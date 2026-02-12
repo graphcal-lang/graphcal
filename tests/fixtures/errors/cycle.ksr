@@ -1,0 +1,4 @@
+// Runtime cycle: a depends on b, b depends on a
+param seed = 1.0;
+node a = @b + 1.0;
+node b = @a + 1.0;

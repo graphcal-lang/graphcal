@@ -1,0 +1,3 @@
+// Const cycle: X depends on Y, Y depends on X
+const X = Y + 1.0;
+const Y = X + 1.0;

@@ -1,0 +1,9 @@
+// rocket.ksr — Phase 0 milestone test
+param dry_mass = 1200.0;
+param fuel_mass = 2800.0;
+param isp = 320.0;
+const G0 = 9.80665;
+
+node v_exhaust = @isp * G0;
+node mass_ratio = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v = @v_exhaust * ln(@mass_ratio);

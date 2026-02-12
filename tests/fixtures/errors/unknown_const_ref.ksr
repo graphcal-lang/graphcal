@@ -1,0 +1,2 @@
+// Unknown constant reference: UNKNOWN is never declared
+node x = UNKNOWN + 1.0;

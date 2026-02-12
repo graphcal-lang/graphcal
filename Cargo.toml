@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+logos = "0.16.1"
+miette = "7.6.0"
+thiserror = "2.0.18"
+petgraph = "0.8.3"
+clap = { version = "4.5.58", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+insta = "1.46.3"
+
+# Internal crates
+kasuri-syntax = { path = "crates/kasuri-syntax" }
+kasuri-eval = { path = "crates/kasuri-eval" }

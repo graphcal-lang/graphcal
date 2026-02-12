@@ -1,0 +1,9 @@
+// constants.ksr — const cross-reference test
+const G0 = 9.80665;
+const TWO_G0 = 2.0 * G0;
+const HALF_PI = PI / 2.0;
+const SQRT2 = sqrt(2.0);
+
+param radius = 100.0;
+node circumference = 2.0 * PI * @radius;
+node area = PI * @radius ^ 2.0;

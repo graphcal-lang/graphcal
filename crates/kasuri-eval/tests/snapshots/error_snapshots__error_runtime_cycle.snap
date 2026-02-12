@@ -1,0 +1,13 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cyclic dependency involving `b`
+    Diagnostic severity: error
+Begin snippet for cycle.ksr starting at line 3, column 1
+
+snippet line 3: node a = @b + 1.0;
+snippet line 4: node b = @a + 1.0;
+    label at line 4, columns 1 to 18: involved in cycle
+diagnostic help: declarations cannot form dependency cycles
+diagnostic code: kasuri::G001

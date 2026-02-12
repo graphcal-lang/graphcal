@@ -1,0 +1,3 @@
+// Unknown graph reference: @z is never declared
+param x = 1.0;
+node y = @z + 1.0;

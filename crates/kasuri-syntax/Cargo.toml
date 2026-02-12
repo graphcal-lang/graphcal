@@ -1,0 +1,9 @@
+[package]
+name = "kasuri-syntax"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+logos = { workspace = true }
+miette.workspace = true
+thiserror.workspace = true

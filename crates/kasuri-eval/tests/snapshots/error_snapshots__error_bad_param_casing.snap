@@ -1,0 +1,13 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unexpected token `IDENTIFIER`
+    Diagnostic severity: error
+Begin snippet for bad_param_casing.ksr starting at line 1, column 1
+
+snippet line 1: // Bad param casing: param must be lower_snake_case
+snippet line 2: param BadName = 1.0;
+    label at line 2, column 7: here
+diagnostic help: expected lower_snake_case identifier
+diagnostic code: kasuri::P001

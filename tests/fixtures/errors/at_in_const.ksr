@@ -1,0 +1,3 @@
+// Graph reference in const expression: @x not allowed
+param x = 1.0;
+const BAD = @x + 1.0;
