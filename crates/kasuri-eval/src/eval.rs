@@ -157,11 +157,81 @@ pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
-#[expect(clippy::too_many_lines)]
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
+    compile_and_eval_with_overrides(source, name, &HashMap::new())
+}
+
+/// Full pipeline with parameter overrides.
+///
+/// Each entry in `overrides` maps a param name to a replacement expression.
+/// The overrides are validated (must refer to existing params, not consts/nodes)
+/// and then substituted before dimension checking and evaluation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if parsing, validation, or evaluation fails.
+#[expect(clippy::too_many_lines)]
+#[expect(clippy::implicit_hasher)]
+pub fn compile_and_eval_with_overrides(
+    source: &str,
+    name: &str,
+    overrides: &HashMap<String, kasuri_syntax::ast::Expr>,
+) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = kasuri_syntax::parser::Parser::with_name(source, name).parse_file()?;
-    let resolved = resolve(&file, &src)?;
+    let mut resolved = resolve(&file, &src)?;
+
+    // Validate and apply overrides
+    for (override_name, override_expr) in overrides {
+        // Check if the name exists at all
+        if let Some((_, cat)) = resolved
+            .source_order
+            .iter()
+            .find(|(n, _)| n == override_name)
+        {
+            match cat {
+                DeclCategory::Param => {}
+                DeclCategory::Const => {
+                    return Err(CompileError::Eval(KasuriError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "const".to_string(),
+                    }));
+                }
+                DeclCategory::Node => {
+                    return Err(CompileError::Eval(KasuriError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "node".to_string(),
+                    }));
+                }
+            }
+        } else {
+            return Err(CompileError::Eval(KasuriError::OverrideUnknownParam {
+                name: override_name.clone(),
+            }));
+        }
+
+        // Replace the expression in resolved.params
+        if let Some(entry) = resolved
+            .params
+            .iter_mut()
+            .find(|(n, _, _)| n == override_name)
+        {
+            entry.1 = override_expr.clone();
+        }
+
+        // Re-extract runtime deps for the overridden param
+        let all_runtime: std::collections::HashSet<&str> = resolved
+            .params
+            .iter()
+            .chain(resolved.nodes.iter())
+            .map(|(n, _, _)| n.as_str())
+            .collect();
+        let mut graph_refs = std::collections::HashSet::new();
+        crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
+        resolved
+            .runtime_deps
+            .insert(override_name.clone(), graph_refs);
+    }
 
     // Build registry: prelude + user-declared dimensions/units
     let mut registry = Registry::new();
@@ -274,6 +344,17 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 
     // Dimension check
     let declared_types = check_dimensions(&file, &registry, &src)?;
+
+    // Dimension-check override expressions against their param's declared type
+    for (override_name, override_expr) in overrides {
+        crate::dim_check::check_override_dimension(
+            override_expr,
+            override_name,
+            &declared_types,
+            &registry,
+            &src,
+        )?;
+    }
 
     let const_values = eval_consts(&resolved, &registry, &src)?;
     let dag = build_dag(&resolved, &src)?;
@@ -929,5 +1010,82 @@ mod tests {
 
         // total_check (generic function): same as total_dv
         assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
+    }
+
+    // --- Override tests ---
+
+    fn parse_expr(s: &str) -> kasuri_syntax::ast::Expr {
+        kasuri_syntax::parser::Parser::new(s)
+            .parse_single_expr()
+            .unwrap()
+    }
+
+    #[test]
+    fn override_param_changes_result() {
+        let source = include_str!("../../../tests/fixtures/rocket.ksr");
+        // Default isp=320 s, override to 450 s => higher delta_v
+        let default = compile_and_eval_named(source, "test").unwrap();
+        let default_dv = find_value(&default, "delta_v");
+
+        let mut overrides = HashMap::new();
+        overrides.insert("isp".to_string(), parse_expr("450 s"));
+        let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
+        let new_dv = find_value(&overridden, "delta_v");
+
+        assert!(new_dv > default_dv, "higher isp should give higher delta_v");
+    }
+
+    #[test]
+    fn override_with_wrong_dimension_errors() {
+        let source = include_str!("../../../tests/fixtures/rocket.ksr");
+        // isp expects Time, not Mass
+        let mut overrides = HashMap::new();
+        overrides.insert("isp".to_string(), parse_expr("450 kg"));
+        let result = compile_and_eval_with_overrides(source, "test", &overrides);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn override_node_errors() {
+        let source = include_str!("../../../tests/fixtures/rocket.ksr");
+        let mut overrides = HashMap::new();
+        overrides.insert("delta_v".to_string(), parse_expr("100 m/s"));
+        let result = compile_and_eval_with_overrides(source, "test", &overrides);
+        match result {
+            Err(CompileError::Eval(KasuriError::OverrideNotAParam { name, actual_kind })) => {
+                assert_eq!(name, "delta_v");
+                assert_eq!(actual_kind, "node");
+            }
+            other => panic!("expected OverrideNotAParam, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn override_const_errors() {
+        let source = include_str!("../../../tests/fixtures/rocket.ksr");
+        let mut overrides = HashMap::new();
+        overrides.insert("G0".to_string(), parse_expr("10.0 m/s^2"));
+        let result = compile_and_eval_with_overrides(source, "test", &overrides);
+        match result {
+            Err(CompileError::Eval(KasuriError::OverrideNotAParam { name, actual_kind })) => {
+                assert_eq!(name, "G0");
+                assert_eq!(actual_kind, "const");
+            }
+            other => panic!("expected OverrideNotAParam, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn override_unknown_param_errors() {
+        let source = include_str!("../../../tests/fixtures/rocket.ksr");
+        let mut overrides = HashMap::new();
+        overrides.insert("nonexistent".to_string(), parse_expr("100"));
+        let result = compile_and_eval_with_overrides(source, "test", &overrides);
+        match result {
+            Err(CompileError::Eval(KasuriError::OverrideUnknownParam { name })) => {
+                assert_eq!(name, "nonexistent");
+            }
+            other => panic!("expected OverrideUnknownParam, got {other:?}"),
+        }
     }
 }

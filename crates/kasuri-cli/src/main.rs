@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process;
 
-use kasuri_eval::eval::{EvalResult, compile_and_eval_named};
+use kasuri_eval::eval::{EvalResult, compile_and_eval_with_overrides};
 
 #[derive(Parser)]
 #[command(name = "kasuri", version, about = "Kasuri language evaluator")]
@@ -21,6 +21,9 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "text")]
         format: OutputFormat,
+        /// Override a param value: --set 'name=expr'
+        #[arg(long)]
+        set: Vec<String>,
     },
 }
 
@@ -45,7 +48,7 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Eval { file, format } => {
+        Commands::Eval { file, format, set } => {
             let source = match std::fs::read_to_string(&file) {
                 Ok(s) => s,
                 Err(e) => {
@@ -54,8 +57,28 @@ fn main() {
                 }
             };
 
+            // Parse --set overrides
+            let mut overrides = std::collections::HashMap::new();
+            for s in &set {
+                let Some((name, value_str)) = s.split_once('=') else {
+                    eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
+                    process::exit(1);
+                };
+                let name = name.trim();
+                let value_str = value_str.trim();
+                match kasuri_syntax::parser::Parser::new(value_str).parse_single_expr() {
+                    Ok(expr) => {
+                        overrides.insert(name.to_string(), expr);
+                    }
+                    Err(e) => {
+                        eprintln!("error: failed to parse --set value for `{name}`: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
+
             let file_name = file.display().to_string();
-            match compile_and_eval_named(&source, &file_name) {
+            match compile_and_eval_with_overrides(&source, &file_name, &overrides) {
                 Ok(result) => match format {
                     OutputFormat::Text => print_text(&result),
                     OutputFormat::Json => print_json(&result),

@@ -94,6 +94,24 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse a single expression from the source string.
+    ///
+    /// Expects the entire input to be consumed; returns an error if there
+    /// are trailing tokens after the expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParseError`] if the source is not a valid expression
+    /// or if there are unexpected trailing tokens.
+    pub fn parse_single_expr(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_expr()?;
+        if let Some(tok) = self.lexer.peek().cloned() {
+            let span = Span::new(self.lexer.current_offset(), 0);
+            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+        }
+        Ok(expr)
+    }
+
     /// Parse the full source file into a [`File`] AST node.
     ///
     /// # Errors
@@ -2805,5 +2823,37 @@ param alt: Length = 400 km;
             }
             _ => panic!("expected fn"),
         }
+    }
+
+    // --- parse_single_expr tests ---
+
+    #[test]
+    fn single_expr_unit_literal() {
+        let expr = Parser::new("450 s").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn single_expr_number() {
+        let expr = Parser::new("3.0").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Number(n) if (n - 3.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn single_expr_compound_unit() {
+        let expr = Parser::new("9.80665 m/s^2").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn single_expr_arithmetic_with_const() {
+        let expr = Parser::new("2.0 * PI").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+    }
+
+    #[test]
+    fn single_expr_trailing_tokens_error() {
+        let result = Parser::new("450 s; extra").parse_single_expr();
+        assert!(result.is_err());
     }
 }
