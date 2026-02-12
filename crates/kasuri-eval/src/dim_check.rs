@@ -173,6 +173,9 @@ fn infer_dim(
                             found: format!("{rhs_dim}"),
                             src: src.clone(),
                             span: rhs.span.into(),
+                            help:
+                                "operands of addition and subtraction must have the same dimension"
+                                    .to_string(),
                         });
                     }
                     Ok(lhs_dim)
@@ -226,6 +229,7 @@ fn infer_dim(
                             found: format!("{rhs_dim}"),
                             src: src.clone(),
                             span: rhs.span.into(),
+                            help: "comparison operands must have the same dimension".to_string(),
                         });
                     }
                     Ok(Dimension::DIMENSIONLESS)
@@ -238,6 +242,7 @@ fn infer_dim(
                             found: format!("{lhs_dim}"),
                             src: src.clone(),
                             span: lhs.span.into(),
+                            help: "boolean operators require Dimensionless operands".to_string(),
                         });
                     }
                     if !rhs_dim.is_dimensionless() {
@@ -246,6 +251,7 @@ fn infer_dim(
                             found: format!("{rhs_dim}"),
                             src: src.clone(),
                             span: rhs.span.into(),
+                            help: "boolean operators require Dimensionless operands".to_string(),
                         });
                     }
                     Ok(Dimension::DIMENSIONLESS)
@@ -287,6 +293,7 @@ fn infer_dim(
                     found: format!("{cond_dim}"),
                     src: src.clone(),
                     span: condition.span.into(),
+                    help: "if/else condition must be Dimensionless".to_string(),
                 });
             }
 
@@ -299,6 +306,7 @@ fn infer_dim(
                     found: format!("{else_dim}"),
                     src: src.clone(),
                     span: else_branch.span.into(),
+                    help: "both branches of if/else must have the same dimension".to_string(),
                 });
             }
 
@@ -359,6 +367,7 @@ fn infer_fn_dim(
                         found: format!("{dim}"),
                         src: src.clone(),
                         span: arg.span.into(),
+                        help: "this function requires Dimensionless arguments".to_string(),
                     });
                 }
             }
@@ -372,6 +381,7 @@ fn infer_fn_dim(
                     found: format!("{}", arg_dims[0]),
                     src: src.clone(),
                     span: args[0].span.into(),
+                    help: "trigonometric functions require an Angle argument".to_string(),
                 });
             }
             Ok(Dimension::DIMENSIONLESS)
@@ -383,6 +393,8 @@ fn infer_fn_dim(
                     found: format!("{}", arg_dims[0]),
                     src: src.clone(),
                     span: args[0].span.into(),
+                    help: "inverse trigonometric functions require a Dimensionless argument"
+                        .to_string(),
                 });
             }
             Ok(Dimension::base(BaseDim::Angle))
@@ -399,6 +411,7 @@ fn infer_fn_dim(
                     found: format!("{}", arg_dims[1]),
                     src: src.clone(),
                     span: args[1].span.into(),
+                    help: "both arguments must have the same dimension".to_string(),
                 });
             }
             Ok(arg_dims[0])
@@ -410,6 +423,7 @@ fn infer_fn_dim(
                     found: format!("{}", arg_dims[1]),
                     src: src.clone(),
                     span: args[1].span.into(),
+                    help: "both arguments must have the same dimension".to_string(),
                 });
             }
             Ok(Dimension::base(BaseDim::Angle))

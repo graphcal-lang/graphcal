@@ -105,10 +105,7 @@ pub enum KasuriError {
     },
 
     #[error("dimension mismatch: expected {expected}, found {found}")]
-    #[diagnostic(
-        code(kasuri::D001),
-        help("operands of addition and subtraction must have the same dimension")
-    )]
+    #[diagnostic(code(kasuri::D001))]
     DimensionMismatch {
         expected: String,
         found: String,
@@ -116,6 +113,8 @@ pub enum KasuriError {
         src: NamedSource<Arc<String>>,
         #[label("has dimension {found}")]
         span: SourceSpan,
+        #[help]
+        help: String,
     },
 
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]

@@ -79,7 +79,6 @@ pub struct EvalResult {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
-#[expect(clippy::result_large_err)]
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
     compile_and_eval_named(source, "input")
 }
@@ -89,7 +88,6 @@ pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
-#[expect(clippy::result_large_err)]
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = kasuri_syntax::parser::Parser::with_name(source, name).parse_file()?;
