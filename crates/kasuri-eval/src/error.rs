@@ -182,4 +182,110 @@ pub enum KasuriError {
         #[label("target unit has different dimension")]
         span: SourceSpan,
     },
+
+    #[error("duplicate `let` binding `{name}`")]
+    #[diagnostic(
+        code(kasuri::S001),
+        help("each `let` binding must have a unique name within a block")
+    )]
+    DuplicateLetBinding {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate binding here")]
+        duplicate: SourceSpan,
+        #[label("first defined here")]
+        first: SourceSpan,
+    },
+
+    #[error("unknown struct type `{name}`")]
+    #[diagnostic(
+        code(kasuri::S002),
+        help("struct types must be declared with `type` before use")
+    )]
+    UnknownStructType {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not found")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown field `{field_name}` on struct `{type_name}`")]
+    #[diagnostic(code(kasuri::S003))]
+    UnknownField {
+        type_name: String,
+        field_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no such field")]
+        span: SourceSpan,
+    },
+
+    #[error("missing field(s) {missing:?} in construction of `{type_name}`")]
+    #[diagnostic(
+        code(kasuri::S004),
+        help("all fields are required when constructing a struct")
+    )]
+    MissingFields {
+        type_name: String,
+        missing: Vec<String>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("incomplete construction")]
+        span: SourceSpan,
+    },
+
+    #[error("extra field(s) {extra:?} in construction of `{type_name}`")]
+    #[diagnostic(
+        code(kasuri::S005),
+        help("only fields declared in the struct type are allowed")
+    )]
+    ExtraFields {
+        type_name: String,
+        extra: Vec<String>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unexpected fields")]
+        span: SourceSpan,
+    },
+
+    #[error("field `{field_name}` of `{type_name}`: expected dimension {expected}, found {found}")]
+    #[diagnostic(code(kasuri::S006))]
+    FieldDimensionMismatch {
+        type_name: String,
+        field_name: String,
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has dimension {found}")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot access field of non-struct value `{name}`")]
+    #[diagnostic(
+        code(kasuri::S007),
+        help("field access `.field` is only valid on struct values")
+    )]
+    NotAStruct {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a struct")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown local variable `{name}`")]
+    #[diagnostic(
+        code(kasuri::S008),
+        help("local variables must be defined with `let` before use")
+    )]
+    UnknownLocalRef {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not found")]
+        span: SourceSpan,
+    },
 }

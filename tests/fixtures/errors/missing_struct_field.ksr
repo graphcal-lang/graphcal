@@ -1,0 +1,10 @@
+// error: missing fields in struct construction
+dimension Velocity = Length / Time;
+
+type Transfer {
+    dv1: Velocity,
+    dv2: Velocity,
+}
+
+param v: Velocity = 100 m/s;
+node bad: Transfer = Transfer { dv1: @v };

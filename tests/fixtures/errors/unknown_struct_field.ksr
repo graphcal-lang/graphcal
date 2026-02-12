@@ -1,0 +1,11 @@
+// error: unknown field access on struct
+dimension Velocity = Length / Time;
+
+type Transfer {
+    dv1: Velocity,
+    dv2: Velocity,
+}
+
+param v: Velocity = 100 m/s;
+node transfer: Transfer = Transfer { dv1: @v, dv2: @v };
+node bad: Velocity = @transfer.nonexistent;

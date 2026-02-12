@@ -20,6 +20,7 @@ pub enum DeclKind {
     Const(ConstDecl),
     Dimension(DimDecl),
     Unit(UnitDecl),
+    Type(TypeDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,20 @@ pub struct UnitDef {
     pub scale: f64,
     pub unit_expr: UnitExpr,
     pub span: Span,
+}
+
+/// Struct type declaration: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+#[derive(Debug, Clone)]
+pub struct TypeDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+}
+
+/// A field in a struct type declaration.
+#[derive(Debug, Clone)]
+pub struct FieldDecl {
+    pub name: Ident,
+    pub type_ann: TypeExpr,
 }
 
 /// An identifier with its source span.
@@ -187,6 +202,38 @@ pub enum ExprKind {
     UnitLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
     Convert { expr: Box<Expr>, target: UnitExpr },
+    /// Local variable reference (bare name in block scope): `r1`, `dv1`
+    LocalRef(Ident),
+    /// Block expression: `{ let a = ...; let b = ...; expr }`
+    Block {
+        stmts: Vec<LetBinding>,
+        expr: Box<Expr>,
+    },
+    /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
+    FieldAccess { expr: Box<Expr>, field: Ident },
+    /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
+    StructConstruction {
+        type_name: Ident,
+        fields: Vec<FieldInit>,
+    },
+}
+
+/// A `let` binding inside a block body.
+#[derive(Debug, Clone)]
+pub struct LetBinding {
+    pub name: Ident,
+    /// Optional type annotation: `let r1: Length = ...`
+    pub type_ann: Option<TypeExpr>,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// A field initializer in struct construction.
+#[derive(Debug, Clone)]
+pub struct FieldInit {
+    pub name: Ident,
+    /// `None` means shorthand: `{ dv1 }` is equivalent to `{ dv1: dv1 }`
+    pub value: Option<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

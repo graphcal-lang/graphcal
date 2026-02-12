@@ -13,11 +13,26 @@ pub struct UnitInfo {
     pub scale: f64,
 }
 
+/// A field in a struct type definition.
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub dimension: Dimension,
+}
+
+/// A struct type definition with its name and fields.
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+}
+
 /// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
 #[derive(Debug, Default)]
 pub struct Registry {
     dimensions: HashMap<String, Dimension>,
     units: HashMap<String, UnitInfo>,
+    structs: HashMap<String, StructDef>,
 }
 
 impl Registry {
@@ -47,6 +62,17 @@ impl Registry {
     #[must_use]
     pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
         self.units.get(name)
+    }
+
+    /// Register a struct type definition.
+    pub fn register_struct(&mut self, def: StructDef) {
+        self.structs.insert(def.name.clone(), def);
+    }
+
+    /// Look up a struct type definition by name.
+    #[must_use]
+    pub fn get_struct(&self, name: &str) -> Option<&StructDef> {
+        self.structs.get(name)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -248,5 +274,30 @@ mod tests {
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn registry_struct_register_and_lookup() {
+        let mut r = make_registry();
+        let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
+        r.register_struct(super::StructDef {
+            name: "TransferResult".to_string(),
+            fields: vec![
+                super::StructField {
+                    name: "dv1".to_string(),
+                    dimension: velocity_dim,
+                },
+                super::StructField {
+                    name: "dv2".to_string(),
+                    dimension: velocity_dim,
+                },
+            ],
+        });
+        let def = r.get_struct("TransferResult").unwrap();
+        assert_eq!(def.name, "TransferResult");
+        assert_eq!(def.fields.len(), 2);
+        assert_eq!(def.fields[0].name, "dv1");
+        assert_eq!(def.fields[0].dimension, velocity_dim);
+        assert!(r.get_struct("NonExistent").is_none());
     }
 }

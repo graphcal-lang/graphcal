@@ -10,6 +10,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+indexmap.workspace = true
 kasuri-syntax = { workspace = true }
 miette.workspace = true
 petgraph = { workspace = true }

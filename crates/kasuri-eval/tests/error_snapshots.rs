@@ -119,3 +119,31 @@ fn error_conversion_dim_mismatch() {
     let rendered = render_error(source, "conversion_dim_mismatch.ksr");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_unknown_struct_field() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_struct_field.ksr");
+    let rendered = render_error(source, "unknown_struct_field.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_struct_field_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/struct_field_dim_mismatch.ksr");
+    let rendered = render_error(source, "struct_field_dim_mismatch.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_let() {
+    let source = include_str!("../../../tests/fixtures/errors/duplicate_let.ksr");
+    let rendered = render_error(source, "duplicate_let.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_missing_struct_field() {
+    let source = include_str!("../../../tests/fixtures/errors/missing_struct_field.ksr");
+    let rendered = render_error(source, "missing_struct_field.ksr");
+    insta::assert_snapshot!(rendered);
+}
