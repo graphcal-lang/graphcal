@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 kasuri-eval = { workspace = true }
+kasuri-syntax = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }

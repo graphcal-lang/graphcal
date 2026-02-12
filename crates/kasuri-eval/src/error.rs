@@ -376,4 +376,18 @@ pub enum KasuriError {
         #[label("wrong index")]
         span: SourceSpan,
     },
+
+    #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
+    #[diagnostic(
+        code(kasuri::O001),
+        help("only `param` declarations can be overridden with --set")
+    )]
+    OverrideNotAParam { name: String, actual_kind: String },
+
+    #[error("unknown parameter `{name}` in --set override")]
+    #[diagnostic(
+        code(kasuri::O002),
+        help("the name must match a `param` declared in the file")
+    )]
+    OverrideUnknownParam { name: String },
 }

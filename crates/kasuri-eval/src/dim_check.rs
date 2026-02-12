@@ -121,6 +121,48 @@ pub fn check_dimensions(
     Ok(declared_types)
 }
 
+/// Check that an override expression has the correct dimension for the given param.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError::DimensionMismatch`] if the expression's inferred
+/// dimension does not match the declared type of the param.
+#[expect(clippy::implicit_hasher)]
+pub fn check_override_dimension(
+    expr: &Expr,
+    param_name: &str,
+    declared_types: &HashMap<String, DeclaredType>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), KasuriError> {
+    let builtin_fns = builtin_functions();
+    let empty_locals: HashMap<String, InferredType> = HashMap::new();
+
+    let declared = &declared_types[param_name];
+    let inferred = infer_type(
+        expr,
+        declared_types,
+        &empty_locals,
+        registry,
+        &builtin_fns,
+        src,
+    )?;
+
+    if !types_match(declared, &inferred) {
+        return Err(KasuriError::DimensionMismatch {
+            expected: format_declared_type(declared),
+            found: format_inferred_type(&inferred),
+            src: src.clone(),
+            span: expr.span.into(),
+            help: format!(
+                "override for `{param_name}` must have dimension {}",
+                format_declared_type(declared)
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Check if a declared type matches an inferred type.
 fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {

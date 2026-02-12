@@ -966,6 +966,86 @@ fn collect_all_refs(
     }
 }
 
+/// Collect `@`-references (graph refs) from an expression.
+///
+/// This is a lightweight version of `collect_all_refs` used for re-extracting
+/// runtime dependencies after an override expression replaces a param's default.
+/// Only collects names that exist in `all_runtime_names`.
+#[expect(clippy::implicit_hasher)]
+pub fn collect_graph_refs(
+    expr: &Expr,
+    all_runtime_names: &HashSet<&str>,
+    refs: &mut HashSet<String>,
+) {
+    match &expr.kind {
+        ExprKind::GraphRef(ident) => {
+            if all_runtime_names.contains(ident.name.as_str()) {
+                refs.insert(ident.name.clone());
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_graph_refs(lhs, all_runtime_names, refs);
+            collect_graph_refs(rhs, all_runtime_names, refs);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            collect_graph_refs(operand, all_runtime_names, refs);
+        }
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_graph_refs(arg, all_runtime_names, refs);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_graph_refs(condition, all_runtime_names, refs);
+            collect_graph_refs(then_branch, all_runtime_names, refs);
+            collect_graph_refs(else_branch, all_runtime_names, refs);
+        }
+        ExprKind::Convert { expr: inner, .. } => {
+            collect_graph_refs(inner, all_runtime_names, refs);
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                collect_graph_refs(&stmt.value, all_runtime_names, refs);
+            }
+            collect_graph_refs(expr, all_runtime_names, refs);
+        }
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            collect_graph_refs(expr, all_runtime_names, refs);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    collect_graph_refs(val, all_runtime_names, refs);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_graph_refs(&entry.value, all_runtime_names, refs);
+            }
+        }
+        ExprKind::ForComp { body, .. } => {
+            collect_graph_refs(body, all_runtime_names, refs);
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_graph_refs(source, all_runtime_names, refs);
+            collect_graph_refs(init, all_runtime_names, refs);
+            collect_graph_refs(body, all_runtime_names, refs);
+        }
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::ConstRef(_)
+        | ExprKind::LocalRef(_) => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

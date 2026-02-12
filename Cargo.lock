@@ -316,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "kasuri-eval",
+ "kasuri-syntax",
  "miette",
  "serde_json",
 ]

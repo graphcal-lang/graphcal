@@ -174,3 +174,109 @@ fn eval_invalid_syntax_fails() {
     assert!(!output.status.success());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// --- --set flag tests ---
+
+#[test]
+fn eval_with_set_flag() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("rocket.ksr"), "--set", "isp=450 s"])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // isp should show 450, not the default 320
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("isp") && l.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+    // delta_v should be higher than default (3778)
+    let dv_line = stdout.lines().find(|l| l.contains("delta_v")).unwrap();
+    assert!(
+        dv_line.contains("5313"),
+        "expected delta_v ~5313 with isp=450: {dv_line}"
+    );
+}
+
+#[test]
+fn eval_with_multiple_set() {
+    let output = kasuri_bin()
+        .args([
+            "eval",
+            &fixture("rocket.ksr"),
+            "--set",
+            "isp=450 s",
+            "--set",
+            "dry_mass=1500 kg",
+        ])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("isp") && l.contains("450")),
+        "expected isp=450: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("dry_mass") && l.contains("1500")),
+        "expected dry_mass=1500: {stdout}"
+    );
+}
+
+#[test]
+fn eval_set_invalid_param() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("rocket.ksr"), "--set", "nonexistent=100"])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("nonexistent"),
+        "expected error mentioning 'nonexistent': {stderr}"
+    );
+}
+
+#[test]
+fn eval_set_node_error() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("rocket.ksr"), "--set", "delta_v=100 m/s"])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("node"),
+        "expected error mentioning 'node': {stderr}"
+    );
+}
+
+#[test]
+fn eval_set_bad_value() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("rocket.ksr"), "--set", "isp=???"])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("error"), "expected parse error: {stderr}");
+}
