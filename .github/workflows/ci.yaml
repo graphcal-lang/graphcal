@@ -78,6 +78,8 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "" # Override global -Dwarnings for MSRV check
     steps:
       - uses: actions/checkout@v4
 
