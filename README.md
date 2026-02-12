@@ -4,10 +4,11 @@
 
 Kasuri replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
-## Current Status: Phase 2 (Structs & Multi-Line Nodes)
+## Current Status: Phase 3 (Pure Functions)
 
-Phases 0--2 are implemented. Kasuri supports dimensioned arithmetic with physical
-units, user-defined struct types, and multi-line node bodies with `let` bindings.
+Phases 0--3 are implemented. Kasuri supports dimensioned arithmetic with physical
+units, user-defined struct types, multi-line node bodies with `let` bindings,
+and pure functions with dimension generics.
 
 ### Rocket equation with units
 
@@ -32,9 +33,9 @@ dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
 G0         = 9.80665 m/s^2
-v_exhaust  = 3138.128
+v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
-delta_v    = 3778.220768
+delta_v    = 3778.220768 m/s
 ```
 
 ### Hohmann transfer with structs and blocks
@@ -85,12 +86,43 @@ R_EARTH           = 6371 km
 GM_EARTH          = 398600.4418 km^3/s^2
 parking_alt       = 200 km
 target_alt        = 35786 km
-transfer.dv1      = 2456.55318
-transfer.dv2      = 1478.029792
-transfer.total_dv = 3934.582972
-transfer.tof      = 18923.604861
-total_dv          = 3934.582972
+transfer.dv1      = 2456.55318 m/s
+transfer.dv2      = 1478.029792 m/s
+transfer.total_dv = 3934.582972 m/s
+transfer.tof      = 18923.604861 s
+total_dv          = 3934.582972 m/s
 tof_hours         = 5.256557 hour
+```
+
+### Reusable functions with dimension generics
+
+```
+// functions.ksr
+dimension Velocity = Length / Time;
+dimension GravParam = Length^3 / Time^2;
+
+const R_EARTH: Length = 6371 km;
+const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+
+fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
+
+fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
+
+param parking_alt: Length = 200 km;
+param target_alt: Length = 35786 km;
+
+node v_parking: Velocity = orbital_velocity(GM_EARTH, R_EARTH + @parking_alt);
+node midpoint_alt: Length = lerp(@parking_alt, @target_alt, 0.5);
+```
+
+```
+$ kasuri eval functions.ksr
+R_EARTH      = 6371 km
+GM_EARTH     = 398600.4418 km^3/s^2
+parking_alt  = 200 km
+target_alt   = 35786 km
+v_parking    = 7788.487985 m/s
+midpoint_alt = 17993000 m
 ```
 
 ### Features
@@ -123,6 +155,15 @@ tof_hours         = 5.256557 hour
 - Field access with `.` operator, chainable (`@transfer.result.inner`)
 - Implicit return (last expression in block without `;`)
 - No shadowing within blocks (duplicate `let` is a compile error)
+
+**Pure functions (Phase 3)**
+
+- `fn` declarations with short (`= expr;`) and block (`{ let ...; expr }`) forms
+- Dimension generics (`<D: Dim>`) with compile-time unification at call sites
+- Purity enforcement: `@` graph references forbidden in function bodies
+- Functions can call other user-defined functions and builtins
+- Recursion detection (direct and mutual) with compile-time error
+- SI unit fallback display for computed values (e.g., `m/s` for Velocity)
 
 ## Installation
 
@@ -157,7 +198,6 @@ kasuri/
 Kasuri is designed to eventually support:
 
 - **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
-- **Pure functions** -- reusable computation with full type checking
 - **Tables with autofill** -- add a row, computed columns extend automatically
 - **Dynamic simulation** -- `scan` over a time axis for system dynamics
 - **Multi-file projects** -- explicit imports, namespaces, prelude
