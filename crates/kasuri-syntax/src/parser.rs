@@ -1715,7 +1715,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 // The type_ann should be a DimExpr with division
                 match &t.fields[0].type_ann.kind {
                     TypeExprKind::DimExpr(_) => {} // ok
-                    other => panic!("expected DimExpr, got {other:?}"),
+                    other @ TypeExprKind::Dimensionless => panic!("expected DimExpr, got {other:?}"),
                 }
             }
             _ => panic!("expected type declaration"),
