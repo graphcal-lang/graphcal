@@ -3,13 +3,20 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use kasuri_syntax::ast::*;
+use kasuri_syntax::ast::{BinOp, Expr, ExprKind, UnaryOp};
 
 use crate::builtins::BuiltinFunction;
 use crate::error::KasuriError;
 
 /// Evaluate an expression given a set of resolved values and built-in functions.
 /// Used by both the const evaluator and the runtime evaluator.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError`] if the expression references an undefined variable,
+/// constant, or function.
+#[expect(clippy::implicit_hasher)] // Internal function always uses default HashMap
+#[expect(clippy::if_not_else)] // `!= 0.0` reads more naturally for DSL truthiness
 pub fn eval_expr(
     expr: &Expr,
     values: &HashMap<String, f64>,
@@ -87,6 +94,8 @@ pub fn eval_expr(
     }
 }
 
+#[expect(clippy::float_cmp)] // Intentional: DSL equality/truthiness uses exact comparison
+#[expect(clippy::if_not_else)] // `!= r` reads naturally for BinOp::Ne
 fn eval_binop(op: BinOp, l: f64, r: f64) -> f64 {
     match op {
         BinOp::Add => l + r,

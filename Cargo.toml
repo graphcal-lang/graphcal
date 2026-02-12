@@ -1,21 +1,55 @@
 [workspace]
+resolver = "3"
 members = ["crates/*"]
-resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.91"
+repository = "https://github.com/shunichironomura/kasuri"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-logos = "0.16.1"
-miette = "7.6.0"
-thiserror = "2.0.18"
-petgraph = "0.8.3"
 clap = { version = "4.5.58", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 insta = "1.46.3"
-
+kasuri-eval = { path = "crates/kasuri-eval" }
 # Internal crates
 kasuri-syntax = { path = "crates/kasuri-syntax" }
-kasuri-eval = { path = "crates/kasuri-eval" }
+logos = "0.16.1"
+miette = "7.6.0"
+petgraph = "0.8.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.18"
+
+[workspace.lints.clippy]
+# Warn-by-default lint groups
+all = { level = "warn", priority = -1 }
+# Warn for specific lints
+allow_attributes = "warn"
+cargo = { level = "warn", priority = -1 }
+cargo_common_metadata = "allow"  # Not publishing yet
+complexity = { level = "warn", priority = -1 }
+# Deny-by-default lints
+correctness = { level = "deny", priority = -1 }
+dbg_macro = "warn"
+decimal_literal_representation = "warn"
+# Allow specific lints (exceptions)
+derive_partial_eq_without_eq = "allow"  # We implement `Eq` only when necessary
+else_if_without_else = "warn"
+missing_errors_doc = "allow"  # TODO: enable later
+missing_panics_doc = "allow"  # TODO: enable later
+multiple_crate_versions = "allow"  # There is nothing we can do about this
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+print_stderr = "warn"
+print_stdout = "warn"
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+
+[workspace.lints.rust]
+unsafe-code = "warn"

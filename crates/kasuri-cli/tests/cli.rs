@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::process::Command;
 
 fn kasuri_bin() -> Command {

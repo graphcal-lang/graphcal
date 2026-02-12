@@ -82,44 +82,46 @@ pub enum Token {
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Token::Param => write!(f, "param"),
-            Token::Node => write!(f, "node"),
-            Token::Const => write!(f, "const"),
-            Token::If => write!(f, "if"),
-            Token::Else => write!(f, "else"),
-            Token::True => write!(f, "true"),
-            Token::False => write!(f, "false"),
-            Token::Plus => write!(f, "+"),
-            Token::Minus => write!(f, "-"),
-            Token::Star => write!(f, "*"),
-            Token::Slash => write!(f, "/"),
-            Token::Caret => write!(f, "^"),
-            Token::Eq => write!(f, "="),
-            Token::EqEq => write!(f, "=="),
-            Token::BangEq => write!(f, "!="),
-            Token::Lt => write!(f, "<"),
-            Token::Gt => write!(f, ">"),
-            Token::LtEq => write!(f, "<="),
-            Token::GtEq => write!(f, ">="),
-            Token::AmpAmp => write!(f, "&&"),
-            Token::PipePipe => write!(f, "||"),
-            Token::Bang => write!(f, "!"),
-            Token::LParen => write!(f, "("),
-            Token::RParen => write!(f, ")"),
-            Token::LBrace => write!(f, "{{"),
-            Token::RBrace => write!(f, "}}"),
-            Token::Semicolon => write!(f, ";"),
-            Token::Comma => write!(f, ","),
-            Token::At => write!(f, "@"),
-            Token::LowerIdent => write!(f, "identifier"),
-            Token::UpperIdent => write!(f, "IDENTIFIER"),
-            Token::Number => write!(f, "number"),
+            Self::Param => write!(f, "param"),
+            Self::Node => write!(f, "node"),
+            Self::Const => write!(f, "const"),
+            Self::If => write!(f, "if"),
+            Self::Else => write!(f, "else"),
+            Self::True => write!(f, "true"),
+            Self::False => write!(f, "false"),
+            Self::Plus => write!(f, "+"),
+            Self::Minus => write!(f, "-"),
+            Self::Star => write!(f, "*"),
+            Self::Slash => write!(f, "/"),
+            Self::Caret => write!(f, "^"),
+            Self::Eq => write!(f, "="),
+            Self::EqEq => write!(f, "=="),
+            Self::BangEq => write!(f, "!="),
+            Self::Lt => write!(f, "<"),
+            Self::Gt => write!(f, ">"),
+            Self::LtEq => write!(f, "<="),
+            Self::GtEq => write!(f, ">="),
+            Self::AmpAmp => write!(f, "&&"),
+            Self::PipePipe => write!(f, "||"),
+            Self::Bang => write!(f, "!"),
+            Self::LParen => write!(f, "("),
+            Self::RParen => write!(f, ")"),
+            Self::LBrace => write!(f, "{{"),
+            Self::RBrace => write!(f, "}}"),
+            Self::Semicolon => write!(f, ";"),
+            Self::Comma => write!(f, ","),
+            Self::At => write!(f, "@"),
+            Self::LowerIdent => write!(f, "identifier"),
+            Self::UpperIdent => write!(f, "IDENTIFIER"),
+            Self::Number => write!(f, "number"),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     fn lex_tokens(input: &str) -> Vec<Token> {

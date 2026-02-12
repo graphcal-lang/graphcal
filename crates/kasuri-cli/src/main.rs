@@ -30,6 +30,7 @@ enum OutputFormat {
     Json,
 }
 
+#[expect(clippy::print_stderr)] // CLI binary, stderr output is expected for errors
 fn main() {
     // Install miette's fancy graphical error handler
     miette::set_hook(Box::new(|_| {
@@ -68,6 +69,7 @@ fn main() {
     }
 }
 
+#[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
 fn print_text(result: &EvalResult) {
     let max_name_len = result
         .all
@@ -78,10 +80,13 @@ fn print_text(result: &EvalResult) {
 
     for (name, value, _) in &result.all {
         let formatted = format_number(*value);
-        println!("{:width$} = {}", name, formatted, width = max_name_len);
+        let width = max_name_len;
+        println!("{name:width$} = {formatted}");
     }
 }
 
+#[expect(clippy::unwrap_used)] // serde_json serialization of BTreeMap<&str, f64> cannot fail
+#[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
 fn print_json(result: &EvalResult) {
     let mut output = serde_json::Map::new();
 
@@ -109,12 +114,13 @@ fn print_json(result: &EvalResult) {
 
 /// Format a number for display: integers without decimal point, floats with
 /// reasonable precision (up to 6 decimal places, trailing zeros stripped).
+#[expect(clippy::cast_possible_truncation)] // Guarded by abs() < 1e15 check
 fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
         format!("{}", value as i64)
     } else {
         // Format with up to 6 decimal places, then strip trailing zeros
-        let s = format!("{:.6}", value);
+        let s = format!("{value:.6}");
         let s = s.trim_end_matches('0');
         let s = s.trim_end_matches('.');
         s.to_string()
@@ -123,6 +129,7 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -133,6 +140,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::approx_constant)]
     fn format_decimal() {
         assert_eq!(format_number(9.80665), "9.80665");
         assert_eq!(format_number(3.14), "3.14");

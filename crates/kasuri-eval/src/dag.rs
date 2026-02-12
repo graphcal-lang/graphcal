@@ -28,6 +28,10 @@ pub struct RuntimeGraph {
 
 /// Build a petgraph DAG from param and node declarations.
 /// Params and nodes are all in the same graph; edges come from `@` references.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError`] if there is a cyclic dependency in the graph.
 pub fn build_dag(
     resolved: &ResolvedFile,
     src: &NamedSource<Arc<String>>,
@@ -71,8 +75,7 @@ pub fn build_dag(
             .iter()
             .chain(resolved.params.iter())
             .find(|(n, _, _)| n == cycle_node)
-            .map(|(_, _, s)| *s)
-            .unwrap_or(Span::new(0, 0));
+            .map_or_else(|| Span::new(0, 0), |(_, _, s)| *s);
         KasuriError::CyclicDependency {
             name: cycle_node.clone(),
             src: src.clone(),
@@ -91,6 +94,7 @@ pub fn build_dag(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::resolve::resolve;
     use kasuri_syntax::parser::Parser;

@@ -6,15 +6,17 @@ pub struct Span {
 }
 
 impl Span {
-    pub fn new(offset: usize, len: usize) -> Self {
+    #[must_use]
+    pub const fn new(offset: usize, len: usize) -> Self {
         Self { offset, len }
     }
 
     /// Merge two spans into one that covers both.
-    pub fn merge(self, other: Span) -> Span {
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
         let start = self.offset.min(other.offset);
         let end = (self.offset + self.len).max(other.offset + other.len);
-        Span::new(start, end - start)
+        Self::new(start, end - start)
     }
 }
 

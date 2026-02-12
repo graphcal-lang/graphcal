@@ -1,8 +1,10 @@
+#![allow(clippy::unwrap_used)]
+
 use kasuri_eval::eval::compile_and_eval_named;
 use miette::{Diagnostic, NarratableReportHandler};
 
 /// Compile the given source and return the rendered error string.
-/// Uses miette's NarratableReportHandler for deterministic output.
+/// Uses miette's `NarratableReportHandler` for deterministic output.
 fn render_error(source: &str, name: &str) -> String {
     let err = compile_and_eval_named(source, name).unwrap_err();
     let diagnostic: &dyn Diagnostic = &err;
