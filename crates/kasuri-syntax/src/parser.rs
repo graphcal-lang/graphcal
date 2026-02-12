@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
-    ExprKind, File, Ident, MulDivOp, NodeDecl, ParamDecl, TypeExpr, TypeExprKind, UnaryOp,
-    UnitDecl, UnitDef, UnitExpr, UnitExprItem,
+    ExprKind, FieldDecl, FieldInit, File, Ident, LetBinding, MulDivOp, NodeDecl, ParamDecl,
+    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -113,15 +113,18 @@ impl<'src> Parser<'src> {
             Some(Token::Const) => self.parse_const(),
             Some(Token::Dimension) => self.parse_dimension_decl(),
             Some(Token::Unit) => self.parse_unit_decl(),
+            Some(Token::Type) => self.parse_type_decl(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token(
-                    "`param`, `node`, `const`, `dimension`, or `unit`",
+                    "`param`, `node`, `const`, `dimension`, `unit`, or `type`",
                     &tok.to_string(),
                     span,
                 ))
             }
-            None => Err(self.unexpected_eof("`param`, `node`, `const`, `dimension`, or `unit`")),
+            None => {
+                Err(self.unexpected_eof("`param`, `node`, `const`, `dimension`, `unit`, or `type`"))
+            }
         }
     }
 
@@ -227,6 +230,49 @@ impl<'src> Parser<'src> {
                 dim_type,
                 definition,
             }),
+            span,
+        })
+    }
+
+    // --- type declaration ---
+
+    fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Type)?;
+        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        self.expect(Token::LBrace)?;
+
+        // Parse field list: at least one field required
+        let mut fields = Vec::new();
+        loop {
+            // Check for closing brace (empty struct or after trailing comma)
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            let field_name =
+                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+            self.expect(Token::Colon)?;
+            let type_ann = self.parse_type_expr()?;
+            fields.push(FieldDecl {
+                name: field_name,
+                type_ann,
+            });
+            // Expect comma or closing brace
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        if fields.is_empty() {
+            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            return Err(self.unexpected_token("at least one field", &tok.to_string(), span));
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Declaration {
+            kind: DeclKind::Type(TypeDecl { name, fields }),
             span,
         })
     }
@@ -705,7 +751,7 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_power(&mut self) -> Result<Expr, ParseError> {
-        let base = self.parse_atom()?;
+        let base = self.parse_postfix()?;
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
             // Right-associative: recurse into parse_unary, not parse_power
@@ -724,6 +770,25 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse postfix operators (field access `.field`), highest precedence after atoms.
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_atom()?;
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token(); // consume '.'
+            let field = self.parse_any_ident()?;
+            let span = expr.span.merge(field.span);
+            expr = Expr {
+                kind: ExprKind::FieldAccess {
+                    expr: Box::new(expr),
+                    field,
+                },
+                span,
+            };
+        }
+        Ok(expr)
+    }
+
+    #[expect(clippy::too_many_lines)] // one match arm per atom kind; splitting would obscure
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
@@ -790,6 +855,9 @@ impl<'src> Parser<'src> {
                         kind: ExprKind::ConstRef(Ident { name, span }),
                         span,
                     })
+                } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
+                    // Struct construction: TypeName { field1: expr, field2 }
+                    self.parse_struct_construction(Ident { name, span })
                 } else if self.lexer.peek() == Some(&Token::LParen) {
                     // Function call: name(args...)
                     self.lexer.next_token(); // consume '('
@@ -811,9 +879,17 @@ impl<'src> Parser<'src> {
                         span: call_span,
                     })
                 } else {
-                    // Bare identifier in expression position -- error
-                    Err(self.unexpected_token("expression", &format!("identifier `{name}`"), span))
+                    // Bare lowercase identifier -> LocalRef (let binding reference)
+                    // Semantic validation happens in resolve/dim_check.
+                    Ok(Expr {
+                        kind: ExprKind::LocalRef(Ident { name, span }),
+                        span,
+                    })
                 }
+            }
+            Some(Token::LBrace) => {
+                // Block expression: { let a = ...; let b = ...; expr }
+                self.parse_block()
             }
             Some(Token::LParen) => {
                 self.lexer.next_token();
@@ -827,6 +903,100 @@ impl<'src> Parser<'src> {
             }
             None => Err(self.unexpected_eof("expression")),
         }
+    }
+
+    // --- Block and let binding parsing ---
+
+    /// Parse a block expression: `{ let_binding* expr }`
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        let (_, start_span) = self.expect(Token::LBrace)?;
+        let mut stmts = Vec::new();
+
+        // Parse let bindings while we see `let`
+        while self.lexer.peek() == Some(&Token::Let) {
+            stmts.push(self.parse_let_binding()?);
+        }
+
+        // Parse the final (return) expression
+        let expr = self.parse_expr()?;
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Block {
+                stmts,
+                expr: Box::new(expr),
+            },
+            span,
+        })
+    }
+
+    /// Parse a let binding: `let IDENT (: TypeExpr)? = Expr ;`
+    fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {
+        let (_, let_span) = self.expect(Token::Let)?;
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+
+        // Optional type annotation
+        let type_ann = if self.lexer.peek() == Some(&Token::Colon) {
+            self.lexer.next_token(); // consume ':'
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+
+        self.expect(Token::Eq)?;
+        let value = self.parse_expr()?;
+        let (_, semi_span) = self.expect(Token::Semicolon)?;
+        let span = let_span.merge(semi_span);
+
+        Ok(LetBinding {
+            name,
+            type_ann,
+            value,
+            span,
+        })
+    }
+
+    // --- Struct construction ---
+
+    /// Parse struct construction after the type name has been consumed:
+    /// `{ field1: expr, field2, ... }`
+    fn parse_struct_construction(&mut self, type_name: Ident) -> Result<Expr, ParseError> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            let field_name = self.parse_any_ident()?;
+
+            // Check for `:` (explicit value) or shorthand (just name)
+            let value = if self.lexer.peek() == Some(&Token::Colon) {
+                self.lexer.next_token(); // consume ':'
+                Some(self.parse_expr()?)
+            } else {
+                None // shorthand: field name matches variable name
+            };
+
+            fields.push(FieldInit {
+                name: field_name,
+                value,
+            });
+
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = type_name.span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::StructConstruction { type_name, fields },
+            span,
+        })
     }
 
     // --- Helper methods ---
@@ -894,6 +1064,14 @@ fn is_lower_snake_case(s: &str) -> bool {
         && s.starts_with(|c: char| c.is_ascii_lowercase())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// `PascalCase`: starts with uppercase, contains at least one lowercase letter
+/// (to distinguish from `UPPER_SNAKE_CASE` like `GRAVITY`).
+fn is_pascal_case(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_uppercase())
+        && s.chars().any(|c| c.is_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -1441,6 +1619,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Const(c) => c.name.name.as_str(),
                 DeclKind::Dimension(d) => d.name.name.as_str(),
                 DeclKind::Unit(u) => u.name.name.as_str(),
+                DeclKind::Type(t) => t.name.name.as_str(),
             })
             .collect();
         assert_eq!(
@@ -1455,5 +1634,331 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 "speed_kmh"
             ]
         );
+    }
+
+    // --- Phase 2 type declaration tests ---
+
+    #[test]
+    fn parse_type_decl_single_field() {
+        let source = "type Orbit { sma: Length }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.name, "Orbit");
+                assert_eq!(t.fields.len(), 1);
+                assert_eq!(t.fields[0].name.name, "sma");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_multiple_fields() {
+        let source = "type TransferResult { dv1: Velocity, dv2: Velocity }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.name, "TransferResult");
+                assert_eq!(t.fields.len(), 2);
+                assert_eq!(t.fields[0].name.name, "dv1");
+                assert_eq!(t.fields[1].name.name, "dv2");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_trailing_comma() {
+        let source = "type TransferResult { dv1: Velocity, dv2: Velocity, }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.fields.len(), 2);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_empty_struct_error() {
+        let source = "type Empty {}";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_type_decl_uppercase_name_error() {
+        // UPPER_SNAKE_CASE should be rejected (not PascalCase)
+        let source = "type ORBIT { sma: Length }";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_type_decl_lowercase_name_error() {
+        let source = "type orbit { sma: Length }";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_type_decl_with_dim_expr_field() {
+        // Field type is a composite dimension expression
+        let source = "type TransferResult { dv: Length / Time }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.fields.len(), 1);
+                assert_eq!(t.fields[0].name.name, "dv");
+                // The type_ann should be a DimExpr with division
+                match &t.fields[0].type_ann.kind {
+                    TypeExprKind::DimExpr(_) => {} // ok
+                    other @ TypeExprKind::Dimensionless => {
+                        panic!("expected DimExpr, got {other:?}")
+                    }
+                }
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_mixed_with_other_decls() {
+        let source = r"
+dimension Velocity = Length / Time;
+type TransferResult { dv1: Velocity, dv2: Velocity }
+param alt: Length = 400 km;
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 3);
+        assert!(matches!(&file.declarations[0].kind, DeclKind::Dimension(_)));
+        assert!(matches!(&file.declarations[1].kind, DeclKind::Type(_)));
+        assert!(matches!(&file.declarations[2].kind, DeclKind::Param(_)));
+    }
+
+    #[test]
+    fn is_pascal_case_examples() {
+        assert!(is_pascal_case("TransferResult"));
+        assert!(is_pascal_case("Orbit"));
+        assert!(is_pascal_case("Ab"));
+        assert!(!is_pascal_case("ORBIT"));
+        assert!(!is_pascal_case("UPPER_SNAKE"));
+        assert!(!is_pascal_case("orbit"));
+        assert!(!is_pascal_case("lower_snake"));
+        assert!(!is_pascal_case(""));
+    }
+
+    // --- Phase 2 block / let / LocalRef tests ---
+
+    #[test]
+    fn parse_block_simple() {
+        let source = "node x: Dimensionless = { let a = 1.0; a + 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, expr } => {
+                    assert_eq!(stmts.len(), 1);
+                    assert_eq!(stmts[0].name.name, "a");
+                    assert!(stmts[0].type_ann.is_none());
+                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_multiple_lets() {
+        let source = "node x: Dimensionless = { let r1 = @a + @b; let r2 = @c; r1 + r2 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, expr } => {
+                    assert_eq!(stmts.len(), 2);
+                    assert_eq!(stmts[0].name.name, "r1");
+                    assert_eq!(stmts[1].name.name, "r2");
+                    // Final expression references two LocalRefs via BinOp
+                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_let_with_type_ann() {
+        let source = "node x: Dimensionless = { let a: Dimensionless = 1.0; a };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, .. } => {
+                    assert_eq!(stmts.len(), 1);
+                    assert!(stmts[0].type_ann.is_some());
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_no_lets() {
+        // Block with no let bindings, just an expression
+        let source = "node x: Dimensionless = { 1.0 + 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, .. } => {
+                    assert_eq!(stmts.len(), 0);
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_local_ref() {
+        // A bare lowercase identifier in expression position parses as LocalRef
+        let source = "node x: Dimensionless = { let a = 1.0; a };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { expr, .. } => {
+                    assert!(matches!(&expr.kind, ExprKind::LocalRef(ident) if ident.name == "a"));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    // --- Phase 2 struct construction and field access tests ---
+
+    #[test]
+    fn parse_struct_construction_explicit_fields() {
+        let source = "node t: Dimensionless = TransferResult { dv1: @a + @b, dv2: @c };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction { type_name, fields } => {
+                    assert_eq!(type_name.name, "TransferResult");
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(fields[0].name.name, "dv1");
+                    assert!(fields[0].value.is_some());
+                    assert_eq!(fields[1].name.name, "dv2");
+                    assert!(fields[1].value.is_some());
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_construction_shorthand() {
+        let source =
+            "node t: Dimensionless = { let dv1 = @a; let dv2 = @b; TransferResult { dv1, dv2 } };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { expr, .. } => match &expr.kind {
+                    ExprKind::StructConstruction { type_name, fields } => {
+                        assert_eq!(type_name.name, "TransferResult");
+                        assert_eq!(fields.len(), 2);
+                        // Shorthand: value is None
+                        assert!(fields[0].value.is_none());
+                        assert!(fields[1].value.is_none());
+                    }
+                    other => panic!("expected StructConstruction, got {other:?}"),
+                },
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_construction_trailing_comma() {
+        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0, };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction { fields, .. } => {
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_field_access() {
+        let source = "node x: Dimensionless = @transfer.dv1;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::FieldAccess { expr, field } => {
+                    assert!(
+                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.name == "transfer")
+                    );
+                    assert_eq!(field.name, "dv1");
+                }
+                other => panic!("expected FieldAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_chained_field_access() {
+        let source = "node x: Dimensionless = @mission.transfer.dv1;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::FieldAccess { expr, field } => {
+                    assert_eq!(field.name, "dv1");
+                    // Inner should be another FieldAccess
+                    match &expr.kind {
+                        ExprKind::FieldAccess {
+                            expr: inner,
+                            field: mid_field,
+                        } => {
+                            assert_eq!(mid_field.name, "transfer");
+                            assert!(
+                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.name == "mission")
+                            );
+                        }
+                        other => panic!("expected inner FieldAccess, got {other:?}"),
+                    }
+                }
+                other => panic!("expected FieldAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_field_access_in_arithmetic() {
+        // Field access should bind tighter than arithmetic
+        let source = "node x: Dimensionless = @t.dv1 + @t.dv2;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::BinOp { op, lhs, rhs } => {
+                    assert!(matches!(op, BinOp::Add));
+                    assert!(matches!(&lhs.kind, ExprKind::FieldAccess { .. }));
+                    assert!(matches!(&rhs.kind, ExprKind::FieldAccess { .. }));
+                }
+                other => panic!("expected BinOp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
     }
 }

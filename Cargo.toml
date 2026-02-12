@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
+indexmap = "2.13.0"
 insta = "1.46.3"
 kasuri-eval = { path = "crates/kasuri-eval" }
 # Internal crates

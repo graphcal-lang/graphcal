@@ -4,14 +4,16 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource};
 use thiserror::Error;
 
+use indexmap::IndexMap;
+
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::const_eval::eval_consts;
 use crate::dag::{RuntimeGraph, build_dag};
-use crate::dim_check::check_dimensions;
+use crate::dim_check::{DeclaredType, check_dimensions};
 use crate::error::KasuriError;
-use crate::eval_expr::eval_expr;
+use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::prelude::load_prelude;
-use crate::registry::Registry;
+use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ResolvedFile, resolve};
 use kasuri_syntax::ast::{DeclKind, ExprKind};
 use kasuri_syntax::dimension::Dimension;
@@ -34,30 +36,72 @@ pub struct DisplayUnit {
     pub scale: f64,
 }
 
-/// A runtime value with SI value, dimension, and optional display unit.
+/// A runtime value: either a scalar with dimension and display info, or a struct.
 #[derive(Debug, Clone)]
-pub struct Value {
-    /// The value in base SI units.
-    pub si_value: f64,
-    /// The dimension of this value.
-    pub dimension: Dimension,
-    /// Optional display unit for pretty-printing.
-    pub display_unit: Option<DisplayUnit>,
+pub enum Value {
+    Scalar {
+        /// The value in base SI units.
+        si_value: f64,
+        /// The dimension of this value.
+        dimension: Dimension,
+        /// Optional display unit for pretty-printing.
+        display_unit: Option<DisplayUnit>,
+    },
+    Struct {
+        /// The struct type name.
+        type_name: String,
+        /// Fields in definition order.
+        fields: IndexMap<String, Self>,
+    },
 }
 
 impl Value {
+    /// Get the SI value. Panics on struct values.
+    #[must_use]
+    pub fn si_value(&self) -> f64 {
+        match self {
+            Self::Scalar { si_value, .. } => *si_value,
+            Self::Struct { type_name, .. } => {
+                panic!("called si_value() on struct `{type_name}`")
+            }
+        }
+    }
+
+    /// Get the dimension. Panics on struct values.
+    #[must_use]
+    pub fn dimension(&self) -> Dimension {
+        match self {
+            Self::Scalar { dimension, .. } => *dimension,
+            Self::Struct { type_name, .. } => {
+                panic!("called dimension() on struct `{type_name}`")
+            }
+        }
+    }
+
     /// Get the value formatted for display: in display units if available, otherwise SI.
     #[must_use]
     pub fn display_value(&self) -> f64 {
-        self.display_unit
-            .as_ref()
-            .map_or(self.si_value, |du| self.si_value / du.scale)
+        match self {
+            Self::Scalar {
+                si_value,
+                display_unit,
+                ..
+            } => display_unit
+                .as_ref()
+                .map_or(*si_value, |du| *si_value / du.scale),
+            Self::Struct { type_name, .. } => {
+                panic!("called display_value() on struct `{type_name}`")
+            }
+        }
     }
 
     /// Get the unit label for display, or `None` for dimensionless/no-unit values.
     #[must_use]
     pub fn display_label(&self) -> Option<&str> {
-        self.display_unit.as_ref().map(|du| du.label.as_str())
+        match self {
+            Self::Scalar { display_unit, .. } => display_unit.as_ref().map(|du| du.label.as_str()),
+            Self::Struct { .. } => None,
+        }
     }
 }
 
@@ -136,12 +180,32 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
                 };
                 registry.register_unit(&u.name.name, dim, scale);
             }
+            DeclKind::Type(t) => {
+                let mut fields = Vec::new();
+                for field in &t.fields {
+                    let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
+                        KasuriError::UnknownDimension {
+                            name: field.name.name.clone(),
+                            src: src.clone(),
+                            span: field.name.span.into(),
+                        }
+                    })?;
+                    fields.push(registry::StructField {
+                        name: field.name.name.clone(),
+                        dimension: dim,
+                    });
+                }
+                registry.register_struct(registry::StructDef {
+                    name: t.name.name.clone(),
+                    fields,
+                });
+            }
             _ => {}
         }
     }
 
     // Dimension check
-    let declared_dims = check_dimensions(&file, &registry, &src)?;
+    let declared_types = check_dimensions(&file, &registry, &src)?;
 
     let const_values = eval_consts(&resolved, &registry, &src)?;
     let dag = build_dag(&resolved, &src)?;
@@ -150,29 +214,72 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
         &dag,
         &const_values,
         &registry,
-        &declared_dims,
+        &declared_types,
         &src,
     )?;
     Ok(result)
+}
+
+/// Convert a `RuntimeValue` to a `Value` using declared type info and display unit extraction.
+fn runtime_to_value(
+    rv: &RuntimeValue,
+    declared_type: Option<&DeclaredType>,
+    display_unit: Option<DisplayUnit>,
+    registry: &Registry,
+) -> Value {
+    match rv {
+        RuntimeValue::Scalar(si_value) => {
+            let dimension = match declared_type {
+                Some(DeclaredType::Scalar(d)) => *d,
+                _ => Dimension::DIMENSIONLESS,
+            };
+            Value::Scalar {
+                si_value: *si_value,
+                dimension,
+                display_unit,
+            }
+        }
+        RuntimeValue::Struct { type_name, fields } => {
+            let struct_def = registry.get_struct(type_name);
+            let converted_fields = fields
+                .iter()
+                .map(|(field_name, field_rv)| {
+                    let field_declared = struct_def.and_then(|sd| {
+                        sd.fields
+                            .iter()
+                            .find(|f| f.name == *field_name)
+                            .map(|f| DeclaredType::Scalar(f.dimension))
+                    });
+                    let val = runtime_to_value(field_rv, field_declared.as_ref(), None, registry);
+                    (field_name.clone(), val)
+                })
+                .collect();
+            Value::Struct {
+                type_name: type_name.clone(),
+                fields: converted_fields,
+            }
+        }
+    }
 }
 
 /// Evaluate the runtime DAG given resolved const values.
 fn evaluate(
     resolved: &ResolvedFile,
     dag: &RuntimeGraph,
-    const_values: &HashMap<String, f64>,
+    const_values: &HashMap<String, RuntimeValue>,
     registry: &Registry,
-    declared_dims: &HashMap<String, Dimension>,
+    declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<EvalResult, KasuriError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
-    let mut values: HashMap<String, f64> = HashMap::new();
+    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
 
     // Insert const values into the lookup table
     for (name, val) in const_values {
-        values.insert(name.clone(), *val);
+        values.insert(name.clone(), val.clone());
     }
 
     // Evaluate in topological order (params first, then nodes that depend on them)
@@ -182,7 +289,15 @@ fn evaluate(
             continue;
         }
         let expr = &dag.expressions[name];
-        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, registry, src)?;
+        let val = eval_expr(
+            expr,
+            &values,
+            &empty_locals,
+            &builtin_consts,
+            &builtin_fns,
+            registry,
+            src,
+        )?;
         values.insert(name.clone(), val);
     }
 
@@ -196,19 +311,11 @@ fn evaluate(
         .collect();
 
     // Helper to build a Value for a given declaration name
-    let make_value = |name: &str, si_value: f64| -> Value {
-        let dimension = declared_dims
-            .get(name)
-            .copied()
-            .unwrap_or(Dimension::DIMENSIONLESS);
+    let make_value = |name: &str, rv: &RuntimeValue| -> Value {
         let display_unit = expr_map
             .get(name)
             .and_then(|expr| extract_display_unit(expr, registry));
-        Value {
-            si_value,
-            dimension,
-            display_unit,
-        }
+        runtime_to_value(rv, declared_types.get(name), display_unit, registry)
     };
 
     // Collect results in source order
@@ -216,7 +323,7 @@ fn evaluate(
         .consts
         .iter()
         .map(|(name, _, _)| {
-            let val = make_value(name, const_values[name]);
+            let val = make_value(name, &const_values[name]);
             (name.clone(), val)
         })
         .collect();
@@ -224,7 +331,7 @@ fn evaluate(
         .params
         .iter()
         .map(|(name, _, _)| {
-            let val = make_value(name, values[name]);
+            let val = make_value(name, &values[name]);
             (name.clone(), val)
         })
         .collect();
@@ -232,7 +339,7 @@ fn evaluate(
         .nodes
         .iter()
         .map(|(name, _, _)| {
-            let val = make_value(name, values[name]);
+            let val = make_value(name, &values[name]);
             (name.clone(), val)
         })
         .collect();
@@ -242,11 +349,11 @@ fn evaluate(
         .source_order
         .iter()
         .map(|(name, cat)| {
-            let si = match cat {
-                DeclCategory::Const => const_values[name],
-                DeclCategory::Param | DeclCategory::Node => values[name],
+            let rv = match cat {
+                DeclCategory::Const => &const_values[name],
+                DeclCategory::Param | DeclCategory::Node => &values[name],
             };
-            let val = make_value(name, si);
+            let val = make_value(name, rv);
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
@@ -341,7 +448,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
-    /// Find the SI value of a named declaration.
+    /// Find the SI value of a named scalar declaration.
     fn find_value(result: &EvalResult, name: &str) -> f64 {
         result
             .consts
@@ -351,7 +458,7 @@ mod tests {
             .find(|(n, _)| n == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
-            .si_value
+            .si_value()
     }
 
     #[test]
@@ -548,5 +655,49 @@ mod tests {
             (display_kmh - expected_kmh).abs() < 0.01,
             "speed_kmh display = {display_kmh}"
         );
+    }
+
+    #[test]
+    fn eval_hohmann_milestone() {
+        let source = include_str!("../../../tests/fixtures/hohmann.ksr");
+        let result = compile_and_eval(source).unwrap();
+
+        // transfer is a struct — check its fields via total_dv and tof_hours nodes
+        let total_dv = find_value(&result, "total_dv");
+        // LEO-to-GEO Hohmann total delta-v should be ~3935 m/s
+        assert!(
+            total_dv > 3900.0 && total_dv < 4000.0,
+            "total_dv = {total_dv}"
+        );
+
+        let tof_hours = find_value(&result, "tof_hours");
+        // Transfer time ~5.26 hours -> SI ~18924 seconds
+        assert!(
+            tof_hours > 18000.0 && tof_hours < 20000.0,
+            "tof_hours SI = {tof_hours}"
+        );
+
+        // Check that tof_hours has display unit "hour"
+        let tof_entry = result.nodes.iter().find(|(n, _)| n == "tof_hours").unwrap();
+        assert_eq!(tof_entry.1.display_label(), Some("hour"));
+        let tof_display = tof_entry.1.display_value();
+        assert!(
+            tof_display > 5.0 && tof_display < 6.0,
+            "tof display = {tof_display} hours"
+        );
+
+        // Check that transfer node is a struct
+        let transfer_entry = result.nodes.iter().find(|(n, _)| n == "transfer").unwrap();
+        match &transfer_entry.1 {
+            Value::Struct { type_name, fields } => {
+                assert_eq!(type_name, "TransferResult");
+                assert_eq!(fields.len(), 4);
+                assert!(fields.contains_key("dv1"));
+                assert!(fields.contains_key("dv2"));
+                assert!(fields.contains_key("total_dv"));
+                assert!(fields.contains_key("tof"));
+            }
+            Value::Scalar { .. } => panic!("expected struct for transfer"),
+        }
     }
 }

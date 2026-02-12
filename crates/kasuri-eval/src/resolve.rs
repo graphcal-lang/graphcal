@@ -60,7 +60,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Param(p) => (p.name.name.clone(), p.name.span, false),
             DeclKind::Node(n) => (n.name.name.clone(), n.name.span, false),
             DeclKind::Const(c) => (c.name.name.clone(), c.name.span, true),
-            DeclKind::Dimension(_) | DeclKind::Unit(_) => continue,
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => continue,
         };
 
         // Check for duplicates
@@ -79,7 +79,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Const(_) => DeclCategory::Const,
             DeclKind::Param(_) => DeclCategory::Param,
             DeclKind::Node(_) => DeclCategory::Node,
-            DeclKind::Dimension(_) | DeclKind::Unit(_) => unreachable!(),
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => unreachable!(),
         };
         source_order.push((name.clone(), category));
 
@@ -117,7 +117,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) => {}
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {}
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
                 let deps = extract_const_refs(
@@ -192,7 +192,8 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
         ExprKind::Number(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::UnitLiteral { .. } => Ok(()),
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_) => Ok(()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_no_graph_refs(lhs, src)?;
             check_no_graph_refs(rhs, src)
@@ -214,6 +215,21 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(else_branch, src)
         }
         ExprKind::Convert { expr: inner, .. } => check_no_graph_refs(inner, src),
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                check_no_graph_refs(&stmt.value, src)?;
+            }
+            check_no_graph_refs(expr, src)
+        }
+        ExprKind::FieldAccess { expr, .. } => check_no_graph_refs(expr, src),
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    check_no_graph_refs(val, src)?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -237,6 +253,7 @@ fn extract_const_refs(
     Ok(deps)
 }
 
+#[expect(clippy::too_many_lines)]
 fn collect_const_refs(
     expr: &Expr,
     all_const_names: &HashSet<&str>,
@@ -246,7 +263,10 @@ fn collect_const_refs(
     deps: &mut HashSet<String>,
 ) -> Result<(), KasuriError> {
     match &expr.kind {
-        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::UnitLiteral { .. } => Ok(()),
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_) => Ok(()),
         ExprKind::GraphRef(_) => unreachable!("should be caught by check_no_graph_refs"),
         ExprKind::ConstRef(ident) => {
             if builtin_consts.contains_key(ident.name.as_str()) {
@@ -335,6 +355,49 @@ fn collect_const_refs(
             src,
             deps,
         ),
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                collect_const_refs(
+                    &stmt.value,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    src,
+                    deps,
+                )?;
+            }
+            collect_const_refs(
+                expr,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                src,
+                deps,
+            )
+        }
+        ExprKind::FieldAccess { expr, .. } => collect_const_refs(
+            expr,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            src,
+            deps,
+        ),
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    collect_const_refs(
+                        val,
+                        all_const_names,
+                        builtin_consts,
+                        builtin_fns,
+                        src,
+                        deps,
+                    )?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -375,7 +438,10 @@ fn collect_all_refs(
     const_refs: &mut HashSet<String>,
 ) -> Result<(), KasuriError> {
     match &expr.kind {
-        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::UnitLiteral { .. } => Ok(()),
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_) => Ok(()),
         ExprKind::GraphRef(ident) => {
             if all_runtime_names.contains(ident.name.as_str()) {
                 graph_refs.insert(ident.name.clone());
@@ -512,6 +578,57 @@ fn collect_all_refs(
             graph_refs,
             const_refs,
         ),
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                collect_all_refs(
+                    &stmt.value,
+                    all_runtime_names,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    src,
+                    graph_refs,
+                    const_refs,
+                )?;
+            }
+            collect_all_refs(
+                expr,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                src,
+                graph_refs,
+                const_refs,
+            )
+        }
+        ExprKind::FieldAccess { expr, .. } => collect_all_refs(
+            expr,
+            all_runtime_names,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            src,
+            graph_refs,
+            const_refs,
+        ),
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    collect_all_refs(
+                        val,
+                        all_runtime_names,
+                        all_const_names,
+                        builtin_consts,
+                        builtin_fns,
+                        src,
+                        graph_refs,
+                        const_refs,
+                    )?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 

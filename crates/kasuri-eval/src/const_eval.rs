@@ -10,7 +10,7 @@ use petgraph::graph::DiGraph;
 
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::KasuriError;
-use crate::eval_expr::eval_expr;
+use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::registry::Registry;
 use crate::resolve::ResolvedFile;
 
@@ -25,7 +25,7 @@ pub fn eval_consts(
     resolved: &ResolvedFile,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, f64>, KasuriError> {
+) -> Result<HashMap<String, RuntimeValue>, KasuriError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -74,12 +74,21 @@ pub fn eval_consts(
         .map(|(name, expr, _)| (name.as_str(), expr))
         .collect();
 
-    let mut values: HashMap<String, f64> = HashMap::new();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
 
     for idx in sorted {
         let name = &graph[idx];
         let expr = const_exprs[name.as_str()];
-        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, registry, src)?;
+        let val = eval_expr(
+            expr,
+            &values,
+            &empty_locals,
+            &builtin_consts,
+            &builtin_fns,
+            registry,
+            src,
+        )?;
         values.insert(name.clone(), val);
     }
 
@@ -97,7 +106,9 @@ mod tests {
         NamedSource::new("test", Arc::new(source.to_string()))
     }
 
-    fn parse_resolve_eval_consts(source: &str) -> Result<HashMap<String, f64>, KasuriError> {
+    fn parse_resolve_eval_consts(
+        source: &str,
+    ) -> Result<HashMap<String, RuntimeValue>, KasuriError> {
         let file = Parser::new(source).parse_file().unwrap();
         let src = make_src(source);
         let resolved = resolve(&file, &src)?;
@@ -106,10 +117,19 @@ mod tests {
         eval_consts(&resolved, &registry, &src)
     }
 
+    fn scalar(rv: &RuntimeValue) -> f64 {
+        match rv {
+            RuntimeValue::Scalar(v) => *v,
+            RuntimeValue::Struct { type_name, .. } => {
+                panic!("expected scalar, got struct `{type_name}`")
+            }
+        }
+    }
+
     #[test]
     fn eval_simple_const() {
         let values = parse_resolve_eval_consts("const G0: Dimensionless = 9.80665;").unwrap();
-        assert!((values["G0"] - 9.80665).abs() < f64::EPSILON);
+        assert!((scalar(&values["G0"]) - 9.80665).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -118,19 +138,19 @@ mod tests {
             "const G0: Dimensionless = 9.80665;\nconst TWO_G0: Dimensionless = 2.0 * G0;",
         )
         .unwrap();
-        assert!((values["TWO_G0"] - 19.6133).abs() < 1e-10);
+        assert!((scalar(&values["TWO_G0"]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
     fn eval_const_with_builtin_const() {
         let values = parse_resolve_eval_consts("const HALF_PI: Dimensionless = PI / 2.0;").unwrap();
-        assert!((values["HALF_PI"] - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
+        assert!((scalar(&values["HALF_PI"]) - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_const_with_builtin_fn() {
         let values = parse_resolve_eval_consts("const SQRT2: Dimensionless = sqrt(2.0);").unwrap();
-        assert!((values["SQRT2"] - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
+        assert!((scalar(&values["SQRT2"]) - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -23,6 +23,10 @@ pub enum Token {
     Dimension,
     #[token("unit")]
     Unit,
+    #[token("type")]
+    Type,
+    #[token("let")]
+    Let,
 
     // Operators
     #[token("+")]
@@ -75,6 +79,8 @@ pub enum Token {
     At,
     #[token(":")]
     Colon,
+    #[token(".")]
+    Dot,
 
     // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
     #[regex(r"[a-zA-Z][a-zA-Z0-9_]*")]
@@ -97,6 +103,8 @@ impl std::fmt::Display for Token {
             Self::False => write!(f, "false"),
             Self::Dimension => write!(f, "dimension"),
             Self::Unit => write!(f, "unit"),
+            Self::Type => write!(f, "type"),
+            Self::Let => write!(f, "let"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
@@ -121,6 +129,7 @@ impl std::fmt::Display for Token {
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
             Self::Colon => write!(f, ":"),
+            Self::Dot => write!(f, "."),
             Self::Ident => write!(f, "identifier"),
             Self::Number => write!(f, "number"),
         }
@@ -313,7 +322,7 @@ mod tests {
     #[test]
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
-        let tokens = lex_tokens("param node const if else dimension unit");
+        let tokens = lex_tokens("param node const if else dimension unit type let");
         assert_eq!(
             tokens,
             vec![
@@ -324,6 +333,8 @@ mod tests {
                 Token::Else,
                 Token::Dimension,
                 Token::Unit,
+                Token::Type,
+                Token::Let,
             ]
         );
     }
@@ -429,5 +440,72 @@ mod tests {
                 Token::Semicolon,
             ]
         );
+    }
+
+    // Phase 2 specific tests
+
+    #[test]
+    fn lex_type_decl() {
+        let tokens = lex_tokens("type TransferResult { dv1: Velocity, dv2: Velocity }");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Type,
+                Token::Ident,
+                Token::LBrace,
+                Token::Ident,
+                Token::Colon,
+                Token::Ident,
+                Token::Comma,
+                Token::Ident,
+                Token::Colon,
+                Token::Ident,
+                Token::RBrace,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_let_binding() {
+        let tokens = lex_tokens("let r1 = @x + @y;");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Let,
+                Token::Ident,
+                Token::Eq,
+                Token::At,
+                Token::Ident,
+                Token::Plus,
+                Token::At,
+                Token::Ident,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_dot_field_access() {
+        let tokens = lex_tokens("@transfer.dv1");
+        assert_eq!(
+            tokens,
+            vec![Token::At, Token::Ident, Token::Dot, Token::Ident,]
+        );
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_type() {
+        // "typedef" should be Ident, not Type + "def"
+        let mut lexer = Token::lexer("typedef");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "typedef");
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_let() {
+        // "letter" should be Ident, not Let + "ter"
+        let mut lexer = Token::lexer("letter");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "letter");
     }
 }

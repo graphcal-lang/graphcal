@@ -71,14 +71,26 @@ fn main() {
 
 #[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
 fn print_text(result: &EvalResult) {
-    let max_name_len = result
-        .all
-        .iter()
-        .map(|(n, _, _)| n.len())
-        .max()
-        .unwrap_or(0);
+    use kasuri_eval::eval::Value;
 
+    // Flatten entries: scalars are one line, structs expand to `name.field` lines
+    let mut lines: Vec<(String, &Value)> = Vec::new();
     for (name, value, _) in &result.all {
+        match value {
+            Value::Scalar { .. } => {
+                lines.push((name.clone(), value));
+            }
+            Value::Struct { fields, .. } => {
+                for (field_name, field_val) in fields {
+                    lines.push((format!("{name}.{field_name}"), field_val));
+                }
+            }
+        }
+    }
+
+    let max_name_len = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+
+    for (name, value) in &lines {
         let formatted = format_number(value.display_value());
         let width = max_name_len;
         if let Some(label) = value.display_label() {
@@ -95,16 +107,36 @@ fn print_json(result: &EvalResult) {
     use kasuri_eval::eval::Value;
 
     fn value_to_json(v: &Value) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert("si_value".to_string(), serde_json::json!(v.si_value));
-        if let Some(du) = &v.display_unit {
-            map.insert(
-                "display_value".to_string(),
-                serde_json::json!(v.display_value()),
-            );
-            map.insert("unit".to_string(), serde_json::json!(du.label));
+        match v {
+            Value::Scalar {
+                si_value,
+                display_unit,
+                ..
+            } => {
+                let mut map = serde_json::Map::new();
+                map.insert("si_value".to_string(), serde_json::json!(si_value));
+                if let Some(du) = display_unit {
+                    map.insert(
+                        "display_value".to_string(),
+                        serde_json::json!(v.display_value()),
+                    );
+                    map.insert("unit".to_string(), serde_json::json!(du.label));
+                }
+                serde_json::Value::Object(map)
+            }
+            Value::Struct {
+                type_name, fields, ..
+            } => {
+                let mut map = serde_json::Map::new();
+                map.insert("type".to_string(), serde_json::json!(type_name));
+                let fields_map: serde_json::Map<String, serde_json::Value> = fields
+                    .iter()
+                    .map(|(name, val)| (name.clone(), value_to_json(val)))
+                    .collect();
+                map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
+                serde_json::Value::Object(map)
+            }
         }
-        serde_json::Value::Object(map)
     }
 
     let mut output = serde_json::Map::new();
