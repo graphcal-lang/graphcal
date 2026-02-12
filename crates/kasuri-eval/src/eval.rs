@@ -106,13 +106,9 @@ impl Value {
                 display_unit,
                 dimension,
                 ..
-            } => {
-                if let Some(du) = display_unit {
-                    Some(du.label.clone())
-                } else {
-                    dimension.si_unit_string()
-                }
-            }
+            } => display_unit
+                .as_ref()
+                .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
             Self::Struct { .. } => None,
         }
     }

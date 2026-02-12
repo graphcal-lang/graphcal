@@ -174,28 +174,28 @@ mod tests {
 
     #[test]
     fn no_recursion_ok() {
-        let source = r#"
+        let source = r"
             fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
             fn quadruple(x: Dimensionless) -> Dimensionless = double(double(x));
-        "#;
+        ";
         check_recursion(source).unwrap();
     }
 
     #[test]
     fn direct_recursion_error() {
-        let source = r#"
+        let source = r"
             fn bad(x: Dimensionless) -> Dimensionless = bad(x);
-        "#;
+        ";
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
     }
 
     #[test]
     fn mutual_recursion_error() {
-        let source = r#"
+        let source = r"
             fn ping(x: Dimensionless) -> Dimensionless = pong(x);
             fn pong(x: Dimensionless) -> Dimensionless = ping(x);
-        "#;
+        ";
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
     }

@@ -2202,12 +2202,12 @@ param alt: Length = 400 km;
 
     #[test]
     fn parse_fn_mixed_with_other_decls() {
-        let source = r#"
+        let source = r"
             const TWO: Dimensionless = 2.0;
             fn double(x: Dimensionless) -> Dimensionless = x * TWO;
             param val: Dimensionless = 5.0;
             node result: Dimensionless = double(@val);
-        "#;
+        ";
         let file = Parser::new(source).parse_file().unwrap();
         assert_eq!(file.declarations.len(), 4);
         assert!(matches!(file.declarations[0].kind, DeclKind::Const(_)));

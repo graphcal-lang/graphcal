@@ -921,11 +921,11 @@ mod tests {
 
     #[test]
     fn resolve_fn_collected() {
-        let source = r#"
+        let source = r"
             fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
             param val: Dimensionless = 1.0;
             node result: Dimensionless = double(@val);
-        "#;
+        ";
         let resolved = parse_and_resolve(source).unwrap();
         assert_eq!(resolved.functions.len(), 1);
         assert_eq!(resolved.functions[0].0, "double");
@@ -933,20 +933,20 @@ mod tests {
 
     #[test]
     fn resolve_fn_duplicate_name_with_param() {
-        let source = r#"
+        let source = r"
             param x: Dimensionless = 1.0;
             fn x(a: Dimensionless) -> Dimensionless = a;
-        "#;
+        ";
         let err = parse_and_resolve(source).unwrap_err();
         assert!(matches!(err, KasuriError::DuplicateName { .. }));
     }
 
     #[test]
     fn resolve_fn_duplicate_name_with_const() {
-        let source = r#"
+        let source = r"
             const X: Dimensionless = 1.0;
             fn X(a: Dimensionless) -> Dimensionless = a;
-        "#;
+        ";
         // This should fail at parse time (fn name must be lower_snake_case)
         let result = Parser::new(source).parse_file();
         assert!(result.is_err());
@@ -954,42 +954,42 @@ mod tests {
 
     #[test]
     fn resolve_at_in_fn_body() {
-        let source = r#"
+        let source = r"
             param val: Dimensionless = 1.0;
             fn bad(x: Dimensionless) -> Dimensionless = x + @val;
-        "#;
+        ";
         let err = parse_and_resolve(source).unwrap_err();
         assert!(matches!(err, KasuriError::GraphRefInFn { .. }));
     }
 
     #[test]
     fn resolve_user_fn_call_in_node() {
-        let source = r#"
+        let source = r"
             fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
             param val: Dimensionless = 5.0;
             node result: Dimensionless = double(@val);
-        "#;
+        ";
         let resolved = parse_and_resolve(source).unwrap();
         assert_eq!(resolved.nodes.len(), 1);
     }
 
     #[test]
     fn resolve_user_fn_call_in_const() {
-        let source = r#"
+        let source = r"
             fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
             const FOUR: Dimensionless = double(2.0);
-        "#;
+        ";
         let resolved = parse_and_resolve(source).unwrap();
         assert_eq!(resolved.consts.len(), 1);
     }
 
     #[test]
     fn resolve_fn_not_in_source_order() {
-        let source = r#"
+        let source = r"
             fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
             param val: Dimensionless = 5.0;
             node result: Dimensionless = double(@val);
-        "#;
+        ";
         let resolved = parse_and_resolve(source).unwrap();
         // Functions should NOT appear in source_order
         assert_eq!(resolved.source_order.len(), 2); // param + node only
