@@ -1,3 +1,17 @@
 default: true
 line-length: false
+first-line-h1: false
+no-inline-html: false
+no-alt-text: false
+link-fragments: false
+no-emphasis-as-heading: false
+heading-increment: false
 fenced-code-language: false
+ol-prefix: false
+no-trailing-punctuation: false
+code-block-style: false
+no-duplicate-heading: false
+ul-indent:
+  indent: 4
+table-column-style:
+  style: compact

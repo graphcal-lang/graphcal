@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-toml
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--enforce-all]
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-shebang-scripts-are-executable
+      - id: check-executables-have-shebangs
+      - id: check-illegal-windows-names
+      - id: fix-byte-order-marker
+      - id: forbid-submodules
+      - id: no-commit-to-branch
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.47.0
+    hooks:
+      - id: markdownlint
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.40.1
+    hooks:
+      - id: typos
