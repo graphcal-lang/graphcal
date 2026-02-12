@@ -11,6 +11,7 @@ pub mod dim_check;
 pub mod error;
 pub mod eval;
 pub mod eval_expr;
+pub mod fn_check;
 pub mod prelude;
 pub mod registry;
 pub mod resolve;

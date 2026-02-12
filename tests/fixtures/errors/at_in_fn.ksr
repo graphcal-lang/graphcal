@@ -1,0 +1,4 @@
+// Error: graph reference @ is not allowed in function bodies
+param x: Length = 1.0 m;
+
+fn bad_fn(a: Length) -> Length = a + @x;

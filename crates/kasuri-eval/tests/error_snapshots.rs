@@ -147,3 +147,24 @@ fn error_missing_struct_field() {
     let rendered = render_error(source, "missing_struct_field.ksr");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_at_in_fn() {
+    let source = include_str!("../../../tests/fixtures/errors/at_in_fn.ksr");
+    let rendered = render_error(source, "at_in_fn.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_recursive_fn() {
+    let source = include_str!("../../../tests/fixtures/errors/recursive_fn.ksr");
+    let rendered = render_error(source, "recursive_fn.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fn_generic_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/fn_generic_dim_mismatch.ksr");
+    let rendered = render_error(source, "fn_generic_dim_mismatch.ksr");
+    insta::assert_snapshot!(rendered);
+}

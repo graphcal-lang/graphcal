@@ -5,8 +5,9 @@ use thiserror::Error;
 
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
-    ExprKind, FieldDecl, FieldInit, File, Ident, LetBinding, MulDivOp, NodeDecl, ParamDecl,
-    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
+    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam,
+    Ident, LetBinding, MulDivOp, NodeDecl, ParamDecl, TypeDecl, TypeExpr, TypeExprKind, UnaryOp,
+    UnitDecl, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -114,17 +115,17 @@ impl<'src> Parser<'src> {
             Some(Token::Dimension) => self.parse_dimension_decl(),
             Some(Token::Unit) => self.parse_unit_decl(),
             Some(Token::Type) => self.parse_type_decl(),
+            Some(Token::Fn) => self.parse_fn_decl(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token(
-                    "`param`, `node`, `const`, `dimension`, `unit`, or `type`",
+                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, or `fn`",
                     &tok.to_string(),
                     span,
                 ))
             }
-            None => {
-                Err(self.unexpected_eof("`param`, `node`, `const`, `dimension`, `unit`, or `type`"))
-            }
+            None => Err(self
+                .unexpected_eof("`param`, `node`, `const`, `dimension`, `unit`, `type`, or `fn`")),
         }
     }
 
@@ -275,6 +276,127 @@ impl<'src> Parser<'src> {
             kind: DeclKind::Type(TypeDecl { name, fields }),
             span,
         })
+    }
+
+    // --- function declaration ---
+
+    /// Parse a function declaration:
+    /// `fn NAME<GENERICS>(PARAMS) -> TYPE = EXPR;`
+    /// `fn NAME<GENERICS>(PARAMS) -> TYPE { STMTS EXPR }`
+    fn parse_fn_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Fn)?;
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+
+        // Optional generic params: <D: Dim, E: Dim>
+        let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+
+        // Parameter list: (param, param, ...)
+        self.expect(Token::LParen)?;
+        let mut params = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RParen) {
+                break;
+            }
+            params.push(self.parse_fn_param()?);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RParen)?;
+
+        // Return type: -> TypeExpr
+        self.expect(Token::Arrow)?;
+        let return_type = self.parse_type_expr()?;
+
+        // Body: either `= expr;` (short) or `{ stmts expr }` (block)
+        let (body, end_span) = if self.lexer.peek() == Some(&Token::Eq) {
+            self.lexer.next_token();
+            let expr = self.parse_expr()?;
+            let (_, semi_span) = self.expect(Token::Semicolon)?;
+            (FnBody::Short(expr), semi_span)
+        } else {
+            let (_, lbrace_span) = self.expect(Token::LBrace)?;
+            let (stmts, expr) = self.parse_block_contents()?;
+            let (_, rbrace_span) = self.expect(Token::RBrace)?;
+            let _ = lbrace_span; // span captured by rbrace
+            (
+                FnBody::Block {
+                    stmts,
+                    expr: Box::new(expr),
+                },
+                rbrace_span,
+            )
+        };
+
+        let span = start_span.merge(end_span);
+        Ok(Declaration {
+            kind: DeclKind::Fn(FnDecl {
+                name,
+                generic_params,
+                params,
+                return_type,
+                body,
+            }),
+            span,
+        })
+    }
+
+    /// Parse generic parameters: `<D: Dim, E: Dim>`
+    fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, ParseError> {
+        self.expect(Token::Lt)?;
+        let mut params = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::Gt) {
+                break;
+            }
+            let name = self.parse_any_ident()?;
+            self.expect(Token::Colon)?;
+            // Only `Dim` constraint is supported
+            let constraint_ident = self.parse_any_ident()?;
+            if constraint_ident.name != "Dim" {
+                return Err(self.unexpected_token(
+                    "`Dim`",
+                    &constraint_ident.name,
+                    constraint_ident.span,
+                ));
+            }
+            params.push(GenericParam {
+                name,
+                constraint: GenericConstraint::Dim,
+            });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::Gt)?;
+        Ok(params)
+    }
+
+    /// Parse a function parameter: `name: TypeExpr`
+    fn parse_fn_param(&mut self) -> Result<FnParam, ParseError> {
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        self.expect(Token::Colon)?;
+        let type_ann = self.parse_type_expr()?;
+        Ok(FnParam { name, type_ann })
+    }
+
+    /// Parse the contents of a block: `let` bindings followed by a final expression.
+    /// Shared between block expressions and function block bodies.
+    fn parse_block_contents(&mut self) -> Result<(Vec<LetBinding>, Expr), ParseError> {
+        let mut stmts = Vec::new();
+        while self.lexer.peek() == Some(&Token::Let) {
+            stmts.push(self.parse_let_binding()?);
+        }
+        let expr = self.parse_expr()?;
+        Ok((stmts, expr))
     }
 
     /// Parse the RHS of a unit definition: `NUMBER UNIT_EXPR`
@@ -910,16 +1032,7 @@ impl<'src> Parser<'src> {
     /// Parse a block expression: `{ let_binding* expr }`
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::LBrace)?;
-        let mut stmts = Vec::new();
-
-        // Parse let bindings while we see `let`
-        while self.lexer.peek() == Some(&Token::Let) {
-            stmts.push(self.parse_let_binding()?);
-        }
-
-        // Parse the final (return) expression
-        let expr = self.parse_expr()?;
-
+        let (stmts, expr) = self.parse_block_contents()?;
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Expr {
@@ -1620,6 +1733,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Dimension(d) => d.name.name.as_str(),
                 DeclKind::Unit(u) => u.name.name.as_str(),
                 DeclKind::Type(t) => t.name.name.as_str(),
+                DeclKind::Fn(f) => f.name.name.as_str(),
             })
             .collect();
         assert_eq!(
@@ -1960,5 +2074,145 @@ param alt: Length = 400 km;
             },
             _ => panic!("expected node"),
         }
+    }
+
+    // Phase 3: fn declaration tests
+
+    #[test]
+    fn parse_fn_short_form() {
+        let source = "fn double(x: Dimensionless) -> Dimensionless = x * 2.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.name, "double");
+                assert!(f.generic_params.is_empty());
+                assert_eq!(f.params.len(), 1);
+                assert_eq!(f.params[0].name.name, "x");
+                assert!(matches!(f.body, FnBody::Short(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_block_form() {
+        let source = "fn add_one(x: Dimensionless) -> Dimensionless { let one = 1.0; x + one }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.name, "add_one");
+                match &f.body {
+                    FnBody::Block { stmts, expr } => {
+                        assert_eq!(stmts.len(), 1);
+                        assert_eq!(stmts[0].name.name, "one");
+                        assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                    }
+                    FnBody::Short(_) => panic!("expected block body"),
+                }
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_with_generics() {
+        let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.name, "lerp");
+                assert_eq!(f.generic_params.len(), 1);
+                assert_eq!(f.generic_params[0].name.name, "D");
+                assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(f.params.len(), 3);
+                assert_eq!(f.params[0].name.name, "a");
+                assert_eq!(f.params[1].name.name, "b");
+                assert_eq!(f.params[2].name.name, "t");
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_multiple_generics() {
+        let source = "fn convert<A: Dim, B: Dim>(x: A, y: B) -> A = x;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.generic_params.len(), 2);
+                assert_eq!(f.generic_params[0].name.name, "A");
+                assert_eq!(f.generic_params[1].name.name, "B");
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_zero_args() {
+        let source = "fn pi_val() -> Dimensionless = PI;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.name, "pi_val");
+                assert!(f.params.is_empty());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_trailing_comma() {
+        let source = "fn add(x: Dimensionless, y: Dimensionless,) -> Dimensionless = x + y;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.params.len(), 2);
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_dim_expr_type() {
+        let source = "fn speed(d: Length, t: Time) -> Length / Time = d / t;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.params.len(), 2);
+                // Return type is a compound dim expr
+                assert!(matches!(f.return_type.kind, TypeExprKind::DimExpr(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_block_no_lets() {
+        let source = "fn identity(x: Dimensionless) -> Dimensionless { x }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => match &f.body {
+                FnBody::Block { stmts, .. } => assert!(stmts.is_empty()),
+                FnBody::Short(_) => panic!("expected block body"),
+            },
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_mixed_with_other_decls() {
+        let source = r#"
+            const TWO: Dimensionless = 2.0;
+            fn double(x: Dimensionless) -> Dimensionless = x * TWO;
+            param val: Dimensionless = 5.0;
+            node result: Dimensionless = double(@val);
+        "#;
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 4);
+        assert!(matches!(file.declarations[0].kind, DeclKind::Const(_)));
+        assert!(matches!(file.declarations[1].kind, DeclKind::Fn(_)));
+        assert!(matches!(file.declarations[2].kind, DeclKind::Param(_)));
+        assert!(matches!(file.declarations[3].kind, DeclKind::Node(_)));
     }
 }

@@ -47,7 +47,7 @@ pub enum KasuriError {
     #[error("unknown function `{name}`")]
     #[diagnostic(
         code(kasuri::N004),
-        help("only built-in functions are available in Phase 0")
+        help("check function name and ensure it is defined")
     )]
     UnknownFunction {
         name: String,
@@ -69,6 +69,31 @@ pub enum KasuriError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("@ reference not allowed here")]
+        span: SourceSpan,
+    },
+
+    #[error("graph reference `@{name}` not allowed in function body")]
+    #[diagnostic(code(kasuri::F001))]
+    GraphRefInFn {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("@ reference not allowed here")]
+        span: SourceSpan,
+        #[help]
+        help: String,
+    },
+
+    #[error("recursive function `{name}` detected")]
+    #[diagnostic(
+        code(kasuri::F002),
+        help("kasuri does not support recursive functions")
+    )]
+    RecursiveFunction {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("involved in recursion")]
         span: SourceSpan,
     },
 

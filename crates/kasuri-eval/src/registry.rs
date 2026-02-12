@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use kasuri_syntax::ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind, UnitExpr};
+use kasuri_syntax::ast::{DimExpr, FnBody, MulDivOp, TypeExpr, TypeExprKind, UnitExpr};
 use kasuri_syntax::dimension::{Dimension, Rational};
+use kasuri_syntax::span::Span;
 
 /// Information about a registered unit.
 #[derive(Debug, Clone)]
@@ -27,12 +28,31 @@ pub struct StructDef {
     pub fields: Vec<StructField>,
 }
 
+/// A user-defined function parameter.
+#[derive(Debug, Clone)]
+pub struct FnParamDef {
+    pub name: String,
+    pub type_expr: TypeExpr,
+}
+
+/// A user-defined function stored in the registry.
+#[derive(Debug, Clone)]
+pub struct FnDef {
+    pub name: String,
+    pub generic_params: Vec<String>,
+    pub params: Vec<FnParamDef>,
+    pub return_type_expr: TypeExpr,
+    pub body: FnBody,
+    pub span: Span,
+}
+
 /// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
 #[derive(Debug, Default)]
 pub struct Registry {
     dimensions: HashMap<String, Dimension>,
     units: HashMap<String, UnitInfo>,
     structs: HashMap<String, StructDef>,
+    functions: HashMap<String, FnDef>,
 }
 
 impl Registry {
@@ -73,6 +93,22 @@ impl Registry {
     #[must_use]
     pub fn get_struct(&self, name: &str) -> Option<&StructDef> {
         self.structs.get(name)
+    }
+
+    /// Register a user-defined function.
+    pub fn register_function(&mut self, def: FnDef) {
+        self.functions.insert(def.name.clone(), def);
+    }
+
+    /// Look up a user-defined function by name.
+    #[must_use]
+    pub fn get_function(&self, name: &str) -> Option<&FnDef> {
+        self.functions.get(name)
+    }
+
+    /// Iterate over all user-defined functions.
+    pub fn all_functions(&self) -> impl Iterator<Item = &FnDef> {
+        self.functions.values()
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.

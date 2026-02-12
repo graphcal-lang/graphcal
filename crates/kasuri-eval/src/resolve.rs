@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use kasuri_syntax::ast::{DeclKind, Expr, ExprKind, File};
+use kasuri_syntax::ast::{DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
 use kasuri_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -32,6 +32,8 @@ pub struct ResolvedFile {
     pub const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
+    /// User-defined function declarations: (name, decl, span).
+    pub functions: Vec<(String, FnDecl, Span)>,
 }
 
 /// Resolve names, check casing, detect duplicates, and extract dependencies.
@@ -49,9 +51,11 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     let mut consts = Vec::new();
     let mut params = Vec::new();
     let mut nodes = Vec::new();
+    let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut source_order = Vec::new();
+    let mut user_fn_names: HashSet<String> = HashSet::new();
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
@@ -60,7 +64,23 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Param(p) => (p.name.name.clone(), p.name.span, false),
             DeclKind::Node(n) => (n.name.name.clone(), n.name.span, false),
             DeclKind::Const(c) => (c.name.name.clone(), c.name.span, true),
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => continue,
+            DeclKind::Fn(f) => {
+                // Check fn name for duplicates (same namespace as param/node/const)
+                if let Some(first_span) = names.get(&f.name.name) {
+                    return Err(KasuriError::DuplicateName {
+                        name: f.name.name.clone(),
+                        src: src.clone(),
+                        duplicate: f.name.span.into(),
+                        first: (*first_span).into(),
+                    });
+                }
+                names.insert(f.name.name.clone(), f.name.span);
+                user_fn_names.insert(f.name.name.clone());
+                continue;
+            }
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {
+                continue;
+            }
         };
 
         // Check for duplicates
@@ -79,7 +99,9 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Const(_) => DeclCategory::Const,
             DeclKind::Param(_) => DeclCategory::Param,
             DeclKind::Node(_) => DeclCategory::Node,
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => unreachable!(),
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {
+                unreachable!()
+            }
         };
         source_order.push((name.clone(), category));
 
@@ -118,6 +140,11 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {}
+            DeclKind::Fn(f) => {
+                // Enforce @ prohibition in function bodies
+                check_no_graph_refs_in_fn(f, src)?;
+                functions.push((f.name.name.clone(), f.clone(), decl.span));
+            }
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
                 let deps = extract_const_refs(
@@ -125,6 +152,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
                     &all_const_names,
                     &builtin_consts,
                     &builtin_fns,
+                    &user_fn_names,
                     src,
                 )?;
                 const_deps.insert(c.name.name.clone(), deps);
@@ -137,6 +165,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
                     &all_const_names,
                     &builtin_consts,
                     &builtin_fns,
+                    &user_fn_names,
                     src,
                 )?;
                 runtime_deps.insert(p.name.name.clone(), graph_refs);
@@ -149,6 +178,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
                     &all_const_names,
                     &builtin_consts,
                     &builtin_fns,
+                    &user_fn_names,
                     src,
                 )?;
                 runtime_deps.insert(n.name.name.clone(), graph_refs);
@@ -164,6 +194,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
         runtime_deps,
         const_deps,
         source_order,
+        functions,
     })
 }
 
@@ -233,12 +264,90 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
     }
 }
 
+/// Check that a function body contains no `@` references (purity enforcement).
+fn check_no_graph_refs_in_fn(
+    fn_decl: &FnDecl,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), KasuriError> {
+    let check = |expr: &Expr| -> Result<(), KasuriError> {
+        check_no_graph_refs_in_fn_expr(expr, &fn_decl.name.name, src)
+    };
+    match &fn_decl.body {
+        FnBody::Short(expr) => check(expr),
+        FnBody::Block { stmts, expr } => {
+            for stmt in stmts {
+                check(&stmt.value)?;
+            }
+            check(expr)
+        }
+    }
+}
+
+fn check_no_graph_refs_in_fn_expr(
+    expr: &Expr,
+    fn_name: &str,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), KasuriError> {
+    match &expr.kind {
+        ExprKind::GraphRef(ident) => Err(KasuriError::GraphRefInFn {
+            name: ident.name.clone(),
+            src: src.clone(),
+            span: expr.span.into(),
+            help: format!("pass `{fn_name}` as a function parameter instead"),
+        }),
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_) => Ok(()),
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            check_no_graph_refs_in_fn_expr(lhs, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(rhs, fn_name, src)
+        }
+        ExprKind::UnaryOp { operand, .. } => check_no_graph_refs_in_fn_expr(operand, fn_name, src),
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                check_no_graph_refs_in_fn_expr(arg, fn_name, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            check_no_graph_refs_in_fn_expr(condition, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(then_branch, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(else_branch, fn_name, src)
+        }
+        ExprKind::Convert { expr: inner, .. } => {
+            check_no_graph_refs_in_fn_expr(inner, fn_name, src)
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                check_no_graph_refs_in_fn_expr(&stmt.value, fn_name, src)?;
+            }
+            check_no_graph_refs_in_fn_expr(expr, fn_name, src)
+        }
+        ExprKind::FieldAccess { expr, .. } => check_no_graph_refs_in_fn_expr(expr, fn_name, src),
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    check_no_graph_refs_in_fn_expr(val, fn_name, src)?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Extract const references from a const expression.
 fn extract_const_refs(
     expr: &Expr,
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<String>, KasuriError> {
     let mut deps = HashSet::new();
@@ -247,6 +356,7 @@ fn extract_const_refs(
         all_const_names,
         builtin_consts,
         builtin_fns,
+        user_fn_names,
         src,
         &mut deps,
     )?;
@@ -259,6 +369,7 @@ fn collect_const_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     deps: &mut HashSet<String>,
 ) -> Result<(), KasuriError> {
@@ -283,37 +394,65 @@ fn collect_const_refs(
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str()) {
+            if !builtin_fns.contains_key(name.name.as_str()) && !user_fn_names.contains(&name.name)
+            {
                 return Err(KasuriError::UnknownFunction {
                     name: name.name.clone(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
             }
-            let expected_arity = builtin_fns[name.name.as_str()].arity;
-            if args.len() != expected_arity {
+            // Only check arity for builtins (user fn arity checked later in dim_check)
+            if let Some(builtin) = builtin_fns.get(name.name.as_str())
+                && args.len() != builtin.arity
+            {
                 return Err(KasuriError::WrongArity {
                     name: name.name.clone(),
-                    expected: expected_arity,
+                    expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
             }
             for arg in args {
-                collect_const_refs(arg, all_const_names, builtin_consts, builtin_fns, src, deps)?;
+                collect_const_refs(
+                    arg,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    deps,
+                )?;
             }
             Ok(())
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_const_refs(lhs, all_const_names, builtin_consts, builtin_fns, src, deps)?;
-            collect_const_refs(rhs, all_const_names, builtin_consts, builtin_fns, src, deps)
+            collect_const_refs(
+                lhs,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )?;
+            collect_const_refs(
+                rhs,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )
         }
         ExprKind::UnaryOp { operand, .. } => collect_const_refs(
             operand,
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             deps,
         ),
@@ -327,6 +466,7 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 deps,
             )?;
@@ -335,6 +475,7 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 deps,
             )?;
@@ -343,6 +484,7 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 deps,
             )
@@ -352,6 +494,7 @@ fn collect_const_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             deps,
         ),
@@ -362,6 +505,7 @@ fn collect_const_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
+                    user_fn_names,
                     src,
                     deps,
                 )?;
@@ -371,6 +515,7 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 deps,
             )
@@ -380,6 +525,7 @@ fn collect_const_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             deps,
         ),
@@ -391,6 +537,7 @@ fn collect_const_refs(
                         all_const_names,
                         builtin_consts,
                         builtin_fns,
+                        user_fn_names,
                         src,
                         deps,
                     )?;
@@ -408,6 +555,7 @@ fn extract_all_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(HashSet<String>, HashSet<String>), KasuriError> {
     let mut graph_refs = HashSet::new();
@@ -418,6 +566,7 @@ fn extract_all_refs(
         all_const_names,
         builtin_consts,
         builtin_fns,
+        user_fn_names,
         src,
         &mut graph_refs,
         &mut const_refs,
@@ -433,6 +582,7 @@ fn collect_all_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     graph_refs: &mut HashSet<String>,
     const_refs: &mut HashSet<String>,
@@ -469,18 +619,20 @@ fn collect_all_refs(
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str()) {
+            if !builtin_fns.contains_key(name.name.as_str()) && !user_fn_names.contains(&name.name)
+            {
                 return Err(KasuriError::UnknownFunction {
                     name: name.name.clone(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
             }
-            let expected_arity = builtin_fns[name.name.as_str()].arity;
-            if args.len() != expected_arity {
+            if let Some(builtin) = builtin_fns.get(name.name.as_str())
+                && args.len() != builtin.arity
+            {
                 return Err(KasuriError::WrongArity {
                     name: name.name.clone(),
-                    expected: expected_arity,
+                    expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),
@@ -493,6 +645,7 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
+                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,
@@ -507,6 +660,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -517,6 +671,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -528,6 +683,7 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -543,6 +699,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -553,6 +710,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -563,6 +721,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -574,6 +733,7 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -586,6 +746,7 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
+                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,
@@ -597,6 +758,7 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
+                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -608,6 +770,7 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
+            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -621,6 +784,7 @@ fn collect_all_refs(
                         all_const_names,
                         builtin_consts,
                         builtin_fns,
+                        user_fn_names,
                         src,
                         graph_refs,
                         const_refs,
@@ -751,5 +915,83 @@ mod tests {
         assert!(c_deps.contains("a"));
         assert!(c_deps.contains("b"));
         assert_eq!(c_deps.len(), 2);
+    }
+
+    // Phase 3: function resolution tests
+
+    #[test]
+    fn resolve_fn_collected() {
+        let source = r#"
+            fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
+            param val: Dimensionless = 1.0;
+            node result: Dimensionless = double(@val);
+        "#;
+        let resolved = parse_and_resolve(source).unwrap();
+        assert_eq!(resolved.functions.len(), 1);
+        assert_eq!(resolved.functions[0].0, "double");
+    }
+
+    #[test]
+    fn resolve_fn_duplicate_name_with_param() {
+        let source = r#"
+            param x: Dimensionless = 1.0;
+            fn x(a: Dimensionless) -> Dimensionless = a;
+        "#;
+        let err = parse_and_resolve(source).unwrap_err();
+        assert!(matches!(err, KasuriError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn resolve_fn_duplicate_name_with_const() {
+        let source = r#"
+            const X: Dimensionless = 1.0;
+            fn X(a: Dimensionless) -> Dimensionless = a;
+        "#;
+        // This should fail at parse time (fn name must be lower_snake_case)
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_at_in_fn_body() {
+        let source = r#"
+            param val: Dimensionless = 1.0;
+            fn bad(x: Dimensionless) -> Dimensionless = x + @val;
+        "#;
+        let err = parse_and_resolve(source).unwrap_err();
+        assert!(matches!(err, KasuriError::GraphRefInFn { .. }));
+    }
+
+    #[test]
+    fn resolve_user_fn_call_in_node() {
+        let source = r#"
+            fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
+            param val: Dimensionless = 5.0;
+            node result: Dimensionless = double(@val);
+        "#;
+        let resolved = parse_and_resolve(source).unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+    }
+
+    #[test]
+    fn resolve_user_fn_call_in_const() {
+        let source = r#"
+            fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
+            const FOUR: Dimensionless = double(2.0);
+        "#;
+        let resolved = parse_and_resolve(source).unwrap();
+        assert_eq!(resolved.consts.len(), 1);
+    }
+
+    #[test]
+    fn resolve_fn_not_in_source_order() {
+        let source = r#"
+            fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
+            param val: Dimensionless = 5.0;
+            node result: Dimensionless = double(@val);
+        "#;
+        let resolved = parse_and_resolve(source).unwrap();
+        // Functions should NOT appear in source_order
+        assert_eq!(resolved.source_order.len(), 2); // param + node only
     }
 }
