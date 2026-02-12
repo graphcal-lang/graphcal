@@ -14,13 +14,16 @@ These open questions from the aspect docs must be resolved before implementing P
 
 ### From [01-computation-model](../01-computation-model.md)
 
-- [ ] **Evaluation strategy for Phase 0:** Eager (evaluate all nodes in topological order).
-      Lazy and incremental recomputation are optimizations for later.
-- [ ] **Error propagation:** If a node fails (e.g., division by zero), does the
-      entire evaluation fail, or do downstream nodes get an error value?
-      Recommendation: fail-fast for Phase 0, revisit when `Option`/`Result` types exist.
+- [x] **Evaluation strategy for Phase 0:** Eager (evaluate all nodes in topological order).
+      Incremental recomputation (dirty tracking with early cutoff) is deferred to later phases
+      but the architecture is designed for it. See the evaluation strategy section in
+      [01-computation-model.md](../01-computation-model.md).
+- [ ] **Error propagation:** Fail-fast for Phase 0 (entire evaluation fails on first error).
+      The accumulator-based error collection pattern (inspired by Salsa) will be adopted in
+      later phases to enable partial evaluation and multiple error reporting. See
+      [17-error-messages.md](../17-error-messages.md).
 - [ ] **Cycle detection:** Confirm that cycles produce a clear compile error with
-      the cycle path printed.
+      the cycle path printed. Use miette's `#[related]` for cycle chain rendering.
 
 ### From [02-syntax-design](../02-syntax-design.md) (subset)
 
@@ -42,10 +45,12 @@ These open questions from the aspect docs must be resolved before implementing P
       names are always errors. Confirm this.
 - [ ] **Duplicate name detection:** `param x = 1; node x = 2;` should be a compile error.
 
-### From [17-error-messages](../17-error-messages.md) (minimal)
+### From [17-error-messages](../17-error-messages.md)
 
-- [ ] **Error format:** Use Rust-style diagnostics with file, line, column, and caret?
-- [ ] **Error codes:** Assign codes now, or defer to later?
+- [x] **Error format:** Use miette's `GraphicalReportHandler` for terminal output (Unicode
+      box-drawing, ANSI colors, labeled spans). See [17-error-messages.md](../17-error-messages.md).
+- [x] **Error codes:** Assign from the start using the `kasuri::{PREFIX}{NUMBER}` scheme.
+      Phase 0 needs `P0xx` (parse), `G0xx` (graph), and `N0xx` (namespace) error codes.
 
 ## Syntax Supported in Phase 0
 
@@ -92,7 +97,7 @@ IDENT        = [a-zA-Z_][a-zA-Z0-9_]*
 | **DAG builder** | AST -> `petgraph` DAG |
 | **Evaluator** | Topological sort, evaluate `f64` arithmetic |
 | **CLI** | `cellgraph eval <file>` prints all node values |
-| **Error reporter** | Parse errors, unknown references, cycles |
+| **Error reporter** | Parse errors, unknown references, cycles (via miette) |
 
 ## Out of Scope
 

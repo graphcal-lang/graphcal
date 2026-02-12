@@ -25,7 +25,7 @@ Each aspect of the language design is documented in a separate file for independ
 
 | # | Aspect | Status | Description |
 | --- | --- | --- | --- |
-| [01](./01-computation-model.md) | Computation Model | Mostly settled | DAG of `param`/`node`/`const`, reactive evaluation |
+| [01](./01-computation-model.md) | Computation Model | Mostly settled | DAG of `param`/`node`/`const`, reactive evaluation, incremental recomputation |
 | [02](./02-syntax-design.md) | Syntax Design | Mostly settled | Keywords, expressions, statement forms |
 | [08](./08-scoping.md) | Scoping (`@` Sigil) | Settled | `@name` = graph scope, bare `name` = local scope |
 | [09](./09-namespace.md) | Namespace & Multi-File | Mostly settled | Modules, imports, visibility, prelude |
@@ -56,7 +56,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [14](./14-spreadsheet-compatibility.md) | Spreadsheet Compatibility | Conceptual | Excel import/export, `.sheetmap` bidirectional sync |
 | [15](./15-python-interop.md) | Python Interop | Conceptual | PyO3 bindings, `#[python]` nodes, parameter sweeps |
 | [16](./16-git-workflow.md) | Git Workflow & Scenarios | Mostly settled | `.graph` as source of truth, `.scenario` overlays |
-| [17](./17-error-messages.md) | Error Messages & Diagnostics | Early | Error codes, format, diagnostic philosophy |
+| [17](./17-error-messages.md) | Error Messages & Diagnostics | Design settled | Error codes, format, miette-based diagnostic system |
 
 ## How to Use These Files
 

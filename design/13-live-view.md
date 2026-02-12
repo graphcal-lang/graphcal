@@ -35,6 +35,15 @@ Write text, get auto-rendered live view. Zero layout control -- like Mermaid.js.
 +------------------------+------------+----------------------+
 ```
 
+## Evaluation Model for Live View
+
+The live view drives the **hybrid eager/lazy evaluation** strategy described in [01-computation-model.md](./01-computation-model.md):
+
+- **Displayed nodes are eagerly recomputed.** When a `param` changes (e.g., via a slider in Edit mode), all nodes currently visible in the rendered grid are recomputed immediately. This provides the spreadsheet-style responsiveness users expect.
+- **Non-visible nodes are lazily evaluated.** Nodes outside the current view (scrolled off-screen, collapsed sections, or in other modules) are only evaluated when demanded (e.g., when the user scrolls to them or when a visible node depends on them).
+- **Early cutoff prevents cascading updates.** If a recomputed node produces the same value as before, its dependents are not re-rendered. This keeps the UI snappy even for large graphs with many downstream nodes.
+- **Cache eviction.** Node values that haven't been demanded in recent evaluation cycles are evicted (age-based, following Typst's comemo pattern). This bounds memory usage for long-running live view sessions.
+
 ## Interaction Modes
 
 | Mode | Description |
