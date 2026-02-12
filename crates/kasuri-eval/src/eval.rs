@@ -95,11 +95,24 @@ impl Value {
         }
     }
 
-    /// Get the unit label for display, or `None` for dimensionless/no-unit values.
+    /// Get the unit label for display, or `None` for dimensionless values.
+    ///
+    /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
+    /// otherwise falls back to the SI unit string (e.g., "m/s", "kg").
     #[must_use]
-    pub fn display_label(&self) -> Option<&str> {
+    pub fn display_label(&self) -> Option<String> {
         match self {
-            Self::Scalar { display_unit, .. } => display_unit.as_ref().map(|du| du.label.as_str()),
+            Self::Scalar {
+                display_unit,
+                dimension,
+                ..
+            } => {
+                if let Some(du) = display_unit {
+                    Some(du.label.clone())
+                } else {
+                    dimension.si_unit_string()
+                }
+            }
             Self::Struct { .. } => None,
         }
     }
@@ -674,7 +687,7 @@ mod tests {
 
         // Check display units
         let speed_kmh = result.nodes.iter().find(|(n, _)| n == "speed_kmh").unwrap();
-        assert_eq!(speed_kmh.1.display_label(), Some("km/hour"));
+        assert_eq!(speed_kmh.1.display_label(), Some("km/hour".to_string()));
         let display_kmh = speed_kmh.1.display_value();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
         assert!(
@@ -705,7 +718,7 @@ mod tests {
 
         // Check that tof_hours has display unit "hour"
         let tof_entry = result.nodes.iter().find(|(n, _)| n == "tof_hours").unwrap();
-        assert_eq!(tof_entry.1.display_label(), Some("hour"));
+        assert_eq!(tof_entry.1.display_label(), Some("hour".to_string()));
         let tof_display = tof_entry.1.display_value();
         assert!(
             tof_display > 5.0 && tof_display < 6.0,

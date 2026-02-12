@@ -121,6 +121,10 @@ fn print_json(result: &EvalResult) {
                         serde_json::json!(v.display_value()),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
+                } else if let Some(si_unit) = v.display_label() {
+                    map.insert("unit".to_string(), serde_json::json!(si_unit));
+                } else {
+                    // Dimensionless: no unit field
                 }
                 serde_json::Value::Object(map)
             }

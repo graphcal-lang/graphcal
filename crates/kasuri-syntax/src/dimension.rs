@@ -148,6 +148,21 @@ impl BaseDim {
             Self::Angle => "Angle",
         }
     }
+
+    /// The SI base unit symbol for this dimension.
+    #[must_use]
+    pub const fn si_symbol(self) -> &'static str {
+        match self {
+            Self::Length => "m",
+            Self::Time => "s",
+            Self::Mass => "kg",
+            Self::Temperature => "K",
+            Self::ElectricCurrent => "A",
+            Self::Amount => "mol",
+            Self::LuminousIntensity => "cd",
+            Self::Angle => "rad",
+        }
+    }
 }
 
 /// A physical dimension represented as a vector of 8 rational exponents
@@ -246,6 +261,61 @@ impl Dimension {
     #[must_use]
     pub fn pow_int(self, n: i32) -> Self {
         self.pow(Rational::from_int(n))
+    }
+
+    /// Format this dimension as an SI unit string (e.g., `m/s`, `kg*m/s^2`).
+    ///
+    /// Returns `None` for dimensionless.
+    #[must_use]
+    pub fn si_unit_string(self) -> Option<String> {
+        if self.is_dimensionless() {
+            return None;
+        }
+
+        let mut result = String::new();
+        let mut first = true;
+
+        // Positive exponents (numerator)
+        for (i, base) in BaseDim::ALL.iter().enumerate() {
+            let exp = self.exponents[i];
+            if exp.is_zero() || exp.num < 0 {
+                continue;
+            }
+            if !first {
+                result.push('*');
+            }
+            first = false;
+            result.push_str(base.si_symbol());
+            if exp != Rational::ONE {
+                result.push('^');
+                result.push_str(&exp.to_string());
+            }
+        }
+
+        // Negative exponents (denominator)
+        for (i, base) in BaseDim::ALL.iter().enumerate() {
+            let exp = self.exponents[i];
+            if exp.is_zero() || exp.num > 0 {
+                continue;
+            }
+            if first {
+                // Only negative exponents (e.g., Frequency = s^-1)
+                result.push_str(base.si_symbol());
+                result.push('^');
+                result.push_str(&exp.to_string());
+                first = false;
+            } else {
+                result.push('/');
+                result.push_str(base.si_symbol());
+                let pos_exp = -exp;
+                if pos_exp != Rational::ONE {
+                    result.push('^');
+                    result.push_str(&pos_exp.to_string());
+                }
+            }
+        }
+
+        Some(result)
     }
 }
 
