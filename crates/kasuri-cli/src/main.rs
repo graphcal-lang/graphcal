@@ -73,19 +73,29 @@ fn main() {
 fn print_text(result: &EvalResult) {
     use kasuri_eval::eval::Value;
 
-    // Flatten entries: scalars are one line, structs expand to `name.field` lines
-    let mut lines: Vec<(String, &Value)> = Vec::new();
-    for (name, value, _) in &result.all {
+    // Flatten entries: scalars are one line, structs expand to `name.field` lines,
+    // indexed values expand to `name[Variant]` lines
+    fn flatten_value<'a>(prefix: &str, value: &'a Value, lines: &mut Vec<(String, &'a Value)>) {
         match value {
             Value::Scalar { .. } => {
-                lines.push((name.clone(), value));
+                lines.push((prefix.to_string(), value));
             }
             Value::Struct { fields, .. } => {
                 for (field_name, field_val) in fields {
-                    lines.push((format!("{name}.{field_name}"), field_val));
+                    flatten_value(&format!("{prefix}.{field_name}"), field_val, lines);
+                }
+            }
+            Value::Indexed { entries, .. } => {
+                for (variant, entry_val) in entries {
+                    flatten_value(&format!("{prefix}[{variant}]"), entry_val, lines);
                 }
             }
         }
+    }
+
+    let mut lines: Vec<(String, &Value)> = Vec::new();
+    for (name, value, _) in &result.all {
+        flatten_value(name, value, &mut lines);
     }
 
     let max_name_len = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
@@ -138,6 +148,23 @@ fn print_json(result: &EvalResult) {
                     .map(|(name, val)| (name.clone(), value_to_json(val)))
                     .collect();
                 map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
+                serde_json::Value::Object(map)
+            }
+            Value::Indexed {
+                index_name,
+                entries,
+                ..
+            } => {
+                let mut map = serde_json::Map::new();
+                map.insert("index".to_string(), serde_json::json!(index_name));
+                let entries_map: serde_json::Map<String, serde_json::Value> = entries
+                    .iter()
+                    .map(|(name, val)| (name.clone(), value_to_json(val)))
+                    .collect();
+                map.insert(
+                    "entries".to_string(),
+                    serde_json::Value::Object(entries_map),
+                );
                 serde_json::Value::Object(map)
             }
         }

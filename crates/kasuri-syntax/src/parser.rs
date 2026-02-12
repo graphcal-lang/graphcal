@@ -5,9 +5,9 @@ use thiserror::Error;
 
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
-    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam,
-    Ident, LetBinding, MulDivOp, NodeDecl, ParamDecl, TypeDecl, TypeExpr, TypeExprKind, UnaryOp,
-    UnitDecl, UnitDef, UnitExpr, UnitExprItem,
+    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
+    GenericParam, Ident, IndexArg, LetBinding, MapEntry, MulDivOp, NodeDecl, ParamDecl, TypeDecl,
+    TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -116,16 +116,18 @@ impl<'src> Parser<'src> {
             Some(Token::Unit) => self.parse_unit_decl(),
             Some(Token::Type) => self.parse_type_decl(),
             Some(Token::Fn) => self.parse_fn_decl(),
+            Some(Token::Index) => self.parse_index_decl(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token(
-                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, or `fn`",
+                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, or `index`",
                     &tok.to_string(),
                     span,
                 ))
             }
-            None => Err(self
-                .unexpected_eof("`param`, `node`, `const`, `dimension`, `unit`, `type`, or `fn`")),
+            None => Err(self.unexpected_eof(
+                "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, or `index`",
+            )),
         }
     }
 
@@ -278,6 +280,43 @@ impl<'src> Parser<'src> {
         })
     }
 
+    // --- index declaration ---
+
+    /// Parse an index declaration:
+    /// `index Maneuver = { Departure, Correction, Insertion }`
+    fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Index)?;
+        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        self.expect(Token::Eq)?;
+        self.expect(Token::LBrace)?;
+
+        let mut variants = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            variants.push(variant);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        if variants.is_empty() {
+            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            return Err(self.unexpected_token("at least one variant", &tok.to_string(), span));
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Declaration {
+            kind: DeclKind::Index(crate::ast::IndexDecl { name, variants }),
+            span,
+        })
+    }
+
     // --- function declaration ---
 
     /// Parse a function declaration:
@@ -357,19 +396,19 @@ impl<'src> Parser<'src> {
             }
             let name = self.parse_any_ident()?;
             self.expect(Token::Colon)?;
-            // Only `Dim` constraint is supported
             let constraint_ident = self.parse_any_ident()?;
-            if constraint_ident.name != "Dim" {
-                return Err(self.unexpected_token(
-                    "`Dim`",
-                    &constraint_ident.name,
-                    constraint_ident.span,
-                ));
-            }
-            params.push(GenericParam {
-                name,
-                constraint: GenericConstraint::Dim,
-            });
+            let constraint = match constraint_ident.name.as_str() {
+                "Dim" => GenericConstraint::Dim,
+                "Index" => GenericConstraint::Index,
+                _ => {
+                    return Err(self.unexpected_token(
+                        "`Dim` or `Index`",
+                        &constraint_ident.name,
+                        constraint_ident.span,
+                    ));
+                }
+            };
+            params.push(GenericParam { name, constraint });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {
@@ -496,23 +535,61 @@ impl<'src> Parser<'src> {
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
-        // Peek to see if it's `Dimensionless`
-        if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
+        // Parse the base type first
+        let mut base = if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
             let text = self.lexer.slice_at(span);
             if text == "Dimensionless" {
                 let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
-                return Ok(TypeExpr {
+                TypeExpr {
                     kind: TypeExprKind::Dimensionless,
                     span,
-                });
+                }
+            } else {
+                let dim_expr = self.parse_dim_expr()?;
+                let span = dim_expr.span;
+                TypeExpr {
+                    kind: TypeExprKind::DimExpr(dim_expr),
+                    span,
+                }
             }
+        } else {
+            let dim_expr = self.parse_dim_expr()?;
+            let span = dim_expr.span;
+            TypeExpr {
+                kind: TypeExprKind::DimExpr(dim_expr),
+                span,
+            }
+        };
+
+        // Check for optional `[Index, ...]` suffix
+        if self.lexer.peek() == Some(&Token::LBracket) {
+            let (_, _bracket_span) = self.lexer.next_token().expect("peek confirmed Some");
+            let mut indexes = Vec::new();
+            loop {
+                if self.lexer.peek() == Some(&Token::RBracket) {
+                    break;
+                }
+                let idx_name =
+                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                indexes.push(idx_name);
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            let (_, end_span) = self.expect(Token::RBracket)?;
+            let span = base.span.merge(end_span);
+            base = TypeExpr {
+                kind: TypeExprKind::Indexed {
+                    base: Box::new(base),
+                    indexes,
+                },
+                span,
+            };
         }
-        let dim_expr = self.parse_dim_expr()?;
-        let span = dim_expr.span;
-        Ok(TypeExpr {
-            kind: TypeExprKind::DimExpr(dim_expr),
-            span,
-        })
+
+        Ok(base)
     }
 
     /// Parse a dimension expression: `DimTerm (("*" | "/") DimTerm)*`
@@ -892,20 +969,49 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse postfix operators (field access `.field`), highest precedence after atoms.
+    /// Parse postfix operators (field access `.field`, index access `[i]`).
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_atom()?;
-        while self.lexer.peek() == Some(&Token::Dot) {
-            self.lexer.next_token(); // consume '.'
-            let field = self.parse_any_ident()?;
-            let span = expr.span.merge(field.span);
-            expr = Expr {
-                kind: ExprKind::FieldAccess {
-                    expr: Box::new(expr),
-                    field,
-                },
-                span,
-            };
+        loop {
+            match self.lexer.peek() {
+                Some(Token::Dot) => {
+                    self.lexer.next_token(); // consume '.'
+                    let field = self.parse_any_ident()?;
+                    let span = expr.span.merge(field.span);
+                    expr = Expr {
+                        kind: ExprKind::FieldAccess {
+                            expr: Box::new(expr),
+                            field,
+                        },
+                        span,
+                    };
+                }
+                Some(Token::LBracket) => {
+                    self.lexer.next_token(); // consume '['
+                    let mut args = Vec::new();
+                    loop {
+                        if self.lexer.peek() == Some(&Token::RBracket) {
+                            break;
+                        }
+                        args.push(self.parse_index_arg()?);
+                        if self.lexer.peek() == Some(&Token::Comma) {
+                            self.lexer.next_token();
+                        } else {
+                            break;
+                        }
+                    }
+                    let (_, end_span) = self.expect(Token::RBracket)?;
+                    let span = expr.span.merge(end_span);
+                    expr = Expr {
+                        kind: ExprKind::IndexAccess {
+                            expr: Box::new(expr),
+                            args,
+                        },
+                        span,
+                    };
+                }
+                _ => break,
+            }
         }
         Ok(expr)
     }
@@ -980,6 +1086,9 @@ impl<'src> Parser<'src> {
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
                     // Struct construction: TypeName { field1: expr, field2 }
                     self.parse_struct_construction(Ident { name, span })
+                } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
+                    // Scan expression: scan(source, init, |acc, val| body)
+                    self.parse_scan(&Ident { name, span })
                 } else if self.lexer.peek() == Some(&Token::LParen) {
                     // Function call: name(args...)
                     self.lexer.next_token(); // consume '('
@@ -1009,9 +1118,48 @@ impl<'src> Parser<'src> {
                     })
                 }
             }
+            Some(Token::For) => {
+                // For comprehension: for m: Maneuver { expr }
+                self.parse_for_comp()
+            }
             Some(Token::LBrace) => {
-                // Block expression: { let a = ...; let b = ...; expr }
-                self.parse_block()
+                // Disambiguate: map literal vs block expression
+                // Consume '{' and peek at what follows
+                let (_, start_span) = self.lexer.next_token().expect("peek confirmed Some");
+                if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
+                    let text = self.lexer.slice_at(ident_span);
+                    if is_pascal_case(text) {
+                        // Could be map literal (PascalCase :: ...) or struct in block
+                        // Save the ident text to check further
+                        let saved_text = text.to_string();
+                        // Consume the ident to peek at what's next
+                        let (_, saved_span) = self.lexer.next_token().expect("peek confirmed");
+                        if self.lexer.peek() == Some(&Token::ColonColon) {
+                            // Map literal: { Ident :: Variant : expr, ... }
+                            self.parse_map_literal_after_first_ident(
+                                start_span,
+                                Ident {
+                                    name: saved_text,
+                                    span: saved_span,
+                                },
+                            )
+                        } else {
+                            // Not a map literal — reparse as block with already-consumed tokens
+                            // The consumed ident is the start of an expression in the block
+                            self.parse_block_after_open_brace_and_ident(
+                                start_span,
+                                &saved_text,
+                                saved_span,
+                            )
+                        }
+                    } else {
+                        // lowercase ident or other — block expression
+                        self.parse_block_after_open_brace(start_span)
+                    }
+                } else {
+                    // Not an ident after { — could be `{ let ...` or `{ expr }`
+                    self.parse_block_after_open_brace(start_span)
+                }
             }
             Some(Token::LParen) => {
                 self.lexer.next_token();
@@ -1028,21 +1176,6 @@ impl<'src> Parser<'src> {
     }
 
     // --- Block and let binding parsing ---
-
-    /// Parse a block expression: `{ let_binding* expr }`
-    fn parse_block(&mut self) -> Result<Expr, ParseError> {
-        let (_, start_span) = self.expect(Token::LBrace)?;
-        let (stmts, expr) = self.parse_block_contents()?;
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = start_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Block {
-                stmts,
-                expr: Box::new(expr),
-            },
-            span,
-        })
-    }
 
     /// Parse a let binding: `let IDENT (: TypeExpr)? = Expr ;`
     fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {
@@ -1108,6 +1241,251 @@ impl<'src> Parser<'src> {
         let span = type_name.span.merge(end_span);
         Ok(Expr {
             kind: ExprKind::StructConstruction { type_name, fields },
+            span,
+        })
+    }
+
+    // --- For comprehension ---
+
+    /// Parse a for comprehension: `for m: Maneuver, n: Phase { expr }`
+    fn parse_for_comp(&mut self) -> Result<Expr, ParseError> {
+        let (_, start_span) = self.expect(Token::For)?;
+        let mut bindings = Vec::new();
+        loop {
+            let var = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+            self.expect(Token::Colon)?;
+            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            bindings.push(ForBinding { var, index });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::LBrace)?;
+        let body = self.parse_expr()?;
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::ForComp {
+                bindings,
+                body: Box::new(body),
+            },
+            span,
+        })
+    }
+
+    // --- Map literal ---
+
+    /// Parse a map literal after `{` and the first `Index` ident have been consumed.
+    /// The `::` is the next token to consume.
+    fn parse_map_literal_after_first_ident(
+        &mut self,
+        brace_span: Span,
+        first_index: Ident,
+    ) -> Result<Expr, ParseError> {
+        // Consume `::` (we already peeked and confirmed it)
+        self.expect(Token::ColonColon)?;
+        let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        self.expect(Token::Colon)?;
+        let value = self.parse_expr()?;
+        let mut entries = vec![MapEntry {
+            index: first_index,
+            variant,
+            value,
+        }];
+        // Parse remaining entries
+        while self.lexer.peek() == Some(&Token::Comma) {
+            self.lexer.next_token(); // consume ','
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break; // trailing comma
+            }
+            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            self.expect(Token::ColonColon)?;
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            self.expect(Token::Colon)?;
+            let value = self.parse_expr()?;
+            entries.push(MapEntry {
+                index,
+                variant,
+                value,
+            });
+        }
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = brace_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::MapLiteral { entries },
+            span,
+        })
+    }
+
+    /// Parse a block expression after `{` has been consumed.
+    fn parse_block_after_open_brace(&mut self, start_span: Span) -> Result<Expr, ParseError> {
+        let (stmts, expr) = self.parse_block_contents()?;
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Block {
+                stmts,
+                expr: Box::new(expr),
+            },
+            span,
+        })
+    }
+
+    /// Parse a block expression after `{` and a `PascalCase` ident have been consumed.
+    /// The ident was consumed during map literal disambiguation but turned out not
+    /// to be a map literal (no `::` followed). Reconstruct parsing state.
+    fn parse_block_after_open_brace_and_ident(
+        &mut self,
+        start_span: Span,
+        ident_name: &str,
+        ident_span: Span,
+    ) -> Result<Expr, ParseError> {
+        // The consumed PascalCase ident is the start of an expression in the block.
+        // It could be a struct construction (PascalCase { ... }) or a ConstRef.
+        let ident = Ident {
+            name: ident_name.to_string(),
+            span: ident_span,
+        };
+        let first_expr = if is_pascal_case(ident_name) && self.lexer.peek() == Some(&Token::LBrace)
+        {
+            self.parse_struct_construction(ident)?
+        } else {
+            // Treat as ConstRef (UPPER_SNAKE_CASE or PascalCase used as const)
+            Expr {
+                kind: ExprKind::ConstRef(ident),
+                span: ident_span,
+            }
+        };
+        // Now continue parsing the rest of the expression (binary ops, etc.)
+        // and then close the block. This is the tricky part — the block might
+        // have just this one expression: `{ SomeExpr }` or it might continue
+        // with operators. We need to continue parsing the expression.
+        // Since we already parsed an atom, we need to handle postfix + binary ops.
+        // The simplest approach: treat `first_expr` as already parsed and
+        // continue with `parse_expr_continued` or wrap the block.
+        // Actually, for blocks the pattern is `{ let ...; expr }` or `{ expr }`.
+        // Since we consumed an ident that's not a `let`, this must be `{ expr }`.
+        // We need to finish parsing the expression (postfix, binary ops).
+        // Unfortunately we can't easily resume mid-expression parsing.
+        // The practical cases are: `{ StructName { ... } }` or `{ CONST_REF op ... }`.
+        // Let's handle it by continuing to parse operators on first_expr.
+        let expr = self.continue_parsing_expr(first_expr)?;
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Block {
+                stmts: vec![],
+                expr: Box::new(expr),
+            },
+            span,
+        })
+    }
+
+    /// Continue parsing an expression from an already-parsed left-hand side.
+    /// Handles postfix operations and binary operators.
+    fn continue_parsing_expr(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
+        // Handle postfix (field access, index access)
+        loop {
+            match self.lexer.peek() {
+                Some(Token::Dot) => {
+                    self.lexer.next_token();
+                    let field = self.parse_any_ident()?;
+                    let span = expr.span.merge(field.span);
+                    expr = Expr {
+                        kind: ExprKind::FieldAccess {
+                            expr: Box::new(expr),
+                            field,
+                        },
+                        span,
+                    };
+                }
+                Some(Token::LBracket) => {
+                    self.lexer.next_token();
+                    let mut args = Vec::new();
+                    loop {
+                        if self.lexer.peek() == Some(&Token::RBracket) {
+                            break;
+                        }
+                        args.push(self.parse_index_arg()?);
+                        if self.lexer.peek() == Some(&Token::Comma) {
+                            self.lexer.next_token();
+                        } else {
+                            break;
+                        }
+                    }
+                    let (_, end_span) = self.expect(Token::RBracket)?;
+                    let span = expr.span.merge(end_span);
+                    expr = Expr {
+                        kind: ExprKind::IndexAccess {
+                            expr: Box::new(expr),
+                            args,
+                        },
+                        span,
+                    };
+                }
+                _ => break,
+            }
+        }
+        // For simplicity, don't handle binary operators here.
+        // This path is only hit for `{ PascalCase ... }` blocks which are rare
+        // and typically just `{ StructName { ... } }`.
+        Ok(expr)
+    }
+
+    // --- Index access ---
+
+    /// Parse an index argument: either `Index::Variant` or a loop variable `m`.
+    fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
+        let (_, span) = self
+            .lexer
+            .next_token()
+            .ok_or_else(|| self.unexpected_eof("index argument"))?;
+        let name = self.lexer.slice_at(span).to_string();
+
+        if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
+            // Qualified variant: Index::Variant
+            self.lexer.next_token(); // consume '::'
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            Ok(IndexArg::Variant {
+                index: Ident { name, span },
+                variant,
+            })
+        } else if is_lower_snake_case(&name) {
+            // Loop variable
+            Ok(IndexArg::Var(Ident { name, span }))
+        } else {
+            Err(self.unexpected_token("loop variable or `Index::Variant`", &name, span))
+        }
+    }
+
+    // --- Scan expression ---
+
+    /// Parse a scan expression: `scan(source, init, |acc, val| body)`
+    fn parse_scan(&mut self, name_ident: &Ident) -> Result<Expr, ParseError> {
+        self.expect(Token::LParen)?;
+        let source = self.parse_expr()?;
+        self.expect(Token::Comma)?;
+        let init = self.parse_expr()?;
+        self.expect(Token::Comma)?;
+        // Parse lambda: |acc, val| body
+        self.expect(Token::Pipe)?;
+        let acc_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        self.expect(Token::Comma)?;
+        let val_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        self.expect(Token::Pipe)?;
+        let body = self.parse_expr()?;
+        let (_, end_span) = self.expect(Token::RParen)?;
+        let span = name_ident.span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Scan {
+                source: Box::new(source),
+                init: Box::new(init),
+                acc_name,
+                val_name,
+                body: Box::new(body),
+            },
             span,
         })
     }
@@ -1187,6 +1565,12 @@ fn is_pascal_case(s: &str) -> bool {
         && s.chars().any(|c| c.is_ascii_lowercase())
 }
 
+/// Uppercase-starting identifier: `PascalCase` names or single-letter generic params like `I`.
+/// Used where both concrete index names (`Maneuver`) and generic params (`I`) are valid.
+fn is_uppercase_starting(s: &str) -> bool {
+    !s.is_empty() && s.starts_with(|c: char| c.is_ascii_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -1225,7 +1609,7 @@ mod tests {
                         assert_eq!(d.terms.len(), 1);
                         assert_eq!(d.terms[0].term.name.name, "Length");
                     }
-                    TypeExprKind::Dimensionless => panic!("expected DimExpr"),
+                    other => panic!("expected DimExpr, got {other:?}"),
                 }
                 assert!(matches!(p.value.kind, ExprKind::UnitLiteral { .. }));
             }
@@ -1250,7 +1634,7 @@ mod tests {
                         assert_eq!(d.terms[1].term.name.name, "Time");
                         assert_eq!(d.terms[1].term.power, Some(2));
                     }
-                    TypeExprKind::Dimensionless => panic!("expected DimExpr"),
+                    other => panic!("expected DimExpr, got {other:?}"),
                 }
             }
             _ => panic!("expected node"),
@@ -1734,6 +2118,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Unit(u) => u.name.name.as_str(),
                 DeclKind::Type(t) => t.name.name.as_str(),
                 DeclKind::Fn(f) => f.name.name.as_str(),
+                DeclKind::Index(i) => i.name.name.as_str(),
             })
             .collect();
         assert_eq!(
@@ -1829,7 +2214,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 // The type_ann should be a DimExpr with division
                 match &t.fields[0].type_ann.kind {
                     TypeExprKind::DimExpr(_) => {} // ok
-                    other @ TypeExprKind::Dimensionless => {
+                    other => {
                         panic!("expected DimExpr, got {other:?}")
                     }
                 }
@@ -2214,5 +2599,211 @@ param alt: Length = 400 km;
         assert!(matches!(file.declarations[1].kind, DeclKind::Fn(_)));
         assert!(matches!(file.declarations[2].kind, DeclKind::Param(_)));
         assert!(matches!(file.declarations[3].kind, DeclKind::Node(_)));
+    }
+
+    // --- Phase 5: Indexed Values ---
+
+    #[test]
+    fn parse_index_decl() {
+        let source = "index Maneuver = { Departure, Correction, Insertion }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.name, "Maneuver");
+                assert_eq!(idx.variants.len(), 3);
+                assert_eq!(idx.variants[0].name, "Departure");
+                assert_eq!(idx.variants[1].name, "Correction");
+                assert_eq!(idx.variants[2].name, "Insertion");
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_index_decl_trailing_comma() {
+        let source = "index Phase = { Boost, Coast, }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.name, "Phase");
+                assert_eq!(idx.variants.len(), 2);
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_indexed_type() {
+        let source = "param dv: Velocity[Maneuver] = 1.0 m/s;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.name.name, "dv");
+                match &p.type_ann.kind {
+                    TypeExprKind::Indexed { base, indexes } => {
+                        assert!(matches!(base.kind, TypeExprKind::DimExpr(_)));
+                        assert_eq!(indexes.len(), 1);
+                        assert_eq!(indexes[0].name, "Maneuver");
+                    }
+                    other => panic!("expected Indexed type, got {other:?}"),
+                }
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_multi_indexed_type() {
+        let source = "param matrix: Dimensionless[Row, Col] = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::Indexed { indexes, .. } => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(indexes[0].name, "Row");
+                    assert_eq!(indexes[1].name, "Col");
+                }
+                other => panic!("expected Indexed type, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_for_comprehension() {
+        let source = "node fuel: Mass[Maneuver] = for m: Maneuver { 1.0 kg };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { bindings, body } => {
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(bindings[0].var.name, "m");
+                    assert_eq!(bindings[0].index.name, "Maneuver");
+                    assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
+                }
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_for_multi_binding() {
+        let source = "node x: Dimensionless[Row, Col] = for r: Row, c: Col { 0.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { bindings, .. } => {
+                    assert_eq!(bindings.len(), 2);
+                    assert_eq!(bindings[0].var.name, "r");
+                    assert_eq!(bindings[0].index.name, "Row");
+                    assert_eq!(bindings[1].var.name, "c");
+                    assert_eq!(bindings[1].index.name, "Col");
+                }
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_index_access_with_variant() {
+        let source = "node x: Velocity = @dv[Maneuver::Departure];";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::IndexAccess { expr, args } => {
+                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
+                    assert_eq!(args.len(), 1);
+                    match &args[0] {
+                        IndexArg::Variant { index, variant } => {
+                            assert_eq!(index.name, "Maneuver");
+                            assert_eq!(variant.name, "Departure");
+                        }
+                        other @ IndexArg::Var(_) => panic!("expected Variant, got {other:?}"),
+                    }
+                }
+                other => panic!("expected IndexAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_index_access_with_loop_var() {
+        let source = "node y: Velocity[Maneuver] = for m: Maneuver { @dv[m] };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { body, .. } => match &body.kind {
+                    ExprKind::IndexAccess { args, .. } => {
+                        assert_eq!(args.len(), 1);
+                        match &args[0] {
+                            IndexArg::Var(ident) => assert_eq!(ident.name, "m"),
+                            other @ IndexArg::Variant { .. } => {
+                                panic!("expected Var, got {other:?}")
+                            }
+                        }
+                    }
+                    other => panic!("expected IndexAccess, got {other:?}"),
+                },
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_map_literal() {
+        let source = "param dv: Velocity[Maneuver] = { Maneuver::Departure: 2.0 km/s, Maneuver::Correction: 0.05 km/s };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::MapLiteral { entries } => {
+                    assert_eq!(entries.len(), 2);
+                    assert_eq!(entries[0].index.name, "Maneuver");
+                    assert_eq!(entries[0].variant.name, "Departure");
+                    assert_eq!(entries[1].index.name, "Maneuver");
+                    assert_eq!(entries[1].variant.name, "Correction");
+                }
+                other => panic!("expected MapLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_scan_expression() {
+        let source = "node cum: Velocity[Maneuver] = scan(@dv, 0.0 m/s, |acc, val| acc + val);";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Scan {
+                    acc_name, val_name, ..
+                } => {
+                    assert_eq!(acc_name.name, "acc");
+                    assert_eq!(val_name.name, "val");
+                }
+                other => panic!("expected Scan, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_generic_fn_with_index_constraint() {
+        let source = "fn total<D: Dim, I: Index>(values: D) -> D = values;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.generic_params.len(), 2);
+                assert_eq!(f.generic_params[0].name.name, "D");
+                assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(f.generic_params[1].name.name, "I");
+                assert_eq!(f.generic_params[1].constraint, GenericConstraint::Index);
+            }
+            _ => panic!("expected fn"),
+        }
     }
 }

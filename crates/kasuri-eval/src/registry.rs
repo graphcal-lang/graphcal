@@ -35,15 +35,38 @@ pub struct FnParamDef {
     pub type_expr: TypeExpr,
 }
 
+/// A generic parameter on a user-defined function, with its constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FnGenericConstraint {
+    /// `D: Dim` — the generic stands for a dimension.
+    Dim,
+    /// `I: Index` — the generic stands for an index.
+    Index,
+}
+
+/// A generic parameter with name and constraint.
+#[derive(Debug, Clone)]
+pub struct FnGenericParam {
+    pub name: String,
+    pub constraint: FnGenericConstraint,
+}
+
 /// A user-defined function stored in the registry.
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
-    pub generic_params: Vec<String>,
+    pub generic_params: Vec<FnGenericParam>,
     pub params: Vec<FnParamDef>,
     pub return_type_expr: TypeExpr,
     pub body: FnBody,
     pub span: Span,
+}
+
+/// A declared index with its ordered variants.
+#[derive(Debug, Clone)]
+pub struct IndexDef {
+    pub name: String,
+    pub variants: Vec<String>,
 }
 
 /// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
@@ -53,6 +76,7 @@ pub struct Registry {
     units: HashMap<String, UnitInfo>,
     structs: HashMap<String, StructDef>,
     functions: HashMap<String, FnDef>,
+    indexes: HashMap<String, IndexDef>,
 }
 
 impl Registry {
@@ -111,6 +135,17 @@ impl Registry {
         self.functions.values()
     }
 
+    /// Register an index definition.
+    pub fn register_index(&mut self, def: IndexDef) {
+        self.indexes.insert(def.name.clone(), def);
+    }
+
+    /// Look up an index definition by name.
+    #[must_use]
+    pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
+        self.indexes.get(name)
+    }
+
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     ///
     /// Returns `None` if any dimension name is unknown.
@@ -137,6 +172,7 @@ impl Registry {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Some(Dimension::DIMENSIONLESS),
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
+            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
         }
     }
 
@@ -335,5 +371,22 @@ mod tests {
         assert_eq!(def.fields[0].name, "dv1");
         assert_eq!(def.fields[0].dimension, velocity_dim);
         assert!(r.get_struct("NonExistent").is_none());
+    }
+
+    #[test]
+    fn registry_index_register_and_lookup() {
+        let mut r = make_registry();
+        r.register_index(super::IndexDef {
+            name: "Maneuver".to_string(),
+            variants: vec![
+                "Departure".to_string(),
+                "Correction".to_string(),
+                "Insertion".to_string(),
+            ],
+        });
+        let def = r.get_index("Maneuver").unwrap();
+        assert_eq!(def.name, "Maneuver");
+        assert_eq!(def.variants, vec!["Departure", "Correction", "Insertion"]);
+        assert!(r.get_index("NonExistent").is_none());
     }
 }

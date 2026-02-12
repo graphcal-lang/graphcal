@@ -1,174 +1,349 @@
-# Phase 5: 1D Tables
+# Phase 5: Indexed Values
 
-> Single-axis tables with map, reduce, scan.
+> Type-level indexing with explicit `for` comprehensions, `sum`/`reduce`,
+> and `scan`. No implicit broadcasting.
 
 ## Goal
 
-Prove that spreadsheet-like tabular data works: declare a table schema,
-populate it with rows, compute derived columns (map), aggregate (reduce),
-and accumulate (scan). This is the feature that makes Cellgraph feel
-like a spreadsheet, not just a calculator.
+Prove that labeled, multi-axis data works as a first-class part of the type
+system. An **indexed value** `T[I]` is a total map from index labels to values
+of type `T`. Combined with explicit `for` comprehensions, this replaces
+spreadsheet-like tabular computation while being type-safe and unambiguous.
+
+This phase subsumes the original "1D tables" and "N-dim tables" designs into
+a single unified mechanism. There is no `table` keyword — "tables" are simply
+co-indexed `param`/`node`/`const` declarations.
 
 ## Prerequisites
 
-Phases 0-4 must be complete. Tables use dimensions (Phase 1), structs
-(Phase 2), functions (Phase 3), and can span files (Phase 4).
+Phases 0-3 must be complete. Indexed values use dimensions (Phase 1),
+structs (Phase 2), and functions (Phase 3). Phase 4 (multi-file) is
+not required.
 
-## Design Decisions to Lock
+## Design Decisions — Locked
 
-### From [10-tables-and-autofill](../10-tables-and-autofill.md) (1D subset)
+### Index Declaration
 
-- [ ] **Table declaration syntax:** `table name { col: Type, ... }` declares a schema.
-      Is this a type declaration (like `type`) or a separate construct?
-- [ ] **Table population:** `param name: schema = [ ... ];` to populate with literal data.
-      Tuple syntax for rows: `("Departure", 2.46 km/s, 300 s)`.
-      Or struct syntax: `{ name: "Departure", delta_v: 2.46 km/s, duration: 300 s }`?
-- [ ] **Table as param vs node:** Can a table be a computed node (all rows generated),
-      or only a param (user-supplied data)?
-- [ ] **Row identity:** Are rows identified by position (index 0, 1, 2, ...) or by
-      a key column?
-- [ ] **Dynamic row count:** Is the number of rows fixed at parse time, or can rows
-      be added at runtime?
+- [x] **`index` keyword:** `index Name = { Variant1, Variant2, ... }` declares a
+      finite label set. Variants are PascalCase identifiers.
+- [x] **Variant access:** `Index::Variant` using `::` path separator, consistent
+      with module paths (Phase 4). Importable with `use Index::*` in Phase 4.
+- [x] **No data payload:** Index variants carry no data. They are C-style enums
+      used purely for labeling. Data-carrying variants are tagged unions (Phase 10).
 
-### Column Expressions (Map)
+### Indexed Types
 
-- [ ] **Syntax:** `node table.new_col: Type = <expr using row>;`
-      The `row` variable gives access to the current row's fields.
-- [ ] **`row` binding:** Is `row` a keyword, a special variable, or an implicit parameter?
-      Does it need `@`? (Recommendation: no `@` -- `row` is local to the expression.)
-- [ ] **Column ordering:** Can column B reference column A defined in the same table?
-      E.g., `node t.fuel = ...;` then `node t.cost = row.fuel * @price;`.
-      This creates dependencies between column expressions -- must be topologically ordered.
-- [ ] **Graph dependency:** A column expression like `node t.fuel = row.dv / @v_exhaust * @mass`
-      creates a graph edge from `v_exhaust` and `mass` to the column. Is the column itself
-      a single node in the DAG, or one node per row?
+- [x] **`T[I]` as a type:** An indexed type means "a value of type `T` for every
+      label in index `I`." This is a total map — every label must have a value.
+- [x] **Multi-axis:** `T[I, J]` is sugar for `T[I][J]` — a value of type `T` for
+      every combination of `I` and `J` labels. Both notations are equivalent.
+- [x] **Type annotations:** `param x: Velocity[Maneuver]`, `node y: Mass[A, B]`.
+      The index is part of the type, not the declaration syntax.
+- [x] **Scalars are unindexed:** A plain `Velocity` is not indexed. There is no
+      implicit broadcasting — combining scalar and indexed values requires explicit
+      `for` comprehension.
 
-### Aggregation (Reduce)
+### Literal Syntax
 
-- [ ] **Syntax:** `node total = table.column.sum();`
-      What aggregation functions are built-in? `sum`, `min`, `max`, `mean`, `count`, `last`, `first`?
-- [ ] **Return type:** `sum()` on a `Mass` column returns `Mass`. `count()` returns `i64`.
-      `mean()` returns the same dimension. Confirm dimensional semantics for each.
-- [ ] **Empty table:** What does `sum()` return for an empty table? `0`? Error?
+- [x] **Map literal:** Indexed values are populated with `{ Index::Variant: expr, ... }`.
+      All variants must be present (total map, no missing values).
+- [x] **Nested literals:** Multi-axis values nest: `{ A::A1: { B::B1: ..., B::B2: ... }, ... }`.
 
-### Running Totals (Scan)
+### `for` Comprehension
 
-- [ ] **Syntax:** `node table.col = scan(init, |acc, row| expr);`
-      `acc` is the accumulator, `row` is the current row. `init` is the initial value.
-- [ ] **Lambda syntax:** `|acc, row| expr` for single expression,
-      `|acc, row| { let ...; expr }` for multi-line. Confirm.
-- [ ] **`@` in scan lambdas:** `@` references graph nodes inside the lambda. Confirm.
-- [ ] **Type of `acc`:** Must match the return type. `scan(0.0 m/s, |acc, row| acc + row.dv)`
-      has type `Velocity` because `acc` starts as `Velocity`.
+- [x] **Explicit iteration:** All element-wise operations require `for`. No implicit
+      broadcasting. `for i: I { expr }` produces a value of type `T[I]` where `T`
+      is the type of `expr`.
+- [x] **Multi-axis sugar:** `for i: I, j: J { expr }` is sugar for
+      `for i: I { for j: J { expr } }`, producing `T[I, J]`.
+- [x] **Loop variable:** The loop variable (e.g., `i`) is used to index into
+      indexed values: `@x[i]`. It is a lowercase identifier.
+- [x] **Scalar access inside `for`:** Scalar (unindexed) values like `@dry_mass`
+      are accessed directly without indexing.
+- [x] **Nesting:** `for` can nest arbitrarily. Inner `for` can reference outer
+      loop variables.
 
-### Primitives extension
+### Indexing (Element Access)
 
-- [ ] **`Str` type:** Tables need string columns for names/labels. Add `Str` to
-      the primitive set. String literals: `"double-quoted"`.
-- [ ] **`i64` type:** May be needed for counts. Implicit `i64` -> `f64` conversion?
-- [ ] **`bool` type:** May be needed for filter-like columns. Already in Phase 0 grammar.
+- [x] **By label:** `@x[Index::Variant]` extracts a scalar from an indexed value.
+- [x] **By loop variable:** `@x[i]` inside a `for i: I { ... }` extracts the
+      element corresponding to the current label.
+- [x] **Partial indexing:** `@x[Index::A1]` on a `T[A, B]` value produces `T[B]`.
+      Fixing one axis yields a value indexed by the remaining axes.
+- [x] **Multi-axis indexing:** `@x[Index::A1, Index::B2]` or `@x[i, j]` for
+      full element access on multi-axis values.
+
+### Reduction
+
+- [x] **`sum()`:** `sum(indexed_expr)` collapses all axes, returning a scalar.
+      Inside a `for`, `sum(for j: J { ... })` collapses only the `J` axis.
+- [x] **Other aggregations:** `min()`, `max()`, `mean()`, `count()` follow the
+      same pattern. `count()` returns `Dimensionless`.
+- [x] **Dimensional semantics:** `sum()` on `Mass[I]` returns `Mass`.
+      `mean()` on `Mass[I]` returns `Mass`. `min()`/`max()` preserve dimension.
+
+### Scan
+
+- [x] **Ordered accumulation:** `scan(indexed_expr, init, |acc, val| body)`
+      produces an indexed value of the same shape. Processes elements in
+      declaration order of the index variants.
+- [x] **Type:** `scan` on `T[I]` with accumulator type `U` produces `U[I]`.
+      The init value has type `U`.
+
+### Functions with Indexed Types
+
+- [x] **`Index` as generic constraint:** `fn total<D: Dim, I: Index>(values: D[I]) -> D`
+      allows functions generic over both dimension and index.
+- [x] **Concrete indexed params:** `fn f(x: Velocity[Maneuver]) -> Velocity` also works.
+- [x] **`for` in function bodies:** Functions can use `for` comprehensions.
+
+### Primitives Extension
+
+- [x] **`Str` type:** String type for labels/names. String literals: `"double-quoted"`.
+      Needed for `param name: Str[Maneuver] = { ... }`.
 
 ## Syntax Supported in Phase 5
 
-Everything from Phase 4, plus:
+Everything from Phase 3, plus:
 
 ```ebnf
-// Table schema declaration (no trailing ;)
-TableDecl    = "table" IDENT "{" FieldList "}"
+// Index declaration
+IndexDecl     = "index" UPPER_IDENT "=" "{" VariantList "}"
+VariantList   = UPPER_IDENT ("," UPPER_IDENT)* ","?
 
-// Table population (as param)
-ParamDecl    = "param" IDENT ":" IDENT "=" "[" RowList "]" ";"
-RowList      = (RowLiteral ",")* RowLiteral ","?
-RowLiteral   = "(" ExprList ")"
-ExprList     = (Expr ",")* Expr ","?
+// Indexed type annotation
+TypeExpr      = BaseType ("[" IndexList "]")?
+IndexList     = UPPER_IDENT ("," UPPER_IDENT)*
 
-// Column expression (map)
-ColNodeDecl  = "node" IDENT "." IDENT (":" TypeExpr)? "=" Expr ";"
+// Map literal (indexed value)
+MapLiteral    = "{" MapEntry ("," MapEntry)* ","? "}"
+MapEntry      = QualVariant ":" Expr
+QualVariant   = UPPER_IDENT "::" UPPER_IDENT
+
+// for comprehension
+ForExpr       = "for" ForBindings "{" Expr "}"
+ForBindings   = ForBinding ("," ForBinding)*
+ForBinding    = LOWER_IDENT ":" UPPER_IDENT
+
+// Indexing
+IndexExpr     = Expr "[" IndexArg ("," IndexArg)* "]"
+IndexArg      = QualVariant | LOWER_IDENT
 
 // Aggregation
-AggExpr      = IDENT "." IDENT "." AGG_FN "()"
-AGG_FN       = "sum" | "min" | "max" | "mean" | "count" | "first" | "last"
+AggExpr       = AGG_FN "(" Expr ")"
+AGG_FN        = "sum" | "min" | "max" | "mean" | "count"
 
 // Scan
-ScanExpr     = "scan" "(" Expr "," Lambda ")"
-Lambda       = "|" IDENT "," IDENT "|" (Expr | Block)
-
-// Row field access
-RowAccess    = "row" "." IDENT
+ScanExpr      = "scan" "(" Expr "," Expr "," Lambda ")"
+Lambda        = "|" LOWER_IDENT "," LOWER_IDENT "|" (Expr | Block)
 
 // String literal
-STRING       = '"' <characters> '"'
+STRING        = '"' <characters> '"'
 ```
 
 ## Implementation Scope
 
 | Component | Description |
 | --- | --- |
-| **Table schema registry** | Store table definitions (column names + types) |
-| **Table literal parser** | Parse row tuples, type-check against schema |
-| **Column expression evaluator** | Apply expression to each row (map) |
-| **Aggregation functions** | sum, min, max, mean, count, first, last |
-| **Scan evaluator** | Sequential accumulation with lambda |
-| **Row scope** | `row.field` resolution within column expressions |
-| **Table-aware DAG** | Column expressions as nodes that depend on table data + graph nodes |
-| **`Str` primitive** | String type, string literals, basic operations |
+| **Index registry** | Store index definitions (name, ordered list of variants) |
+| **Index variant resolution** | Resolve `Maneuver::Departure` to an index + variant |
+| **Indexed type in type system** | `T[I]` as a type constructor; multi-axis `T[I, J]` |
+| **Map literal parser** | Parse `{ Index::Variant: expr, ... }` with totality check |
+| **`for` comprehension** | Parse and evaluate `for i: I { expr }` |
+| **Indexing operator** | Parse and evaluate `expr[i]`, `expr[Index::Variant]` |
+| **Aggregation functions** | `sum`, `min`, `max`, `mean`, `count` over indexed values |
+| **Scan evaluator** | Sequential accumulation with lambda over indexed values |
+| **Dimension checker updates** | Type-check indexed types, `for`, indexing, aggregations |
+| **`Str` primitive** | String type, string literals |
+| **`Index` generic constraint** | `<I: Index>` in function signatures |
+| **CLI output** | Display indexed values as tables |
 
 ## Out of Scope
 
-- Multi-dimensional tables (N-dim with indexes) -- Phase 7
+- Multi-file (Phase 4)
+- Dynamic indexes (runtime-loaded label sets)
+- Index arithmetic (Cartesian products, subsets)
 - Table joins
 - Filtering / where clauses
-- Dynamic row insertion/removal
-- Table rendering (TUI) -- Phase 11
+- Range indexes (numeric sequences for time axes — Phase 8)
+- Tagged unions (Phase 10)
+- Sparse indexed values / missing values / `Option<T>`
+- `i64`, `bool`, `Datetime` primitives
 
 ## Milestone Test
 
-```rust
-table maneuvers {
-    name: Str,
-    delta_v: Velocity,
-    duration: Time,
+```kasuri
+index Maneuver = { Departure, Correction, Insertion }
+
+dimension Velocity = Length / Time;
+dimension SpecificImpulse = Time;
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    Maneuver::Correction: 0.05 km/s,
+    Maneuver::Insertion: 1.48 km/s,
 }
 
-param maneuvers: maneuvers = [
-    ("Departure",  2.46 km/s, 300 s),
-    ("Correction", 0.05 km/s,  60 s),
-    ("Insertion",  1.48 km/s, 240 s),
-];
+param duration: Time[Maneuver] = {
+    Maneuver::Departure: 300 s,
+    Maneuver::Correction: 60 s,
+    Maneuver::Insertion: 240 s,
+}
 
 param dry_mass: Mass = 1200 kg;
 param isp: SpecificImpulse = 320 s;
+const G0: Acceleration = 9.80665 m/s^2;
 node v_exhaust: Velocity = @isp * @G0;
 
-// Map: compute a new column
-node maneuvers.fuel: Mass = @dry_mass * (exp(row.delta_v / @v_exhaust) - 1.0);
+// for comprehension: compute fuel for each maneuver
+node fuel: Mass[Maneuver] = for m: Maneuver {
+    @dry_mass * (exp(@delta_v[m] / @v_exhaust) - 1.0)
+}
 
-// Scan: cumulative delta-v
-node maneuvers.cum_dv: Velocity = scan(0.0 m/s, |acc, row| acc + row.delta_v);
+// scan: cumulative delta-v
+node cum_dv: Velocity[Maneuver] = scan(
+    for m: Maneuver { @delta_v[m] },
+    0.0 m/s,
+    |acc, val| acc + val,
+)
 
-// Reduce: total fuel
-node total_fuel: Mass = maneuvers.fuel.sum();
-node max_dv: Velocity = maneuvers.delta_v.max();
+// reduce: total fuel and max delta-v
+node total_fuel: Mass = sum(for m: Maneuver { @fuel[m] })
+node max_dv: Velocity = max(for m: Maneuver { @delta_v[m] })
 ```
 
-```
-$ cellgraph eval mission/
-maneuvers:
-  | name       | delta_v   | duration | fuel      | cum_dv    |
-  | Departure  | 2.46 km/s | 300 s    | 1523.7 kg | 2.46 km/s |
-  | Correction | 0.05 km/s |  60 s    |   19.3 kg | 2.51 km/s |
-  | Insertion  | 1.48 km/s | 240 s    |  735.1 kg | 3.99 km/s |
+```text
+$ kasuri eval mission.ksr
+dry_mass  = 1200 kg
+isp       = 320 s
+G0        = 9.80665 m/s^2
+v_exhaust = 3138.1 m/s
+
+delta_v:
+  | Maneuver   | delta_v   |
+  | Departure  | 2.46 km/s |
+  | Correction | 0.05 km/s |
+  | Insertion  | 1.48 km/s |
+
+duration:
+  | Maneuver   | duration |
+  | Departure  | 300 s    |
+  | Correction | 60 s     |
+  | Insertion  | 240 s    |
+
+fuel:
+  | Maneuver   | fuel      |
+  | Departure  | 1523.7 kg |
+  | Correction | 19.3 kg   |
+  | Insertion  | 735.1 kg  |
+
+cum_dv:
+  | Maneuver   | cum_dv    |
+  | Departure  | 2.46 km/s |
+  | Correction | 2.51 km/s |
+  | Insertion  | 3.99 km/s |
 
 total_fuel = 2278.1 kg
 max_dv     = 2.46 km/s
 ```
 
+### Multi-axis example
+
+```kasuri
+index Row = { R1, R2 }
+index Col = { C1, C2, C3 }
+
+param P: Dimensionless[Row, Col] = {
+    Row::R1: { Col::C1: 1.0, Col::C2: 2.0, Col::C3: 3.0 },
+    Row::R2: { Col::C1: 4.0, Col::C2: 5.0, Col::C3: 6.0 },
+}
+
+// Sum over columns for each row
+node row_sums: Dimensionless[Row] = for r: Row {
+    sum(for c: Col { @P[r, c] })
+}
+
+// Transpose
+node P_T: Dimensionless[Col, Row] = for c: Col, r: Row {
+    @P[r, c]
+}
+```
+
+### Matrix multiplication example
+
+```kasuri
+index I = { I1, I2 }
+index J = { J1, J2, J3 }
+index K = { K1, K2 }
+
+param A: Dimensionless[I, J] = { ... }
+param B: Dimensionless[J, K] = { ... }
+
+// C[i, k] = sum_j(A[i, j] * B[j, k])
+node C: Dimensionless[I, K] = for i: I, k: K {
+    sum(for j: J { @A[i, j] * @B[j, k] })
+}
+```
+
+### Generic function over indexed values
+
+```kasuri
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+
+fn dot<I: Index>(a: Dimensionless[I], b: Dimensionless[I]) -> Dimensionless =
+    sum(for i: I { a[i] * b[i] });
+```
+
+### Error cases that must work
+
+```kasuri
+// error: missing variant in map literal
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    // missing Correction and Insertion
+}
+//  error: missing variants `Maneuver::Correction`, `Maneuver::Insertion`
+
+// error: indexing without for
+node bad: Velocity[Maneuver] = @delta_v + @extra_dv;
+//  error: cannot add Velocity[Maneuver] + Velocity[Maneuver];
+//  use `for m: Maneuver { @delta_v[m] + @extra_dv[m] }` instead
+
+// error: wrong index in indexing
+node bad2: Velocity = @delta_v[Phase::Coast];
+//  error: expected index `Maneuver`, got `Phase`
+
+// error: unknown variant
+node bad3: Velocity = @delta_v[Maneuver::Landing];
+//  error: unknown variant `Landing` in index `Maneuver`
+```
+
 ## Open Questions
 
-- [ ] How should tables be displayed in CLI output? The above shows a formatted table,
-      but is this the default or opt-in?
-- [ ] Can a column expression reference another computed column of the same table?
-      E.g., `node t.cost = row.fuel * @price;` where `fuel` is also computed.
-      This requires ordering column expressions in the DAG.
-- [ ] Should there be a way to reference a specific row? E.g., `maneuvers[0].delta_v`
-      or `maneuvers["Departure"].delta_v`?
+- [ ] **CLI table grouping:** Should co-indexed values (e.g., `delta_v`, `duration`,
+      `fuel` all indexed by `Maneuver`) be grouped into a single table in CLI output?
+      Or displayed separately as shown in the milestone test?
+- [ ] **Index ordering:** Are index variants ordered by declaration order? This matters
+      for `scan` and for CLI display. (Recommendation: yes, declaration order.)
+- [ ] **Struct-indexed values:** Can a struct be indexed? E.g.,
+      `node result: TransferResult[Maneuver] = for m: Maneuver { ... }`.
+      (Recommendation: yes, `T` in `T[I]` can be any value type.)
+- [ ] **`for` in const expressions:** Can `const` use `for`? This would mean
+      `const X: Dimensionless[I] = for i: I { ... }` — the index is known at
+      compile time, so this is statically evaluable. (Recommendation: yes.)
+- [ ] **Empty indexes:** Is `index Empty = {}` valid? If so, what does
+      `sum(for e: Empty { ... })` return? (Recommendation: disallow empty indexes.)
+- [ ] **Display units in indexed values:** Can elements of an indexed value have
+      different display units? Or one display unit for the entire indexed value?
+      (Recommendation: one display unit per indexed value.)
+
+## Dependencies on Other Phases
+
+- **Phase 1 (Dimensions):** Indexed values carry dimensional types.
+- **Phase 2 (Structs):** Struct types can be indexed.
+- **Phase 3 (Functions):** `<I: Index>` generic constraint, `for` in function bodies.
+- **Phase 4 (Multi-file):** `use Index::*` to import variants.
+- **Phase 7 → merged:** N-dim tables are now `T[I, J]`, not a separate phase.
+- **Phase 8 (System Dynamics):** Time axis as a range index (extends this design).
+- **Phase 9 (Spaces):** Orthogonal — `Velocity in ECI` and `Velocity[Maneuver] in ECI`.
+- **Phase 11 (TUI):** `T[I]` → table, `T[I, J]` → matrix, `T[I, J, K]` → matrix + slicer.

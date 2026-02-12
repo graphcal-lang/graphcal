@@ -4,11 +4,11 @@
 
 Kasuri replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
-## Current Status: Phase 3 (Pure Functions)
+## Current Status: Phase 5 (Indexed Values)
 
-Phases 0--3 are implemented. Kasuri supports dimensioned arithmetic with physical
+Phases 0--5 are implemented. Kasuri supports dimensioned arithmetic with physical
 units, user-defined struct types, multi-line node bodies with `let` bindings,
-and pure functions with dimension generics.
+pure functions with dimension generics, and indexed values with aggregation.
 
 ### Rocket equation with units
 
@@ -125,6 +125,46 @@ v_parking    = 7788.487985 m/s
 midpoint_alt = 17993000 m
 ```
 
+### Indexed values with aggregation
+
+```
+// indexed.ksr
+dimension Velocity = Length / Time;
+
+index Maneuver = { Departure, Correction, Insertion }
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    Maneuver::Correction: 0.12 km/s,
+    Maneuver::Insertion: 1.83 km/s,
+};
+
+node double_dv: Velocity[Maneuver] = for m: Maneuver {
+    @delta_v[m] * 2.0
+};
+
+node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
+node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
+
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+node total_check: Velocity = total(@delta_v);
+```
+
+```
+$ kasuri eval indexed.ksr
+delta_v[Departure]          = 2.46 km/s
+delta_v[Correction]         = 0.12 km/s
+delta_v[Insertion]          = 1.83 km/s
+double_dv[Departure]        = 4920 m/s
+double_dv[Correction]       = 240 m/s
+double_dv[Insertion]        = 3660 m/s
+total_dv                    = 4410 m/s
+cumulative_dv[Departure]    = 2460 m/s
+cumulative_dv[Correction]   = 2580 m/s
+cumulative_dv[Insertion]    = 4410 m/s
+total_check                 = 4410 m/s
+```
+
 ### Features
 
 **Core language (Phase 0)**
@@ -165,6 +205,17 @@ midpoint_alt = 17993000 m
 - Recursion detection (direct and mutual) with compile-time error
 - SI unit fallback display for computed values (e.g., `m/s` for Velocity)
 
+**Indexed values (Phase 5)**
+
+- `index` declarations with named variants (`index Maneuver = { Departure, Correction, Insertion }`)
+- Indexed types as first-class (`Velocity[Maneuver]`, multi-axis `T[A, B]`)
+- Map literals with totality checking (`{ Maneuver::Departure: 2.46 km/s, ... }`)
+- `for` comprehensions with explicit iteration (`for m: Maneuver { @delta_v[m] * 2.0 }`)
+- Indexing by variant (`@x[Maneuver::Departure]`) or loop variable (`@x[m]`)
+- Aggregation functions: `sum`, `min`, `max`, `mean`, `count` collapse indexed values to scalars
+- `scan` for ordered accumulation (`scan(@delta_v, 0.0 m/s, |acc, val| acc + val)`)
+- Generic index constraint (`<I: Index>`) alongside dimension generics
+
 ## Installation
 
 ```sh
@@ -198,9 +249,8 @@ kasuri/
 Kasuri is designed to eventually support:
 
 - **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
-- **Tables with autofill** -- add a row, computed columns extend automatically
-- **Dynamic simulation** -- `scan` over a time axis for system dynamics
 - **Multi-file projects** -- explicit imports, namespaces, prelude
+- **Dynamic simulation** -- `scan` over a time axis for system dynamics
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
 - **Spreadsheet import/export** -- maintain `.ksr` source, domain experts keep their Excel
 
