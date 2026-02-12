@@ -1,0 +1,3 @@
+// Wrong arity: sqrt expects 1 argument, got 2
+param x = 1.0;
+node y = sqrt(@x, 2.0);

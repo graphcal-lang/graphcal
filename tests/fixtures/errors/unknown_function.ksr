@@ -1,0 +1,3 @@
+// Unknown function: bogus is not a built-in function
+param x = 1.0;
+node y = bogus(@x);

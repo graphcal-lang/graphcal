@@ -1,0 +1,3 @@
+// Duplicate name: x is declared twice
+param x = 1.0;
+param x = 2.0;

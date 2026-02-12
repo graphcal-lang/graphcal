@@ -1,0 +1,84 @@
+use kasuri_eval::eval::compile_and_eval_named;
+use miette::{Diagnostic, NarratableReportHandler};
+
+/// Compile the given source and return the rendered error string.
+/// Uses miette's NarratableReportHandler for deterministic output.
+fn render_error(source: &str, name: &str) -> String {
+    let err = compile_and_eval_named(source, name).unwrap_err();
+    let diagnostic: &dyn Diagnostic = &err;
+    let mut buf = String::new();
+    NarratableReportHandler::new()
+        .render_report(&mut buf, diagnostic)
+        .unwrap();
+    buf
+}
+
+#[test]
+fn error_duplicate_name() {
+    let source = include_str!("../../../tests/fixtures/errors/duplicate.ksr");
+    let rendered = render_error(source, "duplicate.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_graph_ref() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_ref.ksr");
+    let rendered = render_error(source, "unknown_ref.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_const_ref() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_const_ref.ksr");
+    let rendered = render_error(source, "unknown_const_ref.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_at_in_const() {
+    let source = include_str!("../../../tests/fixtures/errors/at_in_const.ksr");
+    let rendered = render_error(source, "at_in_const.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bad_const_casing() {
+    let source = include_str!("../../../tests/fixtures/errors/bad_const_casing.ksr");
+    let rendered = render_error(source, "bad_const_casing.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bad_param_casing() {
+    let source = include_str!("../../../tests/fixtures/errors/bad_param_casing.ksr");
+    let rendered = render_error(source, "bad_param_casing.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_runtime_cycle() {
+    let source = include_str!("../../../tests/fixtures/errors/cycle.ksr");
+    let rendered = render_error(source, "cycle.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_const_cycle() {
+    let source = include_str!("../../../tests/fixtures/errors/const_cycle.ksr");
+    let rendered = render_error(source, "const_cycle.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_function() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_function.ksr");
+    let rendered = render_error(source, "unknown_function.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_wrong_arity() {
+    let source = include_str!("../../../tests/fixtures/errors/wrong_arity.ksr");
+    let rendered = render_error(source, "wrong_arity.ksr");
+    insta::assert_snapshot!(rendered);
+}

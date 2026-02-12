@@ -1,0 +1,13 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown function `bogus`
+    Diagnostic severity: error
+Begin snippet for unknown_function.ksr starting at line 2, column 1
+
+snippet line 2: param x = 1.0;
+snippet line 3: node y = bogus(@x);
+    label at line 3, columns 10 to 14: unknown function
+diagnostic help: only built-in functions are available in Phase 0
+diagnostic code: kasuri::N004
