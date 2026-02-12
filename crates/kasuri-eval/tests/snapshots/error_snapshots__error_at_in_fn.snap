@@ -1,0 +1,14 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 155
+expression: rendered
+---
+graph reference `@x` not allowed in function body
+    Diagnostic severity: error
+Begin snippet for at_in_fn.ksr starting at line 3, column 1
+
+snippet line 3: 
+snippet line 4: fn bad_fn(a: Length) -> Length = a + @x;
+    label at line 4, columns 38 to 39: @ reference not allowed here
+diagnostic help: pass `bad_fn` as a function parameter instead
+diagnostic code: kasuri::F001

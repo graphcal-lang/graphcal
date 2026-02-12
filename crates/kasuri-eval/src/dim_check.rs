@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use kasuri_syntax::ast::{BinOp, DeclKind, Expr, ExprKind, File};
+use kasuri_syntax::ast::{BinOp, DeclKind, Expr, ExprKind, File, MulDivOp, TypeExprKind};
 use kasuri_syntax::dimension::{Dimension, Rational};
 
 use crate::builtins::{DimSignature, builtin_constants, builtin_functions};
@@ -54,7 +54,7 @@ pub fn check_dimensions(
     // First pass: resolve declared type annotations
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {}
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {}
             DeclKind::Const(c) => {
                 let dt = resolve_type_annotation(&c.type_ann, registry, src)?;
                 declared_types.insert(c.name.name.clone(), dt);
@@ -74,7 +74,9 @@ pub fn check_dimensions(
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
     for decl in &file.declarations {
         let (name, type_ann, value_expr) = match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => continue,
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {
+                continue;
+            }
             DeclKind::Const(c) => (&c.name.name, &c.type_ann, &c.value),
             DeclKind::Param(p) => (&p.name.name, &p.type_ann, &p.value),
             DeclKind::Node(n) => (&n.name.name, &n.type_ann, &n.value),
@@ -378,23 +380,105 @@ fn infer_type(
         ),
 
         ExprKind::FnCall { name, args } => {
-            let func = builtin_fns.get(name.name.as_str()).ok_or_else(|| {
-                KasuriError::UnknownFunction {
+            // Try builtin first
+            if let Some(func) = builtin_fns.get(name.name.as_str()) {
+                let arg_dims: Vec<Dimension> = args
+                    .iter()
+                    .map(|a| {
+                        let t =
+                            infer_type(a, declared_types, local_types, registry, builtin_fns, src)?;
+                        expect_scalar(&t, src, a.span)
+                    })
+                    .collect::<Result<_, _>>()?;
+                return infer_fn_dim(func.dim_sig, &arg_dims, args, src).map(InferredType::Scalar);
+            }
+
+            // Try user-defined function
+            let fn_def =
+                registry
+                    .get_function(&name.name)
+                    .ok_or_else(|| KasuriError::UnknownFunction {
+                        name: name.name.clone(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    })?;
+
+            // Arity check
+            if args.len() != fn_def.params.len() {
+                return Err(KasuriError::WrongArity {
                     name: name.name.clone(),
+                    expected: fn_def.params.len(),
+                    got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),
-                }
-            })?;
+                });
+            }
 
-            let arg_dims: Vec<Dimension> = args
+            // Infer arg types
+            let arg_types: Vec<InferredType> = args
                 .iter()
-                .map(|a| {
-                    let t = infer_type(a, declared_types, local_types, registry, builtin_fns, src)?;
-                    expect_scalar(&t, src, a.span)
-                })
+                .map(|a| infer_type(a, declared_types, local_types, registry, builtin_fns, src))
                 .collect::<Result<_, _>>()?;
 
-            infer_fn_dim(func.dim_sig, &arg_dims, args, src).map(InferredType::Scalar)
+            if fn_def.generic_params.is_empty() {
+                // Non-generic: resolve each param type and check
+                for (i, param) in fn_def.params.iter().enumerate() {
+                    let expected = resolve_type_annotation(&param.type_expr, registry, src)?;
+                    let expected_inferred = match &expected {
+                        DeclaredType::Scalar(d) => InferredType::Scalar(*d),
+                        DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
+                    };
+                    if arg_types[i] != expected_inferred {
+                        let expected_str = match &expected_inferred {
+                            InferredType::Scalar(d) => format!("{d}"),
+                            InferredType::Struct(n) => n.clone(),
+                        };
+                        let actual_str = match &arg_types[i] {
+                            InferredType::Scalar(d) => format!("{d}"),
+                            InferredType::Struct(n) => n.clone(),
+                        };
+                        return Err(KasuriError::DimensionMismatch {
+                            expected: expected_str,
+                            found: actual_str,
+                            src: src.clone(),
+                            span: args[i].span.into(),
+                            help: format!(
+                                "parameter `{}` expects {expected_inferred:?}",
+                                param.name
+                            ),
+                        });
+                    }
+                }
+                // Resolve return type
+                let ret = resolve_type_annotation(&fn_def.return_type_expr, registry, src)?;
+                Ok(match ret {
+                    DeclaredType::Scalar(d) => InferredType::Scalar(d),
+                    DeclaredType::Struct(n) => InferredType::Struct(n),
+                })
+            } else {
+                // Generic: unify generic params from arg types
+                let mut substitution: HashMap<String, Dimension> = HashMap::new();
+                for (i, param) in fn_def.params.iter().enumerate() {
+                    let actual_dim = expect_scalar(&arg_types[i], src, args[i].span)?;
+                    unify_type_expr(
+                        &param.type_expr,
+                        actual_dim,
+                        &fn_def.generic_params,
+                        &mut substitution,
+                        registry,
+                        src,
+                        args[i].span,
+                    )?;
+                }
+                // Resolve return type with substitution
+                let ret_dim = resolve_type_with_substitution(
+                    &fn_def.return_type_expr,
+                    &substitution,
+                    registry,
+                    src,
+                )?;
+                Ok(InferredType::Scalar(ret_dim))
+            }
         }
 
         ExprKind::If {
@@ -696,6 +780,163 @@ fn infer_type(
     }
 }
 
+/// Unify a parameter's type expression against an actual dimension, binding generic names.
+///
+/// For example, if `type_expr` is `D` and `actual` is `Length`, binds `D = Length`.
+/// If `type_expr` is `D^2` and `actual` is `Area` (= Length^2), binds `D = Length`.
+/// Non-generic terms are resolved normally and checked for equality.
+fn unify_type_expr(
+    type_expr: &kasuri_syntax::ast::TypeExpr,
+    actual: Dimension,
+    generic_params: &[String],
+    substitution: &mut HashMap<String, Dimension>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: kasuri_syntax::span::Span,
+) -> Result<(), KasuriError> {
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => {
+            if !actual.is_dimensionless() {
+                return Err(KasuriError::DimensionMismatch {
+                    expected: "Dimensionless".to_string(),
+                    found: format!("{actual}"),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: "expected Dimensionless argument".to_string(),
+                });
+            }
+            Ok(())
+        }
+        TypeExprKind::DimExpr(dim_expr) => {
+            // Check if this is a single generic param (most common case: `D` or `D^n`)
+            if dim_expr.terms.len() == 1 {
+                let item = &dim_expr.terms[0];
+                let name = &item.term.name.name;
+                if generic_params.contains(name) {
+                    let exp = item.term.power.unwrap_or(1);
+                    // Solve: D^exp = actual => D = actual^(1/exp)
+                    let bound_dim = if exp == 1 {
+                        actual
+                    } else {
+                        actual.pow(Rational::new(1, exp))
+                    };
+                    // Check consistency with previous binding
+                    if let Some(prev) = substitution.get(name) {
+                        if *prev != bound_dim {
+                            return Err(KasuriError::DimensionMismatch {
+                                expected: format!("{prev}"),
+                                found: format!("{bound_dim}"),
+                                src: src.clone(),
+                                span: span.into(),
+                                help: format!(
+                                    "generic `{name}` was bound to {prev} but this argument requires {bound_dim}"
+                                ),
+                            });
+                        }
+                    } else {
+                        substitution.insert(name.clone(), bound_dim);
+                    }
+                    return Ok(());
+                }
+            }
+
+            // General case: compute the "expected" dimension by resolving non-generic
+            // terms concretely and generic terms via substitution/binding.
+            // Walk terms, accumulating into expected_dim.
+            let mut expected_dim = Dimension::DIMENSIONLESS;
+            for item in &dim_expr.terms {
+                let name = &item.term.name.name;
+                let exp = item.term.power.unwrap_or(1);
+
+                let term_dim = if generic_params.contains(name) {
+                    // Generic term: try to bind or check consistency
+                    if let Some(prev) = substitution.get(name) {
+                        prev.pow(Rational::from_int(exp))
+                    } else {
+                        // Cannot determine generic from compound expression unless
+                        // we solve a system of equations. For Phase 3, we require
+                        // that each generic param appears as a standalone param first
+                        // so it's already bound. If not bound, error.
+                        return Err(KasuriError::DimensionMismatch {
+                            expected: format!("generic `{name}` (unresolved)"),
+                            found: format!("{actual}"),
+                            src: src.clone(),
+                            span: span.into(),
+                            help: format!(
+                                "generic `{name}` could not be inferred from this argument"
+                            ),
+                        });
+                    }
+                } else {
+                    // Concrete dimension name
+                    let base = registry.get_dimension(name).ok_or_else(|| {
+                        KasuriError::UnknownDimension {
+                            name: name.clone(),
+                            src: src.clone(),
+                            span: item.term.span.into(),
+                        }
+                    })?;
+                    base.pow(Rational::from_int(exp))
+                };
+
+                expected_dim = match item.op {
+                    MulDivOp::Mul => expected_dim * term_dim,
+                    MulDivOp::Div => expected_dim / term_dim,
+                };
+            }
+
+            if expected_dim != actual {
+                return Err(KasuriError::DimensionMismatch {
+                    expected: format!("{expected_dim}"),
+                    found: format!("{actual}"),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: "dimension mismatch in function argument".to_string(),
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Resolve a type expression to a concrete dimension, substituting generic names.
+fn resolve_type_with_substitution(
+    type_expr: &kasuri_syntax::ast::TypeExpr,
+    substitution: &HashMap<String, Dimension>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Dimension, KasuriError> {
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => Ok(Dimension::DIMENSIONLESS),
+        TypeExprKind::DimExpr(dim_expr) => {
+            let mut result = Dimension::DIMENSIONLESS;
+            for item in &dim_expr.terms {
+                let name = &item.term.name.name;
+                let exp = item.term.power.unwrap_or(1);
+
+                let base = if let Some(dim) = substitution.get(name) {
+                    *dim
+                } else if let Some(dim) = registry.get_dimension(name) {
+                    *dim
+                } else {
+                    return Err(KasuriError::UnknownDimension {
+                        name: name.clone(),
+                        src: src.clone(),
+                        span: item.term.span.into(),
+                    });
+                };
+
+                let term_dim = base.pow(Rational::from_int(exp));
+                result = match item.op {
+                    MulDivOp::Mul => result * term_dim,
+                    MulDivOp::Div => result / term_dim,
+                };
+            }
+            Ok(result)
+        }
+    }
+}
+
 /// Infer the result dimension of a built-in function call given its `DimSignature`.
 fn infer_fn_dim(
     sig: DimSignature,
@@ -797,8 +1038,34 @@ mod tests {
 
     fn check(source: &str) -> Result<HashMap<String, DeclaredType>, KasuriError> {
         let file = Parser::new(source).parse_file().unwrap();
-        let registry = make_registry();
+        let mut registry = make_registry();
         let src = make_src(source);
+
+        // Register user-defined functions (mirrors eval.rs pipeline)
+        for decl in &file.declarations {
+            if let DeclKind::Fn(fn_decl) = &decl.kind {
+                registry.register_function(crate::registry::FnDef {
+                    name: fn_decl.name.name.clone(),
+                    generic_params: fn_decl
+                        .generic_params
+                        .iter()
+                        .map(|g| g.name.name.clone())
+                        .collect(),
+                    params: fn_decl
+                        .params
+                        .iter()
+                        .map(|p| crate::registry::FnParamDef {
+                            name: p.name.name.clone(),
+                            type_expr: p.type_ann.clone(),
+                        })
+                        .collect(),
+                    return_type_expr: fn_decl.return_type.clone(),
+                    body: fn_decl.body.clone(),
+                    span: decl.span,
+                });
+            }
+        }
+
         check_dimensions(&file, &registry, &src)
     }
 
@@ -912,5 +1179,84 @@ mod tests {
         // Area is Length^2, r^2 = Length^2
         // But we need PI * r^2 for circle area — just testing r^2 = Area
         check(source).unwrap();
+    }
+
+    // --- User-defined function tests ---
+
+    #[test]
+    fn check_non_generic_fn_call() {
+        let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam y: Length = 2.0 m;\nnode z: Length = add_lengths(@x, @y);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_non_generic_fn_dim_mismatch() {
+        let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam t: Time = 1.0 s;\nnode z: Length = add_lengths(@x, @t);";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn check_non_generic_fn_return_type() {
+        // Function returns Velocity but we annotate as Length
+        let source = "fn speed(d: Length, t: Time) -> Velocity = d / t;\nparam d: Length = 10.0 m;\nparam t: Time = 2.0 s;\nnode v: Length = speed(@d, @t);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_generic_fn_call() {
+        let source = "fn double<D: Dim>(x: D) -> D = x + x;\nparam alt: Length = 100 km;\nnode doubled: Length = double(@alt);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_generic_fn_multi_param() {
+        let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100 km;\nparam y: Length = 200 km;\nnode mid: Length = lerp(@x, @y, 0.5);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_generic_fn_consistency_error() {
+        // a: D binds D=Length, b: D expects Length but gets Time
+        let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100 km;\nparam t: Time = 1.0 s;\nnode bad: Length = lerp(@x, @t, 0.5);";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn check_generic_fn_infers_return_type() {
+        // Return type D should be inferred as Velocity
+        let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Velocity = identity(@v);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_generic_fn_wrong_annotation() {
+        // identity returns Velocity (D=Velocity) but annotation says Length
+        let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Length = identity(@v);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_fn_wrong_arity() {
+        let source =
+            "fn f(a: Length) -> Length = a;\nparam x: Length = 1.0 m;\nnode y: Length = f(@x, @x);";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::WrongArity { .. }));
+    }
+
+    #[test]
+    fn check_fn_unknown_function() {
+        let source = "param x: Length = 1.0 m;\nnode y: Length = no_such_fn(@x);";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::UnknownFunction { .. }));
     }
 }

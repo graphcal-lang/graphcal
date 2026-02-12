@@ -1,0 +1,7 @@
+// Error: generic dimension mismatch -- D bound to Length but Time given
+fn add<D: Dim>(a: D, b: D) -> D = a + b;
+
+param x: Length = 1.0 m;
+param t: Time = 1.0 s;
+
+node bad: Length = add(@x, @t);

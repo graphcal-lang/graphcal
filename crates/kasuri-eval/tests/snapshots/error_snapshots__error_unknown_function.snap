@@ -10,5 +10,5 @@ Begin snippet for unknown_function.ksr starting at line 2, column 1
 snippet line 2: param x: Dimensionless = 1.0;
 snippet line 3: node y: Dimensionless = bogus(@x);
     label at line 3, columns 25 to 29: unknown function
-diagnostic help: only built-in functions are available in Phase 0
+diagnostic help: check function name and ensure it is defined
 diagnostic code: kasuri::N004

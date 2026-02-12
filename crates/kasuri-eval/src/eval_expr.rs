@@ -4,7 +4,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use kasuri_syntax::ast::{BinOp, Expr, ExprKind, UnaryOp};
+use kasuri_syntax::ast::{BinOp, Expr, ExprKind, FnBody, UnaryOp};
 
 use crate::builtins::BuiltinFunction;
 use crate::error::KasuriError;
@@ -145,15 +145,38 @@ pub fn eval_expr(
             }))
         }
         ExprKind::FnCall { name, args } => {
-            let builtin =
-                builtin_fns
-                    .get(name.name.as_str())
+            // Try builtin first
+            if let Some(builtin) = builtin_fns.get(name.name.as_str()) {
+                let arg_values: Vec<f64> = args
+                    .iter()
+                    .map(|a| {
+                        eval_expr(
+                            a,
+                            values,
+                            local_values,
+                            builtin_consts,
+                            builtin_fns,
+                            registry,
+                            src,
+                        )
+                        .map(|rv| rv.expect_scalar("function argument"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                return Ok(RuntimeValue::Scalar((builtin.eval)(&arg_values)));
+            }
+
+            // Try user-defined function
+            let fn_def =
+                registry
+                    .get_function(&name.name)
                     .ok_or_else(|| KasuriError::EvalError {
                         message: format!("unknown function `{}`", name.name),
                         src: src.clone(),
                         span: name.span.into(),
                     })?;
-            let arg_values: Vec<f64> = args
+
+            // Evaluate arguments
+            let arg_values: Vec<RuntimeValue> = args
                 .iter()
                 .map(|a| {
                     eval_expr(
@@ -165,10 +188,54 @@ pub fn eval_expr(
                         registry,
                         src,
                     )
-                    .map(|rv| rv.expect_scalar("function argument"))
                 })
                 .collect::<Result<_, _>>()?;
-            Ok(RuntimeValue::Scalar((builtin.eval)(&arg_values)))
+
+            // Build fn_locals from param names + arg values
+            let mut fn_locals: HashMap<String, RuntimeValue> = HashMap::new();
+            for (param, val) in fn_def.params.iter().zip(arg_values) {
+                fn_locals.insert(param.name.clone(), val);
+            }
+
+            // Evaluate body: pass `values` for ConstRef access (user consts like GM_EARTH).
+            // Purity is enforced by the resolver's @ prohibition -- no GraphRef nodes
+            // exist in function bodies, so passing values is safe.
+            let body = fn_def.body.clone();
+            match &body {
+                FnBody::Short(expr) => eval_expr(
+                    expr,
+                    values,
+                    &fn_locals,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                ),
+                FnBody::Block { stmts, expr } => {
+                    let mut block_locals = fn_locals;
+                    for binding in stmts {
+                        let val = eval_expr(
+                            &binding.value,
+                            values,
+                            &block_locals,
+                            builtin_consts,
+                            builtin_fns,
+                            registry,
+                            src,
+                        )?;
+                        block_locals.insert(binding.name.name.clone(), val);
+                    }
+                    eval_expr(
+                        expr,
+                        values,
+                        &block_locals,
+                        builtin_consts,
+                        builtin_fns,
+                        registry,
+                        src,
+                    )
+                }
+            }
         }
         ExprKind::If {
             condition,

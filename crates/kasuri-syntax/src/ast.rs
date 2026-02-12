@@ -21,6 +21,7 @@ pub enum DeclKind {
     Dimension(DimDecl),
     Unit(UnitDecl),
     Type(TypeDecl),
+    Fn(FnDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +84,49 @@ pub struct TypeDecl {
 pub struct FieldDecl {
     pub name: Ident,
     pub type_ann: TypeExpr,
+}
+
+/// Function declaration: `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;`
+#[derive(Debug, Clone)]
+pub struct FnDecl {
+    pub name: Ident,
+    pub generic_params: Vec<GenericParam>,
+    pub params: Vec<FnParam>,
+    pub return_type: TypeExpr,
+    pub body: FnBody,
+}
+
+/// A generic parameter: `D: Dim`
+#[derive(Debug, Clone)]
+pub struct GenericParam {
+    pub name: Ident,
+    pub constraint: GenericConstraint,
+}
+
+/// Constraint on a generic parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericConstraint {
+    /// `D: Dim` -- the generic stands for a dimension.
+    Dim,
+}
+
+/// A function parameter: `x: Length`, `t: Dimensionless`
+#[derive(Debug, Clone)]
+pub struct FnParam {
+    pub name: Ident,
+    pub type_ann: TypeExpr,
+}
+
+/// The body of a function declaration.
+#[derive(Debug, Clone)]
+pub enum FnBody {
+    /// Short form: `= expr;`
+    Short(Expr),
+    /// Block form: `{ let a = ...; let b = ...; expr }`
+    Block {
+        stmts: Vec<LetBinding>,
+        expr: Box<Expr>,
+    },
 }
 
 /// An identifier with its source span.
@@ -285,5 +329,149 @@ mod tests {
             }],
         };
         assert_eq!(file.declarations.len(), 1);
+    }
+
+    #[test]
+    fn construct_fn_decl_short() {
+        let s = Span::new(0, 1);
+        let decl = FnDecl {
+            name: Ident {
+                name: "double".into(),
+                span: s,
+            },
+            generic_params: vec![GenericParam {
+                name: Ident {
+                    name: "D".into(),
+                    span: s,
+                },
+                constraint: GenericConstraint::Dim,
+            }],
+            params: vec![FnParam {
+                name: Ident {
+                    name: "x".into(),
+                    span: s,
+                },
+                type_ann: TypeExpr {
+                    kind: TypeExprKind::DimExpr(DimExpr {
+                        terms: vec![DimExprItem {
+                            op: MulDivOp::Mul,
+                            term: DimTerm {
+                                name: Ident {
+                                    name: "D".into(),
+                                    span: s,
+                                },
+                                power: None,
+                                span: s,
+                            },
+                        }],
+                        span: s,
+                    }),
+                    span: s,
+                },
+            }],
+            return_type: TypeExpr {
+                kind: TypeExprKind::DimExpr(DimExpr {
+                    terms: vec![DimExprItem {
+                        op: MulDivOp::Mul,
+                        term: DimTerm {
+                            name: Ident {
+                                name: "D".into(),
+                                span: s,
+                            },
+                            power: None,
+                            span: s,
+                        },
+                    }],
+                    span: s,
+                }),
+                span: s,
+            },
+            body: FnBody::Short(Expr {
+                kind: ExprKind::BinOp {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr {
+                        kind: ExprKind::Number(2.0),
+                        span: s,
+                    }),
+                    rhs: Box::new(Expr {
+                        kind: ExprKind::LocalRef(Ident {
+                            name: "x".into(),
+                            span: s,
+                        }),
+                        span: s,
+                    }),
+                },
+                span: s,
+            }),
+        };
+        assert_eq!(decl.generic_params.len(), 1);
+        assert_eq!(decl.params.len(), 1);
+        assert_eq!(decl.generic_params[0].constraint, GenericConstraint::Dim);
+    }
+
+    #[test]
+    fn construct_fn_decl_block() {
+        let s = Span::new(0, 1);
+        let decl = FnDecl {
+            name: Ident {
+                name: "add_one".into(),
+                span: s,
+            },
+            generic_params: vec![],
+            params: vec![FnParam {
+                name: Ident {
+                    name: "x".into(),
+                    span: s,
+                },
+                type_ann: TypeExpr {
+                    kind: TypeExprKind::Dimensionless,
+                    span: s,
+                },
+            }],
+            return_type: TypeExpr {
+                kind: TypeExprKind::Dimensionless,
+                span: s,
+            },
+            body: FnBody::Block {
+                stmts: vec![LetBinding {
+                    name: Ident {
+                        name: "one".into(),
+                        span: s,
+                    },
+                    type_ann: None,
+                    value: Expr {
+                        kind: ExprKind::Number(1.0),
+                        span: s,
+                    },
+                    span: s,
+                }],
+                expr: Box::new(Expr {
+                    kind: ExprKind::BinOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr {
+                            kind: ExprKind::LocalRef(Ident {
+                                name: "x".into(),
+                                span: s,
+                            }),
+                            span: s,
+                        }),
+                        rhs: Box::new(Expr {
+                            kind: ExprKind::LocalRef(Ident {
+                                name: "one".into(),
+                                span: s,
+                            }),
+                            span: s,
+                        }),
+                    },
+                    span: s,
+                }),
+            },
+        };
+        assert_eq!(decl.generic_params.len(), 0);
+        assert_eq!(decl.params.len(), 1);
+        match &decl.body {
+            FnBody::Block { stmts, .. } => assert_eq!(stmts.len(), 1),
+            FnBody::Short(_) => panic!("expected block body"),
+        }
     }
 }

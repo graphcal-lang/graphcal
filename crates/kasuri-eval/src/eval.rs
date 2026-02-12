@@ -95,11 +95,20 @@ impl Value {
         }
     }
 
-    /// Get the unit label for display, or `None` for dimensionless/no-unit values.
+    /// Get the unit label for display, or `None` for dimensionless values.
+    ///
+    /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
+    /// otherwise falls back to the SI unit string (e.g., "m/s", "kg").
     #[must_use]
-    pub fn display_label(&self) -> Option<&str> {
+    pub fn display_label(&self) -> Option<String> {
         match self {
-            Self::Scalar { display_unit, .. } => display_unit.as_ref().map(|du| du.label.as_str()),
+            Self::Scalar {
+                display_unit,
+                dimension,
+                ..
+            } => display_unit
+                .as_ref()
+                .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
             Self::Struct { .. } => None,
         }
     }
@@ -203,6 +212,32 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
             _ => {}
         }
     }
+
+    // Register user-defined functions
+    for (name, fn_decl, span) in &resolved.functions {
+        registry.register_function(registry::FnDef {
+            name: name.clone(),
+            generic_params: fn_decl
+                .generic_params
+                .iter()
+                .map(|g| g.name.name.clone())
+                .collect(),
+            params: fn_decl
+                .params
+                .iter()
+                .map(|p| registry::FnParamDef {
+                    name: p.name.name.clone(),
+                    type_expr: p.type_ann.clone(),
+                })
+                .collect(),
+            return_type_expr: fn_decl.return_type.clone(),
+            body: fn_decl.body.clone(),
+            span: *span,
+        });
+    }
+
+    // Check for recursive function calls
+    crate::fn_check::check_no_recursion(&registry, &src)?;
 
     // Dimension check
     let declared_types = check_dimensions(&file, &registry, &src)?;
@@ -648,7 +683,7 @@ mod tests {
 
         // Check display units
         let speed_kmh = result.nodes.iter().find(|(n, _)| n == "speed_kmh").unwrap();
-        assert_eq!(speed_kmh.1.display_label(), Some("km/hour"));
+        assert_eq!(speed_kmh.1.display_label(), Some("km/hour".to_string()));
         let display_kmh = speed_kmh.1.display_value();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
         assert!(
@@ -679,7 +714,7 @@ mod tests {
 
         // Check that tof_hours has display unit "hour"
         let tof_entry = result.nodes.iter().find(|(n, _)| n == "tof_hours").unwrap();
-        assert_eq!(tof_entry.1.display_label(), Some("hour"));
+        assert_eq!(tof_entry.1.display_label(), Some("hour".to_string()));
         let tof_display = tof_entry.1.display_value();
         assert!(
             tof_display > 5.0 && tof_display < 6.0,
@@ -696,6 +731,49 @@ mod tests {
                 assert!(fields.contains_key("dv2"));
                 assert!(fields.contains_key("total_dv"));
                 assert!(fields.contains_key("tof"));
+            }
+            Value::Scalar { .. } => panic!("expected struct for transfer"),
+        }
+    }
+
+    #[test]
+    fn eval_functions_milestone() {
+        let source = include_str!("../../../tests/fixtures/functions.ksr");
+        let result = compile_and_eval(source).unwrap();
+
+        // v_parking: orbital velocity at LEO (R_EARTH + 200 km)
+        // sqrt(GM_EARTH / (R_EARTH + 200 km)) = sqrt(3.986004418e14 / 6571000)
+        let v_parking = find_value(&result, "v_parking");
+        assert!(
+            v_parking > 7700.0 && v_parking < 7800.0,
+            "v_parking = {v_parking}"
+        );
+
+        // v_check should equal v_parking (same computation via fn-calling-fn)
+        let v_check = find_value(&result, "v_check");
+        assert!(
+            (v_check - v_parking).abs() < 1e-6,
+            "v_check = {v_check}, v_parking = {v_parking}"
+        );
+
+        // midpoint_alt: lerp(200 km, 35786 km, 0.5) = 17993 km -> 17993000 m SI
+        let midpoint = find_value(&result, "midpoint_alt");
+        assert!(
+            (midpoint - 17_993_000.0).abs() < 1.0,
+            "midpoint_alt = {midpoint}"
+        );
+
+        // transfer: Hohmann LEO-to-GEO, total_dv ~3935 m/s
+        let transfer_entry = result.nodes.iter().find(|(n, _)| n == "transfer").unwrap();
+        match &transfer_entry.1 {
+            Value::Struct { type_name, fields } => {
+                assert_eq!(type_name, "TransferResult");
+                assert_eq!(fields.len(), 3);
+                let total_dv = fields["total_dv"].si_value();
+                assert!(
+                    total_dv > 3900.0 && total_dv < 4000.0,
+                    "total_dv = {total_dv}"
+                );
             }
             Value::Scalar { .. } => panic!("expected struct for transfer"),
         }

@@ -27,6 +27,8 @@ pub enum Token {
     Type,
     #[token("let")]
     Let,
+    #[token("fn")]
+    Fn,
 
     // Operators
     #[token("+")]
@@ -105,6 +107,7 @@ impl std::fmt::Display for Token {
             Self::Unit => write!(f, "unit"),
             Self::Type => write!(f, "type"),
             Self::Let => write!(f, "let"),
+            Self::Fn => write!(f, "fn"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
@@ -322,7 +325,7 @@ mod tests {
     #[test]
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
-        let tokens = lex_tokens("param node const if else dimension unit type let");
+        let tokens = lex_tokens("param node const if else dimension unit type let fn");
         assert_eq!(
             tokens,
             vec![
@@ -335,6 +338,7 @@ mod tests {
                 Token::Unit,
                 Token::Type,
                 Token::Let,
+                Token::Fn,
             ]
         );
     }
@@ -507,5 +511,77 @@ mod tests {
         let mut lexer = Token::lexer("letter");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "letter");
+    }
+
+    // Phase 3 specific tests
+
+    #[test]
+    fn lex_fn_decl_short() {
+        let tokens = lex_tokens("fn lerp(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Fn,
+                Token::Ident, // lerp
+                Token::LParen,
+                Token::Ident, // a
+                Token::Colon,
+                Token::Ident, // D
+                Token::Comma,
+                Token::Ident, // b
+                Token::Colon,
+                Token::Ident, // D
+                Token::Comma,
+                Token::Ident, // t
+                Token::Colon,
+                Token::Ident, // Dimensionless
+                Token::RParen,
+                Token::Arrow,
+                Token::Ident, // D
+                Token::Eq,
+                Token::Ident, // a
+                Token::Plus,
+                Token::LParen,
+                Token::Ident, // b
+                Token::Minus,
+                Token::Ident, // a
+                Token::RParen,
+                Token::Star,
+                Token::Ident, // t
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_fn_with_generics() {
+        let tokens = lex_tokens("fn abs<D: Dim>(x: D) -> D");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Fn,
+                Token::Ident, // abs
+                Token::Lt,    // <
+                Token::Ident, // D
+                Token::Colon,
+                Token::Ident, // Dim
+                Token::Gt,    // >
+                Token::LParen,
+                Token::Ident, // x
+                Token::Colon,
+                Token::Ident, // D
+                Token::RParen,
+                Token::Arrow,
+                Token::Ident, // D
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_fn() {
+        // "fnord" should be Ident, not Fn + "ord"
+        let mut lexer = Token::lexer("fnord");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "fnord");
     }
 }

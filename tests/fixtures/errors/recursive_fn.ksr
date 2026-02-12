@@ -1,0 +1,2 @@
+// Error: recursive function call detected
+fn recurse(x: Dimensionless) -> Dimensionless = recurse(x);
