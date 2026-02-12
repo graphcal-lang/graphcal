@@ -79,28 +79,51 @@ fn print_text(result: &EvalResult) {
         .unwrap_or(0);
 
     for (name, value, _) in &result.all {
-        let formatted = format_number(*value);
+        let formatted = format_number(value.display_value());
         let width = max_name_len;
-        println!("{name:width$} = {formatted}");
+        if let Some(label) = value.display_label() {
+            println!("{name:width$} = {formatted} {label}");
+        } else {
+            println!("{name:width$} = {formatted}");
+        }
     }
 }
 
-#[expect(clippy::unwrap_used)] // serde_json serialization of BTreeMap<&str, f64> cannot fail
+#[expect(clippy::unwrap_used)] // serde_json serialization cannot fail for these types
 #[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
 fn print_json(result: &EvalResult) {
+    use kasuri_eval::eval::Value;
+
+    fn value_to_json(v: &Value) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        map.insert("si_value".to_string(), serde_json::json!(v.si_value));
+        if let Some(du) = &v.display_unit {
+            map.insert(
+                "display_value".to_string(),
+                serde_json::json!(v.display_value()),
+            );
+            map.insert("unit".to_string(), serde_json::json!(du.label));
+        }
+        serde_json::Value::Object(map)
+    }
+
     let mut output = serde_json::Map::new();
 
-    let consts: BTreeMap<&str, f64> = result
+    let consts: BTreeMap<&str, serde_json::Value> = result
         .consts
         .iter()
-        .map(|(n, v)| (n.as_str(), *v))
+        .map(|(n, v)| (n.as_str(), value_to_json(v)))
         .collect();
-    let params: BTreeMap<&str, f64> = result
+    let params: BTreeMap<&str, serde_json::Value> = result
         .params
         .iter()
-        .map(|(n, v)| (n.as_str(), *v))
+        .map(|(n, v)| (n.as_str(), value_to_json(v)))
         .collect();
-    let nodes: BTreeMap<&str, f64> = result.nodes.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    let nodes: BTreeMap<&str, serde_json::Value> = result
+        .nodes
+        .iter()
+        .map(|(n, v)| (n.as_str(), value_to_json(v)))
+        .collect();
 
     output.insert("const".to_string(), serde_json::to_value(consts).unwrap());
     output.insert("param".to_string(), serde_json::to_value(params).unwrap());

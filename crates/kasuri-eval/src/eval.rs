@@ -7,9 +7,14 @@ use thiserror::Error;
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::const_eval::eval_consts;
 use crate::dag::{RuntimeGraph, build_dag};
+use crate::dim_check::check_dimensions;
 use crate::error::KasuriError;
 use crate::eval_expr::eval_expr;
+use crate::prelude::load_prelude;
+use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ResolvedFile, resolve};
+use kasuri_syntax::ast::{DeclKind, ExprKind};
+use kasuri_syntax::dimension::Dimension;
 use kasuri_syntax::parser::ParseError;
 
 /// The kind of a declaration.
@@ -20,17 +25,53 @@ pub enum DeclType {
     Node,
 }
 
+/// Display unit metadata: the unit name(s) and scale factor for pretty-printing.
+#[derive(Debug, Clone)]
+pub struct DisplayUnit {
+    /// Human-readable unit string (e.g., "km", "m/s^2", "km/hour")
+    pub label: String,
+    /// Scale factor from SI to this display unit: `display_value = si_value / scale`
+    pub scale: f64,
+}
+
+/// A runtime value with SI value, dimension, and optional display unit.
+#[derive(Debug, Clone)]
+pub struct Value {
+    /// The value in base SI units.
+    pub si_value: f64,
+    /// The dimension of this value.
+    pub dimension: Dimension,
+    /// Optional display unit for pretty-printing.
+    pub display_unit: Option<DisplayUnit>,
+}
+
+impl Value {
+    /// Get the value formatted for display: in display units if available, otherwise SI.
+    #[must_use]
+    pub fn display_value(&self) -> f64 {
+        self.display_unit
+            .as_ref()
+            .map_or(self.si_value, |du| self.si_value / du.scale)
+    }
+
+    /// Get the unit label for display, or `None` for dimensionless/no-unit values.
+    #[must_use]
+    pub fn display_label(&self) -> Option<&str> {
+        self.display_unit.as_ref().map(|du| du.label.as_str())
+    }
+}
+
 /// The result of evaluating a `.ksr` file.
 #[derive(Debug)]
 pub struct EvalResult {
     /// Const values in source order.
-    pub consts: Vec<(String, f64)>,
+    pub consts: Vec<(String, Value)>,
     /// Param values in source order.
-    pub params: Vec<(String, f64)>,
+    pub params: Vec<(String, Value)>,
     /// Node values in source order.
-    pub nodes: Vec<(String, f64)>,
+    pub nodes: Vec<(String, Value)>,
     /// All values in source order with their declaration type.
-    pub all: Vec<(String, f64, DeclType)>,
+    pub all: Vec<(String, Value, DeclType)>,
 }
 
 /// Full pipeline: parse -> resolve -> const eval -> DAG build -> runtime eval.
@@ -38,6 +79,7 @@ pub struct EvalResult {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
+#[expect(clippy::result_large_err)]
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
     compile_and_eval_named(source, "input")
 }
@@ -47,13 +89,72 @@ pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
+#[expect(clippy::result_large_err)]
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = kasuri_syntax::parser::Parser::with_name(source, name).parse_file()?;
     let resolved = resolve(&file, &src)?;
-    let const_values = eval_consts(&resolved, &src)?;
+
+    // Build registry: prelude + user-declared dimensions/units
+    let mut registry = Registry::new();
+    load_prelude(&mut registry);
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Dimension(d) => {
+                let dim = if let Some(def) = &d.definition {
+                    registry
+                        .resolve_dim_expr(def)
+                        .ok_or_else(|| KasuriError::UnknownDimension {
+                            name: d.name.name.clone(),
+                            src: src.clone(),
+                            span: d.name.span.into(),
+                        })?
+                } else {
+                    // Base dimension — should already be in the prelude.
+                    // If not, this is a user-defined base dimension (not supported yet).
+                    continue;
+                };
+                registry.register_dimension(&d.name.name, dim);
+            }
+            DeclKind::Unit(u) => {
+                let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
+                    KasuriError::UnknownDimension {
+                        name: u.name.name.clone(),
+                        src: src.clone(),
+                        span: u.name.span.into(),
+                    }
+                })?;
+                let scale = if let Some(def) = &u.definition {
+                    let (_unit_dim, base_scale) = registry
+                        .resolve_unit_expr(&def.unit_expr)
+                        .ok_or_else(|| KasuriError::UnknownUnit {
+                            name: u.name.name.clone(),
+                            src: src.clone(),
+                            span: def.span.into(),
+                        })?;
+                    def.scale * base_scale
+                } else {
+                    1.0
+                };
+                registry.register_unit(&u.name.name, dim, scale);
+            }
+            _ => {}
+        }
+    }
+
+    // Dimension check
+    let declared_dims = check_dimensions(&file, &registry, &src)?;
+
+    let const_values = eval_consts(&resolved, &registry, &src)?;
     let dag = build_dag(&resolved, &src)?;
-    let result = evaluate(&resolved, &dag, &const_values, &src)?;
+    let result = evaluate(
+        &resolved,
+        &dag,
+        &const_values,
+        &registry,
+        &declared_dims,
+        &src,
+    )?;
     Ok(result)
 }
 
@@ -62,6 +163,8 @@ fn evaluate(
     resolved: &ResolvedFile,
     dag: &RuntimeGraph,
     const_values: &HashMap<String, f64>,
+    registry: &Registry,
+    declared_dims: &HashMap<String, Dimension>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<EvalResult, KasuriError> {
     let builtin_consts = builtin_constants();
@@ -81,25 +184,59 @@ fn evaluate(
             continue;
         }
         let expr = &dag.expressions[name];
-        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, src)?;
+        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, registry, src)?;
         values.insert(name.clone(), val);
     }
+
+    // Build a map from name -> expression for display unit extraction
+    let expr_map: HashMap<&str, &kasuri_syntax::ast::Expr> = resolved
+        .consts
+        .iter()
+        .chain(resolved.params.iter())
+        .chain(resolved.nodes.iter())
+        .map(|(name, expr, _)| (name.as_str(), expr))
+        .collect();
+
+    // Helper to build a Value for a given declaration name
+    let make_value = |name: &str, si_value: f64| -> Value {
+        let dimension = declared_dims
+            .get(name)
+            .copied()
+            .unwrap_or(Dimension::DIMENSIONLESS);
+        let display_unit = expr_map
+            .get(name)
+            .and_then(|expr| extract_display_unit(expr, registry));
+        Value {
+            si_value,
+            dimension,
+            display_unit,
+        }
+    };
 
     // Collect results in source order
     let consts = resolved
         .consts
         .iter()
-        .map(|(name, _, _)| (name.clone(), const_values[name]))
+        .map(|(name, _, _)| {
+            let val = make_value(name, const_values[name]);
+            (name.clone(), val)
+        })
         .collect();
     let params = resolved
         .params
         .iter()
-        .map(|(name, _, _)| (name.clone(), values[name]))
+        .map(|(name, _, _)| {
+            let val = make_value(name, values[name]);
+            (name.clone(), val)
+        })
         .collect();
     let nodes = resolved
         .nodes
         .iter()
-        .map(|(name, _, _)| (name.clone(), values[name]))
+        .map(|(name, _, _)| {
+            let val = make_value(name, values[name]);
+            (name.clone(), val)
+        })
         .collect();
 
     // Build the `all` list in source order
@@ -107,10 +244,11 @@ fn evaluate(
         .source_order
         .iter()
         .map(|(name, cat)| {
-            let val = match cat {
+            let si = match cat {
                 DeclCategory::Const => const_values[name],
                 DeclCategory::Param | DeclCategory::Node => values[name],
             };
+            let val = make_value(name, si);
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
@@ -126,6 +264,66 @@ fn evaluate(
         nodes,
         all,
     })
+}
+
+/// Extract display unit from an expression.
+///
+/// - `ExprKind::Convert { target, .. }` -> use the target unit
+/// - `ExprKind::UnitLiteral { unit, .. }` -> use the literal's unit
+/// - Anything else -> `None` (display in SI)
+fn extract_display_unit(
+    expr: &kasuri_syntax::ast::Expr,
+    registry: &Registry,
+) -> Option<DisplayUnit> {
+    match &expr.kind {
+        ExprKind::Convert { target, .. } => {
+            let (_dim, scale) = registry.resolve_unit_expr(target)?;
+            Some(DisplayUnit {
+                label: format_unit_expr(target),
+                scale,
+            })
+        }
+        ExprKind::UnitLiteral { unit, .. } => {
+            let (_dim, scale) = registry.resolve_unit_expr(unit)?;
+            Some(DisplayUnit {
+                label: format_unit_expr(unit),
+                scale,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Format a `UnitExpr` as a human-readable label.
+/// E.g., `m`, `km/hour`, `kg * m / s^2`
+fn format_unit_expr(expr: &kasuri_syntax::ast::UnitExpr) -> String {
+    use kasuri_syntax::ast::MulDivOp;
+
+    let mut numerator = Vec::new();
+    let mut denominator = Vec::new();
+
+    for item in &expr.terms {
+        let mut part = item.name.name.clone();
+        if let Some(pow) = item.power
+            && pow != 1
+        {
+            part = format!("{part}^{pow}");
+        }
+        match item.op {
+            MulDivOp::Mul => numerator.push(part),
+            MulDivOp::Div => denominator.push(part),
+        }
+    }
+
+    if denominator.is_empty() {
+        numerator.join(" * ")
+    } else if numerator.len() == 1 && denominator.len() == 1 {
+        format!("{}/{}", numerator[0], denominator[0])
+    } else {
+        let num = numerator.join(" * ");
+        let den = denominator.join(" * ");
+        format!("{num}/{den}")
+    }
 }
 
 /// Top-level compile error that wraps both parse and eval errors.
@@ -145,6 +343,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    /// Find the SI value of a named declaration.
     fn find_value(result: &EvalResult, name: &str) -> f64 {
         result
             .consts
@@ -154,6 +353,7 @@ mod tests {
             .find(|(n, _)| n == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
+            .si_value
     }
 
     #[test]
@@ -215,21 +415,21 @@ mod tests {
     #[test]
     fn eval_if_else_true_branch() {
         let result =
-            compile_and_eval("param x = 5.0;\nnode y = if @x > 0.0 { @x } else { 0.0 };").unwrap();
+            compile_and_eval("param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };").unwrap();
         assert!((find_value(&result, "y") - 5.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_if_else_false_branch() {
         let result =
-            compile_and_eval("param x = -3.0;\nnode y = if @x > 0.0 { @x } else { 0.0 };").unwrap();
+            compile_and_eval("param x: Dimensionless = -3.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };").unwrap();
         assert!((find_value(&result, "y") - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_boolean_and() {
         let result = compile_and_eval(
-            "param a = 1.0;\nparam b = 0.0;\nnode c = if @a > 0.0 && @b > 0.0 { 1.0 } else { 0.0 };",
+            "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 0.0;\nnode c: Dimensionless = if @a > 0.0 && @b > 0.0 { 1.0 } else { 0.0 };",
         )
         .unwrap();
         assert!((find_value(&result, "c") - 0.0).abs() < f64::EPSILON);
@@ -238,7 +438,7 @@ mod tests {
     #[test]
     fn eval_boolean_or() {
         let result = compile_and_eval(
-            "param a = 1.0;\nparam b = 0.0;\nnode c = if @a > 0.0 || @b > 0.0 { 1.0 } else { 0.0 };",
+            "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 0.0;\nnode c: Dimensionless = if @a > 0.0 || @b > 0.0 { 1.0 } else { 0.0 };",
         )
         .unwrap();
         assert!((find_value(&result, "c") - 1.0).abs() < f64::EPSILON);
@@ -246,20 +446,24 @@ mod tests {
 
     #[test]
     fn eval_unary_neg() {
-        let result = compile_and_eval("param x = 5.0;\nnode y = -@x;").unwrap();
+        let result =
+            compile_and_eval("param x: Dimensionless = 5.0;\nnode y: Dimensionless = -@x;")
+                .unwrap();
         assert!((find_value(&result, "y") - (-5.0)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_power() {
-        let result = compile_and_eval("param x = 3.0;\nnode y = @x ^ 2.0;").unwrap();
+        let result =
+            compile_and_eval("param x: Dimensionless = 3.0;\nnode y: Dimensionless = @x ^ 2.0;")
+                .unwrap();
         assert!((find_value(&result, "y") - 9.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_result_source_order() {
         let result = compile_and_eval(
-            "param b = 2.0;\nparam a = 1.0;\nnode z = @a + @b;\nnode y = @z * 2.0;",
+            "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
         )
         .unwrap();
         assert_eq!(result.params[0].0, "b");
@@ -288,5 +492,63 @@ mod tests {
         assert_eq!(result.all[0].2, DeclType::Param);
         assert_eq!(result.all[3].2, DeclType::Const);
         assert_eq!(result.all[4].2, DeclType::Node);
+    }
+
+    #[test]
+    fn eval_orbital_milestone() {
+        let source = include_str!("../../../tests/fixtures/orbital.ksr");
+        let result = compile_and_eval(source).unwrap();
+
+        // alt = 400 km -> SI: 400_000.0 m
+        assert!(
+            (find_value(&result, "alt") - 400_000.0).abs() < f64::EPSILON,
+            "alt = {}",
+            find_value(&result, "alt")
+        );
+        // period = 90 min -> SI: 5400.0 s
+        assert!(
+            (find_value(&result, "period") - 5400.0).abs() < f64::EPSILON,
+            "period = {}",
+            find_value(&result, "period")
+        );
+        // R_EARTH = 6371 km -> SI: 6_371_000.0 m
+        assert!(
+            (find_value(&result, "R_EARTH") - 6_371_000.0).abs() < f64::EPSILON,
+            "R_EARTH = {}",
+            find_value(&result, "R_EARTH")
+        );
+
+        // circumference = 2 * PI * (6_371_000 + 400_000)
+        let expected_circumference = 2.0 * std::f64::consts::PI * 6_771_000.0;
+        assert!(
+            (find_value(&result, "circumference") - expected_circumference).abs() < 0.01,
+            "circumference = {}",
+            find_value(&result, "circumference")
+        );
+
+        // speed = circumference / period
+        let expected_speed = expected_circumference / 5400.0;
+        assert!(
+            (find_value(&result, "speed") - expected_speed).abs() < 0.01,
+            "speed = {}",
+            find_value(&result, "speed")
+        );
+
+        // speed_kmh = speed (same SI value, only display unit changes)
+        assert!(
+            (find_value(&result, "speed_kmh") - expected_speed).abs() < 0.01,
+            "speed_kmh SI = {}",
+            find_value(&result, "speed_kmh")
+        );
+
+        // Check display units
+        let speed_kmh = result.nodes.iter().find(|(n, _)| n == "speed_kmh").unwrap();
+        assert_eq!(speed_kmh.1.display_label(), Some("km/hour"));
+        let display_kmh = speed_kmh.1.display_value();
+        let expected_kmh = expected_speed / (1000.0 / 3600.0);
+        assert!(
+            (display_kmh - expected_kmh).abs() < 0.01,
+            "speed_kmh display = {display_kmh}"
+        );
     }
 }

@@ -11,10 +11,11 @@ use petgraph::graph::DiGraph;
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::KasuriError;
 use crate::eval_expr::eval_expr;
+use crate::registry::Registry;
 use crate::resolve::ResolvedFile;
 
 /// Topologically sort const declarations and evaluate them at compile time.
-/// Returns a map of `const_name` -> `f64` value.
+/// Returns a map of `const_name` -> `f64` value (in base SI units).
 ///
 /// # Errors
 ///
@@ -22,6 +23,7 @@ use crate::resolve::ResolvedFile;
 /// or if evaluation of a const expression fails.
 pub fn eval_consts(
     resolved: &ResolvedFile,
+    registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<String, f64>, KasuriError> {
     let builtin_consts = builtin_constants();
@@ -77,7 +79,7 @@ pub fn eval_consts(
     for idx in sorted {
         let name = &graph[idx];
         let expr = const_exprs[name.as_str()];
-        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, src)?;
+        let val = eval_expr(expr, &values, &builtin_consts, &builtin_fns, registry, src)?;
         values.insert(name.clone(), val);
     }
 
@@ -99,43 +101,53 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         let src = make_src(source);
         let resolved = resolve(&file, &src)?;
-        eval_consts(&resolved, &src)
+        let mut registry = crate::registry::Registry::new();
+        crate::prelude::load_prelude(&mut registry);
+        eval_consts(&resolved, &registry, &src)
     }
 
     #[test]
     fn eval_simple_const() {
-        let values = parse_resolve_eval_consts("const G0 = 9.80665;").unwrap();
+        let values = parse_resolve_eval_consts("const G0: Dimensionless = 9.80665;").unwrap();
         assert!((values["G0"] - 9.80665).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_const_chain() {
-        let values =
-            parse_resolve_eval_consts("const G0 = 9.80665;\nconst TWO_G0 = 2.0 * G0;").unwrap();
+        let values = parse_resolve_eval_consts(
+            "const G0: Dimensionless = 9.80665;\nconst TWO_G0: Dimensionless = 2.0 * G0;",
+        )
+        .unwrap();
         assert!((values["TWO_G0"] - 19.6133).abs() < 1e-10);
     }
 
     #[test]
     fn eval_const_with_builtin_const() {
-        let values = parse_resolve_eval_consts("const HALF_PI = PI / 2.0;").unwrap();
+        let values = parse_resolve_eval_consts("const HALF_PI: Dimensionless = PI / 2.0;").unwrap();
         assert!((values["HALF_PI"] - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_const_with_builtin_fn() {
-        let values = parse_resolve_eval_consts("const SQRT2 = sqrt(2.0);").unwrap();
+        let values = parse_resolve_eval_consts("const SQRT2: Dimensionless = sqrt(2.0);").unwrap();
         assert!((values["SQRT2"] - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
     }
 
     #[test]
     fn eval_const_cycle_detected() {
-        let err = parse_resolve_eval_consts("const A = B + 1.0;\nconst B = A + 1.0;").unwrap_err();
+        let err = parse_resolve_eval_consts(
+            "const A: Dimensionless = B + 1.0;\nconst B: Dimensionless = A + 1.0;",
+        )
+        .unwrap_err();
         assert!(matches!(err, KasuriError::CyclicDependency { .. }));
     }
 
     #[test]
     fn eval_no_consts() {
-        let values = parse_resolve_eval_consts("param x = 1.0;\nnode y = @x + 2.0;").unwrap();
+        let values = parse_resolve_eval_consts(
+            "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;",
+        )
+        .unwrap();
         assert!(values.is_empty());
     }
 }

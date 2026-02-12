@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(lexer.slice_at(span), "param");
 
         let (tok, span) = lexer.next_token().unwrap();
-        assert_eq!(tok, Token::LowerIdent);
+        assert_eq!(tok, Token::Ident);
         assert_eq!(lexer.slice_at(span), "x");
 
         let (tok, span) = lexer.next_token().unwrap();
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(lexer.peek(), Some(&Token::Param));
 
         lexer.next_token();
-        assert_eq!(lexer.peek(), Some(&Token::LowerIdent));
+        assert_eq!(lexer.peek(), Some(&Token::Ident));
     }
 
     #[test]

@@ -7,9 +7,10 @@ use kasuri_syntax::ast::{BinOp, Expr, ExprKind, UnaryOp};
 
 use crate::builtins::BuiltinFunction;
 use crate::error::KasuriError;
+use crate::registry::Registry;
 
 /// Evaluate an expression given a set of resolved values and built-in functions.
-/// Used by both the const evaluator and the runtime evaluator.
+/// Returns the value in base SI units.
 ///
 /// # Errors
 ///
@@ -17,15 +18,29 @@ use crate::error::KasuriError;
 /// constant, or function.
 #[expect(clippy::implicit_hasher)] // Internal function always uses default HashMap
 #[expect(clippy::if_not_else)] // `!= 0.0` reads more naturally for DSL truthiness
+#[expect(clippy::too_many_lines)] // Single match over all ExprKind variants
 pub fn eval_expr(
     expr: &Expr,
     values: &HashMap<String, f64>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
+    registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<f64, KasuriError> {
     match &expr.kind {
         ExprKind::Number(n) => Ok(*n),
+        ExprKind::UnitLiteral { value, unit } => {
+            // Convert to SI: value * scale
+            let (_dim, scale) =
+                registry
+                    .resolve_unit_expr(unit)
+                    .ok_or_else(|| KasuriError::EvalError {
+                        message: "unknown unit in literal".to_string(),
+                        src: src.clone(),
+                        span: unit.span.into(),
+                    })?;
+            Ok(*value * scale)
+        }
         ExprKind::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
         ExprKind::GraphRef(ident) => {
             values
@@ -47,12 +62,12 @@ pub fn eval_expr(
                 span: expr.span.into(),
             }),
         ExprKind::BinOp { op, lhs, rhs } => {
-            let l = eval_expr(lhs, values, builtin_consts, builtin_fns, src)?;
-            let r = eval_expr(rhs, values, builtin_consts, builtin_fns, src)?;
+            let l = eval_expr(lhs, values, builtin_consts, builtin_fns, registry, src)?;
+            let r = eval_expr(rhs, values, builtin_consts, builtin_fns, registry, src)?;
             Ok(eval_binop(*op, l, r))
         }
         ExprKind::UnaryOp { op, operand } => {
-            let v = eval_expr(operand, values, builtin_consts, builtin_fns, src)?;
+            let v = eval_expr(operand, values, builtin_consts, builtin_fns, registry, src)?;
             Ok(match op {
                 UnaryOp::Neg => -v,
                 UnaryOp::Not => {
@@ -75,7 +90,7 @@ pub fn eval_expr(
                     })?;
             let arg_values: Vec<f64> = args
                 .iter()
-                .map(|a| eval_expr(a, values, builtin_consts, builtin_fns, src))
+                .map(|a| eval_expr(a, values, builtin_consts, builtin_fns, registry, src))
                 .collect::<Result<_, _>>()?;
             Ok((builtin.eval)(&arg_values))
         }
@@ -84,12 +99,38 @@ pub fn eval_expr(
             then_branch,
             else_branch,
         } => {
-            let cond = eval_expr(condition, values, builtin_consts, builtin_fns, src)?;
+            let cond = eval_expr(
+                condition,
+                values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
             if cond != 0.0 {
-                eval_expr(then_branch, values, builtin_consts, builtin_fns, src)
+                eval_expr(
+                    then_branch,
+                    values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )
             } else {
-                eval_expr(else_branch, values, builtin_consts, builtin_fns, src)
+                eval_expr(
+                    else_branch,
+                    values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )
             }
+        }
+        // Convert: the inner expression is already in SI; just pass through.
+        // Display unit metadata is handled at a higher level.
+        ExprKind::Convert { expr: inner, .. } => {
+            eval_expr(inner, values, builtin_consts, builtin_fns, registry, src)
         }
     }
 }

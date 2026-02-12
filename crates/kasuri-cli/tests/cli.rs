@@ -52,9 +52,11 @@ fn eval_rocket_json_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
-    assert!(json["const"]["G0"].as_f64().is_some());
-    assert!((json["param"]["dry_mass"].as_f64().unwrap() - 1200.0).abs() < f64::EPSILON);
-    assert!(json["node"]["v_exhaust"].as_f64().is_some());
+    assert!(json["const"]["G0"]["si_value"].as_f64().is_some());
+    assert!(
+        (json["param"]["dry_mass"]["si_value"].as_f64().unwrap() - 1200.0).abs() < f64::EPSILON
+    );
+    assert!(json["node"]["v_exhaust"]["si_value"].as_f64().is_some());
 }
 
 #[test]

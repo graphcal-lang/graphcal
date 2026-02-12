@@ -1,5 +1,6 @@
 ---
 source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 36
 expression: rendered
 ---
 unknown constant `UNKNOWN`
@@ -7,7 +8,7 @@ unknown constant `UNKNOWN`
 Begin snippet for unknown_const_ref.ksr starting at line 1, column 1
 
 snippet line 1: // Unknown constant reference: UNKNOWN is never declared
-snippet line 2: node x = UNKNOWN + 1.0;
-    label at line 2, columns 10 to 16: not found
+snippet line 2: node x: Dimensionless = UNKNOWN + 1.0;
+    label at line 2, columns 25 to 31: not found
 diagnostic help: constant references must point to a `const` or built-in constant (PI, E)
 diagnostic code: kasuri::N003

@@ -1,0 +1,14 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 106
+expression: rendered
+---
+dimension mismatch: expected Dimensionless, found Length
+    Diagnostic severity: error
+Begin snippet for exp_requires_dimensionless.ksr starting at line 2, column 1
+
+snippet line 2: param alt: Length = 400 km;
+snippet line 3: node bad: Dimensionless = exp(@alt);
+    label at line 3, columns 31 to 34: has dimension Length
+diagnostic help: operands of addition and subtraction must have the same dimension
+diagnostic code: kasuri::D001

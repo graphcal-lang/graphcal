@@ -1,13 +1,14 @@
 ---
 source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 29
 expression: rendered
 ---
 unknown graph reference `@z`
     Diagnostic severity: error
 Begin snippet for unknown_ref.ksr starting at line 2, column 1
 
-snippet line 2: param x = 1.0;
-snippet line 3: node y = @z + 1.0;
-    label at line 3, column 11: not found
+snippet line 2: param x: Dimensionless = 1.0;
+snippet line 3: node y: Dimensionless = @z + 1.0;
+    label at line 3, column 26: not found
 diagnostic help: graph references must point to a `param` or `node`
 diagnostic code: kasuri::N002

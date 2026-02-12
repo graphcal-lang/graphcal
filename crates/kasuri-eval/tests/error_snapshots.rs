@@ -84,3 +84,38 @@ fn error_wrong_arity() {
     let rendered = render_error(source, "wrong_arity.ksr");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_dim_mismatch_add() {
+    let source = include_str!("../../../tests/fixtures/errors/dim_mismatch_add.ksr");
+    let rendered = render_error(source, "dim_mismatch_add.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_dim_mismatch_annotation() {
+    let source = include_str!("../../../tests/fixtures/errors/dim_mismatch_annotation.ksr");
+    let rendered = render_error(source, "dim_mismatch_annotation.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_exp_requires_dimensionless() {
+    let source = include_str!("../../../tests/fixtures/errors/exp_requires_dimensionless.ksr");
+    let rendered = render_error(source, "exp_requires_dimensionless.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_unit() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_unit.ksr");
+    let rendered = render_error(source, "unknown_unit.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_conversion_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/conversion_dim_mismatch.ksr");
+    let rendered = render_error(source, "conversion_dim_mismatch.ksr");
+    insta::assert_snapshot!(rendered);
+}

@@ -1,13 +1,14 @@
 ---
 source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 50
 expression: rendered
 ---
-unexpected token `identifier`
+unexpected token `identifier `bad_name``
     Diagnostic severity: error
 Begin snippet for bad_const_casing.ksr starting at line 1, column 1
 
 snippet line 1: // Bad const casing: const must be UPPER_SNAKE_CASE
-snippet line 2: const bad_name = 1.0;
+snippet line 2: const bad_name: Dimensionless = 1.0;
     label at line 2, columns 7 to 14: here
 diagnostic help: expected UPPER_SNAKE_CASE identifier
 diagnostic code: kasuri::P001
