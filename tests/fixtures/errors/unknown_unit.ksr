@@ -1,0 +1,2 @@
+// error: unknown unit
+node x: Length = 100 foobar;

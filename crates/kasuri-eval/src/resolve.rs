@@ -55,10 +55,12 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
+        // Dimension and Unit declarations are handled by the registry, not the resolver
         let (name, name_span, is_const) = match &decl.kind {
             DeclKind::Param(p) => (p.name.name.clone(), p.name.span, false),
             DeclKind::Node(n) => (n.name.name.clone(), n.name.span, false),
             DeclKind::Const(c) => (c.name.name.clone(), c.name.span, true),
+            DeclKind::Dimension(_) | DeclKind::Unit(_) => continue,
         };
 
         // Check for duplicates
@@ -77,6 +79,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Const(_) => DeclCategory::Const,
             DeclKind::Param(_) => DeclCategory::Param,
             DeclKind::Node(_) => DeclCategory::Node,
+            DeclKind::Dimension(_) | DeclKind::Unit(_) => unreachable!(),
         };
         source_order.push((name.clone(), category));
 
@@ -114,6 +117,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
         match &decl.kind {
+            DeclKind::Dimension(_) | DeclKind::Unit(_) => {}
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
                 let deps = extract_const_refs(
@@ -185,7 +189,10 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             src: src.clone(),
             span: expr.span.into(),
         }),
-        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::ConstRef(_) => Ok(()),
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::UnitLiteral { .. } => Ok(()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_no_graph_refs(lhs, src)?;
             check_no_graph_refs(rhs, src)
@@ -206,6 +213,7 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(then_branch, src)?;
             check_no_graph_refs(else_branch, src)
         }
+        ExprKind::Convert { expr: inner, .. } => check_no_graph_refs(inner, src),
     }
 }
 
@@ -238,7 +246,7 @@ fn collect_const_refs(
     deps: &mut HashSet<String>,
 ) -> Result<(), KasuriError> {
     match &expr.kind {
-        ExprKind::Number(_) | ExprKind::Bool(_) => Ok(()),
+        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::UnitLiteral { .. } => Ok(()),
         ExprKind::GraphRef(_) => unreachable!("should be caught by check_no_graph_refs"),
         ExprKind::ConstRef(ident) => {
             if builtin_consts.contains_key(ident.name.as_str()) {
@@ -319,6 +327,14 @@ fn collect_const_refs(
                 deps,
             )
         }
+        ExprKind::Convert { expr: inner, .. } => collect_const_refs(
+            inner,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            src,
+            deps,
+        ),
     }
 }
 
@@ -359,7 +375,7 @@ fn collect_all_refs(
     const_refs: &mut HashSet<String>,
 ) -> Result<(), KasuriError> {
     match &expr.kind {
-        ExprKind::Number(_) | ExprKind::Bool(_) => Ok(()),
+        ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::UnitLiteral { .. } => Ok(()),
         ExprKind::GraphRef(ident) => {
             if all_runtime_names.contains(ident.name.as_str()) {
                 graph_refs.insert(ident.name.clone());
@@ -486,6 +502,16 @@ fn collect_all_refs(
                 const_refs,
             )
         }
+        ExprKind::Convert { expr: inner, .. } => collect_all_refs(
+            inner,
+            all_runtime_names,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            src,
+            graph_refs,
+            const_refs,
+        ),
     }
 }
 
@@ -526,67 +552,75 @@ mod tests {
 
     #[test]
     fn resolve_duplicate_name() {
-        let err = parse_and_resolve("param x = 1.0;\nnode x = 2.0;").unwrap_err();
+        let err = parse_and_resolve("param x: Dimensionless = 1.0;\nnode x: Dimensionless = 2.0;")
+            .unwrap_err();
         assert!(matches!(err, KasuriError::DuplicateName { .. }));
     }
 
     #[test]
     fn resolve_unknown_graph_ref() {
-        let err = parse_and_resolve("node x = @nonexistent + 1.0;").unwrap_err();
+        let err = parse_and_resolve("node x: Dimensionless = @nonexistent + 1.0;").unwrap_err();
         assert!(matches!(err, KasuriError::UnknownGraphRef { .. }));
     }
 
     #[test]
     fn resolve_unknown_const_ref() {
-        let err = parse_and_resolve("node x = NONEXISTENT + 1.0;").unwrap_err();
+        let err = parse_and_resolve("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
         assert!(matches!(err, KasuriError::UnknownConstRef { .. }));
     }
 
     #[test]
     fn resolve_at_in_const() {
-        let err = parse_and_resolve("param p = 1.0;\nconst BAD = @p * 2.0;").unwrap_err();
+        let err = parse_and_resolve(
+            "param p: Dimensionless = 1.0;\nconst BAD: Dimensionless = @p * 2.0;",
+        )
+        .unwrap_err();
         assert!(matches!(err, KasuriError::GraphRefInConst { .. }));
     }
 
     #[test]
     fn parser_rejects_bad_const_casing() {
-        let result = Parser::new("const bad_name = 42.0;").parse_file();
+        let result = Parser::new("const bad_name: Dimensionless = 42.0;").parse_file();
         assert!(result.is_err());
     }
 
     #[test]
     fn parser_rejects_bad_param_casing() {
-        let result = Parser::new("param BAD = 42.0;").parse_file();
+        let result = Parser::new("param BAD: Dimensionless = 42.0;").parse_file();
         assert!(result.is_err());
     }
 
     #[test]
     fn resolve_builtin_const_recognized() {
-        let resolved = parse_and_resolve("node x = PI * 2.0;").unwrap();
+        let resolved = parse_and_resolve("node x: Dimensionless = PI * 2.0;").unwrap();
         assert_eq!(resolved.nodes.len(), 1);
     }
 
     #[test]
     fn resolve_builtin_function_recognized() {
-        let resolved = parse_and_resolve("param x = 4.0;\nnode y = sqrt(@x);").unwrap();
+        let resolved =
+            parse_and_resolve("param x: Dimensionless = 4.0;\nnode y: Dimensionless = sqrt(@x);")
+                .unwrap();
         assert_eq!(resolved.nodes.len(), 1);
     }
 
     #[test]
     fn resolve_unknown_function() {
-        let err = parse_and_resolve("node x = unknown_fn(1.0);").unwrap_err();
+        let err = parse_and_resolve("node x: Dimensionless = unknown_fn(1.0);").unwrap_err();
         assert!(matches!(err, KasuriError::UnknownFunction { .. }));
     }
 
     #[test]
     fn resolve_wrong_arity() {
-        let err = parse_and_resolve("node x = sqrt(1.0, 2.0);").unwrap_err();
+        let err = parse_and_resolve("node x: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
         assert!(matches!(err, KasuriError::WrongArity { .. }));
     }
 
     #[test]
     fn resolve_const_deps_extracted() {
-        let resolved = parse_and_resolve("const A = 1.0;\nconst B = A + 2.0;").unwrap();
+        let resolved =
+            parse_and_resolve("const A: Dimensionless = 1.0;\nconst B: Dimensionless = A + 2.0;")
+                .unwrap();
         let b_deps = &resolved.const_deps["B"];
         assert!(b_deps.contains("A"));
         assert_eq!(b_deps.len(), 1);
@@ -595,7 +629,7 @@ mod tests {
     #[test]
     fn resolve_runtime_deps_extracted() {
         let resolved =
-            parse_and_resolve("param a = 1.0;\nparam b = 2.0;\nnode c = @a + @b;").unwrap();
+            parse_and_resolve("param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;").unwrap();
         let c_deps = &resolved.runtime_deps["c"];
         assert!(c_deps.contains("a"));
         assert!(c_deps.contains("b"));

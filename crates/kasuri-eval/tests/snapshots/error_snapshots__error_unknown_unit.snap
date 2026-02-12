@@ -1,0 +1,14 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+assertion_line: 113
+expression: rendered
+---
+unknown unit `foobar`
+    Diagnostic severity: error
+Begin snippet for unknown_unit.ksr starting at line 1, column 1
+
+snippet line 1: // error: unknown unit
+snippet line 2: node x: Length = 100 foobar;
+    label at line 2, columns 22 to 27: unknown unit
+diagnostic help: unit must be declared or part of the prelude
+diagnostic code: kasuri::D003

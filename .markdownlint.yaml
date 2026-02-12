@@ -12,6 +12,6 @@ no-trailing-punctuation: false
 code-block-style: false
 no-duplicate-heading: false
 ul-indent:
-  indent: 4
+  indent: 2
 table-column-style:
   style: compact

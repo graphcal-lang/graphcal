@@ -1,4 +1,4 @@
 // Runtime cycle: a depends on b, b depends on a
-param seed = 1.0;
-node a = @b + 1.0;
-node b = @a + 1.0;
+param seed: Dimensionless = 1.0;
+node a: Dimensionless = @b + 1.0;
+node b: Dimensionless = @a + 1.0;

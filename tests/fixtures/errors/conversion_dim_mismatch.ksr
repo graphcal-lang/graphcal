@@ -1,0 +1,3 @@
+// error: conversion target has wrong dimension
+param alt: Length = 400 km;
+node bad: Length = @alt -> s;

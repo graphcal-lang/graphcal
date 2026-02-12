@@ -1,9 +1,36 @@
 use std::collections::HashMap;
 
+/// Describes how a built-in function interacts with dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DimSignature {
+    /// All arguments must be Dimensionless, returns Dimensionless.
+    /// e.g., exp, ln
+    AllDimensionless,
+    /// Argument must be Angle, returns Dimensionless.
+    /// e.g., sin, cos, tan
+    AngleToDimensionless,
+    /// Returns Angle from Dimensionless arguments.
+    /// e.g., asin, acos
+    DimensionlessToAngle,
+    /// Argument is D, returns D^(1/2). Dimension must have even exponents.
+    /// e.g., sqrt
+    Sqrt,
+    /// Argument is D, returns D (preserves dimension).
+    /// e.g., abs, floor, ceil
+    Passthrough,
+    /// Both arguments must have same dimension D, returns D.
+    /// e.g., min, max
+    SameDimension,
+    /// Both arguments must have same dimension D, returns Angle.
+    /// e.g., atan2
+    SameDimensionToAngle,
+}
+
 pub struct BuiltinFunction {
     pub name: &'static str,
     pub arity: usize,
     pub eval: fn(&[f64]) -> f64,
+    pub dim_sig: DimSignature,
 }
 
 #[must_use]
@@ -16,6 +43,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "sqrt",
             arity: 1,
             eval: |a| a[0].sqrt(),
+            dim_sig: DimSignature::Sqrt,
         },
     );
     m.insert(
@@ -24,6 +52,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "exp",
             arity: 1,
             eval: |a| a[0].exp(),
+            dim_sig: DimSignature::AllDimensionless,
         },
     );
     m.insert(
@@ -32,6 +61,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "ln",
             arity: 1,
             eval: |a| a[0].ln(),
+            dim_sig: DimSignature::AllDimensionless,
         },
     );
     m.insert(
@@ -40,6 +70,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "abs",
             arity: 1,
             eval: |a| a[0].abs(),
+            dim_sig: DimSignature::Passthrough,
         },
     );
     m.insert(
@@ -48,6 +79,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "sin",
             arity: 1,
             eval: |a| a[0].sin(),
+            dim_sig: DimSignature::AngleToDimensionless,
         },
     );
     m.insert(
@@ -56,6 +88,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "cos",
             arity: 1,
             eval: |a| a[0].cos(),
+            dim_sig: DimSignature::AngleToDimensionless,
         },
     );
     m.insert(
@@ -64,6 +97,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "tan",
             arity: 1,
             eval: |a| a[0].tan(),
+            dim_sig: DimSignature::AngleToDimensionless,
         },
     );
     m.insert(
@@ -72,6 +106,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "asin",
             arity: 1,
             eval: |a| a[0].asin(),
+            dim_sig: DimSignature::DimensionlessToAngle,
         },
     );
     m.insert(
@@ -80,6 +115,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "acos",
             arity: 1,
             eval: |a| a[0].acos(),
+            dim_sig: DimSignature::DimensionlessToAngle,
         },
     );
     m.insert(
@@ -88,6 +124,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "floor",
             arity: 1,
             eval: |a| a[0].floor(),
+            dim_sig: DimSignature::Passthrough,
         },
     );
     m.insert(
@@ -96,6 +133,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "ceil",
             arity: 1,
             eval: |a| a[0].ceil(),
+            dim_sig: DimSignature::Passthrough,
         },
     );
     m.insert(
@@ -104,6 +142,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "atan2",
             arity: 2,
             eval: |a| a[0].atan2(a[1]),
+            dim_sig: DimSignature::SameDimensionToAngle,
         },
     );
     m.insert(
@@ -112,6 +151,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "min",
             arity: 2,
             eval: |a| a[0].min(a[1]),
+            dim_sig: DimSignature::SameDimension,
         },
     );
     m.insert(
@@ -120,6 +160,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
             name: "max",
             arity: 2,
             eval: |a| a[0].max(a[1]),
+            dim_sig: DimSignature::SameDimension,
         },
     );
     m

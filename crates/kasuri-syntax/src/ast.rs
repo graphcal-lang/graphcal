@@ -18,24 +18,56 @@ pub enum DeclKind {
     Param(ParamDecl),
     Node(NodeDecl),
     Const(ConstDecl),
+    Dimension(DimDecl),
+    Unit(UnitDecl),
 }
 
 #[derive(Debug, Clone)]
 pub struct ParamDecl {
     pub name: Ident,
+    pub type_ann: TypeExpr,
     pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
 pub struct NodeDecl {
     pub name: Ident,
+    pub type_ann: TypeExpr,
     pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
     pub name: Ident,
+    pub type_ann: TypeExpr,
     pub value: Expr,
+}
+
+/// Dimension declaration: `dimension Velocity = Length / Time;`
+#[derive(Debug, Clone)]
+pub struct DimDecl {
+    pub name: Ident,
+    /// `None` for base dimensions: `dimension Length;`
+    pub definition: Option<DimExpr>,
+}
+
+/// Unit declaration: `unit km: Length = 1000 m;`
+#[derive(Debug, Clone)]
+pub struct UnitDecl {
+    pub name: Ident,
+    /// The dimension this unit measures.
+    pub dim_type: DimExpr,
+    /// Scale definition: `(scale_value, base_unit_expr)`.
+    /// `None` for base SI units: `unit m: Length;`
+    pub definition: Option<UnitDef>,
+}
+
+/// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.
+#[derive(Debug, Clone)]
+pub struct UnitDef {
+    pub scale: f64,
+    pub unit_expr: UnitExpr,
+    pub span: Span,
 }
 
 /// An identifier with its source span.
@@ -44,6 +76,79 @@ pub struct Ident {
     pub name: String,
     pub span: Span,
 }
+
+// --- Type expressions ---
+
+/// A type expression (dimension annotation on declarations).
+/// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
+#[derive(Debug, Clone)]
+pub struct TypeExpr {
+    pub kind: TypeExprKind,
+    pub span: Span,
+}
+
+/// The kind of a type expression.
+#[derive(Debug, Clone)]
+pub enum TypeExprKind {
+    /// `Dimensionless`
+    Dimensionless,
+    /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
+    DimExpr(DimExpr),
+}
+
+/// A dimension expression: product/quotient of dimension terms.
+/// E.g., `Length^3 / Time^2`
+#[derive(Debug, Clone)]
+pub struct DimExpr {
+    pub terms: Vec<DimExprItem>,
+    pub span: Span,
+}
+
+/// One term in a dimension expression with its combining operator.
+#[derive(Debug, Clone)]
+pub struct DimExprItem {
+    /// `Mul` for the first term and for `*`, `Div` for `/`.
+    pub op: MulDivOp,
+    pub term: DimTerm,
+}
+
+/// A single dimension term: `IDENT` or `IDENT ^ INTEGER`
+#[derive(Debug, Clone)]
+pub struct DimTerm {
+    pub name: Ident,
+    /// `None` means exponent 1.
+    pub power: Option<i32>,
+    pub span: Span,
+}
+
+// --- Unit expressions ---
+
+/// A unit expression (for literals and conversion targets).
+/// E.g., `km`, `m/s^2`, `kg * m / s^2`
+#[derive(Debug, Clone)]
+pub struct UnitExpr {
+    pub terms: Vec<UnitExprItem>,
+    pub span: Span,
+}
+
+/// One term in a unit expression.
+#[derive(Debug, Clone)]
+pub struct UnitExprItem {
+    /// `Mul` for the first term and for `*`, `Div` for `/`.
+    pub op: MulDivOp,
+    pub name: Ident,
+    /// `None` means exponent 1.
+    pub power: Option<i32>,
+}
+
+/// Multiply or divide operator used in dimension/unit expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MulDivOp {
+    Mul,
+    Div,
+}
+
+// --- Expressions ---
 
 /// An expression node.
 #[derive(Debug, Clone)]
@@ -78,6 +183,10 @@ pub enum ExprKind {
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
     },
+    /// Unit-annotated literal: `400 km`, `9.80665 m/s^2`
+    UnitLiteral { value: f64, unit: UnitExpr },
+    /// Conversion: `expr -> unit_expr`
+    Convert { expr: Box<Expr>, target: UnitExpr },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,12 +225,16 @@ mod tests {
                         name: "x".into(),
                         span: Span::new(6, 1),
                     },
+                    type_ann: TypeExpr {
+                        kind: TypeExprKind::Dimensionless,
+                        span: Span::new(9, 15),
+                    },
                     value: Expr {
                         kind: ExprKind::Number(1.0),
-                        span: Span::new(10, 3),
+                        span: Span::new(27, 3),
                     },
                 }),
-                span: Span::new(0, 14),
+                span: Span::new(0, 31),
             }],
         };
         assert_eq!(file.declarations.len(), 1);

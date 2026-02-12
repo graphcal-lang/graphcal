@@ -134,14 +134,17 @@ mod tests {
 
     #[test]
     fn dag_cycle_detected() {
-        let err = parse_resolve_build("node a = @b + 1.0;\nnode b = @a + 1.0;").unwrap_err();
+        let err = parse_resolve_build(
+            "node a: Dimensionless = @b + 1.0;\nnode b: Dimensionless = @a + 1.0;",
+        )
+        .unwrap_err();
         assert!(matches!(err, KasuriError::CyclicDependency { .. }));
     }
 
     #[test]
     fn dag_simple_chain() {
         let dag =
-            parse_resolve_build("param x = 1.0;\nnode y = @x + 1.0;\nnode z = @y * 2.0;").unwrap();
+            parse_resolve_build("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;\nnode z: Dimensionless = @y * 2.0;").unwrap();
         let topo_names: Vec<&str> = dag
             .topo_order
             .iter()

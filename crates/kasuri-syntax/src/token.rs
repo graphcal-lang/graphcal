@@ -19,6 +19,10 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("dimension")]
+    Dimension,
+    #[token("unit")]
+    Unit,
 
     // Operators
     #[token("+")]
@@ -51,6 +55,8 @@ pub enum Token {
     PipePipe,
     #[token("!")]
     Bang,
+    #[token("->")]
+    Arrow,
 
     // Delimiters
     #[token("(")]
@@ -67,12 +73,12 @@ pub enum Token {
     Comma,
     #[token("@")]
     At,
+    #[token(":")]
+    Colon,
 
-    // Identifiers
-    #[regex(r"[a-z][a-z0-9_]*")]
-    LowerIdent,
-    #[regex(r"[A-Z][A-Z0-9_]*")]
-    UpperIdent,
+    // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
+    #[regex(r"[a-zA-Z][a-zA-Z0-9_]*")]
+    Ident,
 
     // Numeric literal (with _ separators and scientific notation)
     #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?")]
@@ -89,6 +95,8 @@ impl std::fmt::Display for Token {
             Self::Else => write!(f, "else"),
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
+            Self::Dimension => write!(f, "dimension"),
+            Self::Unit => write!(f, "unit"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
@@ -104,6 +112,7 @@ impl std::fmt::Display for Token {
             Self::AmpAmp => write!(f, "&&"),
             Self::PipePipe => write!(f, "||"),
             Self::Bang => write!(f, "!"),
+            Self::Arrow => write!(f, "->"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
@@ -111,8 +120,8 @@ impl std::fmt::Display for Token {
             Self::Semicolon => write!(f, ";"),
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
-            Self::LowerIdent => write!(f, "identifier"),
-            Self::UpperIdent => write!(f, "IDENTIFIER"),
+            Self::Colon => write!(f, ":"),
+            Self::Ident => write!(f, "identifier"),
             Self::Number => write!(f, "number"),
         }
     }
@@ -135,7 +144,7 @@ mod tests {
             tokens,
             vec![
                 Token::Param,
-                Token::LowerIdent,
+                Token::Ident,
                 Token::Eq,
                 Token::Number,
                 Token::Semicolon,
@@ -150,12 +159,12 @@ mod tests {
             tokens,
             vec![
                 Token::Node,
-                Token::LowerIdent,
+                Token::Ident,
                 Token::Eq,
                 Token::At,
-                Token::LowerIdent,
+                Token::Ident,
                 Token::Star,
-                Token::UpperIdent,
+                Token::Ident,
                 Token::Semicolon,
             ]
         );
@@ -168,7 +177,7 @@ mod tests {
             tokens,
             vec![
                 Token::Const,
-                Token::UpperIdent,
+                Token::Ident,
                 Token::Eq,
                 Token::Number,
                 Token::Semicolon,
@@ -224,7 +233,7 @@ mod tests {
             tokens,
             vec![
                 Token::Param,
-                Token::LowerIdent,
+                Token::Ident,
                 Token::Eq,
                 Token::Number,
                 Token::Semicolon,
@@ -279,10 +288,10 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::LowerIdent,
+                Token::Ident,
                 Token::LParen,
                 Token::At,
-                Token::LowerIdent,
+                Token::Ident,
                 Token::RParen,
             ]
         );
@@ -291,7 +300,7 @@ mod tests {
     #[test]
     fn lex_upper_ident_pi() {
         let mut lexer = Token::lexer("PI");
-        assert_eq!(lexer.next(), Some(Ok(Token::UpperIdent)));
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "PI");
     }
 
@@ -303,8 +312,8 @@ mod tests {
 
     #[test]
     fn lex_keywords_not_identifiers() {
-        // "param" should be Token::Param, not LowerIdent
-        let tokens = lex_tokens("param node const if else");
+        // "param" should be Token::Param, not Ident
+        let tokens = lex_tokens("param node const if else dimension unit");
         assert_eq!(
             tokens,
             vec![
@@ -313,15 +322,112 @@ mod tests {
                 Token::Const,
                 Token::If,
                 Token::Else,
+                Token::Dimension,
+                Token::Unit,
             ]
         );
     }
 
     #[test]
     fn lex_identifier_starting_with_keyword() {
-        // "parameter" should be LowerIdent, not Param + "eter"
+        // "parameter" should be Ident, not Param + "eter"
         let mut lexer = Token::lexer("parameter");
-        assert_eq!(lexer.next(), Some(Ok(Token::LowerIdent)));
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "parameter");
+    }
+
+    // Phase 1 specific tests
+
+    #[test]
+    fn lex_pascal_case_identifiers() {
+        let tokens = lex_tokens("Length Time Mass Velocity Dimensionless");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_mixed_case_unit_identifiers() {
+        // Pa, Hz, kN, kPa, MPa -- all should lex as single Ident tokens
+        let tokens = lex_tokens("Pa Hz kN kPa MPa");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+                Token::Ident,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_colon() {
+        let tokens = lex_tokens("param alt: Length = 400 km;");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Param,
+                Token::Ident,
+                Token::Colon,
+                Token::Ident,
+                Token::Eq,
+                Token::Number,
+                Token::Ident,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_arrow() {
+        let tokens = lex_tokens("@speed -> km");
+        assert_eq!(
+            tokens,
+            vec![Token::At, Token::Ident, Token::Arrow, Token::Ident,]
+        );
+    }
+
+    #[test]
+    fn lex_dimension_decl() {
+        let tokens = lex_tokens("dimension Velocity = Length / Time;");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Dimension,
+                Token::Ident,
+                Token::Eq,
+                Token::Ident,
+                Token::Slash,
+                Token::Ident,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_unit_decl() {
+        let tokens = lex_tokens("unit km: Length = 1000 m;");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Unit,
+                Token::Ident,
+                Token::Colon,
+                Token::Ident,
+                Token::Eq,
+                Token::Number,
+                Token::Ident,
+                Token::Semicolon,
+            ]
+        );
     }
 }

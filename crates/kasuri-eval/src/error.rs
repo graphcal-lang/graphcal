@@ -103,4 +103,83 @@ pub enum KasuriError {
         #[label("error here")]
         span: SourceSpan,
     },
+
+    #[error("dimension mismatch: expected {expected}, found {found}")]
+    #[diagnostic(code(kasuri::D001))]
+    DimensionMismatch {
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has dimension {found}")]
+        span: SourceSpan,
+        #[help]
+        help: String,
+    },
+
+    #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
+    #[diagnostic(
+        code(kasuri::D002),
+        help("the declared type must match the inferred dimension of the expression")
+    )]
+    DimensionMismatchInAnnotation {
+        declared: String,
+        inferred: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("declared as {declared}")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown unit `{name}`")]
+    #[diagnostic(
+        code(kasuri::D003),
+        help("unit must be declared or part of the prelude")
+    )]
+    UnknownUnit {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown unit")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown dimension `{name}`")]
+    #[diagnostic(
+        code(kasuri::D004),
+        help("dimension must be declared or part of the prelude")
+    )]
+    UnknownDimension {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown dimension")]
+        span: SourceSpan,
+    },
+
+    #[error("exponent in power must be a numeric literal for dimensional analysis")]
+    #[diagnostic(
+        code(kasuri::D005),
+        help("use a literal exponent like `x ^ 2.0` so dimensions can be checked at compile time")
+    )]
+    NonLiteralExponent {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("non-literal exponent")]
+        span: SourceSpan,
+    },
+
+    #[error("conversion target dimension {target} does not match expression dimension {expr_dim}")]
+    #[diagnostic(
+        code(kasuri::D006),
+        help("the `->` conversion operator can only change units within the same dimension")
+    )]
+    ConversionDimensionMismatch {
+        target: String,
+        expr_dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("target unit has different dimension")]
+        span: SourceSpan,
+    },
 }

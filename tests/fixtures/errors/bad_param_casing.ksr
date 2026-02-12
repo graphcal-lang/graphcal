@@ -1,2 +1,2 @@
 // Bad param casing: param must be lower_snake_case
-param BadName = 1.0;
+param BadName: Dimensionless = 1.0;
