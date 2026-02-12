@@ -53,10 +53,17 @@ pub enum Value {
         /// Fields in definition order.
         fields: IndexMap<String, Self>,
     },
+    /// An indexed collection: maps variant names to values.
+    Indexed {
+        /// The index type name.
+        index_name: String,
+        /// Entries in declaration order.
+        entries: IndexMap<String, Self>,
+    },
 }
 
 impl Value {
-    /// Get the SI value. Panics on struct values.
+    /// Get the SI value. Panics on non-scalar values.
     #[must_use]
     pub fn si_value(&self) -> f64 {
         match self {
@@ -64,16 +71,22 @@ impl Value {
             Self::Struct { type_name, .. } => {
                 panic!("called si_value() on struct `{type_name}`")
             }
+            Self::Indexed { index_name, .. } => {
+                panic!("called si_value() on indexed value `{index_name}[...]`")
+            }
         }
     }
 
-    /// Get the dimension. Panics on struct values.
+    /// Get the dimension. Panics on non-scalar values.
     #[must_use]
     pub fn dimension(&self) -> Dimension {
         match self {
             Self::Scalar { dimension, .. } => *dimension,
             Self::Struct { type_name, .. } => {
                 panic!("called dimension() on struct `{type_name}`")
+            }
+            Self::Indexed { index_name, .. } => {
+                panic!("called dimension() on indexed value `{index_name}[...]`")
             }
         }
     }
@@ -92,6 +105,9 @@ impl Value {
             Self::Struct { type_name, .. } => {
                 panic!("called display_value() on struct `{type_name}`")
             }
+            Self::Indexed { index_name, .. } => {
+                panic!("called display_value() on indexed value `{index_name}[...]`")
+            }
         }
     }
 
@@ -109,7 +125,7 @@ impl Value {
             } => display_unit
                 .as_ref()
                 .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
-            Self::Struct { .. } => None,
+            Self::Struct { .. } | Self::Indexed { .. } => None,
         }
     }
 }
@@ -141,6 +157,7 @@ pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
+#[expect(clippy::too_many_lines)]
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = kasuri_syntax::parser::Parser::with_name(source, name).parse_file()?;
@@ -189,6 +206,12 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
                 };
                 registry.register_unit(&u.name.name, dim, scale);
             }
+            DeclKind::Index(idx) => {
+                registry.register_index(registry::IndexDef {
+                    name: idx.name.name.clone(),
+                    variants: idx.variants.iter().map(|v| v.name.clone()).collect(),
+                });
+            }
             DeclKind::Type(t) => {
                 let mut fields = Vec::new();
                 for field in &t.fields {
@@ -220,7 +243,17 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
             generic_params: fn_decl
                 .generic_params
                 .iter()
-                .map(|g| g.name.name.clone())
+                .map(|g| registry::FnGenericParam {
+                    name: g.name.name.clone(),
+                    constraint: match g.constraint {
+                        kasuri_syntax::ast::GenericConstraint::Dim => {
+                            registry::FnGenericConstraint::Dim
+                        }
+                        kasuri_syntax::ast::GenericConstraint::Index => {
+                            registry::FnGenericConstraint::Index
+                        }
+                    },
+                })
                 .collect(),
             params: fn_decl
                 .params
@@ -293,6 +326,34 @@ fn runtime_to_value(
                 type_name: type_name.clone(),
                 fields: converted_fields,
             }
+        }
+        RuntimeValue::Indexed {
+            index_name,
+            entries,
+        } => {
+            let element_declared = match declared_type {
+                Some(DeclaredType::Indexed { element, .. }) => Some(element.as_ref()),
+                _ => None,
+            };
+            let converted_entries = entries
+                .iter()
+                .map(|(variant, entry_rv)| {
+                    let val = runtime_to_value(
+                        entry_rv,
+                        element_declared,
+                        display_unit.clone(),
+                        registry,
+                    );
+                    (variant.clone(), val)
+                })
+                .collect();
+            Value::Indexed {
+                index_name: index_name.clone(),
+                entries: converted_entries,
+            }
+        }
+        RuntimeValue::VariantLabel { .. } => {
+            panic!("VariantLabel should not appear in final values")
         }
     }
 }
@@ -430,6 +491,14 @@ fn extract_display_unit(
                 scale,
             })
         }
+        // For map literals, extract display unit from the first entry
+        ExprKind::MapLiteral { entries } => entries
+            .first()
+            .and_then(|e| extract_display_unit(&e.value, registry)),
+        // For `for` comprehensions, extract display unit from the body
+        ExprKind::ForComp { body, .. } => extract_display_unit(body, registry),
+        // For scan, extract display unit from the init expression
+        ExprKind::Scan { init, .. } => extract_display_unit(init, registry),
         _ => None,
     }
 }
@@ -732,7 +801,7 @@ mod tests {
                 assert!(fields.contains_key("total_dv"));
                 assert!(fields.contains_key("tof"));
             }
-            Value::Scalar { .. } => panic!("expected struct for transfer"),
+            _ => panic!("expected struct for transfer"),
         }
     }
 
@@ -775,7 +844,90 @@ mod tests {
                     "total_dv = {total_dv}"
                 );
             }
-            Value::Scalar { .. } => panic!("expected struct for transfer"),
+            _ => panic!("expected struct for transfer"),
         }
+    }
+
+    /// Helper: find a named value and return it (for indexed value tests).
+    fn find_entry(result: &EvalResult, name: &str) -> Value {
+        result
+            .all
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .clone()
+    }
+
+    /// Helper: extract indexed entries as `Vec<(variant, si_value)>`.
+    fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
+        match value {
+            Value::Indexed { entries, .. } => entries
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.si_value()))
+                .collect(),
+            _ => panic!("expected indexed value, got {value:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_indexed_milestone() {
+        let source = include_str!("../../../tests/fixtures/indexed.ksr");
+        let result = compile_and_eval(source).unwrap();
+
+        // delta_v param: 2460, 120, 1830 m/s (SI)
+        let dv = find_entry(&result, "delta_v");
+        let dv_vals = indexed_si_values(&dv);
+        assert_eq!(dv_vals.len(), 3);
+        assert!(
+            (dv_vals[0].1 - 2460.0).abs() < 0.01,
+            "Departure = {}",
+            dv_vals[0].1
+        );
+        assert!(
+            (dv_vals[1].1 - 120.0).abs() < 0.01,
+            "Correction = {}",
+            dv_vals[1].1
+        );
+        assert!(
+            (dv_vals[2].1 - 1830.0).abs() < 0.01,
+            "Insertion = {}",
+            dv_vals[2].1
+        );
+
+        // double_dv: doubled values
+        let ddv = find_entry(&result, "double_dv");
+        let ddv_vals = indexed_si_values(&ddv);
+        assert!((ddv_vals[0].1 - 4920.0).abs() < 0.01);
+        assert!((ddv_vals[1].1 - 240.0).abs() < 0.01);
+        assert!((ddv_vals[2].1 - 3660.0).abs() < 0.01);
+
+        // total_dv: 2460 + 120 + 1830 = 4410 m/s
+        assert!((find_value(&result, "total_dv") - 4410.0).abs() < 0.01);
+
+        // max_dv: 2460
+        assert!((find_value(&result, "max_dv") - 2460.0).abs() < 0.01);
+
+        // min_dv: 120
+        assert!((find_value(&result, "min_dv") - 120.0).abs() < 0.01);
+
+        // mean_dv: 4410 / 3 = 1470
+        assert!((find_value(&result, "mean_dv") - 1470.0).abs() < 0.01);
+
+        // n_maneuvers: 3
+        assert!((find_value(&result, "n_maneuvers") - 3.0).abs() < f64::EPSILON);
+
+        // departure_dv: 2460
+        assert!((find_value(&result, "departure_dv") - 2460.0).abs() < 0.01);
+
+        // cumulative_dv: scan cumulative [2460, 2460+120=2580, 2580+1830=4410]
+        let cumulative = find_entry(&result, "cumulative_dv");
+        let cumulative_vals = indexed_si_values(&cumulative);
+        assert!((cumulative_vals[0].1 - 2460.0).abs() < 0.01);
+        assert!((cumulative_vals[1].1 - 2580.0).abs() < 0.01);
+        assert!((cumulative_vals[2].1 - 4410.0).abs() < 0.01);
+
+        // total_check (generic function): same as total_dv
+        assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
     }
 }

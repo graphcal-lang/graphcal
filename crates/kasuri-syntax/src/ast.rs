@@ -22,6 +22,7 @@ pub enum DeclKind {
     Unit(UnitDecl),
     Type(TypeDecl),
     Fn(FnDecl),
+    Index(IndexDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +87,13 @@ pub struct FieldDecl {
     pub type_ann: TypeExpr,
 }
 
+/// Index declaration: `index Maneuver = { Departure, Correction, Insertion }`
+#[derive(Debug, Clone)]
+pub struct IndexDecl {
+    pub name: Ident,
+    pub variants: Vec<Ident>,
+}
+
 /// Function declaration: `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;`
 #[derive(Debug, Clone)]
 pub struct FnDecl {
@@ -108,6 +116,8 @@ pub struct GenericParam {
 pub enum GenericConstraint {
     /// `D: Dim` -- the generic stands for a dimension.
     Dim,
+    /// `I: Index` -- the generic stands for an index.
+    Index,
 }
 
 /// A function parameter: `x: Length`, `t: Dimensionless`
@@ -153,6 +163,11 @@ pub enum TypeExprKind {
     Dimensionless,
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
+    /// An indexed type like `Velocity[Maneuver]` or `Dimensionless[A, B]`
+    Indexed {
+        base: Box<TypeExpr>,
+        indexes: Vec<Ident>,
+    },
 }
 
 /// A dimension expression: product/quotient of dimension terms.
@@ -260,6 +275,26 @@ pub enum ExprKind {
         type_name: Ident,
         fields: Vec<FieldInit>,
     },
+    /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
+    MapLiteral { entries: Vec<MapEntry> },
+    /// For comprehension: `for m: Maneuver { @delta_v[m] + 1.0 }`
+    ForComp {
+        bindings: Vec<ForBinding>,
+        body: Box<Expr>,
+    },
+    /// Index access: `@delta_v[m]`, `@delta_v[Maneuver::Departure]`, `@P[a, b]`
+    IndexAccess {
+        expr: Box<Expr>,
+        args: Vec<IndexArg>,
+    },
+    /// Scan: `scan(source, init, |acc, val| body)`
+    Scan {
+        source: Box<Expr>,
+        init: Box<Expr>,
+        acc_name: Ident,
+        val_name: Ident,
+        body: Box<Expr>,
+    },
 }
 
 /// A `let` binding inside a block body.
@@ -270,6 +305,30 @@ pub struct LetBinding {
     pub type_ann: Option<TypeExpr>,
     pub value: Expr,
     pub span: Span,
+}
+
+/// An entry in a map literal: `Maneuver::Departure: 2.46 km/s`
+#[derive(Debug, Clone)]
+pub struct MapEntry {
+    pub index: Ident,
+    pub variant: Ident,
+    pub value: Expr,
+}
+
+/// A binding in a `for` comprehension: `m: Maneuver`
+#[derive(Debug, Clone)]
+pub struct ForBinding {
+    pub var: Ident,
+    pub index: Ident,
+}
+
+/// An argument in an index access: either a qualified variant or a loop variable.
+#[derive(Debug, Clone)]
+pub enum IndexArg {
+    /// Qualified variant: `Maneuver::Departure`
+    Variant { index: Ident, variant: Ident },
+    /// Loop variable: `m`
+    Var(Ident),
 }
 
 /// A field initializer in struct construction.

@@ -10,13 +10,24 @@ use crate::builtins::BuiltinFunction;
 use crate::error::KasuriError;
 use crate::registry::Registry;
 
-/// A runtime value: either a scalar (f64 in SI units) or a struct with named fields.
+/// A runtime value: either a scalar (f64 in SI units), a struct, or an indexed collection.
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
     Scalar(f64),
     Struct {
         type_name: String,
         fields: IndexMap<String, Self>,
+    },
+    /// An indexed collection: maps variant names to values, preserving declaration order.
+    Indexed {
+        index_name: String,
+        entries: IndexMap<String, Self>,
+    },
+    /// A variant label during `for` comprehension iteration.
+    /// Not a "real" value — only exists in `local_values` during loop body evaluation.
+    VariantLabel {
+        index_name: String,
+        variant: String,
     },
 }
 
@@ -28,6 +39,12 @@ impl RuntimeValue {
             Self::Scalar(v) => *v,
             Self::Struct { type_name, .. } => {
                 panic!("expected scalar for {context}, got struct `{type_name}`")
+            }
+            Self::Indexed { index_name, .. } => {
+                panic!("expected scalar for {context}, got indexed value `{index_name}[...]`")
+            }
+            Self::VariantLabel { variant, .. } => {
+                panic!("expected scalar for {context}, got variant label `{variant}`")
             }
         }
     }
@@ -145,6 +162,62 @@ pub fn eval_expr(
             }))
         }
         ExprKind::FnCall { name, args } => {
+            // Aggregation functions over indexed values: sum, min, max, mean, count
+            if matches!(name.name.as_str(), "sum" | "min" | "max" | "mean" | "count")
+                && args.len() == 1
+            {
+                let arg_val = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                if let RuntimeValue::Indexed { entries, .. } = arg_val {
+                    return Ok(match name.name.as_str() {
+                        "sum" => {
+                            let total: f64 = entries
+                                .values()
+                                .map(|v| v.expect_scalar("sum element"))
+                                .sum();
+                            RuntimeValue::Scalar(total)
+                        }
+                        "min" => {
+                            let min = entries
+                                .values()
+                                .map(|v| v.expect_scalar("min element"))
+                                .fold(f64::INFINITY, f64::min);
+                            RuntimeValue::Scalar(min)
+                        }
+                        "max" => {
+                            let max = entries
+                                .values()
+                                .map(|v| v.expect_scalar("max element"))
+                                .fold(f64::NEG_INFINITY, f64::max);
+                            RuntimeValue::Scalar(max)
+                        }
+                        "mean" => {
+                            #[expect(clippy::cast_precision_loss)]
+                            let n = entries.len() as f64;
+                            let total: f64 = entries
+                                .values()
+                                .map(|v| v.expect_scalar("mean element"))
+                                .sum();
+                            RuntimeValue::Scalar(total / n)
+                        }
+                        "count" => {
+                            #[expect(clippy::cast_precision_loss)]
+                            let n = entries.len() as f64;
+                            RuntimeValue::Scalar(n)
+                        }
+                        _ => unreachable!(),
+                    });
+                }
+                // If not indexed, fall through to builtins (min/max are 2-arg builtins)
+            }
+
             // Try builtin first
             if let Some(builtin) = builtin_fns.get(name.name.as_str()) {
                 let arg_values: Vec<f64> = args
@@ -328,8 +401,8 @@ pub fn eval_expr(
                             span: field.span.into(),
                         })
                 }
-                RuntimeValue::Scalar(_) => Err(KasuriError::EvalError {
-                    message: "field access on scalar value".to_string(),
+                _ => Err(KasuriError::EvalError {
+                    message: "field access on non-struct value".to_string(),
                     src: src.clone(),
                     span: inner.span.into(),
                 }),
@@ -370,7 +443,217 @@ pub fn eval_expr(
                 fields: field_map,
             })
         }
+
+        ExprKind::MapLiteral { entries } => {
+            let idx_name = &entries[0].index.name;
+            let mut result = IndexMap::new();
+            for entry in entries {
+                let val = eval_expr(
+                    &entry.value,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                result.insert(entry.variant.name.clone(), val);
+            }
+            Ok(RuntimeValue::Indexed {
+                index_name: idx_name.clone(),
+                entries: result,
+            })
+        }
+
+        ExprKind::ForComp { bindings, body } => {
+            // Evaluate body for each combination of index variants
+            eval_for_comp(
+                bindings,
+                body,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )
+        }
+
+        ExprKind::IndexAccess { expr: inner, args } => {
+            let mut current = eval_expr(
+                inner,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
+            for arg in args {
+                let RuntimeValue::Indexed { entries, .. } = current else {
+                    return Err(KasuriError::EvalError {
+                        message: "indexing a non-indexed value".to_string(),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                };
+                let variant_name = match arg {
+                    kasuri_syntax::ast::IndexArg::Variant { variant, .. } => variant.name.clone(),
+                    kasuri_syntax::ast::IndexArg::Var(ident) => {
+                        let var_val = local_values.get(&ident.name).ok_or_else(|| {
+                            KasuriError::EvalError {
+                                message: format!("undefined loop variable `{}`", ident.name),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            }
+                        })?;
+                        let RuntimeValue::VariantLabel { variant, .. } = var_val else {
+                            return Err(KasuriError::EvalError {
+                                message: format!("`{}` is not a loop variable", ident.name),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        };
+                        variant.clone()
+                    }
+                };
+                current =
+                    entries
+                        .get(&variant_name)
+                        .cloned()
+                        .ok_or_else(|| KasuriError::EvalError {
+                            message: format!("variant `{variant_name}` not found"),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+            }
+            Ok(current)
+        }
+
+        ExprKind::Scan {
+            source,
+            init,
+            acc_name,
+            val_name,
+            body,
+        } => {
+            let source_val = eval_expr(
+                source,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
+            let RuntimeValue::Indexed {
+                index_name,
+                entries,
+            } = source_val
+            else {
+                return Err(KasuriError::EvalError {
+                    message: "scan source must be an indexed value".to_string(),
+                    src: src.clone(),
+                    span: source.span.into(),
+                });
+            };
+            let init_val = eval_expr(
+                init,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
+
+            let mut acc = init_val;
+            let mut result_entries = IndexMap::new();
+            for (variant, val) in &entries {
+                let mut scan_locals = local_values.clone();
+                scan_locals.insert(acc_name.name.clone(), acc);
+                scan_locals.insert(val_name.name.clone(), val.clone());
+                let body_val = eval_expr(
+                    body,
+                    values,
+                    &scan_locals,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                result_entries.insert(variant.clone(), body_val.clone());
+                acc = body_val;
+            }
+            Ok(RuntimeValue::Indexed {
+                index_name,
+                entries: result_entries,
+            })
+        }
     }
+}
+
+/// Evaluate a `for` comprehension by iterating over index variants.
+///
+/// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
+/// and collects results into `Indexed`.
+/// For multi-binding, produces nested `Indexed` values.
+#[expect(clippy::too_many_arguments)]
+fn eval_for_comp(
+    bindings: &[kasuri_syntax::ast::ForBinding],
+    body: &Expr,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<RuntimeValue, KasuriError> {
+    let binding = &bindings[0];
+    let idx_name = &binding.index.name;
+    let idx_def = registry
+        .get_index(idx_name)
+        .expect("index validated by dim_check");
+    let remaining = &bindings[1..];
+
+    let mut entries = IndexMap::new();
+    for variant in &idx_def.variants {
+        let mut inner_locals = local_values.clone();
+        inner_locals.insert(
+            binding.var.name.clone(),
+            RuntimeValue::VariantLabel {
+                index_name: idx_name.clone(),
+                variant: variant.clone(),
+            },
+        );
+        let val = if remaining.is_empty() {
+            eval_expr(
+                body,
+                values,
+                &inner_locals,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?
+        } else {
+            eval_for_comp(
+                remaining,
+                body,
+                values,
+                &inner_locals,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?
+        };
+        entries.insert(variant.clone(), val);
+    }
+    Ok(RuntimeValue::Indexed {
+        index_name: idx_name.clone(),
+        entries,
+    })
 }
 
 #[expect(clippy::float_cmp)] // Intentional: DSL equality/truthiness uses exact comparison

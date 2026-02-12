@@ -116,7 +116,7 @@ fn collect_fn_calls_in_expr(
             }
             collect_fn_calls_in_expr(expr, user_fns, calls);
         }
-        ExprKind::FieldAccess { expr, .. } => {
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
             collect_fn_calls_in_expr(expr, user_fns, calls);
         }
         ExprKind::StructConstruction { fields, .. } => {
@@ -132,6 +132,21 @@ fn collect_fn_calls_in_expr(
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_) => {}
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_fn_calls_in_expr(&entry.value, user_fns, calls);
+            }
+        }
+        ExprKind::ForComp { body, .. } => {
+            collect_fn_calls_in_expr(body, user_fns, calls);
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_fn_calls_in_expr(source, user_fns, calls);
+            collect_fn_calls_in_expr(init, user_fns, calls);
+            collect_fn_calls_in_expr(body, user_fns, calls);
+        }
     }
 }
 
@@ -154,7 +169,17 @@ mod tests {
                 generic_params: fn_decl
                     .generic_params
                     .iter()
-                    .map(|g| g.name.name.clone())
+                    .map(|g| crate::registry::FnGenericParam {
+                        name: g.name.name.clone(),
+                        constraint: match g.constraint {
+                            kasuri_syntax::ast::GenericConstraint::Dim => {
+                                crate::registry::FnGenericConstraint::Dim
+                            }
+                            kasuri_syntax::ast::GenericConstraint::Index => {
+                                crate::registry::FnGenericConstraint::Index
+                            }
+                        },
+                    })
                     .collect(),
                 params: fn_decl
                     .params

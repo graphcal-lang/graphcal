@@ -313,4 +313,67 @@ pub enum KasuriError {
         #[label("not found")]
         span: SourceSpan,
     },
+
+    #[error("unknown index `{name}`")]
+    #[diagnostic(
+        code(kasuri::I001),
+        help("index must be declared with `index Name = {{ Variant1, Variant2, ... }}`")
+    )]
+    UnknownIndex {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown index")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown variant `{variant_name}` in index `{index_name}`")]
+    #[diagnostic(code(kasuri::I002))]
+    UnknownVariant {
+        index_name: String,
+        variant_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a variant of `{index_name}`")]
+        span: SourceSpan,
+    },
+
+    #[error("missing variant(s) {missing:?} in map literal for index `{index_name}`")]
+    #[diagnostic(
+        code(kasuri::I003),
+        help("map literals must cover all variants of the index")
+    )]
+    MissingVariants {
+        index_name: String,
+        missing: Vec<String>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("incomplete map literal")]
+        span: SourceSpan,
+    },
+
+    #[error("extra variant(s) {extra:?} in map literal for index `{index_name}`")]
+    #[diagnostic(
+        code(kasuri::I004),
+        help("only variants declared in the index are allowed")
+    )]
+    ExtraVariants {
+        index_name: String,
+        extra: Vec<String>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unexpected variants")]
+        span: SourceSpan,
+    },
+
+    #[error("index mismatch: expected `{expected}`, found `{found}`")]
+    #[diagnostic(code(kasuri::I005))]
+    IndexMismatch {
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("wrong index")]
+        span: SourceSpan,
+    },
 }

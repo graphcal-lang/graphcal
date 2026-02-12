@@ -15,6 +15,7 @@ use crate::registry::Registry;
 pub enum DeclaredType {
     Scalar(Dimension),
     Struct(String),
+    Indexed { element: Box<Self>, index: String },
 }
 
 /// The inferred type of an expression.
@@ -22,6 +23,13 @@ pub enum DeclaredType {
 pub enum InferredType {
     Scalar(Dimension),
     Struct(String),
+    Indexed {
+        element: Box<Self>,
+        index: String,
+    },
+    /// A loop variable bound by `for m: Maneuver`.
+    /// Used only in `local_types` — not a "real" value type.
+    LoopVar(String),
 }
 
 /// Check dimensions for all declarations in a file.
@@ -54,7 +62,11 @@ pub fn check_dimensions(
     // First pass: resolve declared type annotations
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {}
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Fn(_)
+            | DeclKind::Index(_) => {}
             DeclKind::Const(c) => {
                 let dt = resolve_type_annotation(&c.type_ann, registry, src)?;
                 declared_types.insert(c.name.name.clone(), dt);
@@ -74,7 +86,11 @@ pub fn check_dimensions(
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
     for decl in &file.declarations {
         let (name, type_ann, value_expr) = match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Fn(_)
+            | DeclKind::Index(_) => {
                 continue;
             }
             DeclKind::Const(c) => (&c.name.name, &c.type_ann, &c.value),
@@ -92,47 +108,71 @@ pub fn check_dimensions(
             src,
         )?;
 
-        match (declared, &inferred) {
-            (DeclaredType::Scalar(d), InferredType::Scalar(i)) => {
-                if d != i {
-                    return Err(KasuriError::DimensionMismatchInAnnotation {
-                        declared: format!("{d}"),
-                        inferred: format!("{i}"),
-                        src: src.clone(),
-                        span: type_ann.span.into(),
-                    });
-                }
-            }
-            (DeclaredType::Struct(d_name), InferredType::Struct(i_name)) => {
-                if d_name != i_name {
-                    return Err(KasuriError::DimensionMismatchInAnnotation {
-                        declared: d_name.clone(),
-                        inferred: i_name.clone(),
-                        src: src.clone(),
-                        span: type_ann.span.into(),
-                    });
-                }
-            }
-            (DeclaredType::Scalar(d), InferredType::Struct(i_name)) => {
-                return Err(KasuriError::DimensionMismatchInAnnotation {
-                    declared: format!("{d}"),
-                    inferred: i_name.clone(),
-                    src: src.clone(),
-                    span: type_ann.span.into(),
-                });
-            }
-            (DeclaredType::Struct(d_name), InferredType::Scalar(i)) => {
-                return Err(KasuriError::DimensionMismatchInAnnotation {
-                    declared: d_name.clone(),
-                    inferred: format!("{i}"),
-                    src: src.clone(),
-                    span: type_ann.span.into(),
-                });
-            }
+        if !types_match(declared, &inferred) {
+            return Err(KasuriError::DimensionMismatchInAnnotation {
+                declared: format_declared_type(declared),
+                inferred: format_inferred_type(&inferred),
+                src: src.clone(),
+                span: type_ann.span.into(),
+            });
         }
     }
 
     Ok(declared_types)
+}
+
+/// Check if a declared type matches an inferred type.
+fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
+    match (declared, inferred) {
+        (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
+        (DeclaredType::Struct(d), InferredType::Struct(i)) => d == i,
+        (
+            DeclaredType::Indexed {
+                element: d_elem,
+                index: d_idx,
+            },
+            InferredType::Indexed {
+                element: i_elem,
+                index: i_idx,
+            },
+        ) => d_idx == i_idx && types_match(d_elem, i_elem),
+        _ => false,
+    }
+}
+
+/// Format a declared type for display in diagnostics.
+fn format_declared_type(dt: &DeclaredType) -> String {
+    match dt {
+        DeclaredType::Scalar(d) => format!("{d}"),
+        DeclaredType::Struct(name) => name.clone(),
+        DeclaredType::Indexed { element, index } => {
+            format!("{}[{index}]", format_declared_type(element))
+        }
+    }
+}
+
+/// Format an inferred type for display in diagnostics.
+fn format_inferred_type(it: &InferredType) -> String {
+    match it {
+        InferredType::Scalar(d) => format!("{d}"),
+        InferredType::Struct(name) => name.clone(),
+        InferredType::Indexed { element, index } => {
+            format!("{}[{index}]", format_inferred_type(element))
+        }
+        InferredType::LoopVar(idx) => format!("<loop var: {idx}>"),
+    }
+}
+
+/// Convert a `DeclaredType` to the corresponding `InferredType`.
+fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
+    match dt {
+        DeclaredType::Scalar(d) => InferredType::Scalar(*d),
+        DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
+        DeclaredType::Indexed { element, index } => InferredType::Indexed {
+            element: Box::new(declared_to_inferred(element)),
+            index: index.clone(),
+        },
+    }
 }
 
 /// Resolve a type annotation to a `DeclaredType`.
@@ -144,22 +184,42 @@ fn resolve_type_annotation(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DeclaredType, KasuriError> {
-    // Check if this is a single-term DimExpr that matches a struct name
-    if let kasuri_syntax::ast::TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
-        && dim_expr.terms.len() == 1
-        && dim_expr.terms[0].term.power.is_none()
-    {
-        let name = &dim_expr.terms[0].term.name.name;
-        if registry.get_struct(name).is_some() {
-            return Ok(DeclaredType::Struct(name.clone()));
+    if let TypeExprKind::Indexed { base, indexes } = &type_ann.kind {
+        // Resolve the base type, then wrap with each index (right to left for nesting)
+        let mut result = resolve_type_annotation(base, registry, src)?;
+        for idx in indexes.iter().rev() {
+            let idx_name = &idx.name;
+            if registry.get_index(idx_name).is_none() {
+                return Err(KasuriError::UnknownIndex {
+                    name: idx_name.clone(),
+                    src: src.clone(),
+                    span: idx.span.into(),
+                });
+            }
+            result = DeclaredType::Indexed {
+                element: Box::new(result),
+                index: idx_name.clone(),
+            };
         }
-    }
+        Ok(result)
+    } else {
+        // Check if this is a single-term DimExpr that matches a struct name
+        if let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
+            && dim_expr.terms.len() == 1
+            && dim_expr.terms[0].term.power.is_none()
+        {
+            let name = &dim_expr.terms[0].term.name.name;
+            if registry.get_struct(name).is_some() {
+                return Ok(DeclaredType::Struct(name.clone()));
+            }
+        }
 
-    // Fall back to dimension resolution
-    let dim = registry
-        .resolve_type_expr(type_ann)
-        .ok_or_else(|| unknown_dim_in_type(type_ann, src))?;
-    Ok(DeclaredType::Scalar(dim))
+        // Fall back to dimension resolution
+        let dim = registry
+            .resolve_type_expr(type_ann)
+            .ok_or_else(|| unknown_dim_in_type(type_ann, src))?;
+        Ok(DeclaredType::Scalar(dim))
+    }
 }
 
 /// Produce a helpful error when a type annotation references an unknown dimension.
@@ -192,10 +252,12 @@ fn expect_scalar(
 ) -> Result<Dimension, KasuriError> {
     match inferred {
         InferredType::Scalar(d) => Ok(*d),
-        InferredType::Struct(name) => Err(KasuriError::NotAStruct {
-            name: name.clone(),
+        other => Err(KasuriError::DimensionMismatch {
+            expected: "scalar dimension".to_string(),
+            found: format_inferred_type(other),
             src: src.clone(),
             span: span.into(),
+            help: "expected a scalar value, not an indexed value or struct".to_string(),
         }),
     }
 }
@@ -244,10 +306,7 @@ fn infer_type(
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
-            Ok(match dt {
-                DeclaredType::Scalar(d) => InferredType::Scalar(*d),
-                DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
-            })
+            Ok(declared_to_inferred(dt))
         }
 
         ExprKind::GraphRef(ident) => {
@@ -259,10 +318,7 @@ fn infer_type(
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
-            Ok(match dt {
-                DeclaredType::Scalar(d) => InferredType::Scalar(*d),
-                DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
-            })
+            Ok(declared_to_inferred(dt))
         }
 
         ExprKind::LocalRef(ident) => {
@@ -380,6 +436,28 @@ fn infer_type(
         ),
 
         ExprKind::FnCall { name, args } => {
+            // Aggregation functions over indexed values: sum, min, max, mean, count
+            if matches!(name.name.as_str(), "sum" | "min" | "max" | "mean" | "count")
+                && args.len() == 1
+            {
+                let arg_type = infer_type(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    src,
+                )?;
+                if let InferredType::Indexed { element, .. } = arg_type {
+                    return Ok(if name.name == "count" {
+                        InferredType::Scalar(Dimension::DIMENSIONLESS)
+                    } else {
+                        *element
+                    });
+                }
+                // If not indexed, fall through to builtins (min/max are 2-arg builtins too)
+            }
+
             // Try builtin first
             if let Some(func) = builtin_fns.get(name.name.as_str()) {
                 let arg_dims: Vec<Dimension> = args
@@ -424,22 +502,11 @@ fn infer_type(
                 // Non-generic: resolve each param type and check
                 for (i, param) in fn_def.params.iter().enumerate() {
                     let expected = resolve_type_annotation(&param.type_expr, registry, src)?;
-                    let expected_inferred = match &expected {
-                        DeclaredType::Scalar(d) => InferredType::Scalar(*d),
-                        DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
-                    };
+                    let expected_inferred = declared_to_inferred(&expected);
                     if arg_types[i] != expected_inferred {
-                        let expected_str = match &expected_inferred {
-                            InferredType::Scalar(d) => format!("{d}"),
-                            InferredType::Struct(n) => n.clone(),
-                        };
-                        let actual_str = match &arg_types[i] {
-                            InferredType::Scalar(d) => format!("{d}"),
-                            InferredType::Struct(n) => n.clone(),
-                        };
                         return Err(KasuriError::DimensionMismatch {
-                            expected: expected_str,
-                            found: actual_str,
+                            expected: format_inferred_type(&expected_inferred),
+                            found: format_inferred_type(&arg_types[i]),
                             src: src.clone(),
                             span: args[i].span.into(),
                             help: format!(
@@ -451,33 +518,45 @@ fn infer_type(
                 }
                 // Resolve return type
                 let ret = resolve_type_annotation(&fn_def.return_type_expr, registry, src)?;
-                Ok(match ret {
-                    DeclaredType::Scalar(d) => InferredType::Scalar(d),
-                    DeclaredType::Struct(n) => InferredType::Struct(n),
-                })
+                Ok(declared_to_inferred(&ret))
             } else {
                 // Generic: unify generic params from arg types
-                let mut substitution: HashMap<String, Dimension> = HashMap::new();
+                let dim_param_names: Vec<String> = fn_def
+                    .generic_params
+                    .iter()
+                    .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Dim)
+                    .map(|g| g.name.clone())
+                    .collect();
+                let index_param_names: Vec<String> = fn_def
+                    .generic_params
+                    .iter()
+                    .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Index)
+                    .map(|g| g.name.clone())
+                    .collect();
+                let mut dim_sub: HashMap<String, Dimension> = HashMap::new();
+                let mut index_sub: HashMap<String, String> = HashMap::new();
                 for (i, param) in fn_def.params.iter().enumerate() {
-                    let actual_dim = expect_scalar(&arg_types[i], src, args[i].span)?;
-                    unify_type_expr(
+                    unify_type_expr_generic(
                         &param.type_expr,
-                        actual_dim,
-                        &fn_def.generic_params,
-                        &mut substitution,
+                        &arg_types[i],
+                        &dim_param_names,
+                        &index_param_names,
+                        &mut dim_sub,
+                        &mut index_sub,
                         registry,
                         src,
                         args[i].span,
                     )?;
                 }
                 // Resolve return type with substitution
-                let ret_dim = resolve_type_with_substitution(
+                let ret_type = resolve_type_with_substitution(
                     &fn_def.return_type_expr,
-                    &substitution,
+                    &dim_sub,
+                    &index_sub,
                     registry,
                     src,
                 )?;
-                Ok(InferredType::Scalar(ret_dim))
+                Ok(ret_type)
             }
         }
 
@@ -523,17 +602,9 @@ fn infer_type(
             )?;
 
             if then_type != else_type {
-                let then_str = match &then_type {
-                    InferredType::Scalar(d) => format!("{d}"),
-                    InferredType::Struct(n) => n.clone(),
-                };
-                let else_str = match &else_type {
-                    InferredType::Scalar(d) => format!("{d}"),
-                    InferredType::Struct(n) => n.clone(),
-                };
                 return Err(KasuriError::DimensionMismatch {
-                    expected: then_str,
-                    found: else_str,
+                    expected: format_inferred_type(&then_type),
+                    found: format_inferred_type(&else_type),
                     src: src.clone(),
                     span: else_branch.span.into(),
                     help: "both branches of if/else must have the same dimension".to_string(),
@@ -616,22 +687,11 @@ fn infer_type(
                 // If type annotation provided, check it matches
                 if let Some(type_ann) = &binding.type_ann {
                     let ann_type = resolve_type_annotation(type_ann, registry, src)?;
-                    let ann_inferred = match &ann_type {
-                        DeclaredType::Scalar(d) => InferredType::Scalar(*d),
-                        DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
-                    };
+                    let ann_inferred = declared_to_inferred(&ann_type);
                     if ann_inferred != rhs_type {
-                        let ann_str = match &ann_inferred {
-                            InferredType::Scalar(d) => format!("{d}"),
-                            InferredType::Struct(n) => n.clone(),
-                        };
-                        let rhs_str = match &rhs_type {
-                            InferredType::Scalar(d) => format!("{d}"),
-                            InferredType::Struct(n) => n.clone(),
-                        };
                         return Err(KasuriError::DimensionMismatchInAnnotation {
-                            declared: ann_str,
-                            inferred: rhs_str,
+                            declared: format_inferred_type(&ann_inferred),
+                            inferred: format_inferred_type(&rhs_type),
                             src: src.clone(),
                             span: type_ann.span.into(),
                         });
@@ -680,8 +740,8 @@ fn infer_type(
                         })?;
                     Ok(InferredType::Scalar(field_def.dimension))
                 }
-                InferredType::Scalar(_) => Err(KasuriError::NotAStruct {
-                    name: format!("{inner_type:?}"),
+                _ => Err(KasuriError::NotAStruct {
+                    name: format_inferred_type(&inner_type),
                     src: src.clone(),
                     span: inner.span.into(),
                 }),
@@ -777,29 +837,362 @@ fn infer_type(
 
             Ok(InferredType::Struct(type_name.name.clone()))
         }
+
+        ExprKind::ForComp { bindings, body } => {
+            // Add loop variables to local_types, infer body type, wrap in Indexed layers
+            let mut inner_locals = local_types.clone();
+            for binding in bindings {
+                let idx_name = &binding.index.name;
+                if registry.get_index(idx_name).is_none() {
+                    return Err(KasuriError::UnknownIndex {
+                        name: idx_name.clone(),
+                        src: src.clone(),
+                        span: binding.index.span.into(),
+                    });
+                }
+                inner_locals.insert(
+                    binding.var.name.clone(),
+                    InferredType::LoopVar(idx_name.clone()),
+                );
+            }
+            let body_type = infer_type(
+                body,
+                declared_types,
+                &inner_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            // Wrap body type with index layers (outermost binding first)
+            let mut result = body_type;
+            for binding in bindings.iter().rev() {
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: binding.index.name.clone(),
+                };
+            }
+            Ok(result)
+        }
+
+        ExprKind::MapLiteral { entries } => {
+            if entries.is_empty() {
+                return Err(KasuriError::EvalError {
+                    message: "empty map literal".to_string(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            // All entries must have the same index name
+            let idx_name = &entries[0].index.name;
+            // Validate index exists
+            let idx_def =
+                registry
+                    .get_index(idx_name)
+                    .ok_or_else(|| KasuriError::UnknownIndex {
+                        name: idx_name.clone(),
+                        src: src.clone(),
+                        span: entries[0].index.span.into(),
+                    })?;
+            // Validate all entries use the same index
+            for entry in entries {
+                if entry.index.name != *idx_name {
+                    return Err(KasuriError::IndexMismatch {
+                        expected: idx_name.clone(),
+                        found: entry.index.name.clone(),
+                        src: src.clone(),
+                        span: entry.index.span.into(),
+                    });
+                }
+            }
+            // Check totality: all variants present, no extras
+            let declared_variants: std::collections::HashSet<&str> =
+                idx_def.variants.iter().map(String::as_str).collect();
+            let provided_variants: std::collections::HashSet<&str> =
+                entries.iter().map(|e| e.variant.name.as_str()).collect();
+            let missing: Vec<String> = declared_variants
+                .difference(&provided_variants)
+                .map(|s| (*s).to_string())
+                .collect();
+            let extra: Vec<String> = provided_variants
+                .difference(&declared_variants)
+                .map(|s| (*s).to_string())
+                .collect();
+            if !missing.is_empty() {
+                return Err(KasuriError::MissingVariants {
+                    index_name: idx_name.clone(),
+                    missing,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            if !extra.is_empty() {
+                return Err(KasuriError::ExtraVariants {
+                    index_name: idx_name.clone(),
+                    extra,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            // Infer element type from first entry, check all entries match
+            let first_type = infer_type(
+                &entries[0].value,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            for entry in &entries[1..] {
+                let entry_type = infer_type(
+                    &entry.value,
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    src,
+                )?;
+                if entry_type != first_type {
+                    return Err(KasuriError::DimensionMismatchInAnnotation {
+                        declared: format_inferred_type(&first_type),
+                        inferred: format_inferred_type(&entry_type),
+                        src: src.clone(),
+                        span: entry.value.span.into(),
+                    });
+                }
+            }
+            Ok(InferredType::Indexed {
+                element: Box::new(first_type),
+                index: idx_name.clone(),
+            })
+        }
+
+        ExprKind::IndexAccess { expr: inner, args } => {
+            let inner_type = infer_type(
+                inner,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            // Peel off one index layer per argument
+            let mut current = inner_type;
+            for arg in args {
+                let InferredType::Indexed {
+                    element,
+                    index: idx_name,
+                } = current
+                else {
+                    return Err(KasuriError::EvalError {
+                        message: "indexing a non-indexed value".to_string(),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                };
+                // Validate the argument matches the index
+                match arg {
+                    kasuri_syntax::ast::IndexArg::Variant { index, variant } => {
+                        if index.name != idx_name {
+                            return Err(KasuriError::IndexMismatch {
+                                expected: idx_name,
+                                found: index.name.clone(),
+                                src: src.clone(),
+                                span: index.span.into(),
+                            });
+                        }
+                        // Validate variant exists
+                        let idx_def = registry.get_index(&idx_name).expect("index validated");
+                        if !idx_def.variants.iter().any(|v| v == &variant.name) {
+                            return Err(KasuriError::UnknownVariant {
+                                index_name: idx_name,
+                                variant_name: variant.name.clone(),
+                                src: src.clone(),
+                                span: variant.span.into(),
+                            });
+                        }
+                    }
+                    kasuri_syntax::ast::IndexArg::Var(ident) => {
+                        // Must be a loop variable with matching index
+                        let var_type = local_types.get(&ident.name).ok_or_else(|| {
+                            KasuriError::UnknownLocalRef {
+                                name: ident.name.clone(),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            }
+                        })?;
+                        let InferredType::LoopVar(var_idx) = var_type else {
+                            return Err(KasuriError::EvalError {
+                                message: format!("`{}` is not a loop variable", ident.name),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        };
+                        if *var_idx != idx_name {
+                            return Err(KasuriError::IndexMismatch {
+                                expected: idx_name,
+                                found: var_idx.clone(),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        }
+                    }
+                }
+                current = *element;
+            }
+            Ok(current)
+        }
+
+        ExprKind::Scan {
+            source,
+            init,
+            acc_name,
+            val_name,
+            body,
+        } => {
+            // source must be indexed, init must be scalar matching element type
+            let source_type = infer_type(
+                source,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            let InferredType::Indexed { element, index } = source_type else {
+                return Err(KasuriError::EvalError {
+                    message: "scan source must be an indexed value".to_string(),
+                    src: src.clone(),
+                    span: source.span.into(),
+                });
+            };
+            let init_type = infer_type(
+                init,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            // init and element must have the same type
+            if init_type != *element {
+                return Err(KasuriError::DimensionMismatch {
+                    expected: format_inferred_type(&element),
+                    found: format_inferred_type(&init_type),
+                    src: src.clone(),
+                    span: init.span.into(),
+                    help: "scan init value must match element type of source".to_string(),
+                });
+            }
+            // Bind acc and val as locals with element type
+            let mut scan_locals = local_types.clone();
+            scan_locals.insert(acc_name.name.clone(), *element.clone());
+            scan_locals.insert(val_name.name.clone(), *element.clone());
+            let body_type = infer_type(
+                body,
+                declared_types,
+                &scan_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            if body_type != *element {
+                return Err(KasuriError::DimensionMismatch {
+                    expected: format_inferred_type(&element),
+                    found: format_inferred_type(&body_type),
+                    src: src.clone(),
+                    span: body.span.into(),
+                    help: "scan body must return the same type as the accumulator".to_string(),
+                });
+            }
+            // scan produces an indexed result with the same index
+            Ok(InferredType::Indexed { element, index })
+        }
     }
 }
 
-/// Unify a parameter's type expression against an actual dimension, binding generic names.
+/// Unify a parameter's type expression against an actual inferred type,
+/// binding generic dimension and index names.
 ///
-/// For example, if `type_expr` is `D` and `actual` is `Length`, binds `D = Length`.
-/// If `type_expr` is `D^2` and `actual` is `Area` (= Length^2), binds `D = Length`.
-/// Non-generic terms are resolved normally and checked for equality.
-fn unify_type_expr(
+/// For example, if `type_expr` is `D` and `actual` is `Scalar(Length)`, binds `D = Length`.
+/// If `type_expr` is `D[I]` and `actual` is `Indexed { Scalar(Velocity), "Maneuver" }`,
+/// binds `D = Velocity_dim` and `I = "Maneuver"`.
+#[expect(clippy::too_many_arguments, clippy::too_many_lines)]
+fn unify_type_expr_generic(
     type_expr: &kasuri_syntax::ast::TypeExpr,
-    actual: Dimension,
-    generic_params: &[String],
-    substitution: &mut HashMap<String, Dimension>,
+    actual: &InferredType,
+    dim_params: &[String],
+    index_params: &[String],
+    dim_sub: &mut HashMap<String, Dimension>,
+    index_sub: &mut HashMap<String, String>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: kasuri_syntax::span::Span,
 ) -> Result<(), KasuriError> {
     match &type_expr.kind {
+        TypeExprKind::Indexed { base, indexes } => {
+            // Peel off index layers from actual type, binding index generics
+            let mut current = actual;
+            for idx in indexes.iter().rev() {
+                let idx_name = &idx.name;
+                let InferredType::Indexed {
+                    element,
+                    index: actual_idx,
+                } = current
+                else {
+                    return Err(KasuriError::DimensionMismatch {
+                        expected: format!("indexed type with index `{idx_name}`"),
+                        found: format_inferred_type(current),
+                        src: src.clone(),
+                        span: span.into(),
+                        help: "expected an indexed value".to_string(),
+                    });
+                };
+                // If this is a generic index param, bind it
+                if index_params.contains(idx_name) {
+                    if let Some(prev) = index_sub.get(idx_name) {
+                        if prev != actual_idx {
+                            return Err(KasuriError::IndexMismatch {
+                                expected: prev.clone(),
+                                found: actual_idx.clone(),
+                                src: src.clone(),
+                                span: span.into(),
+                            });
+                        }
+                    } else {
+                        index_sub.insert(idx_name.clone(), actual_idx.clone());
+                    }
+                } else if *idx_name != *actual_idx {
+                    // Concrete index name — must match exactly
+                    return Err(KasuriError::IndexMismatch {
+                        expected: idx_name.clone(),
+                        found: actual_idx.clone(),
+                        src: src.clone(),
+                        span: span.into(),
+                    });
+                } else {
+                    // Concrete index name matches — OK
+                }
+                current = element;
+            }
+            // Now unify the base type against the peeled element
+            unify_type_expr_generic(
+                base,
+                current,
+                dim_params,
+                index_params,
+                dim_sub,
+                index_sub,
+                registry,
+                src,
+                span,
+            )
+        }
         TypeExprKind::Dimensionless => {
-            if !actual.is_dimensionless() {
+            let actual_dim = expect_scalar(actual, src, span)?;
+            if !actual_dim.is_dimensionless() {
                 return Err(KasuriError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
-                    found: format!("{actual}"),
+                    found: format!("{actual_dim}"),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Dimensionless argument".to_string(),
@@ -808,20 +1201,20 @@ fn unify_type_expr(
             Ok(())
         }
         TypeExprKind::DimExpr(dim_expr) => {
+            let actual_dim = expect_scalar(actual, src, span)?;
+
             // Check if this is a single generic param (most common case: `D` or `D^n`)
             if dim_expr.terms.len() == 1 {
                 let item = &dim_expr.terms[0];
                 let name = &item.term.name.name;
-                if generic_params.contains(name) {
+                if dim_params.contains(name) {
                     let exp = item.term.power.unwrap_or(1);
-                    // Solve: D^exp = actual => D = actual^(1/exp)
                     let bound_dim = if exp == 1 {
-                        actual
+                        actual_dim
                     } else {
-                        actual.pow(Rational::new(1, exp))
+                        actual_dim.pow(Rational::new(1, exp))
                     };
-                    // Check consistency with previous binding
-                    if let Some(prev) = substitution.get(name) {
+                    if let Some(prev) = dim_sub.get(name) {
                         if *prev != bound_dim {
                             return Err(KasuriError::DimensionMismatch {
                                 expected: format!("{prev}"),
@@ -834,32 +1227,25 @@ fn unify_type_expr(
                             });
                         }
                     } else {
-                        substitution.insert(name.clone(), bound_dim);
+                        dim_sub.insert(name.clone(), bound_dim);
                     }
                     return Ok(());
                 }
             }
 
-            // General case: compute the "expected" dimension by resolving non-generic
-            // terms concretely and generic terms via substitution/binding.
-            // Walk terms, accumulating into expected_dim.
+            // General case: resolve terms
             let mut expected_dim = Dimension::DIMENSIONLESS;
             for item in &dim_expr.terms {
                 let name = &item.term.name.name;
                 let exp = item.term.power.unwrap_or(1);
 
-                let term_dim = if generic_params.contains(name) {
-                    // Generic term: try to bind or check consistency
-                    if let Some(prev) = substitution.get(name) {
+                let term_dim = if dim_params.contains(name) {
+                    if let Some(prev) = dim_sub.get(name) {
                         prev.pow(Rational::from_int(exp))
                     } else {
-                        // Cannot determine generic from compound expression unless
-                        // we solve a system of equations. For Phase 3, we require
-                        // that each generic param appears as a standalone param first
-                        // so it's already bound. If not bound, error.
                         return Err(KasuriError::DimensionMismatch {
                             expected: format!("generic `{name}` (unresolved)"),
-                            found: format!("{actual}"),
+                            found: format!("{actual_dim}"),
                             src: src.clone(),
                             span: span.into(),
                             help: format!(
@@ -868,7 +1254,6 @@ fn unify_type_expr(
                         });
                     }
                 } else {
-                    // Concrete dimension name
                     let base = registry.get_dimension(name).ok_or_else(|| {
                         KasuriError::UnknownDimension {
                             name: name.clone(),
@@ -885,10 +1270,10 @@ fn unify_type_expr(
                 };
             }
 
-            if expected_dim != actual {
+            if expected_dim != actual_dim {
                 return Err(KasuriError::DimensionMismatch {
                     expected: format!("{expected_dim}"),
-                    found: format!("{actual}"),
+                    found: format!("{actual_dim}"),
                     src: src.clone(),
                     span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
@@ -899,22 +1284,23 @@ fn unify_type_expr(
     }
 }
 
-/// Resolve a type expression to a concrete dimension, substituting generic names.
+/// Resolve a type expression to an `InferredType`, substituting generic dim and index names.
 fn resolve_type_with_substitution(
     type_expr: &kasuri_syntax::ast::TypeExpr,
-    substitution: &HashMap<String, Dimension>,
+    dim_sub: &HashMap<String, Dimension>,
+    index_sub: &HashMap<String, String>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<Dimension, KasuriError> {
+) -> Result<InferredType, KasuriError> {
     match &type_expr.kind {
-        TypeExprKind::Dimensionless => Ok(Dimension::DIMENSIONLESS),
+        TypeExprKind::Dimensionless => Ok(InferredType::Scalar(Dimension::DIMENSIONLESS)),
         TypeExprKind::DimExpr(dim_expr) => {
             let mut result = Dimension::DIMENSIONLESS;
             for item in &dim_expr.terms {
                 let name = &item.term.name.name;
                 let exp = item.term.power.unwrap_or(1);
 
-                let base = if let Some(dim) = substitution.get(name) {
+                let base = if let Some(dim) = dim_sub.get(name) {
                     *dim
                 } else if let Some(dim) = registry.get_dimension(name) {
                     *dim
@@ -930,6 +1316,23 @@ fn resolve_type_with_substitution(
                 result = match item.op {
                     MulDivOp::Mul => result * term_dim,
                     MulDivOp::Div => result / term_dim,
+                };
+            }
+            Ok(InferredType::Scalar(result))
+        }
+        TypeExprKind::Indexed { base, indexes } => {
+            let mut result =
+                resolve_type_with_substitution(base, dim_sub, index_sub, registry, src)?;
+            for idx in indexes.iter().rev() {
+                let idx_name = &idx.name;
+                // Look up in index substitution, then use as-is
+                let resolved_idx = index_sub
+                    .get(idx_name)
+                    .cloned()
+                    .unwrap_or_else(|| idx_name.clone());
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: resolved_idx,
                 };
             }
             Ok(result)
@@ -1041,7 +1444,15 @@ mod tests {
         let mut registry = make_registry();
         let src = make_src(source);
 
-        // Register user-defined functions (mirrors eval.rs pipeline)
+        // Register indexes and user-defined functions (mirrors eval.rs pipeline)
+        for decl in &file.declarations {
+            if let DeclKind::Index(idx) = &decl.kind {
+                registry.register_index(crate::registry::IndexDef {
+                    name: idx.name.name.clone(),
+                    variants: idx.variants.iter().map(|v| v.name.clone()).collect(),
+                });
+            }
+        }
         for decl in &file.declarations {
             if let DeclKind::Fn(fn_decl) = &decl.kind {
                 registry.register_function(crate::registry::FnDef {
@@ -1049,7 +1460,17 @@ mod tests {
                     generic_params: fn_decl
                         .generic_params
                         .iter()
-                        .map(|g| g.name.name.clone())
+                        .map(|g| crate::registry::FnGenericParam {
+                            name: g.name.name.clone(),
+                            constraint: match g.constraint {
+                                kasuri_syntax::ast::GenericConstraint::Dim => {
+                                    crate::registry::FnGenericConstraint::Dim
+                                }
+                                kasuri_syntax::ast::GenericConstraint::Index => {
+                                    crate::registry::FnGenericConstraint::Index
+                                }
+                            },
+                        })
                         .collect(),
                     params: fn_decl
                         .params
@@ -1258,5 +1679,246 @@ mod tests {
         let source = "param x: Length = 1.0 m;\nnode y: Length = no_such_fn(@x);";
         let err = check(source).unwrap_err();
         assert!(matches!(err, KasuriError::UnknownFunction { .. }));
+    }
+
+    // --- Indexed type tests ---
+
+    #[test]
+    fn check_indexed_param_map_literal() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};";
+        let types = check(source).unwrap();
+        let velocity = Dimension::base(kasuri_syntax::dimension::BaseDim::Length)
+            / Dimension::base(kasuri_syntax::dimension::BaseDim::Time);
+        assert_eq!(
+            types["dv"],
+            DeclaredType::Indexed {
+                element: Box::new(DeclaredType::Scalar(velocity)),
+                index: "Maneuver".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn check_for_comprehension() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node doubled: Velocity[Maneuver] = for m: Maneuver { @dv[m] + @dv[m] };";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_for_comprehension_type_mismatch() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_index_access_with_variant() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node first: Velocity = @dv[Maneuver::Departure];";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_map_literal_missing_variant() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::MissingVariants { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_map_literal_extra_variant() {
+        let source = "\
+index Maneuver = { Departure, Correction }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::ExtraVariants { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_index_mismatch_in_for() {
+        let source = "\
+index Phase = { Coast, Burn }
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Phase] = for p: Phase { @dv[p] };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::IndexMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_sum_aggregation() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node total_dv: Velocity = sum(@dv);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_count_aggregation() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node n: Dimensionless = count(@dv);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_mean_aggregation() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node avg_dv: Velocity = mean(@dv);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_scan() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_scan_type_mismatch() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Maneuver] = scan(@dv, 0.0 m, |acc, val| acc + val);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_unknown_index_in_type_annotation() {
+        let source = "param x: Velocity[NoSuchIndex] = 1.0 m / s;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownIndex { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_generic_index_fn() {
+        // fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node total_dv: Velocity = total(@dv);";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_generic_index_fn_wrong_return() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Length = total(@dv);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_for_with_sum() {
+        // sum over a for comprehension
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node total: Velocity = sum(for m: Maneuver { @dv[m] });";
+        check(source).unwrap();
     }
 }

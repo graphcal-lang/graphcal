@@ -104,6 +104,61 @@ fn eval_functions_text_output() {
 }
 
 #[test]
+fn eval_indexed_text_output() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("indexed.ksr")])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // Indexed values flatten: delta_v[Departure], delta_v[Correction], delta_v[Insertion], etc.
+    // Check key lines exist
+    assert!(
+        lines.iter().any(|l| l.contains("delta_v[Departure]")),
+        "missing delta_v[Departure]: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("total_dv")),
+        "missing total_dv: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("cumulative_dv[Insertion]")),
+        "missing cumulative_dv[Insertion]: {lines:?}"
+    );
+}
+
+#[test]
+fn eval_indexed_json_output() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("indexed.ksr"), "--format", "json"])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
+
+    // delta_v is an indexed param
+    let dv = &json["param"]["delta_v"];
+    assert_eq!(dv["index"].as_str(), Some("Maneuver"));
+    assert!(dv["entries"]["Departure"]["si_value"].as_f64().is_some());
+
+    // total_dv is a scalar node
+    assert!(json["node"]["total_dv"]["si_value"].as_f64().is_some());
+}
+
+#[test]
 fn eval_invalid_syntax_fails() {
     // Create a temp file with invalid syntax
     let dir = std::env::temp_dir().join("kasuri_test");

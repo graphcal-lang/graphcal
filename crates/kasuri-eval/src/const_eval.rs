@@ -120,8 +120,8 @@ mod tests {
     fn scalar(rv: &RuntimeValue) -> f64 {
         match rv {
             RuntimeValue::Scalar(v) => *v,
-            RuntimeValue::Struct { type_name, .. } => {
-                panic!("expected scalar, got struct `{type_name}`")
+            other => {
+                panic!("expected scalar, got {other:?}")
             }
         }
     }

@@ -9,6 +9,9 @@ use kasuri_syntax::span::Span;
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::KasuriError;
 
+/// Aggregation functions recognized as special forms (not registered as builtins).
+const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
+
 /// The kind of a declaration (used for source-order tracking).
 #[derive(Debug, Clone, Copy)]
 pub enum DeclCategory {
@@ -78,7 +81,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
                 user_fn_names.insert(f.name.name.clone());
                 continue;
             }
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Index(_) => {
                 continue;
             }
         };
@@ -99,7 +102,11 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             DeclKind::Const(_) => DeclCategory::Const,
             DeclKind::Param(_) => DeclCategory::Param,
             DeclKind::Node(_) => DeclCategory::Node,
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Fn(_) => {
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Fn(_)
+            | DeclKind::Index(_) => {
                 unreachable!()
             }
         };
@@ -139,7 +146,8 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) => {}
+            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Index(_) => {
+            }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
@@ -252,7 +260,9 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             }
             check_no_graph_refs(expr, src)
         }
-        ExprKind::FieldAccess { expr, .. } => check_no_graph_refs(expr, src),
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            check_no_graph_refs(expr, src)
+        }
         ExprKind::StructConstruction { fields, .. } => {
             for field in fields {
                 if let Some(val) = &field.value {
@@ -260,6 +270,20 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
                 }
             }
             Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                check_no_graph_refs(&entry.value, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => check_no_graph_refs(body, src),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            check_no_graph_refs(source, src)?;
+            check_no_graph_refs(init, src)?;
+            check_no_graph_refs(body, src)
         }
     }
 }
@@ -329,7 +353,9 @@ fn check_no_graph_refs_in_fn_expr(
             }
             check_no_graph_refs_in_fn_expr(expr, fn_name, src)
         }
-        ExprKind::FieldAccess { expr, .. } => check_no_graph_refs_in_fn_expr(expr, fn_name, src),
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            check_no_graph_refs_in_fn_expr(expr, fn_name, src)
+        }
         ExprKind::StructConstruction { fields, .. } => {
             for field in fields {
                 if let Some(val) = &field.value {
@@ -337,6 +363,20 @@ fn check_no_graph_refs_in_fn_expr(
                 }
             }
             Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                check_no_graph_refs_in_fn_expr(&entry.value, fn_name, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => check_no_graph_refs_in_fn_expr(body, fn_name, src),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            check_no_graph_refs_in_fn_expr(source, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(init, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(body, fn_name, src)
         }
     }
 }
@@ -394,7 +434,9 @@ fn collect_const_refs(
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str()) && !user_fn_names.contains(&name.name)
+            if !builtin_fns.contains_key(name.name.as_str())
+                && !user_fn_names.contains(&name.name)
+                && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(KasuriError::UnknownFunction {
                     name: name.name.clone(),
@@ -402,9 +444,12 @@ fn collect_const_refs(
                     span: name.span.into(),
                 });
             }
-            // Only check arity for builtins (user fn arity checked later in dim_check)
+            // Only check arity for builtins (user fn arity checked later in dim_check).
+            // Skip arity check for aggregation functions (min/max can be called with
+            // 1 indexed arg even though the builtin versions take 2 scalar args).
             if let Some(builtin) = builtin_fns.get(name.name.as_str())
                 && args.len() != builtin.arity
+                && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(KasuriError::WrongArity {
                     name: name.name.clone(),
@@ -520,15 +565,17 @@ fn collect_const_refs(
                 deps,
             )
         }
-        ExprKind::FieldAccess { expr, .. } => collect_const_refs(
-            expr,
-            all_const_names,
-            builtin_consts,
-            builtin_fns,
-            user_fn_names,
-            src,
-            deps,
-        ),
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            collect_const_refs(
+                expr,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )
+        }
         ExprKind::StructConstruction { fields, .. } => {
             for field in fields {
                 if let Some(val) = &field.value {
@@ -544,6 +591,60 @@ fn collect_const_refs(
                 }
             }
             Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_const_refs(
+                    &entry.value,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    deps,
+                )?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => collect_const_refs(
+            body,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            user_fn_names,
+            src,
+            deps,
+        ),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_const_refs(
+                source,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )?;
+            collect_const_refs(
+                init,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )?;
+            collect_const_refs(
+                body,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )
         }
     }
 }
@@ -619,7 +720,9 @@ fn collect_all_refs(
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str()) && !user_fn_names.contains(&name.name)
+            if !builtin_fns.contains_key(name.name.as_str())
+                && !user_fn_names.contains(&name.name)
+                && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(KasuriError::UnknownFunction {
                     name: name.name.clone(),
@@ -629,6 +732,7 @@ fn collect_all_refs(
             }
             if let Some(builtin) = builtin_fns.get(name.name.as_str())
                 && args.len() != builtin.arity
+                && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(KasuriError::WrongArity {
                     name: name.name.clone(),
@@ -764,17 +868,19 @@ fn collect_all_refs(
                 const_refs,
             )
         }
-        ExprKind::FieldAccess { expr, .. } => collect_all_refs(
-            expr,
-            all_runtime_names,
-            all_const_names,
-            builtin_consts,
-            builtin_fns,
-            user_fn_names,
-            src,
-            graph_refs,
-            const_refs,
-        ),
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            collect_all_refs(
+                expr,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )
+        }
         ExprKind::StructConstruction { fields, .. } => {
             for field in fields {
                 if let Some(val) = &field.value {
@@ -792,6 +898,70 @@ fn collect_all_refs(
                 }
             }
             Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_all_refs(
+                    &entry.value,
+                    all_runtime_names,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    graph_refs,
+                    const_refs,
+                )?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => collect_all_refs(
+            body,
+            all_runtime_names,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            user_fn_names,
+            src,
+            graph_refs,
+            const_refs,
+        ),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_all_refs(
+                source,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )?;
+            collect_all_refs(
+                init,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )?;
+            collect_all_refs(
+                body,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )
         }
     }
 }

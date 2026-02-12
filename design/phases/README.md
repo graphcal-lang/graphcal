@@ -18,15 +18,13 @@ Phase 3: Pure Functions (fn, generics)
     |
 Phase 4: Multi-File & Namespaces (use, private, prelude)
     |
-Phase 5: 1D Tables (map, reduce, scan)
+Phase 5: Indexed Values (index, T[I], for, sum/reduce/scan)
     |
 Phase 6: Scenarios & CLI Workflow
     |
     +------- MVP complete -------
     |
-    +---> Phase 7: N-Dim Tables & Indexes
-    |        |
-    |        +---> Phase 8: System Dynamics
+    +---> Phase 8: System Dynamics (range indexes, scan over time)
     |
     +---> Phase 9: Spaces
     +---> Phase 10: Tagged Unions & Match
@@ -46,14 +44,14 @@ Phase 6: Scenarios & CLI Workflow
 | [2](./phase-2-structs.md) | Structs & Multi-Line Nodes | `type` (single-variant), block bodies, `let` |
 | [3](./phase-3-pure-functions.md) | Pure Functions | `fn`, `<D: Dim>`, stdlib math |
 | [4](./phase-4-multi-file.md) | Multi-File & Namespaces | `use`, `private`, `project.graph`, prelude |
-| [5](./phase-5-tables.md) | 1D Tables | `table`, map/reduce/scan |
+| [5](./phase-5-tables.md) | Indexed Values | `index`, `T[I]`, `for`, sum/reduce/scan |
 | [6](./phase-6-scenarios.md) | Scenarios & CLI | `.scenario`, `cellgraph check`, assertions |
 
 ### Post-MVP
 
 | Phase | File | Adds |
 | --- | --- | --- |
-| [7+](./phase-7-and-beyond.md) | Post-MVP | N-dim tables, system dynamics, spaces, tagged unions, TUI, spreadsheet compat, Python interop |
+| [8+](./phase-7-and-beyond.md) | Post-MVP | System dynamics, spaces, tagged unions, TUI, spreadsheet compat, Python interop |
 
 ## How to Use These Documents
 

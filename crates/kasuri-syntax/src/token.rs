@@ -29,6 +29,10 @@ pub enum Token {
     Let,
     #[token("fn")]
     Fn,
+    #[token("index")]
+    Index,
+    #[token("for")]
+    For,
 
     // Operators
     #[token("+")]
@@ -63,6 +67,10 @@ pub enum Token {
     Bang,
     #[token("->")]
     Arrow,
+    #[token("::")]
+    ColonColon,
+    #[token("|")]
+    Pipe,
 
     // Delimiters
     #[token("(")]
@@ -73,6 +81,10 @@ pub enum Token {
     LBrace,
     #[token("}")]
     RBrace,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
     #[token(";")]
     Semicolon,
     #[token(",")]
@@ -108,6 +120,8 @@ impl std::fmt::Display for Token {
             Self::Type => write!(f, "type"),
             Self::Let => write!(f, "let"),
             Self::Fn => write!(f, "fn"),
+            Self::Index => write!(f, "index"),
+            Self::For => write!(f, "for"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
@@ -124,10 +138,14 @@ impl std::fmt::Display for Token {
             Self::PipePipe => write!(f, "||"),
             Self::Bang => write!(f, "!"),
             Self::Arrow => write!(f, "->"),
+            Self::ColonColon => write!(f, "::"),
+            Self::Pipe => write!(f, "|"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
             Self::RBrace => write!(f, "}}"),
+            Self::LBracket => write!(f, "["),
+            Self::RBracket => write!(f, "]"),
             Self::Semicolon => write!(f, ";"),
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
@@ -325,7 +343,7 @@ mod tests {
     #[test]
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
-        let tokens = lex_tokens("param node const if else dimension unit type let fn");
+        let tokens = lex_tokens("param node const if else dimension unit type let fn index for");
         assert_eq!(
             tokens,
             vec![
@@ -339,6 +357,8 @@ mod tests {
                 Token::Type,
                 Token::Let,
                 Token::Fn,
+                Token::Index,
+                Token::For,
             ]
         );
     }
