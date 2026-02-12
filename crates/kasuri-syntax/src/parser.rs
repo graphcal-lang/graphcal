@@ -2721,7 +2721,7 @@ param alt: Length = 400 km;
                             assert_eq!(index.name, "Maneuver");
                             assert_eq!(variant.name, "Departure");
                         }
-                        other => panic!("expected Variant, got {other:?}"),
+                        other @ IndexArg::Var(_) => panic!("expected Variant, got {other:?}"),
                     }
                 }
                 other => panic!("expected IndexAccess, got {other:?}"),
@@ -2741,7 +2741,9 @@ param alt: Length = 400 km;
                         assert_eq!(args.len(), 1);
                         match &args[0] {
                             IndexArg::Var(ident) => assert_eq!(ident.name, "m"),
-                            other => panic!("expected Var, got {other:?}"),
+                            other @ IndexArg::Variant { .. } => {
+                                panic!("expected Var, got {other:?}")
+                            }
                         }
                     }
                     other => panic!("expected IndexAccess, got {other:?}"),

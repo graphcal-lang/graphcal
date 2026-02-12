@@ -897,10 +897,10 @@ mod tests {
 
         // double_dv: doubled values
         let ddv = find_entry(&result, "double_dv");
-        let ddv_vals = indexed_si_values(&ddv);
-        assert!((ddv_vals[0].1 - 4920.0).abs() < 0.01);
-        assert!((ddv_vals[1].1 - 240.0).abs() < 0.01);
-        assert!((ddv_vals[2].1 - 3660.0).abs() < 0.01);
+        let double_dv_vals = indexed_si_values(&ddv);
+        assert!((double_dv_vals[0].1 - 4920.0).abs() < 0.01);
+        assert!((double_dv_vals[1].1 - 240.0).abs() < 0.01);
+        assert!((double_dv_vals[2].1 - 3660.0).abs() < 0.01);
 
         // total_dv: 2460 + 120 + 1830 = 4410 m/s
         assert!((find_value(&result, "total_dv") - 4410.0).abs() < 0.01);
