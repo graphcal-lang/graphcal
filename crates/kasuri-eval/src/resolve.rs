@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use kasuri_syntax::ast::*;
+use kasuri_syntax::ast::{DeclKind, Expr, ExprKind, File};
 use kasuri_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -26,15 +26,21 @@ pub struct ResolvedFile {
     pub params: Vec<(String, Expr, Span)>,
     /// Node declarations in source order: (name, expr, span).
     pub nodes: Vec<(String, Expr, Span)>,
-    /// For each node/param, the set of @-references (graph deps).
+    /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
-    /// For each const, the set of CONST_REF references (const deps).
+    /// For each const, the set of `CONST_REF` references (const deps).
     pub const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
 }
 
 /// Resolve names, check casing, detect duplicates, and extract dependencies.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError`] if duplicate names, unknown references, casing
+/// violations, or arity mismatches are found.
+#[expect(clippy::too_many_lines)] // Complex resolution logic with multiple passes
 pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, KasuriError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
@@ -74,7 +80,8 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
         };
         source_order.push((name.clone(), category));
 
-        // Check casing (defensive — parser should enforce this already)
+        // Check casing (defensive -- parser should enforce this already)
+        #[expect(clippy::else_if_without_else)] // No action needed in the else case
         if is_const {
             if !is_upper_snake_case(&name) {
                 return Err(KasuriError::EvalError {
@@ -96,12 +103,12 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     let all_const_names: HashSet<&str> = names
         .keys()
         .filter(|n| is_upper_snake_case(n))
-        .map(|n| n.as_str())
+        .map(String::as_str)
         .collect();
     let all_runtime_names: HashSet<&str> = names
         .keys()
         .filter(|n| is_lower_snake_case(n))
-        .map(|n| n.as_str())
+        .map(String::as_str)
         .collect();
 
     // Second pass: resolve references and extract dependencies
@@ -339,7 +346,8 @@ fn extract_all_refs(
     Ok((graph_refs, const_refs))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
+#[expect(clippy::too_many_lines)] // Recursive reference collector for all expression types
 fn collect_all_refs(
     expr: &Expr,
     all_runtime_names: &HashSet<&str>,
@@ -483,6 +491,7 @@ fn collect_all_refs(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use kasuri_syntax::parser::Parser;
 

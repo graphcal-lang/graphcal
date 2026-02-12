@@ -14,7 +14,12 @@ use crate::eval_expr::eval_expr;
 use crate::resolve::ResolvedFile;
 
 /// Topologically sort const declarations and evaluate them at compile time.
-/// Returns a map of const_name -> f64 value.
+/// Returns a map of `const_name` -> `f64` value.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError`] if there is a cyclic dependency among constants
+/// or if evaluation of a const expression fails.
 pub fn eval_consts(
     resolved: &ResolvedFile,
     src: &NamedSource<Arc<String>>,
@@ -52,8 +57,7 @@ pub fn eval_consts(
             .consts
             .iter()
             .find(|(n, _, _)| n == cycle_node)
-            .map(|(_, _, s)| *s)
-            .unwrap_or(Span::new(0, 0));
+            .map_or_else(|| Span::new(0, 0), |(_, _, s)| *s);
         KasuriError::CyclicDependency {
             name: cycle_node.clone(),
             src: src.clone(),
@@ -82,6 +86,7 @@ pub fn eval_consts(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::resolve::resolve;
     use kasuri_syntax::parser::Parser;

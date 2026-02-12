@@ -3,6 +3,7 @@ use crate::token::Token;
 use logos::Logos;
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
+#[expect(clippy::option_option)] // Intentional: None = not peeked, Some(None) = EOF, Some(Some(_)) = peeked token
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, Token>,
     peeked: Option<Option<(Token, Span)>>,
@@ -10,6 +11,7 @@ pub struct Lexer<'src> {
 }
 
 impl<'src> Lexer<'src> {
+    #[must_use]
     pub fn new(source: &'src str) -> Self {
         Self {
             inner: Token::lexer(source),
@@ -24,39 +26,42 @@ impl<'src> Lexer<'src> {
     }
 
     /// Peek at the next token and its span without consuming it.
+    ///
+    /// # Panics
+    ///
+    /// This method will not panic in practice. The internal `unwrap()` is safe
+    /// because `self.peeked` is always `Some` after the preceding `is_none` check.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         if self.peeked.is_none() {
             self.peeked = Some(self.advance());
         }
         self.peeked
             .as_ref()
-            .unwrap()
+            .expect("peeked is always Some after the is_none check above")
             .as_ref()
             .map(|(tok, span)| (tok, *span))
     }
 
     /// Consume and return the next token and its span.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
-        if let Some(peeked) = self.peeked.take() {
-            peeked
-        } else {
-            self.advance()
-        }
+        self.peeked.take().unwrap_or_else(|| self.advance())
     }
 
     /// Get the source text corresponding to a span.
+    #[must_use]
     pub fn slice_at(&self, span: Span) -> &'src str {
         &self.source[span.offset..span.offset + span.len]
     }
 
     /// Get the full source text.
-    pub fn source(&self) -> &'src str {
+    #[must_use]
+    pub const fn source(&self) -> &'src str {
         self.source
     }
 
     /// Get the byte offset of the current position in the source.
     /// Useful for generating error spans when the lexer has no more tokens.
-    pub fn current_offset(&mut self) -> usize {
+    pub const fn current_offset(&mut self) -> usize {
         if let Some(ref peeked) = self.peeked
             && let Some((_, span)) = peeked
         {
@@ -72,20 +77,18 @@ impl<'src> Lexer<'src> {
             let result = self.inner.next()?;
             let slice_span = self.inner.span();
             let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-            match result {
-                Ok(token) => return Some((token, span)),
-                Err(()) => {
-                    // Skip unrecognized tokens for now; error reporting will
-                    // be handled by the parser in later steps.
-                    continue;
-                }
+            if let Ok(token) = result {
+                return Some((token, span));
             }
+            // Skip unrecognized tokens for now; error reporting will
+            // be handled by the parser in later steps.
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

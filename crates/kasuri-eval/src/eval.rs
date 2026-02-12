@@ -34,11 +34,19 @@ pub struct EvalResult {
 }
 
 /// Full pipeline: parse -> resolve -> const eval -> DAG build -> runtime eval.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if parsing or evaluation fails.
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
     compile_and_eval_named(source, "input")
 }
 
 /// Full pipeline with a custom source name (used for file paths in diagnostics).
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if parsing or evaluation fails.
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = kasuri_syntax::parser::Parser::with_name(source, name).parse_file()?;
@@ -134,6 +142,7 @@ pub enum CompileError {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     fn find_value(result: &EvalResult, name: &str) -> f64 {
@@ -148,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::suboptimal_flops)] // Clearer to express expected math directly
     fn eval_rocket_milestone() {
         let source = include_str!("../../../tests/fixtures/rocket.ksr");
         let result = compile_and_eval(source).unwrap();
@@ -178,6 +188,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::suboptimal_flops)] // Clearer to express expected math directly
     fn eval_constants_ksr() {
         let source = include_str!("../../../tests/fixtures/constants.ksr");
         let result = compile_and_eval(source).unwrap();

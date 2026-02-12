@@ -3,7 +3,10 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::ast::*;
+use crate::ast::{
+    BinOp, ConstDecl, DeclKind, Declaration, Expr, ExprKind, File, Ident, NodeDecl, ParamDecl,
+    UnaryOp,
+};
 use crate::lexer::Lexer;
 use crate::span::Span;
 use crate::token::Token;
@@ -50,6 +53,7 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
+    #[must_use]
     pub fn new(source: &'src str) -> Self {
         Self {
             lexer: Lexer::new(source),
@@ -58,6 +62,7 @@ impl<'src> Parser<'src> {
         }
     }
 
+    #[must_use]
     pub fn with_name(source: &'src str, name: &str) -> Self {
         Self {
             lexer: Lexer::new(source),
@@ -89,6 +94,11 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse the full source file into a [`File`] AST node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParseError`] if the source contains invalid syntax.
     pub fn parse_file(&mut self) -> Result<File, ParseError> {
         let mut declarations = Vec::new();
         while self.lexer.peek().is_some() {
@@ -103,7 +113,7 @@ impl<'src> Parser<'src> {
             Some(Token::Node) => self.parse_node(),
             Some(Token::Const) => self.parse_const(),
             Some(_) => {
-                let (tok, span) = self.lexer.next_token().unwrap();
+                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token("`param`, `node`, or `const`", &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof("`param`, `node`, or `const`")),
@@ -167,7 +177,7 @@ impl<'src> Parser<'src> {
 
     fn parse_conditional(&mut self) -> Result<Expr, ParseError> {
         if self.lexer.peek() == Some(&Token::If) {
-            let (_, if_span) = self.lexer.next_token().unwrap();
+            let (_, if_span) = self.lexer.next_token().expect("peek confirmed Some");
             let condition = self.parse_expr()?;
             self.expect(Token::LBrace)?;
             let then_branch = self.parse_expr()?;
@@ -303,7 +313,7 @@ impl<'src> Parser<'src> {
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Minus) => {
-                let (_, op_span) = self.lexer.next_token().unwrap();
+                let (_, op_span) = self.lexer.next_token().expect("peek confirmed Some");
                 let operand = self.parse_unary()?;
                 let span = op_span.merge(operand.span);
                 Ok(Expr {
@@ -315,7 +325,7 @@ impl<'src> Parser<'src> {
                 })
             }
             Some(Token::Bang) => {
-                let (_, op_span) = self.lexer.next_token().unwrap();
+                let (_, op_span) = self.lexer.next_token().expect("peek confirmed Some");
                 let operand = self.parse_unary()?;
                 let span = op_span.merge(operand.span);
                 Ok(Expr {
@@ -353,7 +363,7 @@ impl<'src> Parser<'src> {
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
-                let (_, span) = self.lexer.next_token().unwrap();
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 let text = self.lexer.slice_at(span).replace('_', "");
                 let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
                     ParseError::InvalidNumber {
@@ -368,21 +378,21 @@ impl<'src> Parser<'src> {
                 })
             }
             Some(Token::True) => {
-                let (_, span) = self.lexer.next_token().unwrap();
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Ok(Expr {
                     kind: ExprKind::Bool(true),
                     span,
                 })
             }
             Some(Token::False) => {
-                let (_, span) = self.lexer.next_token().unwrap();
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Ok(Expr {
                     kind: ExprKind::Bool(false),
                     span,
                 })
             }
             Some(Token::At) => {
-                let (_, at_span) = self.lexer.next_token().unwrap();
+                let (_, at_span) = self.lexer.next_token().expect("peek confirmed Some");
                 let ident = self.parse_lower_ident()?;
                 let span = at_span.merge(ident.span);
                 Ok(Expr {
@@ -391,7 +401,7 @@ impl<'src> Parser<'src> {
                 })
             }
             Some(Token::UpperIdent) => {
-                let (_, span) = self.lexer.next_token().unwrap();
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 let name = self.lexer.slice_at(span).to_string();
                 Ok(Expr {
                     kind: ExprKind::ConstRef(Ident { name, span }),
@@ -400,7 +410,7 @@ impl<'src> Parser<'src> {
             }
             Some(Token::LowerIdent) => {
                 // Function call: name(args...)
-                let (_, name_span) = self.lexer.next_token().unwrap();
+                let (_, name_span) = self.lexer.next_token().expect("peek confirmed Some");
                 let name = self.lexer.slice_at(name_span).to_string();
                 self.expect(Token::LParen)?;
                 let mut args = Vec::new();
@@ -431,7 +441,7 @@ impl<'src> Parser<'src> {
                 Ok(expr)
             }
             Some(_) => {
-                let (tok, span) = self.lexer.next_token().unwrap();
+                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token("expression", &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof("expression")),
@@ -440,6 +450,7 @@ impl<'src> Parser<'src> {
 
     // --- Helper methods ---
 
+    #[expect(clippy::needless_pass_by_value)] // Token is small and the API is cleaner with by-value
     fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
         let expected_str = format!("`{expected}`");
         match self.lexer.next_token() {
@@ -478,6 +489,7 @@ impl<'src> Parser<'src> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -496,6 +508,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::approx_constant)]
     fn parse_node_literal() {
         let file = Parser::new("node y = 3.14;").parse_file().unwrap();
         assert_eq!(file.declarations.len(), 1);

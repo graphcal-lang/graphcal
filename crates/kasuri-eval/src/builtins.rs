@@ -6,6 +6,8 @@ pub struct BuiltinFunction {
     pub eval: fn(&[f64]) -> f64,
 }
 
+#[must_use]
+#[expect(clippy::too_many_lines)] // Declarative list of built-in functions
 pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     let mut m = HashMap::new();
     m.insert(
@@ -123,6 +125,7 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m
 }
 
+#[must_use]
 pub fn builtin_constants() -> HashMap<&'static str, f64> {
     let mut m = HashMap::new();
     m.insert("PI", std::f64::consts::PI);
