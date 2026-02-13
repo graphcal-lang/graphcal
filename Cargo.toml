@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["editors/zed"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
