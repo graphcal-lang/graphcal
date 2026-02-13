@@ -93,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: crate-ci/typos@v1.43.1
+      - uses: crate-ci/typos@v1.43.4
 
   collect:
     needs: [checks, test, coverage, msrv, typos]
