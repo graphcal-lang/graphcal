@@ -51,6 +51,8 @@ pub enum Token {
     Slash,
     #[token("^")]
     Caret,
+    #[token("%")]
+    Percent,
     #[token("=")]
     Eq,
     #[token("==")]
@@ -135,6 +137,7 @@ impl std::fmt::Display for Token {
             Self::Star => write!(f, "*"),
             Self::Slash => write!(f, "/"),
             Self::Caret => write!(f, "^"),
+            Self::Percent => write!(f, "%"),
             Self::Eq => write!(f, "="),
             Self::EqEq => write!(f, "=="),
             Self::BangEq => write!(f, "!="),

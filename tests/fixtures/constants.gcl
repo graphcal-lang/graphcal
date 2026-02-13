@@ -7,6 +7,6 @@ const TWO_G0: Acceleration = 2.0 * G0;
 const HALF_PI: Dimensionless = PI / 2.0;
 const SQRT2: Dimensionless = sqrt(2.0);
 
-param radius: Length = 100 m;
+param radius: Length = 100.0 m;
 node circumference: Length = 2.0 * PI * @radius;
 node area: Area = PI * @radius ^ 2.0;

@@ -127,6 +127,7 @@ fn collect_fn_calls_in_expr(
             }
         }
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)

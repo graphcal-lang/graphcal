@@ -9,7 +9,7 @@ type TransferResult {
     total_dv: Velocity,
 }
 
-const R_EARTH: Length = 6371 km;
+const R_EARTH: Length = 6371.0 km;
 const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 // Non-generic function: orbital velocity
@@ -37,8 +37,8 @@ fn earth_radius() -> Length = R_EARTH;
 // Function calling another function
 fn circular_velocity_at_alt(alt: Length) -> Velocity = orbital_velocity(GM_EARTH, earth_radius() + alt);
 
-param parking_alt: Length = 200 km;
-param target_alt: Length = 35786 km;
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
 
 node v_parking: Velocity = orbital_velocity(GM_EARTH, R_EARTH + @parking_alt);
 node transfer: TransferResult = hohmann_dv(GM_EARTH, R_EARTH + @parking_alt, R_EARTH + @target_alt);

@@ -7,7 +7,7 @@ extra field(s) ["bonus"] in construction of `Orbit`
 Begin snippet for extra_struct_fields.gcl starting at line 1, column 1
 
 snippet line 1: type Orbit { altitude: Length, speed: Velocity }
-snippet line 2: node o: Orbit = Orbit { altitude: 400 km, speed: 7.6 km / s, bonus: 1.0 };
-    label at line 2, columns 17 to 73: unexpected fields
+snippet line 2: node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };
+    label at line 2, columns 17 to 75: unexpected fields
 diagnostic help: only fields declared in the struct type are allowed
 diagnostic code: graphcal::S005

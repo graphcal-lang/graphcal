@@ -1,4 +1,4 @@
 // error: cannot add Length + Time
-param alt: Length = 400 km;
-param period: Time = 90 min;
+param alt: Length = 400.0 km;
+param period: Time = 90.0 min;
 node bad: Length = @alt + @period;

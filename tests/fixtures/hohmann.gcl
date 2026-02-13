@@ -9,11 +9,11 @@ type TransferResult {
     tof: Time,
 }
 
-const R_EARTH: Length = 6371 km;
+const R_EARTH: Length = 6371.0 km;
 const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
-param parking_alt: Length = 200 km;
-param target_alt: Length = 35786 km;
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
 
 node transfer: TransferResult = {
     let r1 = R_EARTH + @parking_alt;

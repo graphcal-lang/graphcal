@@ -11,6 +11,7 @@ use crate::error::GraphcalError;
 
 /// Aggregation functions recognized as special forms (not registered as builtins).
 const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
+const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
 
 /// Declarations imported from other files, to be injected into the resolve scope.
 ///
@@ -310,6 +311,7 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             span: expr.span.into(),
         }),
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
@@ -401,6 +403,7 @@ fn check_no_graph_refs_in_fn_expr(
             help: format!("pass `{fn_name}` as a function parameter instead"),
         }),
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
@@ -499,6 +502,7 @@ fn collect_const_refs(
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_) => Ok(()),
@@ -521,6 +525,7 @@ fn collect_const_refs(
             if !builtin_fns.contains_key(name.name.as_str())
                 && !user_fn_names.contains(&name.name)
                 && !AGGREGATION_FNS.contains(&name.name.as_str())
+                && !CONVERSION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.name.clone(),
@@ -529,8 +534,7 @@ fn collect_const_refs(
                 });
             }
             // Only check arity for builtins (user fn arity checked later in dim_check).
-            // Skip arity check for aggregation functions (min/max can be called with
-            // 1 indexed arg even though the builtin versions take 2 scalar args).
+            // Skip arity check for aggregation/conversion functions.
             if let Some(builtin) = builtin_fns.get(name.name.as_str())
                 && args.len() != builtin.arity
                 && !AGGREGATION_FNS.contains(&name.name.as_str())
@@ -780,6 +784,7 @@ fn collect_all_refs(
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_) => Ok(()),
@@ -813,6 +818,7 @@ fn collect_all_refs(
             if !builtin_fns.contains_key(name.name.as_str())
                 && !user_fn_names.contains(&name.name)
                 && !AGGREGATION_FNS.contains(&name.name.as_str())
+                && !CONVERSION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.name.clone(),
@@ -1128,6 +1134,7 @@ pub fn collect_graph_refs(
             collect_graph_refs(body, all_runtime_names, refs);
         }
         ExprKind::Number(_)
+        | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::ConstRef(_)
@@ -1479,7 +1486,7 @@ mod tests {
     #[test]
     fn resolve_node_with_convert() {
         let resolved =
-            parse_and_resolve("param x: Length = 1000 m;\nnode y: Length = @x -> km;").unwrap();
+            parse_and_resolve("param x: Length = 1000.0 m;\nnode y: Length = @x -> km;").unwrap();
         assert_eq!(resolved.nodes.len(), 1);
     }
 

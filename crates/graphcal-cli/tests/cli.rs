@@ -184,7 +184,7 @@ fn eval_invalid_syntax_fails() {
 #[test]
 fn eval_with_set_flag() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450 s"])
+        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
         .output()
         .expect("failed to run graphcal");
 
@@ -216,9 +216,9 @@ fn eval_with_multiple_set() {
             "eval",
             &fixture("rocket.gcl"),
             "--set",
-            "isp=450 s",
+            "isp=450.0 s",
             "--set",
-            "dry_mass=1500 kg",
+            "dry_mass=1500.0 kg",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -261,7 +261,7 @@ fn eval_set_invalid_param() {
 #[test]
 fn eval_set_node_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "delta_v=100 m/s"])
+        .args(["eval", &fixture("rocket.gcl"), "--set", "delta_v=100.0 m/s"])
         .output()
         .expect("failed to run graphcal");
 
@@ -322,7 +322,7 @@ fn eval_multi_file_with_set() {
             "eval",
             &fixture("multi/rocket_split/main.gcl"),
             "--set",
-            "isp=450 s",
+            "isp=450.0 s",
         ])
         .output()
         .expect("failed to run graphcal");

@@ -38,7 +38,7 @@ pub struct DisplayUnit {
     pub scale: f64,
 }
 
-/// A runtime value: either a scalar with dimension and display info, a bool, or a struct.
+/// A runtime value: either a scalar with dimension and display info, a bool, an integer, or a struct.
 #[derive(Debug, Clone)]
 pub enum Value {
     Scalar {
@@ -50,6 +50,7 @@ pub enum Value {
         display_unit: Option<DisplayUnit>,
     },
     Bool(bool),
+    Int(i64),
     Struct {
         /// The struct type name.
         type_name: String,
@@ -72,6 +73,7 @@ impl Value {
         match self {
             Self::Scalar { si_value, .. } => *si_value,
             Self::Bool(_) => panic!("called si_value() on Bool"),
+            Self::Int(_) => panic!("called si_value() on Int"),
             Self::Struct { type_name, .. } => {
                 panic!("called si_value() on struct `{type_name}`")
             }
@@ -87,6 +89,7 @@ impl Value {
         match self {
             Self::Scalar { dimension, .. } => *dimension,
             Self::Bool(_) => panic!("called dimension() on Bool"),
+            Self::Int(_) => panic!("called dimension() on Int"),
             Self::Struct { type_name, .. } => {
                 panic!("called dimension() on struct `{type_name}`")
             }
@@ -108,6 +111,7 @@ impl Value {
                 .as_ref()
                 .map_or(*si_value, |du| *si_value / du.scale),
             Self::Bool(_) => panic!("called display_value() on Bool"),
+            Self::Int(_) => panic!("called display_value() on Int"),
             Self::Struct { type_name, .. } => {
                 panic!("called display_value() on struct `{type_name}`")
             }
@@ -131,7 +135,7 @@ impl Value {
             } => display_unit
                 .as_ref()
                 .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
-            Self::Bool(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
+            Self::Bool(_) | Self::Int(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
         }
     }
 }
@@ -692,6 +696,7 @@ fn runtime_to_value(
             }
         }
         RuntimeValue::Bool(b) => Value::Bool(*b),
+        RuntimeValue::Int(i) => Value::Int(*i),
         RuntimeValue::Struct { type_name, fields } => {
             let struct_def = registry.get_struct(type_name);
             let converted_fields = fields
@@ -1408,7 +1413,7 @@ mod tests {
 
     #[test]
     fn eval_unary_neg_dimensioned() {
-        let result = compile_and_eval("param x: Length = 100 m;\nnode y: Length = -@x;").unwrap();
+        let result = compile_and_eval("param x: Length = 100.0 m;\nnode y: Length = -@x;").unwrap();
         assert!((find_value(&result, "y") - (-100.0)).abs() < f64::EPSILON);
     }
 
@@ -1428,7 +1433,7 @@ mod tests {
         let default_dv = find_value(&default, "delta_v");
 
         let mut overrides = HashMap::new();
-        overrides.insert("isp".to_string(), parse_expr("450 s"));
+        overrides.insert("isp".to_string(), parse_expr("450.0 s"));
         let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
         let new_dv = find_value(&overridden, "delta_v");
 
@@ -1440,7 +1445,7 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         // isp expects Time, not Mass
         let mut overrides = HashMap::new();
-        overrides.insert("isp".to_string(), parse_expr("450 kg"));
+        overrides.insert("isp".to_string(), parse_expr("450.0 kg"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         assert!(result.is_err());
     }
@@ -1449,7 +1454,7 @@ mod tests {
     fn override_node_errors() {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         let mut overrides = HashMap::new();
-        overrides.insert("delta_v".to_string(), parse_expr("100 m/s"));
+        overrides.insert("delta_v".to_string(), parse_expr("100.0 m/s"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         match result {
             Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
@@ -1571,6 +1576,102 @@ mod tests {
     fn eval_valid_sqrt_ok() {
         let result = compile_and_eval("node y: Dimensionless = sqrt(4.0);").unwrap();
         assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
+    }
+
+    // --- Integer type tests ---
+
+    /// Helper: find a named Int value.
+    fn find_int_value(result: &EvalResult, name: &str) -> i64 {
+        let val = &result
+            .all
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1;
+        match val {
+            Value::Int(i) => *i,
+            other => panic!("expected Int for `{name}`, got {other:?}"),
+        }
+    }
+
+    /// Helper: find a named Bool value.
+    fn find_bool_value(result: &EvalResult, name: &str) -> bool {
+        let val = &result
+            .all
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1;
+        match val {
+            Value::Bool(b) => *b,
+            other => panic!("expected Bool for `{name}`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_integers_milestone() {
+        let source = include_str!("../../../tests/fixtures/integers.gcl");
+        let result = compile_and_eval(source).unwrap();
+
+        assert_eq!(find_int_value(&result, "a"), 10);
+        assert_eq!(find_int_value(&result, "b"), 3);
+        assert_eq!(find_int_value(&result, "sum"), 13);
+        assert_eq!(find_int_value(&result, "diff"), 7);
+        assert_eq!(find_int_value(&result, "prod"), 30);
+        assert_eq!(find_int_value(&result, "quot"), 3); // truncating division
+        assert_eq!(find_int_value(&result, "rem"), 1);
+        assert_eq!(find_int_value(&result, "power"), 9);
+        assert_eq!(find_int_value(&result, "neg_a"), -10);
+
+        assert!(find_bool_value(&result, "a_gt_b"));
+        assert!(!find_bool_value(&result, "a_eq_b"));
+        assert!(!find_bool_value(&result, "a_le_b"));
+
+        assert_eq!(find_int_value(&result, "SEVEN"), 7);
+        assert_eq!(find_int_value(&result, "clamped"), 7); // 10 > 7, so clamp to 7
+
+        // to_float(10) = 10.0
+        assert!((find_value(&result, "a_float") - 10.0).abs() < f64::EPSILON);
+        // to_int(3.7) = 3 (truncating)
+        assert_eq!(find_int_value(&result, "back_to_int"), 3);
+    }
+
+    #[test]
+    fn eval_int_division_by_zero() {
+        assert_eval_error(
+            "param x: Int = 10;\nnode y: Int = @x / 0;",
+            "integer division by zero",
+        );
+    }
+
+    #[test]
+    fn eval_int_modulo_by_zero() {
+        assert_eval_error(
+            "param x: Int = 10;\nnode y: Int = @x % 0;",
+            "integer modulo by zero",
+        );
+    }
+
+    #[test]
+    fn eval_int_negative_exponent() {
+        // `-1` is parsed as UnaryOp::Neg(Integer(1)), not a literal, so dim_check
+        // rejects it as a non-literal exponent before the evaluator sees it.
+        let err = compile_and_eval("param x: Int = 2;\nnode y: Int = @x ^ -1;");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn eval_int_mixed_type_error() {
+        // Int + Scalar should be a type error
+        let err = compile_and_eval("param x: Int = 10;\nnode y: Dimensionless = @x + 1.0;");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn eval_int_with_unit_parse_error() {
+        // `10 km` should be a parse error
+        let err = compile_and_eval("param x: Length = 10 km;");
+        assert!(err.is_err());
     }
 
     mod prop {
