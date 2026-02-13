@@ -14,10 +14,12 @@ use crate::error::KasuriError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::prelude::load_prelude;
 use crate::registry::{self, Registry};
-use crate::resolve::{DeclCategory, ResolvedFile, resolve};
+use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve, resolve_with_imports};
 use kasuri_syntax::ast::{DeclKind, ExprKind};
 use kasuri_syntax::dimension::Dimension;
 use kasuri_syntax::parser::ParseError;
+
+use std::path::Path;
 
 /// The kind of a declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,7 +172,6 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing, validation, or evaluation fails.
-#[expect(clippy::too_many_lines)]
 #[expect(clippy::implicit_hasher)]
 pub fn compile_and_eval_with_overrides(
     source: &str,
@@ -236,6 +237,47 @@ pub fn compile_and_eval_with_overrides(
     // Build registry: prelude + user-declared dimensions/units
     let mut registry = Registry::new();
     load_prelude(&mut registry);
+    register_file_declarations(&file, &mut registry, &src)?;
+
+    // Register user-defined functions
+    register_functions(&resolved, &mut registry);
+
+    // Check for recursive function calls
+    crate::fn_check::check_no_recursion(&registry, &src)?;
+
+    // Dimension check
+    let declared_types = check_dimensions(&file, &registry, &src)?;
+
+    // Dimension-check override expressions against their param's declared type
+    for (override_name, override_expr) in overrides {
+        crate::dim_check::check_override_dimension(
+            override_expr,
+            override_name,
+            &declared_types,
+            &registry,
+            &src,
+        )?;
+    }
+
+    let const_values = eval_consts(&resolved, &registry, &src)?;
+    let dag = build_dag(&resolved, &src)?;
+    let result = evaluate(
+        &resolved,
+        &dag,
+        &const_values,
+        &registry,
+        &declared_types,
+        &src,
+    )?;
+    Ok(result)
+}
+
+/// Register dimensions, units, indexes, and types from a file's declarations into the registry.
+fn register_file_declarations(
+    file: &kasuri_syntax::ast::File,
+    registry: &mut Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), KasuriError> {
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Dimension(d) => {
@@ -248,8 +290,6 @@ pub fn compile_and_eval_with_overrides(
                             span: d.name.span.into(),
                         })?
                 } else {
-                    // Base dimension — should already be in the prelude.
-                    // If not, this is a user-defined base dimension (not supported yet).
                     continue;
                 };
                 registry.register_dimension(&d.name.name, dim);
@@ -305,8 +345,11 @@ pub fn compile_and_eval_with_overrides(
             _ => {}
         }
     }
+    Ok(())
+}
 
-    // Register user-defined functions
+/// Register user-defined functions from a `ResolvedFile` into the registry.
+fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
     for (name, fn_decl, span) in &resolved.functions {
         registry.register_function(registry::FnDef {
             name: name.clone(),
@@ -338,35 +381,270 @@ pub fn compile_and_eval_with_overrides(
             span: *span,
         });
     }
+}
+
+/// Full pipeline for multi-file projects with parameter overrides.
+///
+/// Loads all files referenced by `use` declarations starting from `root_path`,
+/// collects imported declarations, and evaluates the root file with imports merged.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
+#[expect(clippy::too_many_lines)]
+#[expect(clippy::implicit_hasher)]
+pub fn compile_and_eval_project(
+    root_path: &Path,
+    overrides: &HashMap<String, kasuri_syntax::ast::Expr>,
+) -> Result<EvalResult, CompileError> {
+    let project = crate::loader::load_project(root_path)?;
+
+    // Build registry starting with prelude
+    let mut registry = Registry::new();
+    load_prelude(&mut registry);
+
+    // Collect imported names for the root file
+    let mut imported = ImportedNames::default();
+
+    let root_file = &project.files[&project.root];
+    let root_src = &root_file.named_source;
+
+    // Process imported files (all except root, in load order = deps first)
+    for file_path in &project.load_order {
+        if *file_path == project.root {
+            continue;
+        }
+        let loaded = &project.files[file_path];
+
+        // Register dimensions, units, indexes, types from imported file
+        register_file_declarations(&loaded.ast, &mut registry, &loaded.named_source)?;
+    }
+
+    // Register root file declarations too
+    register_file_declarations(&root_file.ast, &mut registry, root_src)?;
+
+    // Now collect exported declarations from imported files based on `use` statements.
+    // Walk the root file's use declarations and validate names.
+    for decl in &root_file.ast.declarations {
+        if let DeclKind::Use(use_decl) = &decl.kind {
+            let import_path = root_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&use_decl.path);
+            let import_canonical = import_path.canonicalize().map_err(|_| {
+                CompileError::Eval(KasuriError::ImportFileNotFound {
+                    path: use_decl.path.clone(),
+                    src: root_src.clone(),
+                    span: use_decl.path_span.into(),
+                })
+            })?;
+
+            let imported_file = &project.files[&import_canonical];
+
+            // For each requested name, find the matching declaration
+            for requested_name in &use_decl.names {
+                let found = find_declaration_in_file(&imported_file.ast, &requested_name.name);
+
+                match found {
+                    Some(ImportedDecl::Const(name, expr, span)) => {
+                        imported.consts.push((name, expr, span));
+                    }
+                    Some(ImportedDecl::Param(name, expr, span)) => {
+                        imported.params.push((name, expr, span));
+                    }
+                    Some(ImportedDecl::Node(name, expr, span)) => {
+                        imported.nodes.push((name, expr, span));
+                    }
+                    Some(ImportedDecl::Fn(name, fn_decl, span)) => {
+                        imported.functions.push((name, fn_decl, span));
+                    }
+                    None => {
+                        return Err(CompileError::Eval(KasuriError::ImportNameNotFound {
+                            name: requested_name.name.clone(),
+                            file_path: use_decl.path.clone(),
+                            src: root_src.clone(),
+                            span: requested_name.span.into(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // Resolve root file with imported names
+    let mut resolved = resolve_with_imports(&root_file.ast, root_src, &imported)?;
+
+    // Validate and apply overrides (same logic as compile_and_eval_with_overrides)
+    for (override_name, override_expr) in overrides {
+        if let Some((_, cat)) = resolved
+            .source_order
+            .iter()
+            .find(|(n, _)| n == override_name)
+        {
+            match cat {
+                DeclCategory::Param => {}
+                DeclCategory::Const => {
+                    return Err(CompileError::Eval(KasuriError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "const".to_string(),
+                    }));
+                }
+                DeclCategory::Node => {
+                    return Err(CompileError::Eval(KasuriError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "node".to_string(),
+                    }));
+                }
+            }
+        } else {
+            return Err(CompileError::Eval(KasuriError::OverrideUnknownParam {
+                name: override_name.clone(),
+            }));
+        }
+
+        if let Some(entry) = resolved
+            .params
+            .iter_mut()
+            .find(|(n, _, _)| n == override_name)
+        {
+            entry.1 = override_expr.clone();
+        }
+
+        let all_runtime: std::collections::HashSet<&str> = resolved
+            .params
+            .iter()
+            .chain(resolved.nodes.iter())
+            .map(|(n, _, _)| n.as_str())
+            .collect();
+        let mut graph_refs = std::collections::HashSet::new();
+        crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
+        resolved
+            .runtime_deps
+            .insert(override_name.clone(), graph_refs);
+    }
+
+    // Register user-defined functions
+    register_functions(&resolved, &mut registry);
 
     // Check for recursive function calls
-    crate::fn_check::check_no_recursion(&registry, &src)?;
+    crate::fn_check::check_no_recursion(&registry, root_src)?;
+
+    // Build imported type declarations for dimension checking.
+    // The imported declarations' type annotations must be resolved so dim_check
+    // knows the dimensions of imported `@` references used in the root file.
+    let mut imported_types: HashMap<String, crate::dim_check::DeclaredType> = HashMap::new();
+    for file_path in &project.load_order {
+        if *file_path == project.root {
+            continue;
+        }
+        let loaded = &project.files[file_path];
+        for decl in &loaded.ast.declarations {
+            match &decl.kind {
+                DeclKind::Const(c) => {
+                    let dt = crate::dim_check::resolve_type_annotation(
+                        &c.type_ann,
+                        &registry,
+                        &loaded.named_source,
+                    )?;
+                    imported_types.insert(c.name.name.clone(), dt);
+                }
+                DeclKind::Param(p) => {
+                    let dt = crate::dim_check::resolve_type_annotation(
+                        &p.type_ann,
+                        &registry,
+                        &loaded.named_source,
+                    )?;
+                    imported_types.insert(p.name.name.clone(), dt);
+                }
+                DeclKind::Node(n) => {
+                    let dt = crate::dim_check::resolve_type_annotation(
+                        &n.type_ann,
+                        &registry,
+                        &loaded.named_source,
+                    )?;
+                    imported_types.insert(n.name.name.clone(), dt);
+                }
+                _ => {}
+            }
+        }
+    }
 
     // Dimension check
-    let declared_types = check_dimensions(&file, &registry, &src)?;
+    let declared_types = crate::dim_check::check_dimensions_with_imports(
+        &root_file.ast,
+        &registry,
+        root_src,
+        &imported_types,
+    )?;
 
-    // Dimension-check override expressions against their param's declared type
+    // Dimension-check override expressions
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
             override_name,
             &declared_types,
             &registry,
-            &src,
+            root_src,
         )?;
     }
 
-    let const_values = eval_consts(&resolved, &registry, &src)?;
-    let dag = build_dag(&resolved, &src)?;
+    let const_values = eval_consts(&resolved, &registry, root_src)?;
+    let dag = build_dag(&resolved, root_src)?;
     let result = evaluate(
         &resolved,
         &dag,
         &const_values,
         &registry,
         &declared_types,
-        &src,
+        root_src,
     )?;
     Ok(result)
+}
+
+/// A declaration found in a file, classified by kind.
+enum ImportedDecl {
+    Const(String, kasuri_syntax::ast::Expr, kasuri_syntax::span::Span),
+    Param(String, kasuri_syntax::ast::Expr, kasuri_syntax::span::Span),
+    Node(String, kasuri_syntax::ast::Expr, kasuri_syntax::span::Span),
+    Fn(
+        String,
+        kasuri_syntax::ast::FnDecl,
+        kasuri_syntax::span::Span,
+    ),
+}
+
+/// Find a declaration by name in a file's AST.
+fn find_declaration_in_file(file: &kasuri_syntax::ast::File, name: &str) -> Option<ImportedDecl> {
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Const(c) if c.name.name == name => {
+                return Some(ImportedDecl::Const(
+                    c.name.name.clone(),
+                    c.value.clone(),
+                    decl.span,
+                ));
+            }
+            DeclKind::Param(p) if p.name.name == name => {
+                return Some(ImportedDecl::Param(
+                    p.name.name.clone(),
+                    p.value.clone(),
+                    decl.span,
+                ));
+            }
+            DeclKind::Node(n) if n.name.name == name => {
+                return Some(ImportedDecl::Node(
+                    n.name.name.clone(),
+                    n.value.clone(),
+                    decl.span,
+                ));
+            }
+            DeclKind::Fn(f) if f.name.name == name => {
+                return Some(ImportedDecl::Fn(f.name.name.clone(), f.clone(), decl.span));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Convert a `RuntimeValue` to a `Value` using declared type info and display unit extraction.
@@ -1087,5 +1365,18 @@ mod tests {
             }
             other => panic!("expected OverrideUnknownParam, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn project_multi_file_rocket() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/rocket_split/main.ksr");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let delta_v = find_value(&result, "delta_v");
+        let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
+        assert!(
+            (delta_v - expected_delta_v).abs() < 0.001,
+            "delta_v = {delta_v}, expected = {expected_delta_v}"
+        );
     }
 }

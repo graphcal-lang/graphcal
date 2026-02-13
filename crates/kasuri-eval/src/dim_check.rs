@@ -45,11 +45,30 @@ pub fn check_dimensions(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<String, DeclaredType>, KasuriError> {
+    check_dimensions_with_imports(file, registry, src, &HashMap::new())
+}
+
+/// Check dimensions with pre-populated declared types from imports.
+///
+/// `imported_types` maps imported declaration names to their declared types.
+/// These are added to `declared_types` before checking the file's own declarations.
+#[expect(clippy::implicit_hasher)]
+pub fn check_dimensions_with_imports(
+    file: &File,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    imported_types: &HashMap<String, DeclaredType>,
+) -> Result<HashMap<String, DeclaredType>, KasuriError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
     // Collect declared types for all consts/params/nodes
     let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
+
+    // Include imported types
+    for (name, dt) in imported_types {
+        declared_types.insert(name.clone(), dt.clone());
+    }
 
     // Built-in constants are Dimensionless
     for name in builtin_consts.keys() {
@@ -66,7 +85,8 @@ pub fn check_dimensions(
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::Fn(_)
-            | DeclKind::Index(_) => {}
+            | DeclKind::Index(_)
+            | DeclKind::Use(_) => {}
             DeclKind::Const(c) => {
                 let dt = resolve_type_annotation(&c.type_ann, registry, src)?;
                 declared_types.insert(c.name.name.clone(), dt);
@@ -90,7 +110,8 @@ pub fn check_dimensions(
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::Fn(_)
-            | DeclKind::Index(_) => {
+            | DeclKind::Index(_)
+            | DeclKind::Use(_) => {
                 continue;
             }
             DeclKind::Const(c) => (&c.name.name, &c.type_ann, &c.value),
@@ -221,7 +242,7 @@ fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
 ///
 /// Checks the struct registry first (for single-term `DimExpr` that match a struct name),
 /// then falls back to dimension resolution.
-fn resolve_type_annotation(
+pub fn resolve_type_annotation(
     type_ann: &kasuri_syntax::ast::TypeExpr,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,

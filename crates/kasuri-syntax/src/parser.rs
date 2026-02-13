@@ -135,16 +135,17 @@ impl<'src> Parser<'src> {
             Some(Token::Type) => self.parse_type_decl(),
             Some(Token::Fn) => self.parse_fn_decl(),
             Some(Token::Index) => self.parse_index_decl(),
+            Some(Token::Use) => self.parse_use_decl(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token(
-                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, or `index`",
+                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, or `use`",
                     &tok.to_string(),
                     span,
                 ))
             }
             None => Err(self.unexpected_eof(
-                "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, or `index`",
+                "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, or `use`",
             )),
         }
     }
@@ -294,6 +295,73 @@ impl<'src> Parser<'src> {
         let span = start_span.merge(end_span);
         Ok(Declaration {
             kind: DeclKind::Type(TypeDecl { name, fields }),
+            span,
+        })
+    }
+
+    // --- use declaration ---
+
+    /// Parse a use declaration:
+    /// `use "./path/to/file.ksr" { name1, name2 };`
+    fn parse_use_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Use)?;
+
+        // Expect a string literal for the file path
+        let (path, path_span) = match self.lexer.next_token() {
+            Some((Token::StringLiteral, span)) => {
+                let raw = self.lexer.slice_at(span);
+                // Strip surrounding quotes
+                let path = raw[1..raw.len() - 1].to_string();
+                (path, span)
+            }
+            Some((tok, span)) => {
+                return Err(self.unexpected_token("a string literal", &tok.to_string(), span));
+            }
+            None => {
+                return Err(self.unexpected_eof("a string literal"));
+            }
+        };
+
+        self.expect(Token::LBrace)?;
+
+        let mut names = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            // Accept any identifier (imports can be any casing)
+            match self.lexer.next_token() {
+                Some((Token::Ident, span)) => {
+                    let name_str = self.lexer.slice_at(span).to_string();
+                    names.push(Ident {
+                        name: name_str,
+                        span,
+                    });
+                }
+                Some((tok, span)) => {
+                    return Err(self.unexpected_token("an identifier", &tok.to_string(), span));
+                }
+                None => {
+                    return Err(self.unexpected_eof("an identifier or `}`"));
+                }
+            }
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        self.expect(Token::RBrace)?;
+        let (_, end_span) = self.expect(Token::Semicolon)?;
+        let span = start_span.merge(end_span);
+
+        Ok(Declaration {
+            kind: DeclKind::Use(crate::ast::UseDecl {
+                path,
+                path_span,
+                names,
+            }),
             span,
         })
     }
@@ -2137,6 +2205,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Type(t) => t.name.name.as_str(),
                 DeclKind::Fn(f) => f.name.name.as_str(),
                 DeclKind::Index(i) => i.name.name.as_str(),
+                DeclKind::Use(_) => "<use>",
             })
             .collect();
         assert_eq!(

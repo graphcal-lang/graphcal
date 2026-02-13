@@ -33,6 +33,12 @@ pub enum Token {
     Index,
     #[token("for")]
     For,
+    #[token("use")]
+    Use,
+
+    // Literals
+    #[regex(r#""[^"]*""#)]
+    StringLiteral,
 
     // Operators
     #[token("+")]
@@ -122,6 +128,8 @@ impl std::fmt::Display for Token {
             Self::Fn => write!(f, "fn"),
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
+            Self::Use => write!(f, "use"),
+            Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Star => write!(f, "*"),
@@ -343,7 +351,8 @@ mod tests {
     #[test]
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
-        let tokens = lex_tokens("param node const if else dimension unit type let fn index for");
+        let tokens =
+            lex_tokens("param node const if else dimension unit type let fn index for use");
         assert_eq!(
             tokens,
             vec![
@@ -359,6 +368,7 @@ mod tests {
                 Token::Fn,
                 Token::Index,
                 Token::For,
+                Token::Use,
             ]
         );
     }
@@ -603,5 +613,40 @@ mod tests {
         let mut lexer = Token::lexer("fnord");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "fnord");
+    }
+
+    // Phase 4 specific tests
+
+    #[test]
+    fn lex_use_statement() {
+        let tokens = lex_tokens(r#"use "./helper.ksr" { G0, isp };"#);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Use,
+                Token::StringLiteral,
+                Token::LBrace,
+                Token::Ident, // G0
+                Token::Comma,
+                Token::Ident, // isp
+                Token::RBrace,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_string_literal() {
+        let mut lexer = Token::lexer(r#""./orbit/transfer.ksr""#);
+        assert_eq!(lexer.next(), Some(Ok(Token::StringLiteral)));
+        assert_eq!(lexer.slice(), r#""./orbit/transfer.ksr""#);
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_use() {
+        // "useful" should be Ident, not Use + "full"
+        let mut lexer = Token::lexer("useful");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "useful");
     }
 }

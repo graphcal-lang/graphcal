@@ -1,0 +1,2 @@
+use "./helper.ksr" { nonexistent };
+param y: Dimensionless = 1.0;

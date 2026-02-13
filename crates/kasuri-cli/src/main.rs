@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process;
 
-use kasuri_eval::eval::{EvalResult, compile_and_eval_with_overrides};
+use kasuri_eval::eval::{EvalResult, compile_and_eval_project};
 
 #[derive(Parser)]
 #[command(name = "kasuri", version, about = "Kasuri language evaluator")]
@@ -49,14 +49,6 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Eval { file, format, set } => {
-            let source = match std::fs::read_to_string(&file) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: failed to read {}: {e}", file.display());
-                    process::exit(1);
-                }
-            };
-
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
             for s in &set {
@@ -77,8 +69,7 @@ fn main() {
                 }
             }
 
-            let file_name = file.display().to_string();
-            match compile_and_eval_with_overrides(&source, &file_name, &overrides) {
+            match compile_and_eval_project(&file, &overrides) {
                 Ok(result) => match format {
                     OutputFormat::Text => print_text(&result),
                     OutputFormat::Json => print_json(&result),

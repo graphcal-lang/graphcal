@@ -377,6 +377,38 @@ pub enum KasuriError {
         span: SourceSpan,
     },
 
+    #[error("file not found: {path}")]
+    #[diagnostic(code(kasuri::M000), help("check that the file path is correct"))]
+    FileNotFound { path: String },
+
+    #[error("circular import detected: {cycle}")]
+    #[diagnostic(code(kasuri::M001), help("files cannot import each other in a cycle"))]
+    CircularImport { cycle: String },
+
+    #[error("imported file not found: {path}")]
+    #[diagnostic(code(kasuri::M002))]
+    ImportFileNotFound {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("referenced here")]
+        span: SourceSpan,
+    },
+
+    #[error("name `{name}` not found in imported file `{file_path}`")]
+    #[diagnostic(
+        code(kasuri::M003),
+        help("check that the name is declared in the imported file")
+    )]
+    ImportNameNotFound {
+        name: String,
+        file_path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not found in imported file")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(kasuri::O001),
