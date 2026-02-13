@@ -26,7 +26,6 @@ pub enum RuntimeValue {
     /// A variant label during `for` comprehension iteration.
     /// Not a "real" value — only exists in `local_values` during loop body evaluation.
     VariantLabel {
-        index_name: String,
         variant: String,
     },
 }
@@ -57,7 +56,6 @@ impl RuntimeValue {
 ///
 /// Returns a [`KasuriError`] if the expression references an undefined variable,
 /// constant, or function.
-#[expect(clippy::implicit_hasher)] // Internal function always uses default HashMap
 #[expect(clippy::if_not_else)] // `!= 0.0` reads more naturally for DSL truthiness
 #[expect(clippy::too_many_lines)] // Single match over all ExprKind variants
 pub fn eval_expr(
@@ -622,7 +620,6 @@ fn eval_for_comp(
         inner_locals.insert(
             binding.var.name.clone(),
             RuntimeValue::VariantLabel {
-                index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
         );

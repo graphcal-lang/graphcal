@@ -3,7 +3,7 @@
 
 pub mod ast;
 pub mod dimension;
-pub mod lexer;
+pub(crate) mod lexer;
 pub mod parser;
 pub mod span;
 pub mod token;

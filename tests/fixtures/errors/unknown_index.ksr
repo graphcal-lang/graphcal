@@ -1,0 +1,1 @@
+param x: Velocity[NoSuchIndex] = 1.0 m / s;

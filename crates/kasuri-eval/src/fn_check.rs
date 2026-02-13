@@ -224,4 +224,155 @@ mod tests {
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
     }
+
+    #[test]
+    fn deep_recursion_chain() {
+        let source = r"
+            fn a(x: Dimensionless) -> Dimensionless = b(x);
+            fn b(x: Dimensionless) -> Dimensionless = c(x);
+            fn c(x: Dimensionless) -> Dimensionless = a(x);
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_unary_op() {
+        let source = r"
+            fn bad(x: Dimensionless) -> Dimensionless = -bad(x);
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_if_else() {
+        let source = r"
+            fn bad(x: Dimensionless) -> Dimensionless =
+                if x > 0.0 { bad(x - 1.0) } else { 0.0 };
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_convert() {
+        // Recursion hidden inside a Convert expression
+        let source = r"
+            fn bad(x: Length) -> Length = bad(x) -> m;
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_block_in_short_body() {
+        // Recursion in a block expression (inside FnBody::Short)
+        let source = r"
+            fn bad(x: Dimensionless) -> Dimensionless = {
+                let a = bad(x);
+                a
+            };
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_block_body() {
+        // Recursion via FnBody::Block (multi-statement fn body with block stmts)
+        let source = r"
+            fn bad(x: Dimensionless) -> Dimensionless {
+                let a = x + 1.0;
+                bad(a)
+            }
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_field_access() {
+        // collect_fn_calls_in_expr on FieldAccess traverses the inner expression
+        let source = r"
+            type Pair { x: Dimensionless, y: Dimensionless }
+            fn helper(v: Dimensionless) -> Pair = Pair { x: v, y: v };
+            fn bad(v: Dimensionless) -> Dimensionless = helper(bad(v)).x;
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_index_access() {
+        // collect_fn_calls_in_expr on IndexAccess traverses the inner expression
+        let source = r"
+            index Phase = { Coast, Burn }
+            fn helper(v: Dimensionless) -> Dimensionless = v;
+            fn bad(v: Dimensionless) -> Dimensionless = helper(bad(v));
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_map_literal() {
+        // Recursion hidden inside a map literal value expression
+        let source = r"
+            index Phase = { Coast, Burn }
+            fn helper(x: Dimensionless) -> Dimensionless[Phase] = {
+                Phase::Coast: helper2(x),
+                Phase::Burn: x,
+            };
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_for_comp() {
+        // Recursion hidden inside a for comprehension body
+        let source = r"
+            index Phase = { Coast, Burn }
+            fn helper(x: Dimensionless) -> Dimensionless[Phase] =
+                for p: Phase { helper2(x) };
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_scan() {
+        // Recursion hidden inside a scan body
+        let source = r"
+            index Phase = { Coast, Burn }
+            fn helper(x: Dimensionless) -> Dimensionless[Phase] =
+                scan({ Phase::Coast: x, Phase::Burn: x }, 0.0, |acc, val| helper2(acc));
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn recursion_through_struct_construction() {
+        // collect_fn_calls_in_expr on StructConstruction traverses field values
+        let source = r"
+            type Pair { x: Dimensionless, y: Dimensionless }
+            fn helper(v: Dimensionless) -> Pair = Pair { x: bad(v), y: v };
+            fn bad(v: Dimensionless) -> Dimensionless = helper(v).x;
+        ";
+        let err = check_recursion(source).unwrap_err();
+        assert!(matches!(err, KasuriError::RecursiveFunction { .. }));
+    }
+
+    #[test]
+    fn no_functions_ok() {
+        let source = r"
+            param x: Dimensionless = 1.0;
+        ";
+        check_recursion(source).unwrap();
+    }
 }

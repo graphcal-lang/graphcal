@@ -86,7 +86,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn unexpected_eof(&mut self, expected: &str) -> ParseError {
+    fn unexpected_eof(&self, expected: &str) -> ParseError {
         ParseError::UnexpectedEof {
             expected: expected.to_string(),
             src: self.named_source(),

@@ -1290,6 +1290,96 @@ mod tests {
         assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
     }
 
+    // --- Comparison and boolean operator tests ---
+
+    #[test]
+    fn eval_comparison_eq() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x == 5.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_comparison_neq() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x != 3.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_comparison_lt() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 3.0;\nnode y: Dimensionless = if @x < 5.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_comparison_lte() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x <= 5.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_comparison_gt() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 10.0;\nnode y: Dimensionless = if @x > 5.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_comparison_gte() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x >= 5.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_boolean_not() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 0.0;\nnode y: Dimensionless = if !(@x > 0.0) { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_boolean_and_short_circuit() {
+        // When first operand is false, second should not matter
+        let result = compile_and_eval(
+            "param x: Dimensionless = 0.0;\nnode y: Dimensionless = if @x > 0.0 && @x < 10.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_boolean_or_short_circuit() {
+        // When first operand is true, second should not matter
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 || @x < -10.0 { 1.0 } else { 0.0 };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_nested_if_else() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 10.0 { 3.0 } else { if @x > 0.0 { 2.0 } else { 1.0 } };",
+        ).unwrap();
+        assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_unary_neg_dimensioned() {
+        let result = compile_and_eval("param x: Length = 100 m;\nnode y: Length = -@x;").unwrap();
+        assert!((find_value(&result, "y") - (-100.0)).abs() < f64::EPSILON);
+    }
+
     // --- Override tests ---
 
     fn parse_expr(s: &str) -> kasuri_syntax::ast::Expr {

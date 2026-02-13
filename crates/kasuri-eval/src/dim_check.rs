@@ -52,7 +52,6 @@ pub fn check_dimensions(
 ///
 /// `imported_types` maps imported declaration names to their declared types.
 /// These are added to `declared_types` before checking the file's own declarations.
-#[expect(clippy::implicit_hasher)]
 pub fn check_dimensions_with_imports(
     file: &File,
     registry: &Registry,
@@ -148,7 +147,6 @@ pub fn check_dimensions_with_imports(
 ///
 /// Returns a [`KasuriError::DimensionMismatch`] if the expression's inferred
 /// dimension does not match the declared type of the param.
-#[expect(clippy::implicit_hasher)]
 pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,
@@ -1507,12 +1505,31 @@ mod tests {
         let mut registry = make_registry();
         let src = make_src(source);
 
-        // Register indexes and user-defined functions (mirrors eval.rs pipeline)
+        // Register indexes, struct types, and user-defined functions (mirrors eval.rs pipeline)
         for decl in &file.declarations {
             if let DeclKind::Index(idx) = &decl.kind {
                 registry.register_index(crate::registry::IndexDef {
                     name: idx.name.name.clone(),
                     variants: idx.variants.iter().map(|v| v.name.clone()).collect(),
+                });
+            }
+        }
+        for decl in &file.declarations {
+            if let DeclKind::Type(t) = &decl.kind {
+                let fields = t
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let dim = registry.resolve_type_expr(&f.type_ann).unwrap();
+                        crate::registry::StructField {
+                            name: f.name.name.clone(),
+                            dimension: dim,
+                        }
+                    })
+                    .collect();
+                registry.register_struct(crate::registry::StructDef {
+                    name: t.name.name.clone(),
+                    fields,
                 });
             }
         }
@@ -1982,6 +1999,525 @@ param dv: Velocity[Maneuver] = {
     Maneuver::Insertion: 1.8 km / s,
 };
 node total: Velocity = sum(for m: Maneuver { @dv[m] });";
+        check(source).unwrap();
+    }
+
+    // --- Comparison dimension mismatch ---
+
+    #[test]
+    fn check_comparison_dimension_mismatch() {
+        let source = "\
+param x: Length = 1.0 m;
+param t: Time = 1.0 s;
+node bad: Dimensionless = if @x > @t { 1.0 } else { 0.0 };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Boolean operator dimension errors ---
+
+    #[test]
+    fn check_boolean_and_lhs_dimensioned() {
+        let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = @x && true;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_boolean_or_rhs_dimensioned() {
+        let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = true || @x;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Power / exponent edge cases ---
+
+    #[test]
+    fn check_power_half_exponent() {
+        // x ^ 0.5 on dimensionless should work
+        let source = "param x: Dimensionless = 4.0;\nnode y: Dimensionless = @x ^ 0.5;";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_power_non_literal_exponent_dimensioned_base() {
+        // dimensioned ^ non-literal → NonLiteralExponent
+        let source = "\
+param x: Length = 1.0 m;
+param n: Dimensionless = 2.0;
+node bad: Area = @x ^ @n;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::NonLiteralExponent { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_power_dimensionless_base_non_literal_exponent() {
+        // dimensionless ^ dimensionless (non-literal) → ok
+        let source = "\
+param x: Dimensionless = 2.0;
+param n: Dimensionless = 3.0;
+node y: Dimensionless = @x ^ @n;";
+        check(source).unwrap();
+    }
+
+    #[test]
+    fn check_power_bad_fractional_exponent() {
+        // x ^ 0.3 → NonLiteralExponent (not 0.5 and not integer)
+        let source = "param x: Length = 1.0 m;\nnode bad: Length = @x ^ 0.3;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::NonLiteralExponent { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_power_dimensioned_exponent() {
+        // anything ^ dimensioned → NonLiteralExponent
+        let source = "\
+param x: Dimensionless = 2.0;
+param n: Length = 1.0 m;
+node bad: Dimensionless = @x ^ @n;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::NonLiteralExponent { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- If condition must be dimensionless ---
+
+    #[test]
+    fn check_if_condition_dimensioned() {
+        let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = if @x { 1.0 } else { 0.0 };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Unknown dimension in type annotation ---
+
+    #[test]
+    fn check_unknown_dimension_in_type() {
+        let source = "param x: NoSuchDimension = 1.0;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownDimension { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- expect_scalar error: struct used where scalar expected ---
+
+    #[test]
+    fn check_struct_in_arithmetic() {
+        let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+param o: Orbit = Orbit { altitude: 400 km, speed: 7.6 km / s };
+node bad: Length = @o + 1.0 m;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- FieldAccess on non-struct ---
+
+    #[test]
+    fn check_field_access_on_scalar() {
+        let source = "\
+param x: Length = 1.0 m;
+node bad: Length = @x.foo;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::NotAStruct { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Struct extra fields ---
+
+    #[test]
+    fn check_struct_extra_fields() {
+        let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node o: Orbit = Orbit { altitude: 400 km, speed: 7.6 km / s, bonus: 1.0 };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::ExtraFields { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Block let-binding type annotation mismatch ---
+
+    #[test]
+    fn check_block_let_type_mismatch() {
+        let source = "\
+param x: Length = 1.0 m;
+node y: Dimensionless = {
+    let a: Time = @x;
+    1.0
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- types_match wildcard: mismatched kinds ---
+
+    #[test]
+    fn check_types_match_struct_vs_scalar() {
+        // Declared as a struct type but expression evaluates to scalar → mismatch
+        let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+param x: Dimensionless = 1.0;
+node o: Orbit = @x;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatchInAnnotation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- ForComp with unknown index ---
+
+    #[test]
+    fn check_for_comp_unknown_index() {
+        let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = for m: NoSuchIndex { @x };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownIndex { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Scan body type mismatch ---
+
+    #[test]
+    fn check_scan_body_type_mismatch() {
+        let source = "\
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km / s,
+    Maneuver::Correction: 0.5 km / s,
+    Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::DimensionMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Scan on non-indexed value ---
+
+    #[test]
+    fn check_scan_on_scalar() {
+        let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::EvalError { .. }), "got: {err:?}");
+    }
+
+    // --- Map literal dimension inconsistency ---
+
+    #[test]
+    fn check_map_literal_inconsistent_element_dims() {
+        let source = "\
+index Phase = { Coast, Burn }
+param x: Dimensionless[Phase] = {
+    Phase::Coast: 1.0,
+    Phase::Burn: 2.0 m,
+};";
+        let err = check(source).unwrap_err();
+        // The map entries have different dimensions: first is Dimensionless, second is Length
+        assert!(
+            matches!(
+                err,
+                KasuriError::DimensionMismatchInAnnotation { .. }
+                    | KasuriError::DimensionMismatch { .. }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Index access with unknown variant ---
+
+    #[test]
+    fn check_index_access_unknown_variant() {
+        let source = "\
+index Phase = { Coast, Burn }
+param x: Dimensionless[Phase] = {
+    Phase::Coast: 1.0,
+    Phase::Burn: 2.0,
+};
+node bad: Dimensionless = @x[Phase::NoSuch];";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownVariant { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Indexing a non-indexed value ---
+
+    #[test]
+    fn check_index_access_on_scalar() {
+        let source = "\
+index Phase = { Coast, Burn }
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = @x[Phase::Coast];";
+        let err = check(source).unwrap_err();
+        assert!(matches!(err, KasuriError::EvalError { .. }), "got: {err:?}");
+    }
+
+    // --- Index access with wrong index name ---
+
+    #[test]
+    fn check_index_access_wrong_index() {
+        let source = "\
+index Phase = { Coast, Burn }
+index Stage = { First, Second }
+param x: Dimensionless[Phase] = {
+    Phase::Coast: 1.0,
+    Phase::Burn: 2.0,
+};
+node bad: Dimensionless = @x[Stage::First];";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::IndexMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through if/else sub-expressions ---
+
+    #[test]
+    fn check_if_error_in_condition() {
+        // Error inside condition sub-expression (unknown unit)
+        let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if (1.0 foobar > 0.0) { 1.0 } else { 0.0 };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_if_error_in_then_branch() {
+        // Error in then-branch sub-expression
+        let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if true { 1.0 foobar } else { 0.0 };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_if_error_in_else_branch() {
+        // Error in else-branch sub-expression
+        let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if true { 0.0 } else { 1.0 foobar };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through convert sub-expression ---
+
+    #[test]
+    fn check_convert_error_in_inner() {
+        // Error inside the inner expression of a convert
+        let source = "\
+node bad: Length = (1.0 foobar) -> m;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through block binding ---
+
+    #[test]
+    fn check_block_error_in_binding() {
+        // Error inside a let-binding value
+        let source = "\
+node bad: Dimensionless = {
+    let a = 1.0 foobar;
+    1.0
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through field access inner expression ---
+
+    #[test]
+    fn check_field_access_error_in_inner() {
+        let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node bad: Length = (1.0 foobar).altitude;";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through struct construction field value ---
+
+    #[test]
+    fn check_struct_construction_error_in_field_value() {
+        let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node o: Orbit = Orbit { altitude: 1.0 foobar, speed: 7.6 km / s };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through for comprehension body ---
+
+    #[test]
+    fn check_for_comp_error_in_body() {
+        let source = "\
+index Phase = { Coast, Burn }
+node bad: Dimensionless[Phase] = for p: Phase { 1.0 foobar };";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through aggregation arg ---
+
+    #[test]
+    fn check_aggregation_error_in_arg() {
+        let source = "\
+node bad: Dimensionless = sum(1.0 foobar);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through generic fn args ---
+
+    #[test]
+    fn check_generic_fn_error_in_arg() {
+        let source = "\
+fn identity<D: Dim>(x: D) -> D = x;
+node bad: Dimensionless = identity(1.0 foobar);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through scan source/init ---
+
+    #[test]
+    fn check_scan_error_in_source() {
+        let source = "\
+index Phase = { Coast, Burn }
+node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Error propagation through map literal entry ---
+
+    #[test]
+    fn check_map_literal_error_in_entry() {
+        let source = "\
+index Phase = { Coast, Burn }
+node bad: Dimensionless[Phase] = {
+    Phase::Coast: 1.0 foobar,
+    Phase::Burn: 2.0,
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::UnknownUnit { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Map literal with mixed index names ---
+
+    #[test]
+    fn check_map_literal_mixed_index_names() {
+        let source = "\
+index Phase = { Coast, Burn }
+index Stage = { First, Second }
+param x: Dimensionless[Phase] = {
+    Phase::Coast: 1.0,
+    Stage::Second: 2.0,
+};";
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, KasuriError::IndexMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    // --- Block let-binding with valid type annotation ---
+
+    #[test]
+    fn check_block_let_type_annotation_ok() {
+        let source = "\
+param x: Length = 1.0 m;
+node y: Length = {
+    let a: Length = @x;
+    a
+};";
         check(source).unwrap();
     }
 }
