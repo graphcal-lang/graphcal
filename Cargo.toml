@@ -1,8 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+default-members = ["crates/kasuri-cli"]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
 repository = "https://github.com/shunichironomura/kasuri"
@@ -12,9 +14,9 @@ license = "MIT OR Apache-2.0"
 clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
-kasuri-eval = { path = "crates/kasuri-eval" }
-# Internal crates
-kasuri-syntax = { path = "crates/kasuri-syntax" }
+kasuri-cli = { path = "crates/kasuri-cli", version = "0.1.0" }
+kasuri-eval = { path = "crates/kasuri-eval", version = "0.1.0" }
+kasuri-syntax = { path = "crates/kasuri-syntax", version = "0.1.0" }
 logos = "0.16.1"
 miette = "7.6.0"
 petgraph = "0.8.3"
@@ -25,34 +27,34 @@ tempfile = "3.25.0"
 thiserror = "2.0.18"
 
 [workspace.lints.clippy]
-# Warn-by-default lint groups
-all = { level = "warn", priority = -1 }
-# Warn for specific lints
-allow_attributes = "warn"
+all = "warn"
+allow_attributes = { level = "warn", priority = 1 }
+allow_attributes_without_reason = { level = "warn", priority = 1 }
 cargo = { level = "warn", priority = -1 }
-cargo_common_metadata = "allow"  # Not publishing yet
 complexity = { level = "warn", priority = -1 }
-# Deny-by-default lints
-correctness = { level = "deny", priority = -1 }
-dbg_macro = "warn"
-decimal_literal_representation = "warn"
-# Allow specific lints (exceptions)
-derive_partial_eq_without_eq = "allow"  # We implement `Eq` only when necessary
-else_if_without_else = "warn"
-missing_errors_doc = "allow"  # TODO: enable later
-missing_panics_doc = "allow"  # TODO: enable later
-multiple_crate_versions = "allow"  # There is nothing we can do about this
+correctness = { level = "deny", priority = -1 }  # deny-by-default
+dbg_macro = { level = "warn", priority = 1 }
+decimal_literal_representation = { level = "warn", priority = 1 }
+derive_partial_eq_without_eq = { level = "allow", priority = 1 }  # We implement `Eq` only when necessary
+else_if_without_else = { level = "warn", priority = 1 }
+expect_used = { level = "allow", priority = 1 }  # TODO: change to "warn" later
+indexing_slicing = { level = "allow", priority = 1 }  # TODO: change to "warn" later
+missing_errors_doc = { level = "allow", priority = 1 }  # TODO: change to "warn" later
+missing_panics_doc = { level = "allow", priority = 1 }  # TODO: change to "warn" later
+multiple_crate_versions = { level = "allow", priority = 1 }  # There is nothing we can do about this
 nursery = { level = "warn", priority = -1 }
+panic = { level = "allow", priority = 1 }  # TODO: change to "warn" later
 pedantic = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
-print_stderr = "warn"
-print_stdout = "warn"
-style = { level = "warn", priority = -1 }
+print_stderr = { level = "warn", priority = 1 }
+print_stdout = { level = "warn", priority = 1 }
+style = { level = "warn", priority = -1 }  # warn-by-default
 suspicious = { level = "warn", priority = -1 }
-todo = "warn"
-undocumented_unsafe_blocks = "warn"
-unimplemented = "warn"
-unwrap_used = "warn"
+todo = { level = "warn", priority = 1 }
+undocumented_unsafe_blocks = { level = "warn", priority = 1 }
+unimplemented = { level = "warn", priority = 1 }
+unwrap_used = { level = "warn", priority = 1 }
 
 [workspace.lints.rust]
+# missing-docs = "warn"
 unsafe-code = "warn"
