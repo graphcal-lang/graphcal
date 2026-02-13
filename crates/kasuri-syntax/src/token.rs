@@ -167,7 +167,7 @@ impl std::fmt::Display for Token {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
 
     use super::*;
 

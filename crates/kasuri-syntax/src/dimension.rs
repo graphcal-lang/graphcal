@@ -322,7 +322,10 @@ impl Dimension {
 impl std::ops::Mul for Dimension {
     type Output = Self;
     /// Multiply two dimensions (add exponents).
-    #[expect(clippy::suspicious_arithmetic_impl)]
+    #[expect(
+        clippy::suspicious_arithmetic_impl,
+        reason = "dimension multiplication adds exponents"
+    )]
     fn mul(self, other: Self) -> Self {
         let mut exponents = [Rational::ZERO; 8];
         for (i, e) in exponents.iter_mut().enumerate() {
@@ -335,7 +338,10 @@ impl std::ops::Mul for Dimension {
 impl std::ops::Div for Dimension {
     type Output = Self;
     /// Divide two dimensions (subtract exponents).
-    #[expect(clippy::suspicious_arithmetic_impl)]
+    #[expect(
+        clippy::suspicious_arithmetic_impl,
+        reason = "dimension division subtracts exponents"
+    )]
     fn div(self, other: Self) -> Self {
         let mut exponents = [Rational::ZERO; 8];
         for (i, e) in exponents.iter_mut().enumerate() {

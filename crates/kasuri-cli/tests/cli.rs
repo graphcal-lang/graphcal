@@ -1,5 +1,5 @@
 //! Allow use of unwrap in tests
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, reason = "test code")]
 
 use std::process::Command;
 

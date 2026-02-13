@@ -3,7 +3,10 @@ use crate::token::Token;
 use logos::Logos;
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
-#[expect(clippy::option_option)] // Intentional: None = not peeked, Some(None) = EOF, Some(Some(_)) = peeked token
+#[expect(
+    clippy::option_option,
+    reason = "None = not peeked, Some(None) = EOF, Some(Some(_)) = peeked token"
+)]
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, Token>,
     peeked: Option<Option<(Token, Span)>>,
@@ -82,7 +85,7 @@ impl<'src> Lexer<'src> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
 
     #[test]

@@ -1102,7 +1102,10 @@ impl<'src> Parser<'src> {
         Ok(expr)
     }
 
-    #[expect(clippy::too_many_lines)] // one match arm per atom kind; splitting would obscure
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match arm per atom kind; splitting would obscure"
+    )]
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
@@ -1578,7 +1581,10 @@ impl<'src> Parser<'src> {
 
     // --- Helper methods ---
 
-    #[expect(clippy::needless_pass_by_value)] // Token is small and the API is cleaner with by-value
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Token is small and the API is cleaner with by-value"
+    )]
     fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
         let expected_str = format!("`{expected}`");
         match self.lexer.next_token() {
@@ -1659,7 +1665,7 @@ fn is_uppercase_starting(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
 
     // --- Phase 1 declaration tests ---

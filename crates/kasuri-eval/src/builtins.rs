@@ -33,7 +33,10 @@ pub struct BuiltinFunction {
 }
 
 #[must_use]
-#[expect(clippy::too_many_lines)] // Declarative list of built-in functions
+#[expect(
+    clippy::too_many_lines,
+    reason = "declarative list of built-in functions"
+)]
 pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     let mut m = HashMap::new();
     m.insert(

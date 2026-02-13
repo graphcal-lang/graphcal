@@ -324,7 +324,10 @@ fn expect_scalar(
 }
 
 /// Infer the type (dimension or struct) of an expression.
-#[expect(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match over all ExprKind variants"
+)]
 fn infer_type(
     expr: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
@@ -421,11 +424,17 @@ fn infer_type(
                 BinOp::Pow => {
                     if let ExprKind::Number(n) = &rhs.kind {
                         if n.fract() == 0.0 {
-                            #[expect(clippy::cast_possible_truncation)]
+                            #[expect(
+                                clippy::cast_possible_truncation,
+                                reason = "guarded by fract() == 0.0 check"
+                            )]
                             let exp = *n as i32;
                             Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
                         } else {
-                            #[expect(clippy::float_cmp)]
+                            #[expect(
+                                clippy::float_cmp,
+                                reason = "checking exact 0.5 literal for square-root exponent"
+                            )]
                             if *n == 0.5 {
                                 Ok(InferredType::Scalar(lhs_dim.pow(Rational::new(1, 2))))
                             } else {
@@ -1177,7 +1186,11 @@ fn infer_type(
 /// For example, if `type_expr` is `D` and `actual` is `Scalar(Length)`, binds `D = Length`.
 /// If `type_expr` is `D[I]` and `actual` is `Indexed { Scalar(Velocity), "Maneuver" }`,
 /// binds `D = Velocity_dim` and `I = "Maneuver"`.
-#[expect(clippy::too_many_arguments, clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "complex generic unification requires many parameters and match arms"
+)]
 fn unify_type_expr_generic(
     type_expr: &kasuri_syntax::ast::TypeExpr,
     actual: &InferredType,
@@ -1485,7 +1498,7 @@ fn infer_fn_dim(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::prelude::load_prelude;
     use kasuri_syntax::parser::Parser;

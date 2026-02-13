@@ -83,7 +83,7 @@ pub fn build_dag(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::resolve::resolve;
     use kasuri_syntax::parser::Parser;

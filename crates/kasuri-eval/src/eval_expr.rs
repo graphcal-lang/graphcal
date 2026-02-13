@@ -57,8 +57,14 @@ impl RuntimeValue {
 ///
 /// Returns a [`KasuriError`] if the expression references an undefined variable,
 /// constant, or function.
-#[expect(clippy::if_not_else)] // `!= 0.0` reads more naturally for DSL truthiness
-#[expect(clippy::too_many_lines)] // Single match over all ExprKind variants
+#[expect(
+    clippy::if_not_else,
+    reason = "`!= 0.0` reads more naturally for DSL truthiness"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match over all ExprKind variants"
+)]
 pub fn eval_expr(
     expr: &Expr,
     values: &HashMap<String, RuntimeValue>,
@@ -198,7 +204,10 @@ pub fn eval_expr(
                             RuntimeValue::Scalar(max)
                         }
                         "mean" => {
-                            #[expect(clippy::cast_precision_loss)]
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "indexed collection length fits in f64"
+                            )]
                             let n = entries.len() as f64;
                             let total: f64 = entries
                                 .values()
@@ -207,7 +216,10 @@ pub fn eval_expr(
                             RuntimeValue::Scalar(total / n)
                         }
                         "count" => {
-                            #[expect(clippy::cast_precision_loss)]
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "indexed collection length fits in f64"
+                            )]
                             let n = entries.len() as f64;
                             RuntimeValue::Scalar(n)
                         }
@@ -600,7 +612,10 @@ pub fn eval_expr(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes through evaluation context to recursive calls"
+)]
 fn eval_for_comp(
     bindings: &[kasuri_syntax::ast::ForBinding],
     body: &Expr,
@@ -681,8 +696,11 @@ fn check_finite(
     }
 }
 
-#[expect(clippy::float_cmp)] // Intentional: DSL equality/truthiness uses exact comparison
-#[expect(clippy::if_not_else)] // `!= r` reads naturally for BinOp::Ne
+#[expect(
+    clippy::float_cmp,
+    reason = "DSL equality/truthiness uses exact comparison"
+)]
+#[expect(clippy::if_not_else, reason = "`!= r` reads naturally for BinOp::Ne")]
 fn eval_binop(
     op: BinOp,
     l: f64,

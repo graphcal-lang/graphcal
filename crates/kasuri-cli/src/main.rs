@@ -33,7 +33,10 @@ enum OutputFormat {
     Json,
 }
 
-#[expect(clippy::print_stderr)] // CLI binary, stderr output is expected for errors
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
 fn main() {
     // Install miette's fancy graphical error handler
     miette::set_hook(Box::new(|_| {
@@ -83,7 +86,7 @@ fn main() {
     }
 }
 
-#[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
+#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 fn print_text(result: &EvalResult) {
     use kasuri_eval::eval::Value;
 
@@ -125,8 +128,11 @@ fn print_text(result: &EvalResult) {
     }
 }
 
-#[expect(clippy::unwrap_used)] // serde_json serialization cannot fail for these types
-#[expect(clippy::print_stdout)] // CLI binary, stdout output is expected
+#[expect(
+    clippy::unwrap_used,
+    reason = "serde_json serialization cannot fail for these types"
+)]
+#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 fn print_json(result: &EvalResult) {
     use kasuri_eval::eval::Value;
 
@@ -214,7 +220,10 @@ fn print_json(result: &EvalResult) {
 
 /// Format a number for display: integers without decimal point, floats with
 /// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-#[expect(clippy::cast_possible_truncation)] // Guarded by abs() < 1e15 check
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "guarded by abs() < 1e15 check"
+)]
 fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
         format!("{}", value as i64)
@@ -229,7 +238,7 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
 
     #[test]
@@ -240,7 +249,10 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::approx_constant)]
+    #[expect(
+        clippy::approx_constant,
+        reason = "testing exact format output of 3.14"
+    )]
     fn format_decimal() {
         assert_eq!(format_number(9.80665), "9.80665");
         assert_eq!(format_number(3.14), "3.14");

@@ -1,20 +1,24 @@
 [package]
 name = "kasuri"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
 repository.workspace = true
 license.workspace = true
-
-[lints]
-workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
+clap = { workspace = true }
 kasuri-eval = { workspace = true }
 kasuri-syntax = { workspace = true }
-clap = { workspace = true }
-serde_json = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[lints]
+workspace = true

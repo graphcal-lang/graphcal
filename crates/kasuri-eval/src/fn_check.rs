@@ -152,7 +152,7 @@ fn collect_fn_calls_in_expr(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::prelude::load_prelude;
     use kasuri_syntax::parser::Parser;

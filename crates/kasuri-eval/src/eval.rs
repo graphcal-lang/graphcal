@@ -172,7 +172,10 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing, validation, or evaluation fails.
-#[expect(clippy::implicit_hasher)]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
 pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
@@ -391,8 +394,14 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
 /// # Errors
 ///
 /// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
-#[expect(clippy::too_many_lines)]
-#[expect(clippy::implicit_hasher)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "multi-file project compilation has many sequential steps"
+)]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
 pub fn compile_and_eval_project(
     root_path: &Path,
     overrides: &HashMap<String, kasuri_syntax::ast::Expr>,
@@ -908,7 +917,7 @@ pub enum CompileError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
 
     /// Find the SI value of a named scalar declaration.
@@ -925,7 +934,10 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::suboptimal_flops)] // Clearer to express expected math directly
+    #[expect(
+        clippy::suboptimal_flops,
+        reason = "clearer to express expected math directly"
+    )]
     fn eval_rocket_milestone() {
         let source = include_str!("../../../tests/fixtures/rocket.ksr");
         let result = compile_and_eval(source).unwrap();
@@ -956,7 +968,10 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::suboptimal_flops)] // Clearer to express expected math directly
+    #[expect(
+        clippy::suboptimal_flops,
+        reason = "clearer to express expected math directly"
+    )]
     fn eval_constants_ksr() {
         let source = include_str!("../../../tests/fixtures/constants.ksr");
         let result = compile_and_eval(source).unwrap();

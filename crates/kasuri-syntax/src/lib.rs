@@ -1,5 +1,8 @@
-// miette derive macro generates code with false-positive unused_assignments warnings
-#![allow(unused_assignments)]
+//! Kasuri Syntax Crate
+#![allow(
+    unused_assignments,
+    reason = "miette derive macro generates false-positive unused_assignments warnings"
+)]
 
 pub mod ast;
 pub mod dimension;

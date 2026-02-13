@@ -111,7 +111,7 @@ fn load_derived_units(r: &mut Registry) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use kasuri_syntax::dimension::Rational;
 
