@@ -239,3 +239,17 @@ fn error_boolean_dim_error() {
     let rendered = render_error(source, "boolean_dim_error.ksr");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_division_by_zero() {
+    let source = include_str!("../../../tests/fixtures/errors/division_by_zero.ksr");
+    let rendered = render_error(source, "division_by_zero.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_sqrt_negative() {
+    let source = include_str!("../../../tests/fixtures/errors/sqrt_negative.ksr");
+    let rendered = render_error(source, "sqrt_negative.ksr");
+    insta::assert_snapshot!(rendered);
+}

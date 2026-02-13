@@ -18,6 +18,7 @@ kasuri-syntax = { path = "crates/kasuri-syntax" }
 logos = "0.16.1"
 miette = "7.6.0"
 petgraph = "0.8.3"
+proptest = "1.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.25.0"

@@ -1469,4 +1469,144 @@ mod tests {
             "delta_v = {delta_v}, expected = {expected_delta_v}"
         );
     }
+
+    // --- Runtime arithmetic error tests ---
+
+    /// Helper: assert that `compile_and_eval` fails with an `EvalError` whose message contains `needle`.
+    fn assert_eval_error(source: &str, needle: &str) {
+        let err = compile_and_eval(source).unwrap_err();
+        match &err {
+            CompileError::Eval(KasuriError::EvalError { message, .. }) => {
+                assert!(
+                    message.contains(needle),
+                    "expected error containing {needle:?}, got {message:?}"
+                );
+            }
+            other => panic!("expected EvalError containing {needle:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_division_by_zero() {
+        assert_eval_error(
+            "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x / 0.0;",
+            "division by zero",
+        );
+    }
+
+    #[test]
+    fn eval_zero_divided_by_zero() {
+        assert_eval_error(
+            "param x: Dimensionless = 0.0;\nnode y: Dimensionless = @x / 0.0;",
+            "division by zero",
+        );
+    }
+
+    #[test]
+    fn eval_sqrt_negative() {
+        assert_eval_error(
+            "node y: Dimensionless = sqrt(-1.0);",
+            "NaN",
+        );
+    }
+
+    #[test]
+    fn eval_ln_zero() {
+        assert_eval_error(
+            "node y: Dimensionless = ln(0.0);",
+            "infinite",
+        );
+    }
+
+    #[test]
+    fn eval_ln_negative() {
+        assert_eval_error(
+            "node y: Dimensionless = ln(-1.0);",
+            "NaN",
+        );
+    }
+
+    #[test]
+    fn eval_exp_overflow() {
+        assert_eval_error(
+            "node y: Dimensionless = exp(1000.0);",
+            "infinite",
+        );
+    }
+
+    #[test]
+    fn eval_power_negative_base_frac_exp() {
+        assert_eval_error(
+            "node y: Dimensionless = (-1.0) ^ 0.5;",
+            "NaN",
+        );
+    }
+
+    #[test]
+    fn eval_valid_division_ok() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 10.0;\nnode y: Dimensionless = @x / 2.0;",
+        )
+        .unwrap();
+        assert!((find_value(&result, "y") - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_valid_sqrt_ok() {
+        let result = compile_and_eval("node y: Dimensionless = sqrt(4.0);").unwrap();
+        assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
+    }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn division_of_finite_nonzero_is_finite(
+                a in proptest::num::f64::NORMAL,
+                b in proptest::num::f64::NORMAL,
+            ) {
+                prop_assume!(b != 0.0 && a.is_finite() && b.is_finite());
+                let source = format!(
+                    "param x: Dimensionless = {a:e};\nparam y: Dimensionless = {b:e};\nnode z: Dimensionless = @x / @y;"
+                );
+                let result = compile_and_eval(&source);
+                match result {
+                    Ok(r) => {
+                        let z = find_value(&r, "z");
+                        prop_assert!(z.is_finite(), "division produced non-finite: {z}");
+                    }
+                    Err(CompileError::Eval(KasuriError::EvalError { message, .. })) => {
+                        // Overflow to infinity is correctly caught
+                        prop_assert!(
+                            message.contains("overflow") || message.contains("infinite"),
+                            "unexpected error: {message}"
+                        );
+                    }
+                    Err(e) => prop_assert!(false, "unexpected error type: {e:?}"),
+                }
+            }
+
+            #[test]
+            fn sqrt_of_positive_is_finite(a in 0.0f64..1e150) {
+                let source = format!(
+                    "param x: Dimensionless = {a:e};\nnode y: Dimensionless = sqrt(@x);"
+                );
+                let result = compile_and_eval(&source).unwrap();
+                let y = find_value(&result, "y");
+                prop_assert!(y.is_finite(), "sqrt produced non-finite: {y}");
+            }
+
+            #[test]
+            fn exp_of_small_is_finite(a in -700.0f64..700.0) {
+                let source = format!(
+                    "param x: Dimensionless = {a:e};\nnode y: Dimensionless = exp(@x);"
+                );
+                let result = compile_and_eval(&source).unwrap();
+                let y = find_value(&result, "y");
+                prop_assert!(y.is_finite(), "exp produced non-finite: {y}");
+            }
+        }
+    }
 }
