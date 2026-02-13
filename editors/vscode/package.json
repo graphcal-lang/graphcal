@@ -1,0 +1,36 @@
+{
+  "name": "graphcal",
+  "displayName": "Graphcal",
+  "description": "Syntax highlighting for Graphcal (.gcl) files",
+  "version": "0.0.1",
+  "publisher": "graphcal",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "graphcal",
+        "aliases": [
+          "Graphcal",
+          "graphcal"
+        ],
+        "extensions": [
+          ".gcl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "graphcal",
+        "scopeName": "source.graphcal",
+        "path": "./syntaxes/graphcal.tmLanguage.json"
+      }
+    ]
+  }
+}
