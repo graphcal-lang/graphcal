@@ -1,8 +1,11 @@
 # Graphcal
 
+> [!WARNING]
+> Graphcal is under active development. Expect breaking changes and bugs.
+
 **A type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations.**
 
-Graphcal replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
+Graphcal replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
 ```
 // rocket.gcl
