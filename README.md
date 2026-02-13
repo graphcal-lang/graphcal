@@ -358,12 +358,13 @@ Start the server (communicates over stdin/stdout):
 graphcal lsp
 ```
 
-**VS Code** -- Use a generic LSP client extension such as [vscode-lsp-sample](https://github.com/AverageMarcus/vscode-lsp-sample) or add the following to your `settings.json` if you have a generic LSP client installed:
+**VS Code** -- Use a generic LSP client extension such as [vscode-glspc](https://github.com/llllvvuu/vscode-glspc) and add the following to your `settings.json`:
 
 ```jsonc
 {
-  "lsp-client.serverCommand": ["<path-to>/graphcal", "lsp"],
-  "lsp-client.languageId": "graphcal"
+  "glspc.serverCommand": "<path-to>/graphcal",
+  "glspc.serverCommandArguments": ["lsp"],
+  "glspc.languageId": "graphcal"
 }
 ```
 
