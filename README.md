@@ -358,15 +358,7 @@ Start the server (communicates over stdin/stdout):
 graphcal lsp
 ```
 
-**VS Code** -- Use a generic LSP client extension such as [vscode-glspc](https://github.com/llllvvuu/vscode-glspc) and add the following to your `settings.json`:
-
-```jsonc
-{
-  "glspc.serverCommand": "<path-to>/graphcal",
-  "glspc.serverCommandArguments": ["lsp"],
-  "glspc.languageId": "graphcal"
-}
-```
+**VS Code** -- A dedicated extension is planned. In the meantime, any generic LSP client extension should work with the `graphcal lsp` command.
 
 **Zed** -- The Zed extension (`editors/zed/`) includes LSP support. After installing it as a dev extension, the server launches automatically if `graphcal` is on your `PATH`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
 
