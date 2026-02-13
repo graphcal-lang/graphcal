@@ -127,55 +127,33 @@ The current lexer regex `[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?` accept
 
 ---
 
-### 3. `Str` (string)
+### 3. ~~`Str` (string)~~ — Not needed
 
-**Current state:** `Token::StringLiteral` exists in the lexer. The parser uses it only for `use` paths. There is no string expression type in the AST or evaluator.
+**Verdict: Removed from the candidate list.**
 
-**Use cases:**
-- Labels, descriptions, metadata
-- Formatting output: `"Transfer dv: " ++ to_string(@dv)`
-- CSV/data file paths
-- Notes on parameters
+The primary use cases for strings in engineering calculations are categorical/choice data: mission phase names, fuel types, statuses, region labels. These are better modeled by **fieldless `type` declarations** (simple enums), which already fit within the planned Phase 10 (tagged unions) and are partially available today via `index`:
 
-**Design decisions needed:**
+```
+// Today (index — already works for table axes):
+index Phase = { Design, Build, Test, Launch }
 
-#### 3a. What operations does `Str` support?
+// Phase 10 (fieldless type — proper enum):
+type FuelKind { LH2, RP1, Methane, Solid }
+type Status { Active, Inactive, Pending }
+```
 
-| Operation | Syntax | Notes |
-|-----------|--------|-------|
-| Concatenation | `++` or `+` | `++` avoids ambiguity with numeric `+` |
-| Interpolation | `"dv = {expr}"` or `f"dv = {expr}"` | Powerful but complex parser change |
-| Comparison | `==`, `!=` | Equality only; ordering is locale-dependent |
-| Length | `len(s)` | Returns `i64` |
-| Conversion | `to_string(x)` | Converts any scalar to string |
+Fieldless types provide stronger guarantees than strings:
+- **Exhaustiveness checking** — `match` must cover all variants
+- **Typo protection** — `FuelKind::Metahne` is a compile error, `"Metahne"` is not
+- **No need for string comparison semantics** — equality is structural, not textual
+- **No string operations to design** — no concatenation, interpolation, length, etc.
 
-#### 3b. Can `Str` be used in `param`/`node`/`const`?
+The remaining `Str` use cases (free-form descriptions, file paths, formatted output) are metadata concerns that live outside the calculation graph. They can be handled by:
+- Comments in source files (already supported)
+- A future metadata/annotation system (e.g., `#[description = "..."]`)
+- External tooling (CLI flags, scenario files)
 
-- `param mission_name: Str = "Artemis I";` — makes sense for metadata
-- `node label: Str = "Phase " ++ to_string(@phase_num);` — derived labels
-
-**Recommendation:** Support `Str` as a type for `param`/`node`/`const`. It's dimensionless and non-numeric. The type checker should reject arithmetic on strings.
-
-#### 3c. Interaction with dimensions
-
-`Str` has no dimension. It's a completely separate type branch:
-- `DeclaredType::Str` / `InferredType::Str`
-- No unit literals on strings
-- No unit conversion on strings
-- Arithmetic operators are type errors
-
-#### 3d. Implementation scope
-
-- **Lexer:** Already has `StringLiteral` token
-- **AST:** Add `ExprKind::StringLiteral(String)`, handle in type annotations
-- **TypeExprKind:** Add `Str` variant (or recognize "Str" as a keyword/builtin type)
-- **RuntimeValue:** Add `Str(String)` variant
-- **Operators:** String concatenation operator (`++` or similar)
-- **Builtins:** `to_string()`, `len()`, maybe `contains()`, `starts_with()`
-
-**Estimated scope:** Medium. The main complexity is deciding on string operations and adding a non-numeric type path through the evaluator.
-
-**Priority:** Medium. Useful for metadata and labeling, but not core to engineering calculations.
+**If a genuine need for runtime strings arises** (e.g., dynamically constructed file paths for data import), it can be reconsidered, but it should not be a priority for the type system.
 
 ---
 
@@ -371,23 +349,19 @@ Based on priority, difficulty, and dependencies:
 
 **Scope:** Medium. The lexer change (splitting int/float literals) and promotion rules are the main work.
 
-### Phase C: `Str` strings
+### Phase C: `Datetime`
 
-**Why third:** Adds the first non-numeric, non-boolean type. Relatively self-contained since strings don't interact with dimensions or arithmetic.
-
-**Scope:** Small-medium. Mostly additive—new type path through the system.
-
-### Phase D: `Datetime`
-
-**Why fourth:** Most complex due to the point-vs-vector interaction with the `Time` dimension. Benefits from having `i64` (for internal representation) and `Str` (for parsing ISO strings) already implemented.
+**Why third:** Most complex due to the point-vs-vector interaction with the `Time` dimension. Benefits from having `i64` (for internal representation) already implemented.
 
 **Scope:** Large. New operator semantics, new crate dependency, careful type-checker work.
 
-### Phase E: `Option<T>`
+### Phase D: `Option<T>`
 
 **Why last among the core types:** Generic over all other types, so it benefits from having the full type zoo available first. Also the most complex type-checker change (every inference rule must handle the optional wrapper).
 
 **Scope:** Large.
+
+*Note: `Str` was removed from this list. Categorical data is better served by fieldless `type` declarations (see section 3 above).*
 
 ---
 
@@ -412,13 +386,12 @@ enum TypeExprKind {
     Indexed { base, indexes },
     Bool,                          // new
     Int,                           // new
-    Str,                           // new
     Datetime,                      // new
     Optional { inner: Box<Self> }, // new
 }
 ```
 
-Alternatively, `Bool`, `Int`, `Str`, `Datetime` could be recognized as builtin type names within `DimExpr` resolution, avoiding AST changes. However, this conflates dimensions with non-dimension types, which may cause confusion.
+Alternatively, `Bool`, `Int`, `Datetime` could be recognized as builtin type names within `DimExpr` resolution, avoiding AST changes. However, this conflates dimensions with non-dimension types, which may cause confusion.
 
 **Recommendation:** Add explicit `TypeExprKind` variants. This keeps the distinction between "dimensioned scalar" and "non-dimensioned primitive" clear in the AST.
 
@@ -430,7 +403,6 @@ enum DeclaredType {
     Scalar(Dimension),    // dimensioned f64
     Integer,              // i64 (dimensionless)
     Bool,                 // bool
-    Str,                  // string
     Datetime,             // datetime
     Optional(Box<Self>),  // Option<T>
     Struct(String),       // user-defined struct
@@ -446,7 +418,6 @@ enum RuntimeValue {
     Scalar(f64),
     Integer(i64),
     Bool(bool),
-    Str(String),
     Datetime(chrono::DateTime<Utc>),
     Optional(Option<Box<Self>>),
     Struct { type_name: String, fields: IndexMap<String, Self> },
@@ -476,7 +447,6 @@ Currently, builtin functions use `DimSignature` which describes dimension constr
 The CLI's JSON output would need to represent new types:
 - `bool`: `true` / `false` (not `1.0` / `0.0`)
 - `i64`: integer number (not float)
-- `Str`: JSON string
 - `Datetime`: ISO 8601 string
 - `Option`: value or `null`
 
@@ -488,9 +458,9 @@ The CLI's JSON output would need to represent new types:
 |------|----------|-------|-----------------|---------------|
 | `bool` (first-class) | High | Low-med | None (separate) | Splitting from f64, operator return types |
 | `i64` | Medium-high | Medium | None (dimensionless) | Mixed-type promotion, int division semantics |
-| `Str` | Medium | Small-med | None | String operations, non-numeric type path |
 | `Datetime` | Medium-high | Large | Yes (point vs vector with Time) | Operator semantics, crate dependency |
 | `Option<T>` | Medium | Large | Wraps any type | Generic type in checker, unwrap semantics |
+| ~~`Str`~~ | ~~Removed~~ | — | — | Superseded by fieldless `type` (enums) |
 | `Complex` | Low | Large | Yes (same dim for re/im) | Operator overloading, function signatures |
 | `Decimal` | Low | Medium | Like f64 | New numeric type, crate dependency |
 | `Range<T>` | Low | Large | Wraps dimensioned types | Interval arithmetic propagation |
