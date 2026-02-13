@@ -38,7 +38,7 @@ pub struct DisplayUnit {
     pub scale: f64,
 }
 
-/// A runtime value: either a scalar with dimension and display info, or a struct.
+/// A runtime value: either a scalar with dimension and display info, a bool, or a struct.
 #[derive(Debug, Clone)]
 pub enum Value {
     Scalar {
@@ -49,6 +49,7 @@ pub enum Value {
         /// Optional display unit for pretty-printing.
         display_unit: Option<DisplayUnit>,
     },
+    Bool(bool),
     Struct {
         /// The struct type name.
         type_name: String,
@@ -70,6 +71,7 @@ impl Value {
     pub fn si_value(&self) -> f64 {
         match self {
             Self::Scalar { si_value, .. } => *si_value,
+            Self::Bool(_) => panic!("called si_value() on Bool"),
             Self::Struct { type_name, .. } => {
                 panic!("called si_value() on struct `{type_name}`")
             }
@@ -84,6 +86,7 @@ impl Value {
     pub fn dimension(&self) -> Dimension {
         match self {
             Self::Scalar { dimension, .. } => *dimension,
+            Self::Bool(_) => panic!("called dimension() on Bool"),
             Self::Struct { type_name, .. } => {
                 panic!("called dimension() on struct `{type_name}`")
             }
@@ -104,6 +107,7 @@ impl Value {
             } => display_unit
                 .as_ref()
                 .map_or(*si_value, |du| *si_value / du.scale),
+            Self::Bool(_) => panic!("called display_value() on Bool"),
             Self::Struct { type_name, .. } => {
                 panic!("called display_value() on struct `{type_name}`")
             }
@@ -127,7 +131,7 @@ impl Value {
             } => display_unit
                 .as_ref()
                 .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
-            Self::Struct { .. } | Self::Indexed { .. } => None,
+            Self::Bool(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
         }
     }
 }
@@ -687,6 +691,7 @@ fn runtime_to_value(
                 display_unit,
             }
         }
+        RuntimeValue::Bool(b) => Value::Bool(*b),
         RuntimeValue::Struct { type_name, fields } => {
             let struct_def = registry.get_struct(type_name);
             let converted_fields = fields

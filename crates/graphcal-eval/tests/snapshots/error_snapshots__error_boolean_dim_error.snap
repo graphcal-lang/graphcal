@@ -2,12 +2,12 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-dimension mismatch: expected Dimensionless, found Length
+dimension mismatch: expected Bool, found Length
     Diagnostic severity: error
 Begin snippet for boolean_dim_error.gcl starting at line 1, column 1
 
 snippet line 1: param x: Length = 1.0 m;
 snippet line 2: node bad: Dimensionless = @x && true;
     label at line 2, columns 27 to 28: has dimension Length
-diagnostic help: boolean operators require Dimensionless operands
+diagnostic help: boolean operators require Bool operands
 diagnostic code: graphcal::D001
