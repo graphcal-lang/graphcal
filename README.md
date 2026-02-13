@@ -4,16 +4,6 @@
 
 Graphcal replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
-## Current Status: Phase 5 + Multi-File Imports
-
-Phases 0--5 and multi-file imports are implemented. Graphcal supports dimensioned
-arithmetic with physical units, user-defined struct types, multi-line node bodies
-with `let` bindings, pure functions with dimension generics, indexed values with
-aggregation, multi-file projects with `use` imports, and runtime parameter
-overrides via `--set`.
-
-### Rocket equation with units
-
 ```
 // rocket.gcl
 dimension Velocity = Length / Time;
@@ -40,7 +30,105 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-### Hohmann transfer with structs and blocks
+## Installation
+
+```sh
+cargo build -p graphcal
+```
+
+## Usage
+
+```sh
+# Evaluate a .gcl file (text output)
+graphcal eval path/to/file.gcl
+
+# JSON output
+graphcal eval path/to/file.gcl --format json
+
+# Override a param value
+graphcal eval path/to/file.gcl --set 'isp=450 s'
+
+# Multi-file project (use declarations resolved automatically)
+graphcal eval project/main.gcl
+```
+
+## Features
+
+**Dimensions and units** --
+Declare physical dimensions and annotate values with units.
+The compiler catches mismatched operations (e.g., `km + kg`) at compile time.
+A built-in prelude provides SI base dimensions, derived dimensions, and common units.
+
+```
+param parking_alt: Length = 200 km;
+node speed: Velocity = 3138.128 m/s;
+node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
+```
+
+**Reactive computation graph** --
+Three declaration kinds -- `param` (inputs), `node` (computed), `const` (compile-time) -- form a DAG that is automatically evaluated in dependency order. Override any `param` at the command line with `--set`.
+
+```sh
+graphcal eval rocket.gcl --set 'isp=450 s'
+```
+
+**Structs and multi-line nodes** --
+Group related values into typed structs. Use block bodies with `let` bindings for complex computations.
+
+```
+type TransferResult {
+    dv1: Velocity,
+    dv2: Velocity,
+    total_dv: Velocity,
+    tof: Time,
+}
+
+node transfer: TransferResult = {
+    let r1 = R_EARTH + @parking_alt;
+    let r2 = R_EARTH + @target_alt;
+    let a = (r1 + r2) / 2.0;
+    // ...
+    TransferResult { dv1, dv2, total_dv: dv1 + dv2, tof: PI * sqrt(a ^ 3.0 / GM_EARTH) }
+};
+```
+
+**Pure functions with dimension generics** --
+Define reusable functions with compile-time dimension checking. Dimension generics (`<D: Dim>`) let you write functions that work across any physical quantity.
+
+```
+fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
+fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
+```
+
+**Indexed values and aggregation** --
+Define named index sets and operate over them with `for` comprehensions and aggregation functions (`sum`, `min`, `max`, `mean`, `count`, `scan`).
+
+```
+index Maneuver = { Departure, Correction, Insertion }
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    Maneuver::Correction: 0.12 km/s,
+    Maneuver::Insertion: 1.83 km/s,
+};
+
+node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
+```
+
+**Multi-file projects** --
+Split calculations across files with `use` imports. All declaration kinds can be imported, and circular dependencies are detected at compile time.
+
+```
+use "./constants.gcl" { G0 };
+use "./params.gcl" { dry_mass, fuel_mass, isp };
+```
+
+**Developer experience** --
+Rich error diagnostics with source spans and error codes (via [miette](https://github.com/zkat/miette)), JSON output for tooling integration, and naming convention enforcement.
+
+## Examples
+
+### Hohmann transfer orbit
 
 ```
 // hohmann.gcl
@@ -218,94 +306,16 @@ mass_ratio = 3.333333
 delta_v    = 5313.122956 m/s
 ```
 
-### Features
+## Vision
 
-**Core language (Phase 0)**
+Graphcal is designed to eventually support:
 
-- Three declaration kinds: `param` (inputs), `node` (computed), `const` (compile-time)
-- `@` sigil for graph references, bare `UPPER_SNAKE_CASE` for const references
-- Arithmetic (`+`, `-`, `*`, `/`, `^`), comparison, boolean (`&&`, `||`, `!`), `if`/`else`
-- 14 built-in functions (`sqrt`, `sin`, `cos`, `ln`, `exp`, `atan2`, `min`, `max`, etc.)
-- Built-in constants (`PI`, `E`)
-- Two-phase evaluation: compile-time (const) then runtime (param/node DAG)
-- Casing enforcement: `const` must be `UPPER_SNAKE_CASE`, `param`/`node` must be `lower_snake_case`
-- Rich error diagnostics via [miette](https://github.com/zkat/miette) with error codes and source spans
-- JSON output (`--format json`)
+- **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
+- **Dynamic simulation** -- `scan` over a time axis for system dynamics
+- **Python interop** -- parameter sweeps and Monte Carlo at native speed
+- **Spreadsheet import/export** -- maintain `.gcl` source, domain experts keep their Excel
 
-**Dimensions and units (Phase 1)**
-
-- `dimension` and `unit` declarations for physical quantities
-- Type annotations on declarations (`param x: Length = 100 km;`)
-- Unit literals (`100 km`, `9.80665 m/s^2`) and unit conversion (`-> hour`)
-- Compile-time dimension checking catches mismatched operations (`km + kg`)
-- Prelude with SI base dimensions, derived dimensions, and common units
-
-**Structs and multi-line nodes (Phase 2)**
-
-- `type` declarations for user-defined struct types with dimensioned fields
-- Block bodies with `let` bindings for multi-line node expressions
-- Struct construction with explicit and shorthand (`{ dv1 }`) field syntax
-- Field access with `.` operator, chainable (`@transfer.result.inner`)
-- Implicit return (last expression in block without `;`)
-- No shadowing within blocks (duplicate `let` is a compile error)
-
-**Pure functions (Phase 3)**
-
-- `fn` declarations with short (`= expr;`) and block (`{ let ...; expr }`) forms
-- Dimension generics (`<D: Dim>`) with compile-time unification at call sites
-- Purity enforcement: `@` graph references forbidden in function bodies
-- Functions can call other user-defined functions and builtins
-- Recursion detection (direct and mutual) with compile-time error
-- SI unit fallback display for computed values (e.g., `m/s` for Velocity)
-
-**Indexed values (Phase 5)**
-
-- `index` declarations with named variants (`index Maneuver = { Departure, Correction, Insertion }`)
-- Indexed types as first-class (`Velocity[Maneuver]`, multi-axis `T[A, B]`)
-- Map literals with totality checking (`{ Maneuver::Departure: 2.46 km/s, ... }`)
-- `for` comprehensions with explicit iteration (`for m: Maneuver { @delta_v[m] * 2.0 }`)
-- Indexing by variant (`@x[Maneuver::Departure]`) or loop variable (`@x[m]`)
-- Aggregation functions: `sum`, `min`, `max`, `mean`, `count` collapse indexed values to scalars
-- `scan` for ordered accumulation (`scan(@delta_v, 0.0 m/s, |acc, val| acc + val)`)
-- Generic index constraint (`<I: Index>`) alongside dimension generics
-
-**Multi-file imports (Phase 4)**
-
-- `use "./path/to/file.gcl" { name1, name2 };` imports declarations from other files
-- File paths are resolved relative to the importing file's directory
-- All declaration kinds can be imported (const, param, node, dimension, unit, type, index, fn)
-- Imported params/nodes participate in the DAG and can be overridden with `--set`
-- Circular import detection with clear error messages
-- Diamond imports (A imports B and C, both import D) are deduplicated
-
-**Parameter overrides (Phase 6)**
-
-- `--set 'param_name=value'` overrides param defaults at the command line
-- Works with both local and imported params
-- Supports unit expressions (`--set 'isp=450 s'`)
-- Multiple `--set` flags can be used simultaneously
-
-## Installation
-
-```sh
-cargo build -p graphcal
-```
-
-## Usage
-
-```sh
-# Evaluate a .gcl file (text output)
-graphcal eval path/to/file.gcl
-
-# JSON output
-graphcal eval path/to/file.gcl --format json
-
-# Override a param value
-graphcal eval path/to/file.gcl --set 'isp=450 s'
-
-# Multi-file project (use declarations resolved automatically)
-graphcal eval project/main.gcl
-```
+See the [design documents](design/README.md) for details.
 
 ## Project Structure
 
@@ -318,17 +328,6 @@ graphcal/
   design/            # language design documents
   tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```
-
-## Vision
-
-Graphcal is designed to eventually support:
-
-- **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
-- **Dynamic simulation** -- `scan` over a time axis for system dynamics
-- **Python interop** -- parameter sweeps and Monte Carlo at native speed
-- **Spreadsheet import/export** -- maintain `.gcl` source, domain experts keep their Excel
-
-See the [design documents](design/README.md) and [phase roadmap](design/phases/README.md) for details.
 
 ## Design Influences
 
