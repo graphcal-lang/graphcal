@@ -7,8 +7,12 @@ default-members = ["crates/kasuri-cli"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
+description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
+readme = "README.md"
 repository = "https://github.com/shunichironomura/kasuri"
 license = "MIT OR Apache-2.0"
+keywords = ["engineering", "units", "reactive", "calculations"]
+categories = ["compilers", "science"]
 
 [workspace.dependencies]
 clap = { version = "4.5.58", features = ["derive"] }

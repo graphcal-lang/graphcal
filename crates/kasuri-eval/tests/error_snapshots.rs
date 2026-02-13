@@ -1,5 +1,5 @@
 //! Tests for error rendering snapshots.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, reason = "test code")]
 
 use kasuri_eval::eval::compile_and_eval_named;
 use miette::{Diagnostic, NarratableReportHandler};

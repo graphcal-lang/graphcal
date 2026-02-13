@@ -70,7 +70,10 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 ///
 /// Returns a [`KasuriError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
-#[expect(clippy::too_many_lines)] // Complex resolution logic with multiple passes
+#[expect(
+    clippy::too_many_lines,
+    reason = "complex resolution logic with multiple passes"
+)]
 pub fn resolve_with_imports(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -163,7 +166,10 @@ pub fn resolve_with_imports(
         source_order.push((name.clone(), category));
 
         // Check casing (defensive -- parser should enforce this already)
-        #[expect(clippy::else_if_without_else)] // No action needed in the else case
+        #[expect(
+            clippy::else_if_without_else,
+            reason = "no action needed in the else case"
+        )]
         if is_const {
             if !is_upper_snake_case(&name) {
                 return Err(KasuriError::EvalError {
@@ -478,7 +484,10 @@ fn extract_const_refs(
     Ok(deps)
 }
 
-#[expect(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "recursive reference collector for all expression types"
+)]
 fn collect_const_refs(
     expr: &Expr,
     all_const_names: &HashSet<&str>,
@@ -750,8 +759,14 @@ fn extract_all_refs(
     Ok((graph_refs, const_refs))
 }
 
-#[expect(clippy::too_many_arguments)]
-#[expect(clippy::too_many_lines)] // Recursive reference collector for all expression types
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes through resolution context to recursive calls"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "recursive reference collector for all expression types"
+)]
 fn collect_all_refs(
     expr: &Expr,
     all_runtime_names: &HashSet<&str>,
@@ -1122,7 +1137,7 @@ pub fn collect_graph_refs(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use kasuri_syntax::parser::Parser;
 
