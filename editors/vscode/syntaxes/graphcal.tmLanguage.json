@@ -1,0 +1,354 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Graphcal",
+  "scopeName": "source.graphcal",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#fn-declaration" },
+    { "include": "#type-declaration" },
+    { "include": "#dimension-declaration" },
+    { "include": "#unit-declaration" },
+    { "include": "#index-declaration" },
+    { "include": "#param-declaration" },
+    { "include": "#node-declaration" },
+    { "include": "#const-declaration" },
+    { "include": "#use-declaration" },
+    { "include": "#let-binding" },
+    { "include": "#for-binding" },
+    { "include": "#control-keywords" },
+    { "include": "#scan-keyword" },
+    { "include": "#generic-params" },
+    { "include": "#return-type" },
+    { "include": "#type-annotation" },
+    { "include": "#fn-call" },
+    { "include": "#graph-ref" },
+    { "include": "#qualified-variant" },
+    { "include": "#booleans" },
+    { "include": "#numbers" },
+    { "include": "#builtin-types" },
+    { "include": "#upper-constant" },
+    { "include": "#pascal-type" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.double-slash.graphcal",
+      "match": "//.*$"
+    },
+
+    "strings": {
+      "name": "string.quoted.double.graphcal",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.graphcal" }
+      }
+    },
+
+    "fn-declaration": {
+      "match": "\\b(fn)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.fn.graphcal" },
+        "2": { "name": "entity.name.function.graphcal" }
+      }
+    },
+
+    "type-declaration": {
+      "match": "\\b(type)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.type.graphcal" },
+        "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "dimension-declaration": {
+      "match": "\\b(dimension)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.dimension.graphcal" },
+        "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "unit-declaration": {
+      "match": "\\b(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.unit.graphcal" },
+        "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "index-declaration": {
+      "match": "\\b(index)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.index.graphcal" },
+        "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "param-declaration": {
+      "match": "\\b(param)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.param.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "node-declaration": {
+      "match": "\\b(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.node.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "const-declaration": {
+      "match": "\\b(const)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.const.graphcal" },
+        "2": { "name": "variable.other.constant.graphcal" }
+      }
+    },
+
+    "use-declaration": {
+      "match": "\\b(use)\\b",
+      "name": "keyword.declaration.use.graphcal"
+    },
+
+    "let-binding": {
+      "match": "\\b(let)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.let.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "for-binding": {
+      "comment": "for m: Maneuver — highlight the index type after ':'",
+      "match": "\\b(for)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)\\s*([A-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.graphcal" },
+        "2": { "name": "variable.other.graphcal" },
+        "3": { "name": "punctuation.separator.colon.graphcal" },
+        "4": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "control-keywords": {
+      "match": "\\b(if|else|for)\\b",
+      "name": "keyword.control.graphcal"
+    },
+
+    "scan-keyword": {
+      "match": "\\b(scan)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "support.function.graphcal" }
+      }
+    },
+
+    "generic-params": {
+      "comment": "Generic parameters: <D: Dim>, <D: Dim, I: Index>",
+      "begin": "<(?=[A-Z]\\w*\\s*:)",
+      "end": ">",
+      "beginCaptures": {
+        "0": { "name": "punctuation.brackets.angle.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.brackets.angle.graphcal" }
+      },
+      "patterns": [
+        { "include": "#builtin-types" },
+        {
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "entity.name.type.graphcal" },
+            "2": { "name": "punctuation.separator.colon.graphcal" }
+          }
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        }
+      ]
+    },
+
+    "return-type": {
+      "comment": "Return type after ') ->': -> D, -> Velocity, -> TransferResult",
+      "begin": "(?<=\\))\\s*(->)\\s*(?=[A-Za-z])",
+      "end": "(?=[=;{])",
+      "beginCaptures": {
+        "1": { "name": "keyword.operator.arrow.graphcal" }
+      },
+      "patterns": [
+        { "include": "#builtin-types" },
+        {
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
+          "name": "entity.name.type.graphcal"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.brackets.square.graphcal"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        }
+      ]
+    },
+
+    "fn-call": {
+      "comment": "Function calls: sqrt(...), orbital_velocity(...), max(...), etc.",
+      "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.graphcal" }
+      }
+    },
+
+    "type-annotation": {
+      "comment": "Type annotation after ':' — matches ': Type', ': Type[Index, ...]', ': Dimensionless[...]'",
+      "begin": "(?<=\\w)\\s*(:)\\s*(?=[A-Z])",
+      "end": "(?=[=;,){])",
+      "beginCaptures": {
+        "1": { "name": "punctuation.separator.colon.graphcal" }
+      },
+      "patterns": [
+        { "include": "#builtin-types" },
+        {
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
+          "name": "entity.name.type.graphcal"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.brackets.square.graphcal"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        },
+        {
+          "match": "[*/^]",
+          "name": "keyword.operator.arithmetic.graphcal"
+        },
+        { "include": "#numbers" }
+      ]
+    },
+
+    "graph-ref": {
+      "match": "(@)([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.variable.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "qualified-variant": {
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)(::)([A-Z][a-zA-Z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "entity.name.type.graphcal" },
+        "2": { "name": "punctuation.separator.namespace.graphcal" },
+        "3": { "name": "variable.other.enummember.graphcal" }
+      }
+    },
+
+    "booleans": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.graphcal"
+    },
+
+    "numbers": {
+      "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?\\b",
+      "name": "constant.numeric.graphcal"
+    },
+
+    "builtin-types": {
+      "match": "\\b(Dimensionless|Dim|Index)\\b",
+      "name": "support.type.graphcal"
+    },
+
+    "upper-constant": {
+      "comment": "ALL_CAPS identifiers are constants (PI, G0, TWO_G0, R_EARTH, GM_EARTH, etc.)",
+      "match": "\\b([A-Z][A-Z0-9_]*[A-Z0-9])\\b|\\b([A-Z]{2,})\\b",
+      "name": "variable.other.constant.graphcal"
+    },
+
+    "pascal-type": {
+      "comment": "PascalCase identifiers are types/dimensions (Velocity, Length, Time, Mass, etc.)",
+      "match": "\\b([A-Z][a-z][a-zA-Z0-9_]*)\\b",
+      "name": "entity.name.type.graphcal"
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.graphcal"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.graphcal"
+        },
+        {
+          "match": "==|!=|<=|>=|<|>",
+          "name": "keyword.operator.comparison.graphcal"
+        },
+        {
+          "match": "&&|\\|\\|",
+          "name": "keyword.operator.logical.graphcal"
+        },
+        {
+          "match": "[+\\-*/^]",
+          "name": "keyword.operator.arithmetic.graphcal"
+        },
+        {
+          "match": "!",
+          "name": "keyword.operator.logical.not.graphcal"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.graphcal"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[()]",
+          "name": "punctuation.brackets.round.graphcal"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.brackets.square.graphcal"
+        },
+        {
+          "match": "[{}]",
+          "name": "punctuation.brackets.curly.graphcal"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.graphcal"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.colon.graphcal"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.dot.graphcal"
+        },
+        {
+          "match": "\\|",
+          "name": "punctuation.separator.pipe.graphcal"
+        }
+      ]
+    }
+  }
+}

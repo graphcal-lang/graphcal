@@ -306,6 +306,22 @@ mass_ratio = 3.333333
 delta_v    = 5313.122956 m/s
 ```
 
+## Editor Support
+
+### VS Code
+
+A TextMate grammar extension is included in `editors/vscode/`. To enable syntax highlighting for `.gcl` files before the extension is published to the marketplace, create a symlink:
+
+```sh
+ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/graphcal-0.0.1
+```
+
+Then restart VS Code (or run "Developer: Reload Window" from the command palette).
+
+### Tree-sitter (Zed, Neovim, Helix)
+
+A tree-sitter grammar with highlight queries is available in `tree-sitter-graphcal/`. Refer to your editor's documentation on how to register a custom tree-sitter grammar.
+
 ## Vision
 
 Graphcal is designed to eventually support:
