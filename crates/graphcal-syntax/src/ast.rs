@@ -173,6 +173,8 @@ pub struct TypeExpr {
 pub enum TypeExprKind {
     /// `Dimensionless`
     Dimensionless,
+    /// `Bool`
+    Bool,
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]` or `Dimensionless[A, B]`

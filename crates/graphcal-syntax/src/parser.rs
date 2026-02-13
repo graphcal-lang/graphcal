@@ -630,6 +630,12 @@ impl<'src> Parser<'src> {
                     kind: TypeExprKind::Dimensionless,
                     span,
                 }
+            } else if text == "Bool" {
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                TypeExpr {
+                    kind: TypeExprKind::Bool,
+                    span,
+                }
             } else {
                 let dim_expr = self.parse_dim_expr()?;
                 let span = dim_expr.span;

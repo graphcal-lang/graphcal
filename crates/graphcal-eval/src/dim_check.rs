@@ -10,10 +10,11 @@ use crate::builtins::{DimSignature, builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
 use crate::registry::Registry;
 
-/// The declared type of a const/param/node: either a scalar with a dimension, or a struct.
+/// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredType {
     Scalar(Dimension),
+    Bool,
     Struct(String),
     Indexed { element: Box<Self>, index: String },
 }
@@ -22,6 +23,7 @@ pub enum DeclaredType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
     Scalar(Dimension),
+    Bool,
     Struct(String),
     Indexed {
         element: Box<Self>,
@@ -186,6 +188,7 @@ pub fn check_override_dimension(
 fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {
         (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
+        (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Struct(d), InferredType::Struct(i)) => d == i,
         (
             DeclaredType::Indexed {
@@ -205,6 +208,7 @@ fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
 fn format_declared_type(dt: &DeclaredType) -> String {
     match dt {
         DeclaredType::Scalar(d) => format!("{d}"),
+        DeclaredType::Bool => "Bool".to_string(),
         DeclaredType::Struct(name) => name.clone(),
         DeclaredType::Indexed { element, index } => {
             format!("{}[{index}]", format_declared_type(element))
@@ -216,6 +220,7 @@ fn format_declared_type(dt: &DeclaredType) -> String {
 fn format_inferred_type(it: &InferredType) -> String {
     match it {
         InferredType::Scalar(d) => format!("{d}"),
+        InferredType::Bool => "Bool".to_string(),
         InferredType::Struct(name) => name.clone(),
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred_type(element))
@@ -228,6 +233,7 @@ fn format_inferred_type(it: &InferredType) -> String {
 fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
     match dt {
         DeclaredType::Scalar(d) => InferredType::Scalar(*d),
+        DeclaredType::Bool => InferredType::Bool,
         DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
         DeclaredType::Indexed { element, index } => InferredType::Indexed {
             element: Box::new(declared_to_inferred(element)),
@@ -245,41 +251,45 @@ pub fn resolve_type_annotation(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DeclaredType, GraphcalError> {
-    if let TypeExprKind::Indexed { base, indexes } = &type_ann.kind {
-        // Resolve the base type, then wrap with each index (right to left for nesting)
-        let mut result = resolve_type_annotation(base, registry, src)?;
-        for idx in indexes.iter().rev() {
-            let idx_name = &idx.name;
-            if registry.get_index(idx_name).is_none() {
-                return Err(GraphcalError::UnknownIndex {
-                    name: idx_name.clone(),
-                    src: src.clone(),
-                    span: idx.span.into(),
-                });
+    match &type_ann.kind {
+        TypeExprKind::Bool => Ok(DeclaredType::Bool),
+        TypeExprKind::Indexed { base, indexes } => {
+            // Resolve the base type, then wrap with each index (right to left for nesting)
+            let mut result = resolve_type_annotation(base, registry, src)?;
+            for idx in indexes.iter().rev() {
+                let idx_name = &idx.name;
+                if registry.get_index(idx_name).is_none() {
+                    return Err(GraphcalError::UnknownIndex {
+                        name: idx_name.clone(),
+                        src: src.clone(),
+                        span: idx.span.into(),
+                    });
+                }
+                result = DeclaredType::Indexed {
+                    element: Box::new(result),
+                    index: idx_name.clone(),
+                };
             }
-            result = DeclaredType::Indexed {
-                element: Box::new(result),
-                index: idx_name.clone(),
-            };
+            Ok(result)
         }
-        Ok(result)
-    } else {
-        // Check if this is a single-term DimExpr that matches a struct name
-        if let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
-            && dim_expr.terms.len() == 1
-            && dim_expr.terms[0].term.power.is_none()
-        {
-            let name = &dim_expr.terms[0].term.name.name;
-            if registry.get_struct(name).is_some() {
-                return Ok(DeclaredType::Struct(name.clone()));
+        _ => {
+            // Check if this is a single-term DimExpr that matches a struct name
+            if let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
+                && dim_expr.terms.len() == 1
+                && dim_expr.terms[0].term.power.is_none()
+            {
+                let name = &dim_expr.terms[0].term.name.name;
+                if registry.get_struct(name).is_some() {
+                    return Ok(DeclaredType::Struct(name.clone()));
+                }
             }
-        }
 
-        // Fall back to dimension resolution
-        let dim = registry
-            .resolve_type_expr(type_ann)
-            .ok_or_else(|| unknown_dim_in_type(type_ann, src))?;
-        Ok(DeclaredType::Scalar(dim))
+            // Fall back to dimension resolution
+            let dim = registry
+                .resolve_type_expr(type_ann)
+                .ok_or_else(|| unknown_dim_in_type(type_ann, src))?;
+            Ok(DeclaredType::Scalar(dim))
+        }
     }
 }
 
@@ -337,9 +347,8 @@ fn infer_type(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match &expr.kind {
-        ExprKind::Number(_) | ExprKind::Bool(_) => {
-            Ok(InferredType::Scalar(Dimension::DIMENSIONLESS))
-        }
+        ExprKind::Number(_) => Ok(InferredType::Scalar(Dimension::DIMENSIONLESS)),
+        ExprKind::Bool(_) => Ok(InferredType::Bool),
 
         ExprKind::UnitLiteral { unit, .. } => {
             let (dim, _scale) = registry.resolve_unit_expr(unit).ok_or_else(|| {
@@ -401,11 +410,77 @@ fn infer_type(
                 infer_type(lhs, declared_types, local_types, registry, builtin_fns, src)?;
             let rhs_type =
                 infer_type(rhs, declared_types, local_types, registry, builtin_fns, src)?;
-            let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
 
             match op {
+                // Logical operators: require Bool operands, return Bool
+                BinOp::And | BinOp::Or => {
+                    if lhs_type != InferredType::Bool {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Bool".to_string(),
+                            found: format_inferred_type(&lhs_type),
+                            src: src.clone(),
+                            span: lhs.span.into(),
+                            help: "boolean operators require Bool operands".to_string(),
+                        });
+                    }
+                    if rhs_type != InferredType::Bool {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Bool".to_string(),
+                            found: format_inferred_type(&rhs_type),
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                            help: "boolean operators require Bool operands".to_string(),
+                        });
+                    }
+                    Ok(InferredType::Bool)
+                }
+                // Equality: both operands must be same type (scalar or Bool)
+                BinOp::Eq | BinOp::Ne => {
+                    if lhs_type == InferredType::Bool || rhs_type == InferredType::Bool {
+                        if lhs_type != rhs_type {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format_inferred_type(&lhs_type),
+                                found: format_inferred_type(&rhs_type),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                                help: "equality operands must have the same type".to_string(),
+                            });
+                        }
+                    } else {
+                        let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                        let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
+                        if lhs_dim != rhs_dim {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format!("{lhs_dim}"),
+                                found: format!("{rhs_dim}"),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                                help: "comparison operands must have the same dimension"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                    Ok(InferredType::Bool)
+                }
+                // Ordering comparisons: require scalar operands, return Bool
+                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                    let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
+                    if lhs_dim != rhs_dim {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format!("{lhs_dim}"),
+                            found: format!("{rhs_dim}"),
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                            help: "comparison operands must have the same dimension".to_string(),
+                        });
+                    }
+                    Ok(InferredType::Bool)
+                }
+                // Arithmetic operators: require scalar operands
                 BinOp::Add | BinOp::Sub => {
+                    let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                    let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
                     if lhs_dim != rhs_dim {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: format!("{lhs_dim}"),
@@ -419,9 +494,19 @@ fn infer_type(
                     }
                     Ok(InferredType::Scalar(lhs_dim))
                 }
-                BinOp::Mul => Ok(InferredType::Scalar(lhs_dim * rhs_dim)),
-                BinOp::Div => Ok(InferredType::Scalar(lhs_dim / rhs_dim)),
+                BinOp::Mul => {
+                    let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                    let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
+                    Ok(InferredType::Scalar(lhs_dim * rhs_dim))
+                }
+                BinOp::Div => {
+                    let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                    let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
+                    Ok(InferredType::Scalar(lhs_dim / rhs_dim))
+                }
                 BinOp::Pow => {
+                    let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
+                    let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
                     if let ExprKind::Number(n) = &rhs.kind {
                         if n.fract() == 0.0 {
                             #[expect(
@@ -460,50 +545,31 @@ fn infer_type(
                         })
                     }
                 }
-                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                    if lhs_dim != rhs_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: format!("{lhs_dim}"),
-                            found: format!("{rhs_dim}"),
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                            help: "comparison operands must have the same dimension".to_string(),
-                        });
-                    }
-                    Ok(InferredType::Scalar(Dimension::DIMENSIONLESS))
-                }
-                BinOp::And | BinOp::Or => {
-                    if !lhs_dim.is_dimensionless() {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Dimensionless".to_string(),
-                            found: format!("{lhs_dim}"),
-                            src: src.clone(),
-                            span: lhs.span.into(),
-                            help: "boolean operators require Dimensionless operands".to_string(),
-                        });
-                    }
-                    if !rhs_dim.is_dimensionless() {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Dimensionless".to_string(),
-                            found: format!("{rhs_dim}"),
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                            help: "boolean operators require Dimensionless operands".to_string(),
-                        });
-                    }
-                    Ok(InferredType::Scalar(Dimension::DIMENSIONLESS))
-                }
             }
         }
 
-        ExprKind::UnaryOp { operand, .. } => infer_type(
-            operand,
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            src,
-        ),
+        ExprKind::UnaryOp { op, operand } => {
+            let operand_type =
+                infer_type(operand, declared_types, local_types, registry, builtin_fns, src)?;
+            match op {
+                graphcal_syntax::ast::UnaryOp::Not => {
+                    if operand_type != InferredType::Bool {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Bool".to_string(),
+                            found: format_inferred_type(&operand_type),
+                            src: src.clone(),
+                            span: operand.span.into(),
+                            help: "logical NOT requires a Bool operand".to_string(),
+                        });
+                    }
+                    Ok(InferredType::Bool)
+                }
+                graphcal_syntax::ast::UnaryOp::Neg => {
+                    // Negation preserves the dimension
+                    Ok(operand_type)
+                }
+            }
+        }
 
         ExprKind::FnCall { name, args } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
@@ -642,14 +708,13 @@ fn infer_type(
                 builtin_fns,
                 src,
             )?;
-            let cond_dim = expect_scalar(&cond_type, src, condition.span)?;
-            if !cond_dim.is_dimensionless() {
+            if cond_type != InferredType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: "Dimensionless".to_string(),
-                    found: format!("{cond_dim}"),
+                    expected: "Bool".to_string(),
+                    found: format_inferred_type(&cond_type),
                     src: src.clone(),
                     span: condition.span.into(),
-                    help: "if/else condition must be Dimensionless".to_string(),
+                    help: "if/else condition must be Bool".to_string(),
                 });
             }
 
@@ -1260,6 +1325,18 @@ fn unify_type_expr_generic(
                 span,
             )
         }
+        TypeExprKind::Bool => {
+            if *actual != InferredType::Bool {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Bool".to_string(),
+                    found: format_inferred_type(actual),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: "expected Bool argument".to_string(),
+                });
+            }
+            Ok(())
+        }
         TypeExprKind::Dimensionless => {
             let actual_dim = expect_scalar(actual, src, span)?;
             if !actual_dim.is_dimensionless() {
@@ -1367,6 +1444,7 @@ fn resolve_type_with_substitution(
 ) -> Result<InferredType, GraphcalError> {
     match &type_expr.kind {
         TypeExprKind::Dimensionless => Ok(InferredType::Scalar(Dimension::DIMENSIONLESS)),
+        TypeExprKind::Bool => Ok(InferredType::Bool),
         TypeExprKind::DimExpr(dim_expr) => {
             let mut result = Dimension::DIMENSIONLESS;
             for item in &dim_expr.terms {

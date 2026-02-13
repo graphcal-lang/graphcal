@@ -103,7 +103,7 @@ fn print_text(result: &EvalResult) {
     // indexed values expand to `name[Variant]` lines
     fn flatten_value<'a>(prefix: &str, value: &'a Value, lines: &mut Vec<(String, &'a Value)>) {
         match value {
-            Value::Scalar { .. } => {
+            Value::Scalar { .. } | Value::Bool(_) => {
                 lines.push((prefix.to_string(), value));
             }
             Value::Struct { fields, .. } => {
@@ -127,12 +127,16 @@ fn print_text(result: &EvalResult) {
     let max_name_len = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
 
     for (name, value) in &lines {
-        let formatted = format_number(value.display_value());
         let width = max_name_len;
-        if let Some(label) = value.display_label() {
-            println!("{name:width$} = {formatted} {label}");
+        if let Value::Bool(b) = value {
+            println!("{name:width$} = {b}");
         } else {
-            println!("{name:width$} = {formatted}");
+            let formatted = format_number(value.display_value());
+            if let Some(label) = value.display_label() {
+                println!("{name:width$} = {formatted} {label}");
+            } else {
+                println!("{name:width$} = {formatted}");
+            }
         }
     }
 }
@@ -167,6 +171,7 @@ fn print_json(result: &EvalResult) {
                 }
                 serde_json::Value::Object(map)
             }
+            Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Struct {
                 type_name, fields, ..
             } => {

@@ -171,6 +171,7 @@ impl Registry {
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Some(Dimension::DIMENSIONLESS),
+            TypeExprKind::Bool => None, // Bool is not a dimension type
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
             TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
         }
