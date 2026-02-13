@@ -3,7 +3,7 @@
 Provides syntax highlighting and LSP diagnostics for Graphcal (`.gcl`) files in [Zed](https://zed.dev/).
 
 - **Syntax highlighting** via a tree-sitter grammar
-- **Diagnostics** via `graphcal-lsp` (parse errors, type/dimension mismatches, unknown references, etc.)
+- **Diagnostics** via `graphcal lsp` (parse errors, type/dimension mismatches, unknown references, etc.)
 
 ## Local Testing
 
@@ -14,7 +14,7 @@ Provides syntax highlighting and LSP diagnostics for Graphcal (`.gcl`) files in 
 
 ### Install as Dev Extension
 
-1. Build the LSP server: `cargo build --release -p graphcal-lsp`
+1. Build Graphcal: `cargo build --release -p graphcal`
 2. Open Zed
 3. Open the command palette: `Cmd+Shift+P`
 4. Run `zed: install dev extension`
@@ -23,14 +23,15 @@ Provides syntax highlighting and LSP diagnostics for Graphcal (`.gcl`) files in 
 
 ### LSP Configuration
 
-The extension looks for `graphcal-lsp` on your `PATH`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
+The extension looks for `graphcal` on your `PATH` and runs `graphcal lsp`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
 
 ```jsonc
 {
   "lsp": {
     "graphcal-lsp": {
       "binary": {
-        "path": "/absolute/path/to/target/release/graphcal-lsp"
+        "path": "/absolute/path/to/target/release/graphcal",
+        "arguments": ["lsp"]
       }
     }
   }

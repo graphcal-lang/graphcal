@@ -322,14 +322,14 @@ Then restart VS Code (or run "Developer: Reload Window" from the command palette
 
 A Zed extension is included in `editors/zed/`, providing syntax highlighting and LSP diagnostics. To install it locally as a dev extension:
 
-1. Build the LSP server: `cargo build --release -p graphcal-lsp`
+1. Build Graphcal: `cargo build --release -p graphcal`
 2. Open Zed
 3. Open the command palette: `Cmd+Shift+P`
 4. Run `zed: install dev extension`
 5. Select the `editors/zed/` directory
 6. Open a `.gcl` file -- syntax should be highlighted and diagnostics should appear
 
-The extension finds `graphcal-lsp` on your `PATH`, or you can override the binary path in `.zed/settings.json` (already included in this repo). See the [LSP section](#lsp-language-server) for details.
+The extension finds `graphcal` on your `PATH` and runs `graphcal lsp`, or you can override the binary path in `.zed/settings.json` (already included in this repo). See the [LSP section](#lsp-language-server) for details.
 
 **Prerequisites:** Rust must be installed via [rustup](https://rustup.rs/) (Zed compiles the tree-sitter grammar from source).
 
@@ -341,33 +341,38 @@ A tree-sitter grammar with highlight queries is available in `tree-sitter-graphc
 
 ### LSP (Language Server)
 
-A minimal LSP server (`graphcal-lsp`) provides real-time diagnostics (parse errors, type/dimension mismatches, unknown references, etc.) in any editor that supports the Language Server Protocol.
+The `graphcal lsp` subcommand starts a minimal LSP server that provides real-time diagnostics (parse errors, type/dimension mismatches, unknown references, etc.) in any editor that supports the Language Server Protocol.
 
-Build the server:
+Build:
 
 ```sh
-cargo build --release -p graphcal-lsp
+cargo build --release -p graphcal
 ```
 
-The binary will be at `target/release/graphcal-lsp`. It communicates over stdin/stdout.
+Start the server (communicates over stdin/stdout):
+
+```sh
+graphcal lsp
+```
 
 **VS Code** -- Use a generic LSP client extension such as [vscode-lsp-sample](https://github.com/AverageMarcus/vscode-lsp-sample) or add the following to your `settings.json` if you have a generic LSP client installed:
 
 ```jsonc
 {
-  "lsp-client.serverCommand": ["<path-to>/graphcal-lsp"],
+  "lsp-client.serverCommand": ["<path-to>/graphcal", "lsp"],
   "lsp-client.languageId": "graphcal"
 }
 ```
 
-**Zed** -- The Zed extension (`editors/zed/`) includes LSP support. After installing it as a dev extension, the server launches automatically if `graphcal-lsp` is on your `PATH`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
+**Zed** -- The Zed extension (`editors/zed/`) includes LSP support. After installing it as a dev extension, the server launches automatically if `graphcal` is on your `PATH`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
 
 ```jsonc
 {
   "lsp": {
     "graphcal-lsp": {
       "binary": {
-        "path": "<path-to>/target/release/graphcal-lsp"
+        "path": "<path-to>/target/release/graphcal",
+        "arguments": ["lsp"]
       }
     }
   }
@@ -379,7 +384,7 @@ The binary will be at `target/release/graphcal-lsp`. It communicates over stdin/
 ```lua
 vim.lsp.start({
   name = "graphcal-lsp",
-  cmd = { "<path-to>/graphcal-lsp" },
+  cmd = { "<path-to>/graphcal", "lsp" },
   filetypes = { "graphcal" },
   root_dir = vim.fn.getcwd(),
 })
@@ -405,8 +410,8 @@ graphcal/
   crates/
     graphcal-syntax/   # lexer (logos) + recursive descent parser + AST
     graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
-    graphcal-cli/      # CLI binary (clap + miette)
-    graphcal-lsp/      # LSP server (tower-lsp) -- diagnostics
+    graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
+    graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics
   design/            # language design documents
   tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```

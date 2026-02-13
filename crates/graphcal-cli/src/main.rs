@@ -25,6 +25,8 @@ enum Commands {
         #[arg(long)]
         set: Vec<String>,
     },
+    /// Start the Language Server Protocol (LSP) server
+    Lsp,
 }
 
 #[derive(ValueEnum, Clone)]
@@ -51,6 +53,13 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
+        Commands::Lsp => {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+                .block_on(graphcal_lsp::run());
+        }
         Commands::Eval { file, format, set } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
