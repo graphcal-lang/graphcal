@@ -1,0 +1,9 @@
+// main.ksr -- rocket equation using imported constants and params
+use "./constants.ksr" { G0 };
+use "./params.ksr" { dry_mass, fuel_mass, isp };
+
+dimension Velocity = Length / Time;
+
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

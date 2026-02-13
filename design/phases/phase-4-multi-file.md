@@ -21,12 +21,14 @@ structs, functions) work. Phase 4 adds the organizational layer.
       `orbit/transfer.graph` -> `orbit.transfer`. Confirm.
 - [ ] **Project root:** `project.graph` file with project metadata.
       What is the syntax?
+
       ```
       project mission_design {
           version: "0.1.0",
           prelude: "prelude.graph",
       }
       ```
+
       Or simpler? Is `project.graph` required, or can a single `.graph` file
       be evaluated standalone (backward compat with Phase 0-3)?
 - [ ] **Prelude loading:** The prelude file's declarations are auto-imported

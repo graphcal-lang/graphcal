@@ -12,6 +12,17 @@ use crate::error::KasuriError;
 /// Aggregation functions recognized as special forms (not registered as builtins).
 const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
 
+/// Declarations imported from other files, to be injected into the resolve scope.
+///
+/// These are treated as if they were declared locally, appearing before local declarations.
+#[derive(Debug, Default)]
+pub struct ImportedNames {
+    pub consts: Vec<(String, Expr, Span)>,
+    pub params: Vec<(String, Expr, Span)>,
+    pub nodes: Vec<(String, Expr, Span)>,
+    pub functions: Vec<(String, FnDecl, Span)>,
+}
+
 /// The kind of a declaration (used for source-order tracking).
 #[derive(Debug, Clone, Copy)]
 pub enum DeclCategory {
@@ -45,8 +56,26 @@ pub struct ResolvedFile {
 ///
 /// Returns a [`KasuriError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
-#[expect(clippy::too_many_lines)] // Complex resolution logic with multiple passes
 pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, KasuriError> {
+    resolve_with_imports(file, src, &ImportedNames::default())
+}
+
+/// Resolve names with imported declarations injected into scope.
+///
+/// Imported declarations are prepended to the local declarations, so they appear
+/// first in eval order. The downstream pipeline (`dim_check`, `const_eval`, DAG, evaluate)
+/// works without changes because imported params/nodes become part of the DAG.
+///
+/// # Errors
+///
+/// Returns a [`KasuriError`] if duplicate names, unknown references, casing
+/// violations, or arity mismatches are found.
+#[expect(clippy::too_many_lines)] // Complex resolution logic with multiple passes
+pub fn resolve_with_imports(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+    imported: &ImportedNames,
+) -> Result<ResolvedFile, KasuriError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -59,6 +88,22 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut source_order = Vec::new();
     let mut user_fn_names: HashSet<String> = HashSet::new();
+
+    // Pre-populate with imported names (they don't get duplicate-checked against
+    // each other here because they were validated in their source files).
+    for (name, _, span) in &imported.consts {
+        names.insert(name.clone(), *span);
+    }
+    for (name, _, span) in &imported.params {
+        names.insert(name.clone(), *span);
+    }
+    for (name, _, span) in &imported.nodes {
+        names.insert(name.clone(), *span);
+    }
+    for (name, _, span) in &imported.functions {
+        names.insert(name.clone(), *span);
+        user_fn_names.insert(name.clone());
+    }
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
@@ -81,7 +126,11 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
                 user_fn_names.insert(f.name.name.clone());
                 continue;
             }
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Index(_) => {
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Use(_) => {
                 continue;
             }
         };
@@ -106,7 +155,8 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::Fn(_)
-            | DeclKind::Index(_) => {
+            | DeclKind::Index(_)
+            | DeclKind::Use(_) => {
                 unreachable!()
             }
         };
@@ -142,12 +192,14 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
         .filter(|n| is_lower_snake_case(n))
         .map(String::as_str)
         .collect();
-
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_) | DeclKind::Unit(_) | DeclKind::Type(_) | DeclKind::Index(_) => {
-            }
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Use(_) => {}
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
@@ -195,14 +247,37 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
         }
     }
 
+    // Prepend imported declarations so they appear before local ones in eval order.
+    let mut all_consts = imported.consts.clone();
+    all_consts.extend(consts);
+    let mut all_params = imported.params.clone();
+    all_params.extend(params);
+    let mut all_nodes = imported.nodes.clone();
+    all_nodes.extend(nodes);
+    let mut all_functions = imported.functions.clone();
+    all_functions.extend(functions);
+
+    // Prepend imported source_order entries
+    let mut all_source_order: Vec<(String, DeclCategory)> = Vec::new();
+    for (name, _, _) in &imported.consts {
+        all_source_order.push((name.clone(), DeclCategory::Const));
+    }
+    for (name, _, _) in &imported.params {
+        all_source_order.push((name.clone(), DeclCategory::Param));
+    }
+    for (name, _, _) in &imported.nodes {
+        all_source_order.push((name.clone(), DeclCategory::Node));
+    }
+    all_source_order.extend(source_order);
+
     Ok(ResolvedFile {
-        consts,
-        params,
-        nodes,
+        consts: all_consts,
+        params: all_params,
+        nodes: all_nodes,
         runtime_deps,
         const_deps,
-        source_order,
-        functions,
+        source_order: all_source_order,
+        functions: all_functions,
     })
 }
 

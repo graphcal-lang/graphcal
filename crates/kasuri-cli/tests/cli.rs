@@ -1,3 +1,4 @@
+//! Allow use of unwrap in tests
 #![allow(clippy::unwrap_used)]
 
 use std::process::Command;
@@ -68,7 +69,10 @@ fn eval_nonexistent_file_fails() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("error"));
+    assert!(
+        stderr.contains("file not found"),
+        "expected 'file not found' in stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -279,4 +283,106 @@ fn eval_set_bad_value() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("error"), "expected parse error: {stderr}");
+}
+
+// --- Multi-file import tests ---
+
+#[test]
+fn eval_multi_file() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("multi/rocket_split/main.ksr")])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Should produce same values as single-file rocket.ksr
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("delta_v") && l.contains("3778")),
+        "expected delta_v ~3778 in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("v_exhaust") && l.contains("3138")),
+        "expected v_exhaust ~3138 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_multi_file_with_set() {
+    let output = kasuri_bin()
+        .args([
+            "eval",
+            &fixture("multi/rocket_split/main.ksr"),
+            "--set",
+            "isp=450 s",
+        ])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("isp") && l.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("delta_v") && l.contains("5313")),
+        "expected delta_v ~5313 with isp=450: {stdout}"
+    );
+}
+
+#[test]
+fn eval_circular_import_error() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("multi/circular_a.ksr")])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("circular") || stderr.contains("Circular"),
+        "expected circular import error: {stderr}"
+    );
+}
+
+#[test]
+fn eval_missing_import_error() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("multi/missing_import.ksr")])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+}
+
+#[test]
+fn eval_import_name_not_found() {
+    let output = kasuri_bin()
+        .args(["eval", &fixture("multi/bad_name_import.ksr")])
+        .output()
+        .expect("failed to run kasuri");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("nonexistent"),
+        "expected error mentioning 'nonexistent': {stderr}"
+    );
 }

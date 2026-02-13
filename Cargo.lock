@@ -331,6 +331,7 @@ dependencies = [
  "miette",
  "petgraph",
  "serde",
+ "tempfile",
  "thiserror",
 ]
 

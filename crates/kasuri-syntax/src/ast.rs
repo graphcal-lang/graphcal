@@ -23,6 +23,18 @@ pub enum DeclKind {
     Type(TypeDecl),
     Fn(FnDecl),
     Index(IndexDecl),
+    Use(UseDecl),
+}
+
+/// Import declaration: `use "./path/to/file.ksr" { name1, name2 };`
+#[derive(Debug, Clone)]
+pub struct UseDecl {
+    /// The file path (quotes stripped, relative to the importing file).
+    pub path: String,
+    /// The path literal's span (for diagnostics).
+    pub path_span: Span,
+    /// The names to import.
+    pub names: Vec<Ident>,
 }
 
 #[derive(Debug, Clone)]

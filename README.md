@@ -4,11 +4,13 @@
 
 Kasuri replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
-## Current Status: Phase 5 (Indexed Values)
+## Current Status: Phase 5 + Multi-File Imports
 
-Phases 0--5 are implemented. Kasuri supports dimensioned arithmetic with physical
-units, user-defined struct types, multi-line node bodies with `let` bindings,
-pure functions with dimension generics, and indexed values with aggregation.
+Phases 0--5 and multi-file imports are implemented. Kasuri supports dimensioned
+arithmetic with physical units, user-defined struct types, multi-line node bodies
+with `let` bindings, pure functions with dimension generics, indexed values with
+aggregation, multi-file projects with `use` imports, and runtime parameter
+overrides via `--set`.
 
 ### Rocket equation with units
 
@@ -165,6 +167,57 @@ cumulative_dv[Insertion]    = 4410 m/s
 total_check                 = 4410 m/s
 ```
 
+### Multi-file projects with imports
+
+```
+// constants.ksr
+dimension Acceleration = Length / Time^2;
+const G0: Acceleration = 9.80665 m/s^2;
+```
+
+```
+// params.ksr
+param dry_mass: Mass = 1200 kg;
+param fuel_mass: Mass = 2800 kg;
+param isp: Time = 320 s;
+```
+
+```
+// main.ksr
+use "./constants.ksr" { G0 };
+use "./params.ksr" { dry_mass, fuel_mass, isp };
+
+dimension Velocity = Length / Time;
+
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
+```
+
+```
+$ kasuri eval main.ksr
+G0         = 9.80665 m/s^2
+dry_mass   = 1200 kg
+fuel_mass  = 2800 kg
+isp        = 320 s
+v_exhaust  = 3138.128 m/s
+mass_ratio = 3.333333
+delta_v    = 3778.220768 m/s
+```
+
+Imported params can be overridden at the command line:
+
+```
+$ kasuri eval main.ksr --set 'isp=450 s'
+G0         = 9.80665 m/s^2
+dry_mass   = 1200 kg
+fuel_mass  = 2800 kg
+isp        = 450 s
+v_exhaust  = 4412.9925 m/s
+mass_ratio = 3.333333
+delta_v    = 5313.122956 m/s
+```
+
 ### Features
 
 **Core language (Phase 0)**
@@ -216,6 +269,22 @@ total_check                 = 4410 m/s
 - `scan` for ordered accumulation (`scan(@delta_v, 0.0 m/s, |acc, val| acc + val)`)
 - Generic index constraint (`<I: Index>`) alongside dimension generics
 
+**Multi-file imports (Phase 4)**
+
+- `use "./path/to/file.ksr" { name1, name2 };` imports declarations from other files
+- File paths are resolved relative to the importing file's directory
+- All declaration kinds can be imported (const, param, node, dimension, unit, type, index, fn)
+- Imported params/nodes participate in the DAG and can be overridden with `--set`
+- Circular import detection with clear error messages
+- Diamond imports (A imports B and C, both import D) are deduplicated
+
+**Parameter overrides (Phase 6)**
+
+- `--set 'param_name=value'` overrides param defaults at the command line
+- Works with both local and imported params
+- Supports unit expressions (`--set 'isp=450 s'`)
+- Multiple `--set` flags can be used simultaneously
+
 ## Installation
 
 ```sh
@@ -230,6 +299,12 @@ kasuri eval path/to/file.ksr
 
 # JSON output
 kasuri eval path/to/file.ksr --format json
+
+# Override a param value
+kasuri eval path/to/file.ksr --set 'isp=450 s'
+
+# Multi-file project (use declarations resolved automatically)
+kasuri eval project/main.ksr
 ```
 
 ## Project Structure
@@ -241,7 +316,7 @@ kasuri/
     kasuri-eval/     # name resolution, dim check, const eval, DAG, runtime eval
     kasuri-cli/      # CLI binary (clap + miette)
   design/            # language design documents
-  tests/fixtures/    # .ksr test files
+  tests/fixtures/    # .ksr test files (single-file and multi-file)
 ```
 
 ## Vision
@@ -249,7 +324,6 @@ kasuri/
 Kasuri is designed to eventually support:
 
 - **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
-- **Multi-file projects** -- explicit imports, namespaces, prelude
 - **Dynamic simulation** -- `scan` over a time axis for system dynamics
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
 - **Spreadsheet import/export** -- maintain `.ksr` source, domain experts keep their Excel
