@@ -175,6 +175,8 @@ pub enum TypeExprKind {
     Dimensionless,
     /// `Bool`
     Bool,
+    /// `Int`
+    Int,
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]` or `Dimensionless[A, B]`
@@ -247,8 +249,10 @@ pub struct Expr {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    /// Numeric literal: `1200.0`, `3.98e5`, `200_000`
+    /// Numeric literal: `1200.0`, `3.98e5`, `200_000.0`
     Number(f64),
+    /// Integer literal: `42`, `1_000`
+    Integer(i64),
     /// Boolean literal: `true`, `false`
     Bool(bool),
     /// Graph reference: `@lower_name`
@@ -359,6 +363,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Pow,
     Eq,
     Ne,

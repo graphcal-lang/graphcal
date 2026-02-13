@@ -582,6 +582,8 @@ impl<'src> Parser<'src> {
     fn eval_const_expr(&self, expr: &Expr) -> Result<f64, ParseError> {
         match &expr.kind {
             ExprKind::Number(n) => Ok(*n),
+            #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
+            ExprKind::Integer(n) => Ok(*n as f64),
             ExprKind::ConstRef(ident) => match ident.name.as_str() {
                 "PI" => Ok(std::f64::consts::PI),
                 "E" => Ok(std::f64::consts::E),
@@ -634,6 +636,12 @@ impl<'src> Parser<'src> {
                 let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 TypeExpr {
                     kind: TypeExprKind::Bool,
+                    span,
+                }
+            } else if text == "Int" {
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                TypeExpr {
+                    kind: TypeExprKind::Int,
                     span,
                 }
             } else {
@@ -994,6 +1002,7 @@ impl<'src> Parser<'src> {
             let op = match self.lexer.peek() {
                 Some(Token::Star) => BinOp::Mul,
                 Some(Token::Slash) => BinOp::Div,
+                Some(Token::Percent) => BinOp::Mod,
                 _ => break,
             };
             self.lexer.next_token();
@@ -1117,31 +1126,58 @@ impl<'src> Parser<'src> {
             Some(Token::Number) => {
                 let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
-                    ParseError::InvalidNumber {
-                        reason: e.to_string(),
-                        src: self.named_source(),
-                        span: span.into(),
-                    }
-                })?;
+                let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
 
-                // Check if followed by an identifier (unit literal): `400 km`, `9.80665 m/s^2`
-                // A unit literal is NUMBER immediately followed by IDENT with no operator.
-                if self.lexer.peek() == Some(&Token::Ident) {
-                    let unit_expr = self.parse_unit_expr()?;
-                    let full_span = span.merge(unit_expr.span);
+                if is_integer {
+                    // Integer literal: no decimal point or scientific notation
+                    if self.lexer.peek() == Some(&Token::Ident) {
+                        // Integer followed by unit is an error: must use float
+                        return Err(ParseError::InvalidNumber {
+                            reason: format!(
+                                "integer literal cannot have units; write `{text}.0` instead"
+                            ),
+                            src: self.named_source(),
+                            span: span.into(),
+                        });
+                    }
+                    let value: i64 = text.parse().map_err(|e: std::num::ParseIntError| {
+                        ParseError::InvalidNumber {
+                            reason: e.to_string(),
+                            src: self.named_source(),
+                            span: span.into(),
+                        }
+                    })?;
                     Ok(Expr {
-                        kind: ExprKind::UnitLiteral {
-                            value,
-                            unit: unit_expr,
-                        },
-                        span: full_span,
-                    })
-                } else {
-                    Ok(Expr {
-                        kind: ExprKind::Number(value),
+                        kind: ExprKind::Integer(value),
                         span,
                     })
+                } else {
+                    // Float literal: has decimal point or scientific notation
+                    let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
+                        ParseError::InvalidNumber {
+                            reason: e.to_string(),
+                            src: self.named_source(),
+                            span: span.into(),
+                        }
+                    })?;
+
+                    // Check if followed by an identifier (unit literal): `400.0 km`
+                    if self.lexer.peek() == Some(&Token::Ident) {
+                        let unit_expr = self.parse_unit_expr()?;
+                        let full_span = span.merge(unit_expr.span);
+                        Ok(Expr {
+                            kind: ExprKind::UnitLiteral {
+                                value,
+                                unit: unit_expr,
+                            },
+                            span: full_span,
+                        })
+                    } else {
+                        Ok(Expr {
+                            kind: ExprKind::Number(value),
+                            span,
+                        })
+                    }
                 }
             }
             Some(Token::True) => {
@@ -1696,7 +1732,7 @@ mod tests {
 
     #[test]
     fn parse_param_with_dim_type() {
-        let file = Parser::new("param alt: Length = 400 km;")
+        let file = Parser::new("param alt: Length = 400.0 km;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
@@ -1802,7 +1838,7 @@ mod tests {
 
     #[test]
     fn parse_derived_unit() {
-        let file = Parser::new("unit km: Length = 1000 m;")
+        let file = Parser::new("unit km: Length = 1000.0 m;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
@@ -1819,7 +1855,7 @@ mod tests {
 
     #[test]
     fn parse_compound_unit_decl() {
-        let file = Parser::new("unit N: Force = 1 kg * m / s^2;")
+        let file = Parser::new("unit N: Force = 1.0 kg * m / s^2;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
@@ -1863,7 +1899,7 @@ mod tests {
 
     #[test]
     fn parse_unit_literal() {
-        let file = Parser::new("param alt: Length = 400 km;")
+        let file = Parser::new("param alt: Length = 400.0 km;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
@@ -2194,9 +2230,9 @@ mod tests {
         let source = r"
 dimension Velocity = Length / Time;
 
-param alt: Length = 400 km;
-param period: Time = 90 min;
-const R_EARTH: Length = 6371 km;
+param alt: Length = 400.0 km;
+param period: Time = 90.0 min;
+const R_EARTH: Length = 6371.0 km;
 
 node circumference: Length = 2.0 * PI * (R_EARTH + @alt);
 node speed: Velocity = @circumference / @period;
@@ -2327,7 +2363,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
         let source = r"
 dimension Velocity = Length / Time;
 type TransferResult { dv1: Velocity, dv2: Velocity }
-param alt: Length = 400 km;
+param alt: Length = 400.0 km;
 ";
         let file = Parser::new(source).parse_file().unwrap();
         assert_eq!(file.declarations.len(), 3);
@@ -2910,8 +2946,17 @@ param alt: Length = 400 km;
 
     #[test]
     fn single_expr_unit_literal() {
-        let expr = Parser::new("450 s").parse_single_expr().unwrap();
+        let expr = Parser::new("450.0 s").parse_single_expr().unwrap();
         assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn single_expr_integer_with_unit_errors() {
+        let result = Parser::new("450 s").parse_single_expr();
+        assert!(
+            result.is_err(),
+            "integer literal with unit should be an error"
+        );
     }
 
     #[test]
@@ -2934,7 +2979,7 @@ param alt: Length = 400 km;
 
     #[test]
     fn single_expr_trailing_tokens_error() {
-        let result = Parser::new("450 s; extra").parse_single_expr();
+        let result = Parser::new("450.0 s; extra").parse_single_expr();
         assert!(result.is_err());
     }
 }

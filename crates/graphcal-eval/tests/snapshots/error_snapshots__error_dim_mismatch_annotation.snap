@@ -6,8 +6,8 @@ type annotation mismatch: declared Mass, inferred Length
     Diagnostic severity: error
 Begin snippet for dim_mismatch_annotation.gcl starting at line 2, column 1
 
-snippet line 2: param alt: Length = 400 km;
-snippet line 3: node wrong: Mass = @alt + 100 km;
+snippet line 2: param alt: Length = 400.0 km;
+snippet line 3: node wrong: Mass = @alt + 100.0 km;
     label at line 3, columns 13 to 16: declared as Mass
 diagnostic help: the declared type must match the inferred dimension of the expression
 diagnostic code: graphcal::D002

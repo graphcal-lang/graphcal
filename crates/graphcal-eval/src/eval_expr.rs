@@ -16,6 +16,7 @@ use crate::registry::Registry;
 pub enum RuntimeValue {
     Scalar(f64),
     Bool(bool),
+    Int(i64),
     Struct {
         type_name: String,
         fields: IndexMap<String, Self>,
@@ -40,6 +41,9 @@ impl RuntimeValue {
             Self::Scalar(v) => *v,
             Self::Bool(_) => {
                 panic!("expected scalar for {context}, got Bool")
+            }
+            Self::Int(i) => {
+                panic!("expected scalar for {context}, got Int({i})")
             }
             Self::Struct { type_name, .. } => {
                 panic!("expected scalar for {context}, got struct `{type_name}`")
@@ -85,6 +89,7 @@ pub fn eval_expr(
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
         ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
+        ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         ExprKind::UnitLiteral { value, unit } => {
             let (_dim, scale) =
                 registry
@@ -178,7 +183,7 @@ pub fn eval_expr(
                 .expect_bool("OR operand");
                 Ok(RuntimeValue::Bool(l || r))
             }
-            // Equality: can compare Bool==Bool or Scalar==Scalar
+            // Equality: can compare Bool==Bool, Int==Int, or Scalar==Scalar
             BinOp::Eq | BinOp::Ne => {
                 let l = eval_expr(
                     lhs,
@@ -198,19 +203,22 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?;
-                if let (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) = (&l, &r) {
-                    let result = match op {
-                        BinOp::Eq => lb == rb,
-                        _ => lb != rb,
-                    };
-                    Ok(RuntimeValue::Bool(result))
-                } else {
-                    let lv = l.expect_scalar("comparison operand");
-                    let rv = r.expect_scalar("comparison operand");
-                    Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
+                let is_eq = *op == BinOp::Eq;
+                match (&l, &r) {
+                    (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => {
+                        Ok(RuntimeValue::Bool(if is_eq { lb == rb } else { lb != rb }))
+                    }
+                    (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
+                        Ok(RuntimeValue::Bool(if is_eq { li == ri } else { li != ri }))
+                    }
+                    _ => {
+                        let lv = l.expect_scalar("comparison operand");
+                        let rv = r.expect_scalar("comparison operand");
+                        Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
+                    }
                 }
             }
-            // Ordering comparisons: Scalar operands, Bool result
+            // Ordering comparisons: Int or Scalar operands, Bool result
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
                 let l = eval_expr(
                     lhs,
@@ -220,8 +228,7 @@ pub fn eval_expr(
                     builtin_fns,
                     registry,
                     src,
-                )?
-                .expect_scalar("comparison operand");
+                )?;
                 let r = eval_expr(
                     rhs,
                     values,
@@ -230,11 +237,22 @@ pub fn eval_expr(
                     builtin_fns,
                     registry,
                     src,
-                )?
-                .expect_scalar("comparison operand");
-                Ok(RuntimeValue::Bool(eval_comparison(*op, l, r)))
+                )?;
+                if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
+                    let result = match op {
+                        BinOp::Lt => li < ri,
+                        BinOp::Gt => li > ri,
+                        BinOp::Le => li <= ri,
+                        BinOp::Ge => li >= ri,
+                        _ => unreachable!(),
+                    };
+                    return Ok(RuntimeValue::Bool(result));
+                }
+                let lv = l.expect_scalar("comparison operand");
+                let rv = r.expect_scalar("comparison operand");
+                Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
             }
-            // Arithmetic operators: Scalar operands, Scalar result
+            // Arithmetic operators: Int or Scalar operands
             _ => {
                 let l = eval_expr(
                     lhs,
@@ -244,8 +262,7 @@ pub fn eval_expr(
                     builtin_fns,
                     registry,
                     src,
-                )?
-                .expect_scalar("binary operand");
+                )?;
                 let r = eval_expr(
                     rhs,
                     values,
@@ -254,9 +271,17 @@ pub fn eval_expr(
                     builtin_fns,
                     registry,
                     src,
-                )?
-                .expect_scalar("binary operand");
-                Ok(RuntimeValue::Scalar(eval_binop(*op, l, r, src, expr.span)?))
+                )?;
+                if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
+                    return Ok(RuntimeValue::Int(eval_int_binop(
+                        *op, *li, *ri, src, expr.span,
+                    )?));
+                }
+                let lv = l.expect_scalar("binary operand");
+                let rv = r.expect_scalar("binary operand");
+                Ok(RuntimeValue::Scalar(eval_binop(
+                    *op, lv, rv, src, expr.span,
+                )?))
             }
         },
         ExprKind::UnaryOp { op, operand } => match op {
@@ -269,9 +294,18 @@ pub fn eval_expr(
                     builtin_fns,
                     registry,
                     src,
-                )?
-                .expect_scalar("unary negation");
-                Ok(RuntimeValue::Scalar(-v))
+                )?;
+                match v {
+                    RuntimeValue::Int(i) => {
+                        let negated = i.checked_neg().ok_or_else(|| GraphcalError::EvalError {
+                            message: "integer negation overflow".to_string(),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+                        Ok(RuntimeValue::Int(negated))
+                    }
+                    _ => Ok(RuntimeValue::Scalar(-v.expect_scalar("unary negation"))),
+                }
             }
             UnaryOp::Not => {
                 let v = eval_expr(
@@ -348,6 +382,44 @@ pub fn eval_expr(
                     });
                 }
                 // If not indexed, fall through to builtins (min/max are 2-arg builtins)
+            }
+
+            // Conversion builtins: to_float and to_int
+            if name.name == "to_float" {
+                let arg = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let RuntimeValue::Int(i) = arg else {
+                    panic!("to_float expects Int argument (checked by dim_check)");
+                };
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "explicit conversion from Int to float"
+                )]
+                return Ok(RuntimeValue::Scalar(i as f64));
+            }
+            if name.name == "to_int" {
+                let arg = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let f = arg.expect_scalar("to_int argument");
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "explicit truncating conversion from float to Int"
+                )]
+                return Ok(RuntimeValue::Int(f as i64));
             }
 
             // Try builtin first
@@ -827,6 +899,62 @@ fn eval_comparison(op: BinOp, l: f64, r: f64) -> bool {
         BinOp::Ge => l >= r,
         _ => panic!("eval_comparison called with non-comparison operator"),
     }
+}
+
+/// Evaluate an arithmetic binary operator on two i64 values with checked arithmetic.
+fn eval_int_binop(
+    op: BinOp,
+    l: i64,
+    r: i64,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<i64, GraphcalError> {
+    match op {
+        BinOp::Add => l.checked_add(r),
+        BinOp::Sub => l.checked_sub(r),
+        BinOp::Mul => l.checked_mul(r),
+        BinOp::Div => {
+            if r == 0 {
+                return Err(GraphcalError::EvalError {
+                    message: "integer division by zero".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            l.checked_div(r)
+        }
+        BinOp::Mod => {
+            if r == 0 {
+                return Err(GraphcalError::EvalError {
+                    message: "integer modulo by zero".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            l.checked_rem(r)
+        }
+        BinOp::Pow => {
+            if r < 0 {
+                return Err(GraphcalError::EvalError {
+                    message: "integer exponent must be non-negative".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            let exp = u32::try_from(r).map_err(|_| GraphcalError::EvalError {
+                message: "integer exponent too large".to_string(),
+                src: src.clone(),
+                span: span.into(),
+            })?;
+            l.checked_pow(exp)
+        }
+        _ => panic!("eval_int_binop called with non-arithmetic operator"),
+    }
+    .ok_or_else(|| GraphcalError::EvalError {
+        message: "integer arithmetic overflow".to_string(),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.

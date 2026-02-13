@@ -6,5 +6,5 @@ type Transfer {
     dv2: Velocity,
 }
 
-param v: Velocity = 100 m/s;
+param v: Velocity = 100.0 m/s;
 node bad: Transfer = Transfer { dv1: @v };

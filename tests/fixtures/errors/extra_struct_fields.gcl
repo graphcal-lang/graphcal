@@ -1,2 +1,2 @@
 type Orbit { altitude: Length, speed: Velocity }
-node o: Orbit = Orbit { altitude: 400 km, speed: 7.6 km / s, bonus: 1.0 };
+node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };
