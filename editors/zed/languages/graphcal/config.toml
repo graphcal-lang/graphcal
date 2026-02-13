@@ -1,0 +1,6 @@
+name = "Graphcal"
+grammar = "graphcal"
+path_suffixes = ["gcl"]
+line_comments = ["// "]
+tab_size = 4
+hard_tabs = false

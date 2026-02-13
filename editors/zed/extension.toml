@@ -1,0 +1,12 @@
+id = "graphcal"
+name = "Graphcal"
+version = "0.0.1"
+schema_version = 1
+authors = ["shunichironomura"]
+description = "Graphcal language support for Zed"
+repository = "https://github.com/shunichironomura/graphcal"
+
+[grammars.graphcal]
+repository = "https://github.com/shunichironomura/graphcal"
+rev = "tree-sitter-zed"
+path = "tree-sitter-graphcal"

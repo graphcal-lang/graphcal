@@ -318,7 +318,21 @@ ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/graphcal-0.0.1
 
 Then restart VS Code (or run "Developer: Reload Window" from the command palette).
 
-### Tree-sitter (Zed, Neovim, Helix)
+### Zed
+
+A Zed extension is included in `editors/zed/`. To install it locally as a dev extension:
+
+1. Open Zed
+2. Open the command palette: `Cmd+Shift+P`
+3. Run `zed: install dev extension`
+4. Select the `editors/zed/` directory
+5. Open a `.gcl` file -- syntax should be highlighted
+
+**Prerequisites:** Rust must be installed via [rustup](https://rustup.rs/) (Zed compiles the tree-sitter grammar from source).
+
+See [`editors/zed/README.md`](editors/zed/README.md) for details on iterating after grammar changes.
+
+### Tree-sitter (Neovim, Helix)
 
 A tree-sitter grammar with highlight queries is available in `tree-sitter-graphcal/`. Refer to your editor's documentation on how to register a custom tree-sitter grammar.
 
