@@ -9,7 +9,9 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use graphcal_eval::eval::{CompileError, compile_and_eval_named};
+use std::collections::HashMap;
+
+use graphcal_eval::eval::{CompileError, compile_and_eval_named, compile_and_eval_project};
 
 #[derive(Debug)]
 struct Backend {
@@ -27,7 +29,10 @@ impl Backend {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
-        let diagnostics = produce_diagnostics(&text, uri.as_str());
+        let diagnostics = uri.to_file_path().map_or_else(
+            |()| produce_diagnostics(&text, uri.as_str()),
+            |path| produce_diagnostics_for_file(&path, &text),
+        );
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
@@ -107,6 +112,18 @@ fn byte_offset_to_position(source: &str, offset: usize) -> Position {
     }
 }
 
+/// Run project evaluation for a file on disk, falling back to single-file evaluation.
+///
+/// When the file is on disk, `compile_and_eval_project` is used so that `use` imports
+/// are resolved correctly. If project loading fails (e.g. file not yet saved),
+/// we fall back to single-file evaluation.
+fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
+    match compile_and_eval_project(path, &HashMap::new()) {
+        Ok(_) => Vec::new(),
+        Err(e) => compile_error_to_diagnostics(&e, source),
+    }
+}
+
 /// Run `compile_and_eval_named` and convert any errors to LSP diagnostics.
 fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
     match compile_and_eval_named(source, name) {
@@ -178,6 +195,8 @@ pub async fn run() {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, reason = "test code")]
+
     use super::*;
 
     #[test]
@@ -245,6 +264,18 @@ mod tests {
         assert!(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
             "expected N002 error code, got {code:?}"
+        );
+    }
+
+    #[test]
+    fn multi_file_project_no_false_errors() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/rocket_split/main.gcl");
+        let source = std::fs::read_to_string(&root).unwrap();
+        let diags = produce_diagnostics_for_file(&root, &source);
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for multi-file project, got: {diags:?}"
         );
     }
 }
