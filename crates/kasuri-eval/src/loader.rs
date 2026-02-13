@@ -144,6 +144,8 @@ fn io_not_found(path: &Path) -> CompileError {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use std::fs;
 
