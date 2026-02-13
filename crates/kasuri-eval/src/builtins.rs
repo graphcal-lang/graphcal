@@ -27,7 +27,6 @@ pub enum DimSignature {
 }
 
 pub struct BuiltinFunction {
-    pub name: &'static str,
     pub arity: usize,
     pub eval: fn(&[f64]) -> f64,
     pub dim_sig: DimSignature,
@@ -40,7 +39,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "sqrt",
         BuiltinFunction {
-            name: "sqrt",
             arity: 1,
             eval: |a| a[0].sqrt(),
             dim_sig: DimSignature::Sqrt,
@@ -49,7 +47,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "exp",
         BuiltinFunction {
-            name: "exp",
             arity: 1,
             eval: |a| a[0].exp(),
             dim_sig: DimSignature::AllDimensionless,
@@ -58,7 +55,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "ln",
         BuiltinFunction {
-            name: "ln",
             arity: 1,
             eval: |a| a[0].ln(),
             dim_sig: DimSignature::AllDimensionless,
@@ -67,7 +63,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "abs",
         BuiltinFunction {
-            name: "abs",
             arity: 1,
             eval: |a| a[0].abs(),
             dim_sig: DimSignature::Passthrough,
@@ -76,7 +71,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "sin",
         BuiltinFunction {
-            name: "sin",
             arity: 1,
             eval: |a| a[0].sin(),
             dim_sig: DimSignature::AngleToDimensionless,
@@ -85,7 +79,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "cos",
         BuiltinFunction {
-            name: "cos",
             arity: 1,
             eval: |a| a[0].cos(),
             dim_sig: DimSignature::AngleToDimensionless,
@@ -94,7 +87,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "tan",
         BuiltinFunction {
-            name: "tan",
             arity: 1,
             eval: |a| a[0].tan(),
             dim_sig: DimSignature::AngleToDimensionless,
@@ -103,7 +95,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "asin",
         BuiltinFunction {
-            name: "asin",
             arity: 1,
             eval: |a| a[0].asin(),
             dim_sig: DimSignature::DimensionlessToAngle,
@@ -112,7 +103,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "acos",
         BuiltinFunction {
-            name: "acos",
             arity: 1,
             eval: |a| a[0].acos(),
             dim_sig: DimSignature::DimensionlessToAngle,
@@ -121,7 +111,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "floor",
         BuiltinFunction {
-            name: "floor",
             arity: 1,
             eval: |a| a[0].floor(),
             dim_sig: DimSignature::Passthrough,
@@ -130,7 +119,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "ceil",
         BuiltinFunction {
-            name: "ceil",
             arity: 1,
             eval: |a| a[0].ceil(),
             dim_sig: DimSignature::Passthrough,
@@ -139,7 +127,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "atan2",
         BuiltinFunction {
-            name: "atan2",
             arity: 2,
             eval: |a| a[0].atan2(a[1]),
             dim_sig: DimSignature::SameDimensionToAngle,
@@ -148,7 +135,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "min",
         BuiltinFunction {
-            name: "min",
             arity: 2,
             eval: |a| a[0].min(a[1]),
             dim_sig: DimSignature::SameDimension,
@@ -157,7 +143,6 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     m.insert(
         "max",
         BuiltinFunction {
-            name: "max",
             arity: 2,
             eval: |a| a[0].max(a[1]),
             dim_sig: DimSignature::SameDimension,

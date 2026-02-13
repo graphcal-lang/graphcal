@@ -1,0 +1,2 @@
+param x: Length = 1.0 m;
+node bad: Dimensionless = @x && true;

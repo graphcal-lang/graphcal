@@ -503,4 +503,109 @@ mod tests {
         let freq = Dimension::DIMENSIONLESS / Dimension::base(BaseDim::Time);
         assert_eq!(format!("{freq}"), "Time^-1");
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating Rational values with small numerators/denominators
+        /// to avoid i32 overflow in intermediate calculations.
+        fn arb_rational() -> impl Strategy<Value = Rational> {
+            (-50i32..=50, -50i32..=50)
+                .prop_filter("denominator must be non-zero", |&(_, d)| d != 0)
+                .prop_map(|(n, d)| Rational::new(n, d))
+        }
+
+        /// Strategy for generating Dimension values with small exponents.
+        fn arb_dimension() -> impl Strategy<Value = Dimension> {
+            proptest::array::uniform8(arb_rational()).prop_map(|exponents| Dimension { exponents })
+        }
+
+        proptest! {
+            // --- Rational invariants ---
+
+            #[test]
+            fn rational_always_reduced(n in -100i32..=100, d in -100i32..=100) {
+                prop_assume!(d != 0);
+                let r = Rational::new(n, d);
+                // den is always positive
+                prop_assert!(r.den > 0, "den must be positive, got {}", r.den);
+                // gcd(|num|, den) == 1 (reduced form)
+                if r.num != 0 {
+                    let g = gcd(r.num.unsigned_abs(), r.den.unsigned_abs());
+                    prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num, r.den);
+                } else {
+                    prop_assert_eq!(r.den, 1, "zero should have den=1, got {}", r.den);
+                }
+            }
+
+            #[test]
+            fn rational_add_commutative(a in arb_rational(), b in arb_rational()) {
+                prop_assert_eq!(a + b, b + a);
+            }
+
+            #[test]
+            fn rational_mul_commutative(a in arb_rational(), b in arb_rational()) {
+                prop_assert_eq!(a * b, b * a);
+            }
+
+            #[test]
+            fn rational_additive_identity(a in arb_rational()) {
+                prop_assert_eq!(a + Rational::ZERO, a);
+            }
+
+            #[test]
+            fn rational_multiplicative_identity(a in arb_rational()) {
+                prop_assert_eq!(a * Rational::ONE, a);
+            }
+
+            #[test]
+            fn rational_additive_inverse(a in arb_rational()) {
+                prop_assert_eq!(a + (-a), Rational::ZERO);
+            }
+
+            #[test]
+            fn rational_sub_self_is_zero(a in arb_rational()) {
+                prop_assert_eq!(a - a, Rational::ZERO);
+            }
+
+            // --- Dimension invariants ---
+
+            #[test]
+            fn dimension_mul_commutative(a in arb_dimension(), b in arb_dimension()) {
+                prop_assert_eq!(a * b, b * a);
+            }
+
+            #[test]
+            fn dimension_dimensionless_is_mul_identity(a in arb_dimension()) {
+                prop_assert_eq!(a * Dimension::DIMENSIONLESS, a);
+            }
+
+            #[test]
+            fn dimension_self_div_is_dimensionless(a in arb_dimension()) {
+                prop_assert_eq!(a / a, Dimension::DIMENSIONLESS);
+            }
+
+            #[test]
+            fn dimension_div_inverse(a in arb_dimension(), b in arb_dimension()) {
+                // (a / b) * b == a
+                prop_assert_eq!((a / b) * b, a);
+            }
+
+            #[test]
+            fn dimension_pow_int_consistent_with_pow(a in arb_dimension(), n in -3i32..=3) {
+                prop_assert_eq!(a.pow_int(n), a.pow(Rational::from_int(n)));
+            }
+
+            #[test]
+            fn dimension_pow_distributes_over_mul(
+                a in arb_dimension(),
+                b in arb_dimension(),
+                r in arb_rational(),
+            ) {
+                // (a * b).pow(r) == a.pow(r) * b.pow(r)
+                prop_assert_eq!((a * b).pow(r), a.pow(r) * b.pow(r));
+            }
+        }
+    }
 }

@@ -1,0 +1,6 @@
+index Phase = { Coast, Burn }
+param dv: Velocity[Phase] = {
+    Phase::Coast: 2.46 km / s,
+    Phase::Burn: 0.5 km / s,
+    Phase::Insertion: 1.8 km / s,
+};

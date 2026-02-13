@@ -169,3 +169,87 @@ fn error_fn_generic_dim_mismatch() {
     let rendered = render_error(source, "fn_generic_dim_mismatch.ksr");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_unknown_dimension() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_dimension.ksr");
+    let rendered = render_error(source, "unknown_dimension.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extra_struct_fields() {
+    let source = include_str!("../../../tests/fixtures/errors/extra_struct_fields.ksr");
+    let rendered = render_error(source, "extra_struct_fields.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_not_a_struct() {
+    let source = include_str!("../../../tests/fixtures/errors/not_a_struct.ksr");
+    let rendered = render_error(source, "not_a_struct.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_index() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_index.ksr");
+    let rendered = render_error(source, "unknown_index.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_variant() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_variant.ksr");
+    let rendered = render_error(source, "unknown_variant.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_missing_variants() {
+    let source = include_str!("../../../tests/fixtures/errors/missing_variants.ksr");
+    let rendered = render_error(source, "missing_variants.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extra_variants() {
+    let source = include_str!("../../../tests/fixtures/errors/extra_variants.ksr");
+    let rendered = render_error(source, "extra_variants.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/index_mismatch.ksr");
+    let rendered = render_error(source, "index_mismatch.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_non_literal_exponent() {
+    let source = include_str!("../../../tests/fixtures/errors/non_literal_exponent.ksr");
+    let rendered = render_error(source, "non_literal_exponent.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_boolean_dim_error() {
+    let source = include_str!("../../../tests/fixtures/errors/boolean_dim_error.ksr");
+    let rendered = render_error(source, "boolean_dim_error.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_division_by_zero() {
+    let source = include_str!("../../../tests/fixtures/errors/division_by_zero.ksr");
+    let rendered = render_error(source, "division_by_zero.ksr");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_sqrt_negative() {
+    let source = include_str!("../../../tests/fixtures/errors/sqrt_negative.ksr");
+    let rendered = render_error(source, "sqrt_negative.ksr");
+    insta::assert_snapshot!(rendered);
+}

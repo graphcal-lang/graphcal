@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use kasuri_syntax::ast::{BinOp, Expr, ExprKind, FnBody, UnaryOp};
+use kasuri_syntax::span::Span;
 
 use crate::builtins::BuiltinFunction;
 use crate::error::KasuriError;
@@ -26,7 +27,6 @@ pub enum RuntimeValue {
     /// A variant label during `for` comprehension iteration.
     /// Not a "real" value — only exists in `local_values` during loop body evaluation.
     VariantLabel {
-        index_name: String,
         variant: String,
     },
 }
@@ -57,7 +57,6 @@ impl RuntimeValue {
 ///
 /// Returns a [`KasuriError`] if the expression references an undefined variable,
 /// constant, or function.
-#[expect(clippy::implicit_hasher)] // Internal function always uses default HashMap
 #[expect(clippy::if_not_else)] // `!= 0.0` reads more naturally for DSL truthiness
 #[expect(clippy::too_many_lines)] // Single match over all ExprKind variants
 pub fn eval_expr(
@@ -137,7 +136,7 @@ pub fn eval_expr(
                 src,
             )?
             .expect_scalar("binary operand");
-            Ok(RuntimeValue::Scalar(eval_binop(*op, l, r)))
+            Ok(RuntimeValue::Scalar(eval_binop(*op, l, r, src, expr.span)?))
         }
         ExprKind::UnaryOp { op, operand } => {
             let v = eval_expr(
@@ -235,7 +234,10 @@ pub fn eval_expr(
                         .map(|rv| rv.expect_scalar("function argument"))
                     })
                     .collect::<Result<_, _>>()?;
-                return Ok(RuntimeValue::Scalar((builtin.eval)(&arg_values)));
+                let result = (builtin.eval)(&arg_values);
+                return Ok(RuntimeValue::Scalar(check_finite(
+                    result, &name.name, src, expr.span,
+                )?));
             }
 
             // Try user-defined function
@@ -622,7 +624,6 @@ fn eval_for_comp(
         inner_locals.insert(
             binding.var.name.clone(),
             RuntimeValue::VariantLabel {
-                index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
         );
@@ -656,70 +657,97 @@ fn eval_for_comp(
     })
 }
 
+/// Validate that a computed value is finite, returning an `EvalError` if it is NaN or infinite.
+fn check_finite(
+    value: f64,
+    context: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<f64, KasuriError> {
+    if value.is_nan() {
+        Err(KasuriError::EvalError {
+            message: format!("invalid argument for {context} (result is NaN)"),
+            src: src.clone(),
+            span: span.into(),
+        })
+    } else if value.is_infinite() {
+        Err(KasuriError::EvalError {
+            message: format!("{context} produced infinite result"),
+            src: src.clone(),
+            span: span.into(),
+        })
+    } else {
+        Ok(value)
+    }
+}
+
 #[expect(clippy::float_cmp)] // Intentional: DSL equality/truthiness uses exact comparison
 #[expect(clippy::if_not_else)] // `!= r` reads naturally for BinOp::Ne
-fn eval_binop(op: BinOp, l: f64, r: f64) -> f64 {
-    match op {
+fn eval_binop(
+    op: BinOp,
+    l: f64,
+    r: f64,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<f64, KasuriError> {
+    let result = match op {
         BinOp::Add => l + r,
         BinOp::Sub => l - r,
         BinOp::Mul => l * r,
-        BinOp::Div => l / r,
-        BinOp::Pow => l.powf(r),
-        BinOp::Eq => {
-            if l == r {
-                1.0
-            } else {
-                0.0
+        BinOp::Div => {
+            if r == 0.0 {
+                return Err(KasuriError::EvalError {
+                    message: "division by zero".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
             }
+            l / r
+        }
+        BinOp::Pow => l.powf(r),
+        // Comparison and boolean ops always return 0.0 or 1.0 — no check needed.
+        BinOp::Eq => {
+            return Ok(if l == r { 1.0 } else { 0.0 });
         }
         BinOp::Ne => {
-            if l != r {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l != r { 1.0 } else { 0.0 });
         }
         BinOp::Lt => {
-            if l < r {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l < r { 1.0 } else { 0.0 });
         }
         BinOp::Gt => {
-            if l > r {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l > r { 1.0 } else { 0.0 });
         }
         BinOp::Le => {
-            if l <= r {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l <= r { 1.0 } else { 0.0 });
         }
         BinOp::Ge => {
-            if l >= r {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l >= r { 1.0 } else { 0.0 });
         }
         BinOp::And => {
-            if l != 0.0 && r != 0.0 {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l != 0.0 && r != 0.0 { 1.0 } else { 0.0 });
         }
         BinOp::Or => {
-            if l != 0.0 || r != 0.0 {
-                1.0
-            } else {
-                0.0
-            }
+            return Ok(if l != 0.0 || r != 0.0 { 1.0 } else { 0.0 });
         }
+    };
+
+    // Post-check: if inputs were finite but result is not, report an error.
+    if l.is_finite() && r.is_finite() && !result.is_finite() {
+        if result.is_nan() {
+            Err(KasuriError::EvalError {
+                message: "invalid arithmetic operation (result is NaN)".to_string(),
+                src: src.clone(),
+                span: span.into(),
+            })
+        } else {
+            Err(KasuriError::EvalError {
+                message: "arithmetic overflow (result is infinite)".to_string(),
+                src: src.clone(),
+                span: span.into(),
+            })
+        }
+    } else {
+        Ok(result)
     }
 }

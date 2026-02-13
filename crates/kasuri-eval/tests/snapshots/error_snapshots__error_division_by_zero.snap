@@ -1,0 +1,12 @@
+---
+source: crates/kasuri-eval/tests/error_snapshots.rs
+expression: rendered
+---
+division by zero
+    Diagnostic severity: error
+Begin snippet for division_by_zero.ksr starting at line 1, column 1
+
+snippet line 1: param x: Dimensionless = 1.0;
+snippet line 2: node y: Dimensionless = @x / 0.0;
+    label at line 2, columns 25 to 32: error here
+diagnostic code: kasuri::E001

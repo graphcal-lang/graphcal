@@ -53,15 +53,9 @@ impl<'src> Lexer<'src> {
         &self.source[span.offset..span.offset + span.len]
     }
 
-    /// Get the full source text.
-    #[must_use]
-    pub const fn source(&self) -> &'src str {
-        self.source
-    }
-
     /// Get the byte offset of the current position in the source.
     /// Useful for generating error spans when the lexer has no more tokens.
-    pub const fn current_offset(&mut self) -> usize {
+    pub const fn current_offset(&self) -> usize {
         if let Some(ref peeked) = self.peeked
             && let Some((_, span)) = peeked
         {
@@ -138,13 +132,6 @@ mod tests {
         let (tok, span) = lexer.peek_with_span().unwrap();
         assert_eq!(*tok, Token::Const);
         assert_eq!(lexer.slice_at(span), "const");
-    }
-
-    #[test]
-    fn source_returns_full_input() {
-        let input = "param x = 1.0;";
-        let lexer = Lexer::new(input);
-        assert_eq!(lexer.source(), input);
     }
 
     #[test]

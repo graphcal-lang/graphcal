@@ -1046,7 +1046,6 @@ fn collect_all_refs(
 /// This is a lightweight version of `collect_all_refs` used for re-extracting
 /// runtime dependencies after an override expression replaces a param's default.
 /// Only collects names that exist in `all_runtime_names`.
-#[expect(clippy::implicit_hasher)]
 pub fn collect_graph_refs(
     expr: &Expr,
     all_runtime_names: &HashSet<&str>,
@@ -1318,5 +1317,247 @@ mod tests {
         let resolved = parse_and_resolve(source).unwrap();
         // Functions should NOT appear in source_order
         assert_eq!(resolved.source_order.len(), 2); // param + node only
+    }
+
+    // --- Additional error path tests ---
+
+    #[test]
+    fn resolve_duplicate_param_name() {
+        let err = parse_and_resolve("param x: Dimensionless = 1.0;\nparam x: Dimensionless = 2.0;")
+            .unwrap_err();
+        assert!(matches!(err, KasuriError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn resolve_duplicate_const_name() {
+        let err = parse_and_resolve("const A: Dimensionless = 1.0;\nconst A: Dimensionless = 2.0;")
+            .unwrap_err();
+        assert!(matches!(err, KasuriError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn resolve_duplicate_node_name() {
+        let err = parse_and_resolve(
+            "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\nnode y: Dimensionless = @x + 1.0;",
+        )
+        .unwrap_err();
+        assert!(matches!(err, KasuriError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn resolve_const_collision_with_param() {
+        // const uses UPPER, param uses lower — no collision
+        let resolved =
+            parse_and_resolve("const A: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;")
+                .unwrap();
+        assert_eq!(resolved.consts.len(), 1);
+        assert_eq!(resolved.params.len(), 1);
+    }
+
+    #[test]
+    fn resolve_unknown_const_ref_in_const() {
+        let err = parse_and_resolve("const A: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
+        assert!(matches!(err, KasuriError::UnknownConstRef { .. }));
+    }
+
+    #[test]
+    fn resolve_unknown_function_in_const() {
+        let err = parse_and_resolve("const A: Dimensionless = unknown_fn(1.0);").unwrap_err();
+        assert!(matches!(err, KasuriError::UnknownFunction { .. }));
+    }
+
+    #[test]
+    fn resolve_wrong_arity_in_const() {
+        let err = parse_and_resolve("const A: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
+        assert!(matches!(err, KasuriError::WrongArity { .. }));
+    }
+
+    #[test]
+    fn resolve_unknown_graph_ref_in_node() {
+        let err =
+            parse_and_resolve("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @z + 1.0;")
+                .unwrap_err();
+        assert!(matches!(err, KasuriError::UnknownGraphRef { .. }));
+    }
+
+    #[test]
+    fn resolve_unknown_function_in_node() {
+        let err =
+            parse_and_resolve("param x: Dimensionless = 1.0;\nnode y: Dimensionless = bad_fn(@x);")
+                .unwrap_err();
+        assert!(matches!(err, KasuriError::UnknownFunction { .. }));
+    }
+
+    #[test]
+    fn resolve_wrong_arity_in_node() {
+        let err = parse_and_resolve(
+            "param x: Dimensionless = 1.0;\nnode y: Dimensionless = sqrt(@x, @x);",
+        )
+        .unwrap_err();
+        assert!(matches!(err, KasuriError::WrongArity { .. }));
+    }
+
+    #[test]
+    fn resolve_const_with_block_expr() {
+        let resolved =
+            parse_and_resolve("const A: Dimensionless = { let x = 1.0; let y = 2.0; x + y };")
+                .unwrap();
+        assert_eq!(resolved.consts.len(), 1);
+        let a_deps = &resolved.const_deps["A"];
+        assert!(a_deps.is_empty());
+    }
+
+    #[test]
+    fn resolve_const_with_if_else() {
+        let resolved =
+            parse_and_resolve("const A: Dimensionless = if 1.0 > 0.0 { 1.0 } else { 0.0 };")
+                .unwrap();
+        assert_eq!(resolved.consts.len(), 1);
+    }
+
+    #[test]
+    fn resolve_const_with_unary_op() {
+        let resolved = parse_and_resolve("const A: Dimensionless = -42.0;").unwrap();
+        assert_eq!(resolved.consts.len(), 1);
+    }
+
+    #[test]
+    fn resolve_node_with_block() {
+        let resolved = parse_and_resolve(
+            "param x: Dimensionless = 1.0;\nnode y: Dimensionless = { let a = @x; a + 1.0 };",
+        )
+        .unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+        let y_deps = &resolved.runtime_deps["y"];
+        assert!(y_deps.contains("x"));
+    }
+
+    #[test]
+    fn resolve_node_with_struct() {
+        let resolved = parse_and_resolve(
+            r"
+            type Pair { a: Dimensionless, b: Dimensionless }
+            param x: Dimensionless = 1.0;
+            node p: Pair = Pair { a: @x, b: @x + 1.0 };
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+        let p_deps = &resolved.runtime_deps["p"];
+        assert!(p_deps.contains("x"));
+    }
+
+    #[test]
+    fn resolve_node_with_field_access() {
+        let resolved = parse_and_resolve(
+            r"
+            type Pair { a: Dimensionless, b: Dimensionless }
+            param x: Dimensionless = 1.0;
+            node p: Pair = Pair { a: @x, b: @x + 1.0 };
+            node val: Dimensionless = @p.a;
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.nodes.len(), 2);
+    }
+
+    #[test]
+    fn resolve_node_with_convert() {
+        let resolved =
+            parse_and_resolve("param x: Length = 1000 m;\nnode y: Length = @x -> km;").unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+    }
+
+    #[test]
+    fn resolve_use_decl_skipped() {
+        // use declarations should not be treated as param/node/const
+        let source = r#"use "./helper.ksr" { something };"#;
+        let file = Parser::new(source).parse_file().unwrap();
+        let resolved = resolve(&file, &make_src(source)).unwrap();
+        assert!(resolved.params.is_empty());
+        assert!(resolved.nodes.is_empty());
+        assert!(resolved.consts.is_empty());
+    }
+
+    #[test]
+    fn resolve_indexed_param() {
+        let resolved = parse_and_resolve(
+            r"
+            index Color = { Red, Green, Blue }
+            param values: Dimensionless[Color] = {
+                Color::Red: 1.0,
+                Color::Green: 2.0,
+                Color::Blue: 3.0,
+            };
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.params.len(), 1);
+    }
+
+    #[test]
+    fn resolve_for_comprehension() {
+        let resolved = parse_and_resolve(
+            r"
+            index Color = { Red, Green, Blue }
+            param values: Dimensionless[Color] = {
+                Color::Red: 1.0,
+                Color::Green: 2.0,
+                Color::Blue: 3.0,
+            };
+            node doubled: Dimensionless[Color] = for c: Color { @values[c] * 2.0 };
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+        let deps = &resolved.runtime_deps["doubled"];
+        assert!(deps.contains("values"));
+    }
+
+    #[test]
+    fn resolve_scan_expression() {
+        let resolved = parse_and_resolve(
+            r"
+            index Step = { First, Second, Third }
+            param vals: Dimensionless[Step] = {
+                Step::First: 1.0,
+                Step::Second: 2.0,
+                Step::Third: 3.0,
+            };
+            node cumul: Dimensionless[Step] = scan(@vals, 0.0, |acc, val| acc + val);
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.nodes.len(), 1);
+        let deps = &resolved.runtime_deps["cumul"];
+        assert!(deps.contains("vals"));
+    }
+
+    #[test]
+    fn resolve_fn_with_block_body() {
+        let resolved = parse_and_resolve(
+            r"
+            fn compute(x: Dimensionless) -> Dimensionless {
+                let a = x * 2.0;
+                let b = a + 1.0;
+                b
+            }
+            param val: Dimensionless = 5.0;
+            node result: Dimensionless = compute(@val);
+        ",
+        )
+        .unwrap();
+        assert_eq!(resolved.functions.len(), 1);
+        assert_eq!(resolved.nodes.len(), 1);
+    }
+
+    #[test]
+    fn resolve_duplicate_fn_name() {
+        let source = r"
+            fn foo(x: Dimensionless) -> Dimensionless = x;
+            fn foo(x: Dimensionless) -> Dimensionless = x * 2.0;
+        ";
+        let err = parse_and_resolve(source).unwrap_err();
+        assert!(matches!(err, KasuriError::DuplicateName { .. }));
     }
 }

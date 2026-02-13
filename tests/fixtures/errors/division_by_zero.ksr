@@ -1,0 +1,2 @@
+param x: Dimensionless = 1.0;
+node y: Dimensionless = @x / 0.0;

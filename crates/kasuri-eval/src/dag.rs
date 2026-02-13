@@ -20,10 +20,6 @@ pub struct RuntimeGraph {
     pub topo_order: Vec<NodeIndex>,
     /// Expressions for each param/node.
     pub expressions: HashMap<String, Expr>,
-    /// Which names are params (with default value).
-    pub param_names: Vec<String>,
-    /// Which names are nodes.
-    pub node_names: Vec<String>,
 }
 
 /// Build a petgraph DAG from param and node declarations.
@@ -39,21 +35,16 @@ pub fn build_dag(
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, NodeIndex> = HashMap::new();
     let mut expressions: HashMap<String, Expr> = HashMap::new();
-    let mut param_names = Vec::new();
-    let mut node_names = Vec::new();
-
     // Add all params and nodes as graph nodes
     for (name, expr, _) in &resolved.params {
         let idx = graph.add_node(name.clone());
         index_map.insert(name.clone(), idx);
         expressions.insert(name.clone(), expr.clone());
-        param_names.push(name.clone());
     }
     for (name, expr, _) in &resolved.nodes {
         let idx = graph.add_node(name.clone());
         index_map.insert(name.clone(), idx);
         expressions.insert(name.clone(), expr.clone());
-        node_names.push(name.clone());
     }
 
     // Add edges from dependencies
@@ -87,8 +78,6 @@ pub fn build_dag(
         graph,
         topo_order,
         expressions,
-        param_names,
-        node_names,
     })
 }
 
@@ -119,8 +108,6 @@ mod tests {
         let dag = build_dag(&resolved, &src).unwrap();
 
         assert_eq!(dag.topo_order.len(), 6);
-        assert_eq!(dag.param_names.len(), 3);
-        assert_eq!(dag.node_names.len(), 3);
 
         let topo_names: Vec<&str> = dag
             .topo_order
