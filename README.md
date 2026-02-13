@@ -336,6 +336,59 @@ See [`editors/zed/README.md`](editors/zed/README.md) for details on iterating af
 
 A tree-sitter grammar with highlight queries is available in `tree-sitter-graphcal/`. Refer to your editor's documentation on how to register a custom tree-sitter grammar.
 
+### LSP (Language Server)
+
+A minimal LSP server (`graphcal-lsp`) provides real-time diagnostics (parse errors, type/dimension mismatches, unknown references, etc.) in any editor that supports the Language Server Protocol.
+
+Build the server:
+
+```sh
+cargo build --release -p graphcal-lsp
+```
+
+The binary will be at `target/release/graphcal-lsp`. It communicates over stdin/stdout.
+
+**VS Code** -- Use a generic LSP client extension such as [vscode-lsp-sample](https://github.com/AverageMarcus/vscode-lsp-sample) or add the following to your `settings.json` if you have a generic LSP client installed:
+
+```jsonc
+{
+  "lsp-client.serverCommand": ["<path-to>/graphcal-lsp"],
+  "lsp-client.languageId": "graphcal"
+}
+```
+
+**Zed** -- Add to your Zed `settings.json`:
+
+```jsonc
+{
+  "lsp": {
+    "graphcal-lsp": {
+      "binary": {
+        "path": "<path-to>/graphcal-lsp"
+      }
+    }
+  },
+  "languages": {
+    "Graphcal": {
+      "language_servers": ["graphcal-lsp"]
+    }
+  }
+}
+```
+
+**Neovim** -- Use `vim.lsp.start()` or a custom `nvim-lspconfig` server:
+
+```lua
+vim.lsp.start({
+  name = "graphcal-lsp",
+  cmd = { "<path-to>/graphcal-lsp" },
+  filetypes = { "graphcal" },
+  root_dir = vim.fn.getcwd(),
+})
+```
+
+> **Note:** The LSP currently provides diagnostics only. Hover, completions, go-to-definition, and other features are planned for future releases.
+
 ## Vision
 
 Graphcal is designed to eventually support:
@@ -355,6 +408,7 @@ graphcal/
     graphcal-syntax/   # lexer (logos) + recursive descent parser + AST
     graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
     graphcal-cli/      # CLI binary (clap + miette)
+    graphcal-lsp/      # LSP server (tower-lsp) -- diagnostics
   design/            # language design documents
   tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```
