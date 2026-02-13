@@ -199,4 +199,4 @@ assertions:
       Or does it only check parsing + types (no evaluation)?
 - [ ] Should scenario files support comments?
 - [ ] Should there be a `cellgraph init` command to scaffold a new project?
-- [ ] Naming: is the CLI command `cellgraph` or `kasuri`?
+- [ ] Naming: is the CLI command `cellgraph` or `graphcal`?

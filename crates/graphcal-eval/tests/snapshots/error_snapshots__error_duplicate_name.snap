@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+duplicate name `x`
+    Diagnostic severity: error
+Begin snippet for duplicate.gcl starting at line 1, column 1
+
+snippet line 1: // Duplicate name: x is declared twice
+snippet line 2: param x: Dimensionless = 1.0;
+    label at line 2, column 7: first defined here
+snippet line 3: param x: Dimensionless = 2.0;
+    label at line 3, column 7: duplicate definition here
+diagnostic help: each name must be unique within a file
+diagnostic code: graphcal::N001

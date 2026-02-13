@@ -275,6 +275,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
+name = "graphcal"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "graphcal-eval",
+ "graphcal-syntax",
+ "miette",
+ "serde_json",
+]
+
+[[package]]
+name = "graphcal-eval"
+version = "0.1.0"
+dependencies = [
+ "graphcal-syntax",
+ "indexmap",
+ "insta",
+ "miette",
+ "petgraph",
+ "proptest",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "graphcal-syntax"
+version = "0.1.0"
+dependencies = [
+ "logos",
+ "miette",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -342,42 +378,6 @@ name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
-
-[[package]]
-name = "kasuri"
-version = "0.1.0"
-dependencies = [
- "clap",
- "kasuri-eval",
- "kasuri-syntax",
- "miette",
- "serde_json",
-]
-
-[[package]]
-name = "kasuri-eval"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "insta",
- "kasuri-syntax",
- "miette",
- "petgraph",
- "proptest",
- "serde",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "kasuri-syntax"
-version = "0.1.0"
-dependencies = [
- "logos",
- "miette",
- "proptest",
- "thiserror",
-]
 
 [[package]]
 name = "leb128fmt"

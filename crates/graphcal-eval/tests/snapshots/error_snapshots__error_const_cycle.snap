@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cyclic dependency involving `Y`
+    Diagnostic severity: error
+Begin snippet for const_cycle.gcl starting at line 2, column 1
+
+snippet line 2: const X: Dimensionless = Y + 1.0;
+snippet line 3: const Y: Dimensionless = X + 1.0;
+    label at line 3, columns 1 to 33: involved in cycle
+diagnostic help: declarations cannot form dependency cycles
+diagnostic code: graphcal::G001

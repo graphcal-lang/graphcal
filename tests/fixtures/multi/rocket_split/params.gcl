@@ -1,0 +1,4 @@
+// params.gcl -- tunable parameters
+param dry_mass: Mass = 1200 kg;
+param fuel_mass: Mass = 2800 kg;
+param isp: Time = 320 s;

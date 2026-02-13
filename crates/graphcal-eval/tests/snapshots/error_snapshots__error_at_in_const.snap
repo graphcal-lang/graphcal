@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+graph reference `@x` not allowed in const expression
+    Diagnostic severity: error
+Begin snippet for at_in_const.gcl starting at line 2, column 1
+
+snippet line 2: param x: Dimensionless = 1.0;
+snippet line 3: const BAD: Dimensionless = @x + 1.0;
+    label at line 3, columns 28 to 29: @ reference not allowed here
+diagnostic help: const expressions are evaluated at compile time and cannot reference params or nodes
+diagnostic code: graphcal::N005

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+conversion target dimension Time does not match expression dimension Length
+    Diagnostic severity: error
+Begin snippet for conversion_dim_mismatch.gcl starting at line 2, column 1
+
+snippet line 2: param alt: Length = 400 km;
+snippet line 3: node bad: Length = @alt -> s;
+    label at line 3, column 28: target unit has different dimension
+diagnostic help: the `->` conversion operator can only change units within the same dimension
+diagnostic code: graphcal::D006
