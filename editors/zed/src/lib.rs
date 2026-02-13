@@ -17,21 +17,23 @@ impl zed::Extension for GraphcalExtension {
 
         if let Some(binary) = settings.binary {
             return Ok(zed::Command {
-                command: binary.path.unwrap_or_else(|| "graphcal-lsp".to_string()),
-                args: binary.arguments.unwrap_or_default(),
+                command: binary.path.unwrap_or_else(|| "graphcal".to_string()),
+                args: binary
+                    .arguments
+                    .unwrap_or_else(|| vec!["lsp".to_string()]),
                 env: Default::default(),
             });
         }
 
-        let path = worktree.which("graphcal-lsp").ok_or_else(|| {
-            "graphcal-lsp not found on PATH. \
-             Install with: cargo install --path crates/graphcal-lsp"
+        let path = worktree.which("graphcal").ok_or_else(|| {
+            "graphcal not found on PATH. \
+             Install with: cargo install graphcal"
                 .to_string()
         })?;
 
         Ok(zed::Command {
             command: path,
-            args: vec![],
+            args: vec!["lsp".to_string()],
             env: Default::default(),
         })
     }

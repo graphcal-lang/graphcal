@@ -424,9 +424,11 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "graphcal-eval",
+ "graphcal-lsp",
  "graphcal-syntax",
  "miette",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -449,7 +451,6 @@ name = "graphcal-lsp"
 version = "0.1.0"
 dependencies = [
  "graphcal-eval",
- "graphcal-syntax",
  "miette",
  "tokio",
  "tower-lsp",
