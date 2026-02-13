@@ -133,23 +133,71 @@ pub fn eval_expr(
         ExprKind::BinOp { op, lhs, rhs } => match op {
             // Logical operators: Bool operands, Bool result
             BinOp::And => {
-                let l = eval_expr(lhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_bool("AND operand");
-                let r = eval_expr(rhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_bool("AND operand");
+                let l = eval_expr(
+                    lhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_bool("AND operand");
+                let r = eval_expr(
+                    rhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_bool("AND operand");
                 Ok(RuntimeValue::Bool(l && r))
             }
             BinOp::Or => {
-                let l = eval_expr(lhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_bool("OR operand");
-                let r = eval_expr(rhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_bool("OR operand");
+                let l = eval_expr(
+                    lhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_bool("OR operand");
+                let r = eval_expr(
+                    rhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_bool("OR operand");
                 Ok(RuntimeValue::Bool(l || r))
             }
             // Equality: can compare Bool==Bool or Scalar==Scalar
             BinOp::Eq | BinOp::Ne => {
-                let l = eval_expr(lhs, values, local_values, builtin_consts, builtin_fns, registry, src)?;
-                let r = eval_expr(rhs, values, local_values, builtin_consts, builtin_fns, registry, src)?;
+                let l = eval_expr(
+                    lhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let r = eval_expr(
+                    rhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
                 if let (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) = (&l, &r) {
                     let result = match op {
                         BinOp::Eq => lb == rb,
@@ -164,33 +212,81 @@ pub fn eval_expr(
             }
             // Ordering comparisons: Scalar operands, Bool result
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                let l = eval_expr(lhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_scalar("comparison operand");
-                let r = eval_expr(rhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_scalar("comparison operand");
+                let l = eval_expr(
+                    lhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_scalar("comparison operand");
+                let r = eval_expr(
+                    rhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_scalar("comparison operand");
                 Ok(RuntimeValue::Bool(eval_comparison(*op, l, r)))
             }
             // Arithmetic operators: Scalar operands, Scalar result
             _ => {
-                let l = eval_expr(lhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_scalar("binary operand");
-                let r = eval_expr(rhs, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_scalar("binary operand");
+                let l = eval_expr(
+                    lhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_scalar("binary operand");
+                let r = eval_expr(
+                    rhs,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_scalar("binary operand");
                 Ok(RuntimeValue::Scalar(eval_binop(*op, l, r, src, expr.span)?))
             }
-        }
+        },
         ExprKind::UnaryOp { op, operand } => match op {
             UnaryOp::Neg => {
-                let v = eval_expr(operand, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_scalar("unary negation");
+                let v = eval_expr(
+                    operand,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_scalar("unary negation");
                 Ok(RuntimeValue::Scalar(-v))
             }
             UnaryOp::Not => {
-                let v = eval_expr(operand, values, local_values, builtin_consts, builtin_fns, registry, src)?
-                    .expect_bool("logical NOT");
+                let v = eval_expr(
+                    operand,
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?
+                .expect_bool("logical NOT");
                 Ok(RuntimeValue::Bool(!v))
             }
-        }
+        },
         ExprKind::FnCall { name, args } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
             if matches!(name.name.as_str(), "sum" | "min" | "max" | "mean" | "count")

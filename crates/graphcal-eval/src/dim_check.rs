@@ -549,8 +549,14 @@ fn infer_type(
         }
 
         ExprKind::UnaryOp { op, operand } => {
-            let operand_type =
-                infer_type(operand, declared_types, local_types, registry, builtin_fns, src)?;
+            let operand_type = infer_type(
+                operand,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                src,
+            )?;
             match op {
                 graphcal_syntax::ast::UnaryOp::Not => {
                     if operand_type != InferredType::Bool {
