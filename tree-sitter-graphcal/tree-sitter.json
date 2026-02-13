@@ -1,0 +1,21 @@
+{
+  "grammars": [
+    {
+      "name": "graphcal",
+      "camelCase": false,
+      "scope": "source.graphcal",
+      "path": ".",
+      "file-types": ["gcl"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^(graphcal|gcl)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for Graphcal (.gcl)",
+    "links": {
+      "repository": "https://github.com/shunichironomura/graphcal"
+    }
+  }
+}

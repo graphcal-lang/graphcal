@@ -1,0 +1,493 @@
+/// <reference types="tree-sitter-cli/dsl" />
+// @ts-check
+
+// Precedence levels (lowest to highest), matching the Graphcal parser.
+const PREC = {
+  CONVERT: 1,    // ->
+  OR: 2,         // ||
+  AND: 3,        // &&
+  COMPARE: 4,    // == != < > <= >=
+  ADD: 5,        // + -
+  MUL: 6,        // * /
+  UNARY: 7,      // - !
+  POWER: 8,      // ^
+  POSTFIX: 9,    // . []
+  CALL: 10,      // fn(...)
+};
+
+module.exports = grammar({
+  name: "graphcal",
+
+  extras: $ => [
+    /\s/,
+    $.line_comment,
+  ],
+
+  word: $ => $.identifier,
+
+  conflicts: $ => [
+    // `identifier {` could be a struct_construction or a bare identifier
+    // followed by a brace body (e.g., in `if condition { ... }`).
+    [$._primary_expr, $.struct_construction],
+  ],
+
+  rules: {
+    source_file: $ => repeat($._declaration),
+
+    // ---------------------------------------------------------------
+    // Declarations
+    // ---------------------------------------------------------------
+
+    _declaration: $ => choice(
+      $.param_declaration,
+      $.node_declaration,
+      $.const_declaration,
+      $.dimension_declaration,
+      $.unit_declaration,
+      $.type_declaration,
+      $.fn_declaration,
+      $.index_declaration,
+      $.use_declaration,
+    ),
+
+    // param dry_mass: Mass = 1200 kg;
+    param_declaration: $ => seq(
+      "param",
+      field("name", $.identifier),
+      optional(seq(":", field("type", $.type_expr))),
+      "=",
+      field("value", $._expr),
+      ";",
+    ),
+
+    // node v_exhaust: Velocity = @isp * G0;
+    node_declaration: $ => seq(
+      "node",
+      field("name", $.identifier),
+      optional(seq(":", field("type", $.type_expr))),
+      "=",
+      field("value", $._expr),
+      ";",
+    ),
+
+    // const G0: Acceleration = 9.80665 m/s^2;
+    const_declaration: $ => seq(
+      "const",
+      field("name", $.identifier),
+      optional(seq(":", field("type", $.type_expr))),
+      "=",
+      field("value", $._expr),
+      ";",
+    ),
+
+    // dimension Length;
+    // dimension Velocity = Length / Time;
+    dimension_declaration: $ => seq(
+      "dimension",
+      field("name", $.identifier),
+      optional(seq("=", field("definition", $.dim_expr))),
+      ";",
+    ),
+
+    // unit m: Length;
+    // unit km: Length = 1000 m;
+    unit_declaration: $ => seq(
+      "unit",
+      field("name", $.identifier),
+      ":",
+      field("dimension", $.dim_expr),
+      optional(seq("=", field("definition", $.unit_def))),
+      ";",
+    ),
+
+    // type TransferResult { dv1: Velocity, dv2: Velocity }
+    type_declaration: $ => seq(
+      "type",
+      field("name", $.identifier),
+      "{",
+      optional(seq(
+        $.field_declaration,
+        repeat(seq(",", $.field_declaration)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    field_declaration: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("type", $.type_expr),
+    ),
+
+    // index Maneuver = { Departure, Correction, Insertion }
+    index_declaration: $ => seq(
+      "index",
+      field("name", $.identifier),
+      "=",
+      "{",
+      optional(seq(
+        $.variant,
+        repeat(seq(",", $.variant)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    variant: $ => $.identifier,
+
+    // fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
+    // fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult { ... }
+    fn_declaration: $ => seq(
+      "fn",
+      field("name", $.identifier),
+      optional(field("generics", $.generic_params)),
+      "(",
+      optional(seq(
+        $.fn_param,
+        repeat(seq(",", $.fn_param)),
+        optional(","),
+      )),
+      ")",
+      "->",
+      field("return_type", $.type_expr),
+      choice(
+        // Short form: = expr;
+        seq("=", field("body", $._expr), ";"),
+        // Block form: { let ...; expr }
+        field("body", $.block_expr),
+      ),
+    ),
+
+    generic_params: $ => seq(
+      "<",
+      $.generic_param,
+      repeat(seq(",", $.generic_param)),
+      optional(","),
+      ">",
+    ),
+
+    generic_param: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("constraint", $.generic_constraint),
+    ),
+
+    generic_constraint: $ => choice("Dim", "Index"),
+
+    fn_param: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("type", $.type_expr),
+    ),
+
+    // use "./path.gcl" { name1, name2 };
+    use_declaration: $ => seq(
+      "use",
+      field("path", $.string_literal),
+      "{",
+      optional(seq(
+        $.identifier,
+        repeat(seq(",", $.identifier)),
+        optional(","),
+      )),
+      "}",
+      ";",
+    ),
+
+    // ---------------------------------------------------------------
+    // Type expressions
+    // ---------------------------------------------------------------
+
+    type_expr: $ => choice(
+      $.indexed_type,
+      $._type_expr_base,
+    ),
+
+    _type_expr_base: $ => choice(
+      $.dimensionless,
+      $.dim_expr,
+    ),
+
+    dimensionless: $ => "Dimensionless",
+
+    // Indexed type: Velocity[Maneuver] or Dimensionless[A, B]
+    indexed_type: $ => seq(
+      field("base", $._type_expr_base),
+      "[",
+      $.identifier,
+      repeat(seq(",", $.identifier)),
+      "]",
+    ),
+
+    // ---------------------------------------------------------------
+    // Dimension expressions: Length, Length^2, Mass * Length / Time^2
+    // ---------------------------------------------------------------
+
+    dim_expr: $ => prec.right(PREC.MUL + 1, seq(
+      $.dim_term,
+      repeat(seq(choice("*", "/"), $.dim_term)),
+    )),
+
+    dim_term: $ => prec.right(PREC.POWER + 1, seq(
+      $.identifier,
+      optional(seq("^", $.number)),
+    )),
+
+    // ---------------------------------------------------------------
+    // Unit expressions: m, m/s^2, kg * m / s^2
+    // ---------------------------------------------------------------
+
+    unit_expr: $ => prec.right(PREC.MUL + 1, seq(
+      $.unit_term,
+      repeat(seq(choice("*", "/"), $.unit_term)),
+    )),
+
+    unit_term: $ => prec.right(PREC.POWER + 1, seq(
+      $.identifier,
+      optional(seq("^", $.number)),
+    )),
+
+    // Unit definition in unit declaration: 1000 m, 1 kg * m / s^2
+    unit_def: $ => seq(
+      $.number,
+      $.unit_expr,
+    ),
+
+    // ---------------------------------------------------------------
+    // Expressions
+    // ---------------------------------------------------------------
+
+    _expr: $ => choice(
+      $.binary_expr,
+      $.unary_expr,
+      $.convert_expr,
+      $.if_expr,
+      $.for_expr,
+      $.scan_expr,
+      $._postfix_expr,
+    ),
+
+    // Conversion: expr -> unit_expr
+    convert_expr: $ => prec.left(PREC.CONVERT, seq(
+      field("value", $._expr),
+      "->",
+      field("target", $.unit_expr),
+    )),
+
+    binary_expr: $ => choice(
+      prec.left(PREC.OR, seq(field("left", $._expr), "||", field("right", $._expr))),
+      prec.left(PREC.AND, seq(field("left", $._expr), "&&", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), "==", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), "!=", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), "<", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), ">", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), "<=", field("right", $._expr))),
+      prec.left(PREC.COMPARE, seq(field("left", $._expr), ">=", field("right", $._expr))),
+      prec.left(PREC.ADD, seq(field("left", $._expr), "+", field("right", $._expr))),
+      prec.left(PREC.ADD, seq(field("left", $._expr), "-", field("right", $._expr))),
+      prec.left(PREC.MUL, seq(field("left", $._expr), "*", field("right", $._expr))),
+      prec.left(PREC.MUL, seq(field("left", $._expr), "/", field("right", $._expr))),
+      prec.right(PREC.POWER, seq(field("left", $._expr), "^", field("right", $._expr))),
+    ),
+
+    unary_expr: $ => prec(PREC.UNARY, seq(
+      field("operator", choice("-", "!")),
+      field("operand", $._expr),
+    )),
+
+    if_expr: $ => prec.right(seq(
+      "if",
+      field("condition", $._expr),
+      field("then", $.brace_body),
+      "else",
+      field("else", $.brace_body),
+    )),
+
+    // for m: Maneuver { ... }
+    for_expr: $ => seq(
+      "for",
+      $.for_binding,
+      repeat(seq(",", $.for_binding)),
+      field("body", $.brace_body),
+    ),
+
+    for_binding: $ => seq(
+      field("var", $.identifier),
+      ":",
+      field("index", $.identifier),
+    ),
+
+    // scan(source, init, |acc, val| body)
+    scan_expr: $ => seq(
+      "scan",
+      "(",
+      field("source", $._expr),
+      ",",
+      field("init", $._expr),
+      ",",
+      "|",
+      field("acc", $.identifier),
+      ",",
+      field("val", $.identifier),
+      "|",
+      field("body", $._expr),
+      ")",
+    ),
+
+    // Postfix expressions: field access, index access, function calls
+    _postfix_expr: $ => choice(
+      $.field_access,
+      $.index_access,
+      $.fn_call,
+      $._primary_expr,
+    ),
+
+    field_access: $ => prec.left(PREC.POSTFIX, seq(
+      field("object", $._expr),
+      ".",
+      field("field", $.identifier),
+    )),
+
+    index_access: $ => prec.left(PREC.POSTFIX, seq(
+      field("object", $._expr),
+      "[",
+      $.index_arg,
+      repeat(seq(",", $.index_arg)),
+      "]",
+    )),
+
+    index_arg: $ => choice(
+      $.qualified_variant,
+      $.identifier,
+    ),
+
+    // Maneuver::Departure
+    qualified_variant: $ => seq(
+      field("index", $.identifier),
+      "::",
+      field("variant", $.identifier),
+    ),
+
+    fn_call: $ => prec(PREC.CALL, seq(
+      field("name", $.identifier),
+      "(",
+      optional(seq(
+        $._expr,
+        repeat(seq(",", $._expr)),
+        optional(","),
+      )),
+      ")",
+    )),
+
+    // Primary expressions
+    _primary_expr: $ => choice(
+      $.number,
+      $.boolean,
+      $.unit_literal,
+      $.graph_ref,
+      $.struct_construction,
+      $.map_literal,
+      $.block_expr,
+      $.parenthesized_expr,
+      $.identifier,
+    ),
+
+    // Unit-annotated literal: 400 km, 9.80665 m/s^2
+    // Uses dynamic precedence to prefer unit_literal over bare number
+    // when followed by an identifier in expression context.
+    unit_literal: $ => prec.dynamic(1, seq(
+      field("value", $.number),
+      field("unit", $.unit_expr),
+    )),
+
+    graph_ref: $ => seq(
+      "@",
+      field("name", $.identifier),
+    ),
+
+    // TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }
+    struct_construction: $ => seq(
+      field("type", $.identifier),
+      "{",
+      optional(seq(
+        $.field_init,
+        repeat(seq(",", $.field_init)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    field_init: $ => choice(
+      // Explicit: field_name: expr
+      seq(
+        field("name", $.identifier),
+        ":",
+        field("value", $._expr),
+      ),
+      // Shorthand: field_name
+      field("name", $.identifier),
+    ),
+
+    // { Maneuver::Departure: 2.46 km/s, ... }
+    map_literal: $ => seq(
+      "{",
+      optional(seq(
+        $.map_entry,
+        repeat(seq(",", $.map_entry)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    map_entry: $ => seq(
+      field("key", $.qualified_variant),
+      ":",
+      field("value", $._expr),
+    ),
+
+    // { let r1 = ...; let r2 = ...; expr }
+    block_expr: $ => seq(
+      "{",
+      repeat($.let_binding),
+      field("value", $._expr),
+      "}",
+    ),
+
+    let_binding: $ => seq(
+      "let",
+      field("name", $.identifier),
+      optional(seq(":", field("type", $.type_expr))),
+      "=",
+      field("value", $._expr),
+      ";",
+    ),
+
+    // A brace-delimited body used by if/for (single expression, no let bindings)
+    brace_body: $ => seq(
+      "{",
+      field("value", $._expr),
+      "}",
+    ),
+
+    parenthesized_expr: $ => seq(
+      "(",
+      $._expr,
+      ")",
+    ),
+
+    // ---------------------------------------------------------------
+    // Terminals
+    // ---------------------------------------------------------------
+
+    // Numeric literal with underscores and scientific notation
+    number: $ => /[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?/,
+
+    boolean: $ => choice("true", "false"),
+
+    string_literal: $ => /"[^"]*"/,
+
+    identifier: $ => /[a-zA-Z][a-zA-Z0-9_]*/,
+
+    line_comment: $ => token(seq("//", /.*/)),
+  },
+});
