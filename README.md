@@ -33,7 +33,7 @@ delta_v    = 3778.220768 m/s
 ## Installation
 
 ```sh
-cargo build -p graphcal
+cargo install --git https://github.com/shunichironomura/graphcal --locked
 ```
 
 ## Usage
