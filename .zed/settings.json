@@ -1,0 +1,9 @@
+{
+  "lsp": {
+    "graphcal-lsp": {
+      "binary": {
+        "path": "/Users/nomura/ghq/github.com/shunichironomura/graphcal/target/release/graphcal-lsp",
+      },
+    },
+  },
+}

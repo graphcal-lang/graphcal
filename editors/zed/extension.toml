@@ -13,4 +13,4 @@ path = "tree-sitter-graphcal"
 
 [language_servers.graphcal-lsp]
 name = "Graphcal LSP"
-languages = ["Graphcal"]
+language = "Graphcal"

@@ -1,2 +1,3 @@
-# Zed build artifacts (grammar clones)
+# Zed build artifacts
 grammars/
+extension.wasm

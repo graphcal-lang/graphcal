@@ -15,7 +15,16 @@ struct Backend {
 }
 
 impl Backend {
+    fn is_graphcal_file(uri: &Url) -> bool {
+        std::path::Path::new(uri.path())
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    }
+
     async fn analyze_and_publish(&self, uri: Url, text: String) {
+        if !Self::is_graphcal_file(&uri) {
+            return;
+        }
         let diagnostics = produce_diagnostics(&text, uri.as_str());
         self.client
             .publish_diagnostics(uri, diagnostics, None)
