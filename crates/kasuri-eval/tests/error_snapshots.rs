@@ -1,3 +1,4 @@
+//! Tests for error rendering snapshots.
 #![allow(clippy::unwrap_used)]
 
 use kasuri_eval::eval::compile_and_eval_named;

@@ -60,6 +60,7 @@ node total = @transfer.total_dv;
 ## Open Questions
 
 - **Pattern matching:** How are tagged unions consumed? Is there a `match` expression?
+
   ```rust
   node fuel = match @maneuver_kind {
       Impulsive(dv) => rocket_fuel(@dry_mass, dv, @v_exhaust),
@@ -67,6 +68,7 @@ node total = @transfer.total_dv;
       GravityAssist(_, _) => 0 kg,
   };
   ```
+
 - **Exhaustiveness checking:** If `match` is supported, should it enforce exhaustive patterns?
 - **Generic types:** Can types be generic? E.g., `type Pair<A, B> { first: A, second: B }`?
 - **Dimensional fields:** Can struct fields carry dimensions? This is already shown in examples (`sma: Length`), but the interaction with the dimension algebra needs specification (e.g., can you do `@orbit.sma + 100 km`?).

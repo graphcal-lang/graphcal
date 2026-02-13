@@ -1,3 +1,4 @@
+//! Allow use of unwrap in tests
 #![allow(clippy::unwrap_used)]
 
 use std::process::Command;
