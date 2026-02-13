@@ -1,3 +1,0 @@
-// constants.ksr -- shared constants
-dimension Acceleration = Length / Time^2;
-const G0: Acceleration = 9.80665 m/s^2;

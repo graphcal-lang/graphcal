@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Length, found Time
+    Diagnostic severity: error
+Begin snippet for dim_mismatch_add.gcl starting at line 3, column 1
+
+snippet line 3: param period: Time = 90 min;
+snippet line 4: node bad: Length = @alt + @period;
+    label at line 4, columns 27 to 33: has dimension Time
+diagnostic help: operands of addition and subtraction must have the same dimension
+diagnostic code: graphcal::D001

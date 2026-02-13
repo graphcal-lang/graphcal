@@ -1,2 +1,0 @@
-use "./nonexistent.ksr" { x };
-param y: Dimensionless = 1.0;

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot access field of non-struct value `Length`
+    Diagnostic severity: error
+Begin snippet for not_a_struct.gcl starting at line 1, column 1
+
+snippet line 1: param x: Length = 1.0 m;
+snippet line 2: node bad: Length = @x.foo;
+    label at line 2, columns 20 to 21: not a struct
+diagnostic help: field access `.field` is only valid on struct values
+diagnostic code: graphcal::S007

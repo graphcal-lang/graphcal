@@ -172,7 +172,7 @@ STRING        = '"' <characters> '"'
 
 ## Milestone Test
 
-```kasuri
+```graphcal
 index Maneuver = { Departure, Correction, Insertion }
 
 dimension Velocity = Length / Time;
@@ -213,7 +213,7 @@ node max_dv: Velocity = max(for m: Maneuver { @delta_v[m] })
 ```
 
 ```text
-$ kasuri eval mission.ksr
+$ graphcal eval mission.gcl
 dry_mass  = 1200 kg
 isp       = 320 s
 G0        = 9.80665 m/s^2
@@ -249,7 +249,7 @@ max_dv     = 2.46 km/s
 
 ### Multi-axis example
 
-```kasuri
+```graphcal
 index Row = { R1, R2 }
 index Col = { C1, C2, C3 }
 
@@ -271,7 +271,7 @@ node P_T: Dimensionless[Col, Row] = for c: Col, r: Row {
 
 ### Matrix multiplication example
 
-```kasuri
+```graphcal
 index I = { I1, I2 }
 index J = { J1, J2, J3 }
 index K = { K1, K2 }
@@ -287,7 +287,7 @@ node C: Dimensionless[I, K] = for i: I, k: K {
 
 ### Generic function over indexed values
 
-```kasuri
+```graphcal
 fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
 
 fn dot<I: Index>(a: Dimensionless[I], b: Dimensionless[I]) -> Dimensionless =
@@ -296,7 +296,7 @@ fn dot<I: Index>(a: Dimensionless[I], b: Dimensionless[I]) -> Dimensionless =
 
 ### Error cases that must work
 
-```kasuri
+```graphcal
 // error: missing variant in map literal
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,

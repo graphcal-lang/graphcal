@@ -49,7 +49,7 @@ node downstream = f(@rounded);                        // skips recomputation if 
 
 Inputs are classified by how frequently they change, enabling the runtime to skip validation for stable subgraphs:
 
-| Classification | Kasuri concept | Change frequency |
+| Classification | Graphcal concept | Change frequency |
 | --- | --- | --- |
 | Low | `param` adjusted by slider or input field | Every interaction |
 | Medium | Scenario overlays | On scenario switch |
@@ -63,7 +63,7 @@ Nodes are identified by **name**, not by declaration order or source position. R
 
 ### Static Dependency Extraction
 
-Unlike Salsa (which discovers dependencies at runtime) or comemo (which tracks observed accesses), Kasuri can extract the full dependency graph **statically** from `@` references in the source. This is a significant simplification: the DAG is known at compile time, enabling ahead-of-time topological sorting and parallel scheduling without runtime tracking overhead.
+Unlike Salsa (which discovers dependencies at runtime) or comemo (which tracks observed accesses), Graphcal can extract the full dependency graph **statically** from `@` references in the source. This is a significant simplification: the DAG is known at compile time, enabling ahead-of-time topological sorting and parallel scheduling without runtime tracking overhead.
 
 ## DAG Constraints
 

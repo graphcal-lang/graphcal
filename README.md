@@ -1,12 +1,12 @@
-# Kasuri
+# Graphcal
 
 **A type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations.**
 
-Kasuri replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
+Graphcal replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, Vensim logistics models, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
 ## Current Status: Phase 5 + Multi-File Imports
 
-Phases 0--5 and multi-file imports are implemented. Kasuri supports dimensioned
+Phases 0--5 and multi-file imports are implemented. Graphcal supports dimensioned
 arithmetic with physical units, user-defined struct types, multi-line node bodies
 with `let` bindings, pure functions with dimension generics, indexed values with
 aggregation, multi-file projects with `use` imports, and runtime parameter
@@ -15,7 +15,7 @@ overrides via `--set`.
 ### Rocket equation with units
 
 ```
-// rocket.ksr
+// rocket.gcl
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
 
@@ -30,7 +30,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```
-$ kasuri eval rocket.ksr
+$ graphcal eval rocket.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
@@ -43,7 +43,7 @@ delta_v    = 3778.220768 m/s
 ### Hohmann transfer with structs and blocks
 
 ```
-// hohmann.ksr
+// hohmann.gcl
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
 
@@ -83,7 +83,7 @@ node tof_hours: Time = @transfer.tof -> hour;
 ```
 
 ```
-$ kasuri eval hohmann.ksr
+$ graphcal eval hohmann.gcl
 R_EARTH           = 6371 km
 GM_EARTH          = 398600.4418 km^3/s^2
 parking_alt       = 200 km
@@ -99,7 +99,7 @@ tof_hours         = 5.256557 hour
 ### Reusable functions with dimension generics
 
 ```
-// functions.ksr
+// functions.gcl
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
 
@@ -118,7 +118,7 @@ node midpoint_alt: Length = lerp(@parking_alt, @target_alt, 0.5);
 ```
 
 ```
-$ kasuri eval functions.ksr
+$ graphcal eval functions.gcl
 R_EARTH      = 6371 km
 GM_EARTH     = 398600.4418 km^3/s^2
 parking_alt  = 200 km
@@ -130,7 +130,7 @@ midpoint_alt = 17993000 m
 ### Indexed values with aggregation
 
 ```
-// indexed.ksr
+// indexed.gcl
 dimension Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion }
@@ -153,7 +153,7 @@ node total_check: Velocity = total(@delta_v);
 ```
 
 ```
-$ kasuri eval indexed.ksr
+$ graphcal eval indexed.gcl
 delta_v[Departure]          = 2.46 km/s
 delta_v[Correction]         = 0.12 km/s
 delta_v[Insertion]          = 1.83 km/s
@@ -170,22 +170,22 @@ total_check                 = 4410 m/s
 ### Multi-file projects with imports
 
 ```
-// constants.ksr
+// constants.gcl
 dimension Acceleration = Length / Time^2;
 const G0: Acceleration = 9.80665 m/s^2;
 ```
 
 ```
-// params.ksr
+// params.gcl
 param dry_mass: Mass = 1200 kg;
 param fuel_mass: Mass = 2800 kg;
 param isp: Time = 320 s;
 ```
 
 ```
-// main.ksr
-use "./constants.ksr" { G0 };
-use "./params.ksr" { dry_mass, fuel_mass, isp };
+// main.gcl
+use "./constants.gcl" { G0 };
+use "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dimension Velocity = Length / Time;
 
@@ -195,7 +195,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```
-$ kasuri eval main.ksr
+$ graphcal eval main.gcl
 G0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
@@ -208,7 +208,7 @@ delta_v    = 3778.220768 m/s
 Imported params can be overridden at the command line:
 
 ```
-$ kasuri eval main.ksr --set 'isp=450 s'
+$ graphcal eval main.gcl --set 'isp=450 s'
 G0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
@@ -271,7 +271,7 @@ delta_v    = 5313.122956 m/s
 
 **Multi-file imports (Phase 4)**
 
-- `use "./path/to/file.ksr" { name1, name2 };` imports declarations from other files
+- `use "./path/to/file.gcl" { name1, name2 };` imports declarations from other files
 - File paths are resolved relative to the importing file's directory
 - All declaration kinds can be imported (const, param, node, dimension, unit, type, index, fn)
 - Imported params/nodes participate in the DAG and can be overridden with `--set`
@@ -288,45 +288,45 @@ delta_v    = 5313.122956 m/s
 ## Installation
 
 ```sh
-cargo build -p kasuri
+cargo build -p graphcal
 ```
 
 ## Usage
 
 ```sh
-# Evaluate a .ksr file (text output)
-kasuri eval path/to/file.ksr
+# Evaluate a .gcl file (text output)
+graphcal eval path/to/file.gcl
 
 # JSON output
-kasuri eval path/to/file.ksr --format json
+graphcal eval path/to/file.gcl --format json
 
 # Override a param value
-kasuri eval path/to/file.ksr --set 'isp=450 s'
+graphcal eval path/to/file.gcl --set 'isp=450 s'
 
 # Multi-file project (use declarations resolved automatically)
-kasuri eval project/main.ksr
+graphcal eval project/main.gcl
 ```
 
 ## Project Structure
 
 ```
-kasuri/
+graphcal/
   crates/
-    kasuri-syntax/   # lexer (logos) + recursive descent parser + AST
-    kasuri-eval/     # name resolution, dim check, const eval, DAG, runtime eval
-    kasuri-cli/      # CLI binary (clap + miette)
+    graphcal-syntax/   # lexer (logos) + recursive descent parser + AST
+    graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
+    graphcal-cli/      # CLI binary (clap + miette)
   design/            # language design documents
-  tests/fixtures/    # .ksr test files (single-file and multi-file)
+  tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```
 
 ## Vision
 
-Kasuri is designed to eventually support:
+Graphcal is designed to eventually support:
 
 - **Coordinate frame safety** -- prevents mixing vectors from different reference frames at compile time
 - **Dynamic simulation** -- `scan` over a time axis for system dynamics
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
-- **Spreadsheet import/export** -- maintain `.ksr` source, domain experts keep their Excel
+- **Spreadsheet import/export** -- maintain `.gcl` source, domain experts keep their Excel
 
 See the [design documents](design/README.md) and [phase roadmap](design/phases/README.md) for details.
 

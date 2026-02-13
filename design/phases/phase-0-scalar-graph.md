@@ -4,7 +4,7 @@
 
 ## Goal
 
-Prove the core computation model works end-to-end: parse a `.ksr` file,
+Prove the core computation model works end-to-end: parse a `.gcl` file,
 build a DAG, topologically sort, evaluate, print results. Everything is
 `f64` -- no dimensions, no units, no types.
 
@@ -57,14 +57,14 @@ These open questions from the aspect docs must be resolved before implementing P
 
 - [x] **Error format:** Use miette's `GraphicalReportHandler` for terminal output (Unicode
       box-drawing, ANSI colors, labeled spans). See [17-error-messages.md](../17-error-messages.md).
-- [x] **Error codes:** Assign from the start using the `kasuri::{PREFIX}{NUMBER}` scheme.
+- [x] **Error codes:** Assign from the start using the `graphcal::{PREFIX}{NUMBER}` scheme.
       Phase 0 needs `P0xx` (parse), `G0xx` (graph), and `N0xx` (namespace) error codes.
 
 ### Naming and file conventions
 
-- [x] **CLI binary name:** `kasuri`.
-- [x] **File extension:** `.ksr`.
-- [x] **CLI command:** `kasuri eval <file>`.
+- [x] **CLI binary name:** `graphcal`.
+- [x] **File extension:** `.gcl`.
+- [x] **CLI command:** `graphcal eval <file>`.
 
 ### Casing rules (compiler-enforced)
 
@@ -182,12 +182,12 @@ UPPER_IDENT   = [A-Z][A-Z0-9_]*
 
 | Component | Description |
 | --- | --- |
-| **Parser** | `.ksr` file -> AST (single file) |
+| **Parser** | `.gcl` file -> AST (single file) |
 | **Name resolver** | Resolve `@` references and bare const references, detect duplicates, detect cycles, enforce casing rules |
 | **Const evaluator** | Topologically sort `const` declarations, evaluate compile-time expressions |
 | **DAG builder** | AST -> `petgraph` DAG (params and nodes only, consts inlined) |
 | **Evaluator** | Topological sort, evaluate `f64` arithmetic |
-| **CLI** | `kasuri eval <file>` prints all values; `--format json` for machine-readable output |
+| **CLI** | `graphcal eval <file>` prints all values; `--format json` for machine-readable output |
 | **Error reporter** | Parse errors, unknown references, cycles, casing violations (via miette) |
 
 ## Out of Scope
@@ -208,7 +208,7 @@ Everything not listed above. Specifically:
 ## Milestone Test
 
 ```rust
-// rocket.ksr
+// rocket.gcl
 param dry_mass = 1200.0;
 param fuel_mass = 2800.0;
 param isp = 320.0;
@@ -220,7 +220,7 @@ node delta_v = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```
-$ kasuri eval rocket.ksr
+$ graphcal eval rocket.gcl
 dry_mass     = 1200
 fuel_mass    = 2800
 isp          = 320
@@ -233,7 +233,7 @@ delta_v      = 3783.277
 ### Const cross-reference test
 
 ```rust
-// constants.ksr
+// constants.gcl
 const G0 = 9.80665;
 const TWO_G0 = 2.0 * G0;
 const HALF_PI = PI / 2.0;
@@ -247,7 +247,7 @@ node area = PI * @radius ^ 2.0;
 ### JSON output test
 
 ```
-$ kasuri eval rocket.ksr --format json
+$ graphcal eval rocket.gcl --format json
 {
   "const": {
     "G0": 9.80665
@@ -268,27 +268,27 @@ $ kasuri eval rocket.ksr --format json
 ### Error cases that must work
 
 ```rust
-// error[kasuri::N002]: unknown graph reference
+// error[graphcal::N002]: unknown graph reference
 node x = @nonexistent + 1.0;
 
-// error[kasuri::G001]: cyclic dependency
+// error[graphcal::G001]: cyclic dependency
 node a = @b + 1.0;
 node b = @a + 1.0;
 
-// error[kasuri::N001]: duplicate name
+// error[graphcal::N001]: duplicate name
 param x = 1.0;
 node x = 2.0;
 
-// error[kasuri::P0xx]: @ not allowed in const expression
+// error[graphcal::P0xx]: @ not allowed in const expression
 const BAD = @some_param * 2.0;
 
-// error[kasuri::P0xx]: const name must be UPPER_SNAKE_CASE
+// error[graphcal::P0xx]: const name must be UPPER_SNAKE_CASE
 const bad_name = 42.0;
 
-// error[kasuri::P0xx]: param name must be lower_snake_case
+// error[graphcal::P0xx]: param name must be lower_snake_case
 param BadParam = 42.0;
 
-// error[kasuri::G001]: cyclic dependency among consts
+// error[graphcal::G001]: cyclic dependency among consts
 const A = B + 1.0;
 const B = A + 1.0;
 ```

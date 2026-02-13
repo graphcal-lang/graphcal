@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/kasuri-cli"]
+default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
 readme = "README.md"
-repository = "https://github.com/shunichironomura/kasuri"
+repository = "https://github.com/shunichironomura/graphcal"
 license = "MIT OR Apache-2.0"
 keywords = ["engineering", "units", "reactive", "calculations"]
 categories = ["compilers", "science"]
@@ -18,9 +18,9 @@ categories = ["compilers", "science"]
 clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
-kasuri-cli = { path = "crates/kasuri-cli", version = "0.1.0" }
-kasuri-eval = { path = "crates/kasuri-eval", version = "0.1.0" }
-kasuri-syntax = { path = "crates/kasuri-syntax", version = "0.1.0" }
+graphcal-cli = { path = "crates/graphcal-cli", version = "0.1.0" }
+graphcal-eval = { path = "crates/graphcal-eval", version = "0.1.0" }
+graphcal-syntax = { path = "crates/graphcal-syntax", version = "0.1.0" }
 logos = "0.16.1"
 miette = "7.6.0"
 petgraph = "0.8.3"

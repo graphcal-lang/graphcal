@@ -1,4 +1,4 @@
-# Ideas for Kasuri
+# Ideas for Graphcal
 
 ## Researched / Incorporated into Design
 

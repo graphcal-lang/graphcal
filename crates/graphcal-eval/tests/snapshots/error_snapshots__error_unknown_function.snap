@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown function `bogus`
+    Diagnostic severity: error
+Begin snippet for unknown_function.gcl starting at line 2, column 1
+
+snippet line 2: param x: Dimensionless = 1.0;
+snippet line 3: node y: Dimensionless = bogus(@x);
+    label at line 3, columns 25 to 29: unknown function
+diagnostic help: check function name and ensure it is defined
+diagnostic code: graphcal::N004

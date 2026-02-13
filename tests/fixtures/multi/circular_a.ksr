@@ -1,2 +1,0 @@
-use "./circular_b.ksr" { y };
-param x: Dimensionless = 1.0;

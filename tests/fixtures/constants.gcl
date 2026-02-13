@@ -1,0 +1,12 @@
+// constants.gcl -- const cross-reference test with units
+dimension Acceleration = Length / Time^2;
+dimension Area = Length^2;
+
+const G0: Acceleration = 9.80665 m/s^2;
+const TWO_G0: Acceleration = 2.0 * G0;
+const HALF_PI: Dimensionless = PI / 2.0;
+const SQRT2: Dimensionless = sqrt(2.0);
+
+param radius: Length = 100 m;
+node circumference: Length = 2.0 * PI * @radius;
+node area: Area = PI * @radius ^ 2.0;

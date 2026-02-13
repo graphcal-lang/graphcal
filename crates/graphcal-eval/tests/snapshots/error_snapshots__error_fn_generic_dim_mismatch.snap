@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Length, found Time
+    Diagnostic severity: error
+Begin snippet for fn_generic_dim_mismatch.gcl starting at line 6, column 1
+
+snippet line 6: 
+snippet line 7: node bad: Length = add(@x, @t);
+    label at line 7, columns 28 to 29: has dimension Time
+diagnostic help: generic `D` was bound to Length but this argument requires Time
+diagnostic code: graphcal::D001

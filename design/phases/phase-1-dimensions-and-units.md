@@ -14,7 +14,7 @@ The compiler rejects dimension mismatches before evaluation.
 Phase 0 (Scalar Graph) must be complete. Phase 1 extends Phase 0:
 
 - Bare `f64` literals become `Dimensionless` values.
-- Existing Phase 0 `.ksr` files are **not** valid in Phase 1 (type annotations are now required).
+- Existing Phase 0 `.gcl` files are **not** valid in Phase 1 (type annotations are now required).
   This is an accepted breaking change.
 - The parser and evaluator are extended, not replaced.
 
@@ -40,7 +40,7 @@ Phase 0 (Scalar Graph) must be complete. Phase 1 extends Phase 0:
       If computed, display in base SI. Explicit `->` conversion overrides display unit.
       Clever unit inference deferred.
 - [x] **User-defined dimensions in the same file:** Yes. `dimension MyDim;` and
-      `dimension Velocity = Length / Time;` are supported in regular `.ksr` files.
+      `dimension Velocity = Length / Time;` are supported in regular `.gcl` files.
 - [x] **Unit prefixes:** Individual declarations (no prefix mechanism).
       `unit km: Length = 1000 m;` is declared individually.
 
@@ -71,7 +71,7 @@ Phase 0 (Scalar Graph) must be complete. Phase 1 extends Phase 0:
 ### Prelude (Phase 1 subset)
 
 - [x] **How to ship the prelude:** Hard-coded in the compiler. Can migrate to
-      auto-loaded `.ksr` prelude in Phase 4 (multi-file).
+      auto-loaded `.gcl` prelude in Phase 4 (multi-file).
 - [x] **Prelude contents:** See "Prelude Contents" section below.
 
 ## Syntax Supported in Phase 1
@@ -202,7 +202,7 @@ E: Dimensionless
 ## Milestone Test
 
 ```rust
-// orbital.ksr
+// orbital.gcl
 dimension Velocity = Length / Time;
 
 param alt: Length = 400 km;
@@ -215,7 +215,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
 ```
 
 ```
-$ kasuri eval orbital.ksr
+$ graphcal eval orbital.gcl
 alt            = 400 km
 period         = 90 min
 R_EARTH        = 6371 km
