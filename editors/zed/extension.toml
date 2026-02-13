@@ -8,5 +8,5 @@ repository = "https://github.com/shunichironomura/graphcal"
 
 [grammars.graphcal]
 repository = "https://github.com/shunichironomura/graphcal"
-rev = "2ac505c"
+rev = "tree-sitter-zed"
 path = "tree-sitter-graphcal"
