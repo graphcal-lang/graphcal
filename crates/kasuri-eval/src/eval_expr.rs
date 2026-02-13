@@ -136,9 +136,7 @@ pub fn eval_expr(
                 src,
             )?
             .expect_scalar("binary operand");
-            Ok(RuntimeValue::Scalar(eval_binop(
-                *op, l, r, src, expr.span,
-            )?))
+            Ok(RuntimeValue::Scalar(eval_binop(*op, l, r, src, expr.span)?))
         }
         ExprKind::UnaryOp { op, operand } => {
             let v = eval_expr(
@@ -238,10 +236,7 @@ pub fn eval_expr(
                     .collect::<Result<_, _>>()?;
                 let result = (builtin.eval)(&arg_values);
                 return Ok(RuntimeValue::Scalar(check_finite(
-                    result,
-                    &name.name,
-                    src,
-                    expr.span,
+                    result, &name.name, src, expr.span,
                 )?));
             }
 

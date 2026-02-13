@@ -1504,50 +1504,34 @@ mod tests {
 
     #[test]
     fn eval_sqrt_negative() {
-        assert_eval_error(
-            "node y: Dimensionless = sqrt(-1.0);",
-            "NaN",
-        );
+        assert_eval_error("node y: Dimensionless = sqrt(-1.0);", "NaN");
     }
 
     #[test]
     fn eval_ln_zero() {
-        assert_eval_error(
-            "node y: Dimensionless = ln(0.0);",
-            "infinite",
-        );
+        assert_eval_error("node y: Dimensionless = ln(0.0);", "infinite");
     }
 
     #[test]
     fn eval_ln_negative() {
-        assert_eval_error(
-            "node y: Dimensionless = ln(-1.0);",
-            "NaN",
-        );
+        assert_eval_error("node y: Dimensionless = ln(-1.0);", "NaN");
     }
 
     #[test]
     fn eval_exp_overflow() {
-        assert_eval_error(
-            "node y: Dimensionless = exp(1000.0);",
-            "infinite",
-        );
+        assert_eval_error("node y: Dimensionless = exp(1000.0);", "infinite");
     }
 
     #[test]
     fn eval_power_negative_base_frac_exp() {
-        assert_eval_error(
-            "node y: Dimensionless = (-1.0) ^ 0.5;",
-            "NaN",
-        );
+        assert_eval_error("node y: Dimensionless = (-1.0) ^ 0.5;", "NaN");
     }
 
     #[test]
     fn eval_valid_division_ok() {
-        let result = compile_and_eval(
-            "param x: Dimensionless = 10.0;\nnode y: Dimensionless = @x / 2.0;",
-        )
-        .unwrap();
+        let result =
+            compile_and_eval("param x: Dimensionless = 10.0;\nnode y: Dimensionless = @x / 2.0;")
+                .unwrap();
         assert!((find_value(&result, "y") - 5.0).abs() < f64::EPSILON);
     }
 
