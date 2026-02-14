@@ -12,6 +12,57 @@ Inspired by [Sguaba](https://github.com/helsing-ai/sguaba), which uses Rust phan
 
 A `tag` declares a family of semantically distinct contexts. Tags are applied as type parameters using generics syntax (`Length<Frame.ECI>`), and removed via explicit `as` cast (`@pos as Length`).
 
+## Sguaba: Prior Art and Lessons
+
+[Sguaba](https://github.com/helsing-ai/sguaba) is the primary inspiration for tags. It uses Rust phantom types to prevent mixing vectors from different coordinate frames. Key design patterns and how Graphcal adapts them:
+
+### How Sguaba Works
+
+Every spatial type carries a frame as a phantom type parameter:
+```rust
+pub struct Vector<In, Time = Z0> {
+    inner: Vector3,            // raw data
+    system: PhantomData<In>,   // frame marker — zero cost at runtime
+}
+```
+
+Frames are zero-sized marker structs with a convention (axis naming):
+```rust
+system! { pub struct PlaneNed using NED }
+// → struct PlaneNed; impl CoordinateSystem for PlaneNed { type Convention = NedLike; }
+```
+
+Transforms are parameterized by source and destination frames:
+```rust
+pub struct Rotation<From, To> { inner: UnitQuaternion, ... }
+
+// Application: Vector<From> * Rotation<From, To> → Vector<To>
+// Composition: Rotation<A, B> * Rotation<B, C> → Rotation<A, C>  (middle-type cancellation)
+```
+
+Constructing a transform is `unsafe` — not for memory safety, but because the programmer is asserting "these numbers really do represent the claimed frame relationship." This is Sguaba's trust boundary.
+
+### What Graphcal Adopts
+
+| Sguaba Pattern | Graphcal Adaptation |
+| --- | --- |
+| Phantom type parameter per value | `Length<Frame.ECI>` — tags as type parameters on dimensions |
+| Compiler rejects mismatched frames | `merge` rejects conflicting tags at compile time |
+| `unsafe` transform construction | `as` cast as the trust boundary (explicit, auditable) |
+| `Rotation<A, B> * Rotation<B, C> → Rotation<A, C>` | `Transform<A, B>` with middle-type cancellation (deferred) |
+| No implicit frame conversions, ever | No implicit tag stripping — always explicit `as` |
+| Scalars are frameless; `vector.magnitude()` returns frameless `Length` | Untagged values are the default; dimensionless auto-clear strips tags from pure ratios |
+
+### Where Graphcal Diverges
+
+**Sguaba has no untagged spatial values.** Every `Vector` and `Coordinate` must have a frame. Scalars (`f64`, `Length`, `Time`) are inherently frameless because they're separate types. Sguaba can enforce this because it's a specialized coordinate library.
+
+Graphcal is a general-purpose calculation language where many values are legitimately context-free. The sticky merge rule (`tagged + untagged → tagged`) is Graphcal's generalization: an untagged value means "I don't have a context" — a valid semantic state — rather than "I'm in an unknown context." This enables `Time<TimeZone.UTC> + duration` without requiring the duration to be tagged.
+
+**Sguaba distinguishes Coordinate (point) from Vector (displacement).** This is the affine space model: `Coordinate - Coordinate = Vector`, `Coordinate + Vector = Coordinate`, `Coordinate + Coordinate` is undefined. Graphcal does not yet distinguish points from displacements — both would be `Length<Frame.ECI>`. This may be worth revisiting (see Open Questions).
+
+**Sguaba uses conventions (NED, FRD, ENU) as a separate axis from frame identity.** A frame has both an identity (`PlaneNed`) and a convention (`NedLike`) that determines axis naming. Graphcal's tag system could support this with a two-level declaration: `tag Frame : NED { Plane, Ship }` — but this is a future refinement.
+
 ## Why Spaces (Not Alternatives)
 
 Several mechanisms could solve the "same dimension, must not mix" problem. Spaces are the best fit for the full range of use cases:
@@ -638,10 +689,12 @@ node thrust_eci: Vec3<Force<Frame.ECI>> = @eci_to_body.inverse() * @thrust_body;
 
 ### Deferred
 
-- **Transform composition:** `Transform<A, B> * Transform<B, C> -> Transform<A, C>` tracking in the type system.
-- **`as` auditing:** Should uses of `as` be flagged in a lint pass or report? Helps code review.
+- **Transform composition:** `Transform<A, B> * Transform<B, C> -> Transform<A, C>` — middle-type cancellation in the type system. Sguaba implements this for `Rotation` and `RigidBodyTransform`; Graphcal should support it for coordinate frame tags.
+- **`as` auditing:** Should uses of `as` be flagged in a lint pass or report? Helps code review. Sguaba uses Rust's `unsafe` for this purpose — Graphcal's `as` serves the same role as a code-review signal.
 - **Tag hierarchy:** Can tags have sub-variants? E.g., `Frame.Inertial` as parent of `Frame.ECI`.
 - **Runtime tag selection:** Can the tag variant be determined at runtime, or is it always compile-time?
+- **Affine space distinction:** Should Graphcal distinguish points (positions) from displacements (vectors)? Sguaba separates `Coordinate` from `Vector` with different algebraic rules: `Point - Point = Vector`, `Point + Vector = Point`, `Point + Point` is undefined. Currently both are `Length<Frame.ECI>` in Graphcal. This is orthogonal to tags but interacts with them.
+- **Tag conventions (axis naming):** Sguaba uses a two-level system: frame identity + convention (NED, FRD, ENU). Could Graphcal support `tag Frame : NED { Plane, Ship }` where the convention determines component names?
 
 ## Dependencies on Other Aspects
 
