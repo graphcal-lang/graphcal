@@ -8,54 +8,70 @@
 
 ## Problem Statement
 
-Graphcal's dimension system currently has 8 hard-coded base dimensions (7 SI + Angle) represented as a fixed-size `[Rational; 8]` exponent vector. Many real-world engineering calculations require dimensions that are **irreducible** — they cannot be expressed as products of powers of SI base dimensions.
+Graphcal's dimension system currently has 8 hard-coded base dimensions (7 SI + Angle) represented as a fixed-size `[Rational; 8]` exponent vector. Some real-world engineering calculations require dimensions that are **irreducible** — they cannot be expressed as products of powers of SI base dimensions.
 
 The design doc ([04](./04-dimensions-and-units.md)) already lists "User-defined base dimensions" as an open question. The language syntax already supports bodyless `dimension` declarations (`dimension Foo;`), but the implementation currently skips them (`ir.rs:184-186`).
 
 ## Catalog of Non-SI Dimension Use Cases
 
-### Tier 1: Very Common, Broadly Needed
+### True Non-SI Base Dimensions
 
-| Dimension | Example Units | Use Cases |
+These represent fundamentally new quantities that need their own dimension axis because they participate in **dimensional algebra** — they appear as numerators or denominators in derived dimensions:
+
+| Dimension | Example Units | Derived Dimensions | Use Cases |
+| --- | --- | --- | --- |
+| **Information** | bit, byte, kB, MB, GB, TB, KiB, MiB, GiB | `Bandwidth = Information / Time`, `DataDensity = Information / Area`, `DataCost = Money / Information` | Data storage, bandwidth, compression ratios, memory sizing |
+| **Money** | USD, EUR, JPY, GBP | `UnitCost = Money / Mass`, `PowerCost = Money / Energy`, `LaunchCost = Money / Mass` | Cost estimation, economic analysis, $/kg launch cost, levelized cost of energy |
+
+These are **not** just counting things — they form rich families of derived dimensions through algebra with SI quantities.
+
+### Counting Dimensions → Better Modeled as `Count` + Spaces
+
+Many other commonly cited examples are "counts of discrete things" that need to be kept distinct. At first glance, these look like candidates for new base dimensions:
+
+| Quantity | Example Units | Seems Like |
 | --- | --- | --- |
-| **Information** | bit, byte, kB, MB, GB, TB, KiB, MiB, GiB | Data storage, bandwidth (`Information / Time`), compression ratios, memory sizing |
-| **Currency / Money** | USD, EUR, JPY, GBP | Cost estimation, economic analysis, $/kg launch cost, levelized cost of energy |
+| People | crew_member, person, FTE | `dimension People;` |
+| Pixel | px, Mpx | `dimension Pixel;` |
+| Cycle | cycle, revolution | `dimension Cycle;` |
+| Packet | packet, frame | `dimension Packet;` |
+| Vehicle | vehicle, spacecraft | `dimension Vehicle;` |
+| Sample/Event | sample, event | `dimension Sample;` |
+| Request | request, query | `dimension Request;` |
+| Cell | cell | `dimension Cell;` |
 
-### Tier 2: Common in Specific Engineering Domains
+However, these are all **the same kind of thing** — a dimensionless count of discrete items. The safety requirement (`5 crew_member + 3 packet` must be a compile error) doesn't require separate *dimensions*; it requires separate *semantic tags*.
 
-| Dimension | Example Units | Use Cases |
-| --- | --- | --- |
-| **Pixel** | px, Mpx | Image processing, display resolution, sensor sizing, px/mm for optical systems |
-| **Count (discrete items)** | items, units, pieces | Manufacturing throughput (items/hour), inventory, batch sizing |
-| **People** | crew_member, person, FTE | Staffing models, life support (kg/person/day), person-hours |
-| **Cycle** | cycle, revolution | Fatigue analysis (cycles to failure), RPM reinterpretation, vibration |
-| **Sample / Event** | sample, event | Signal processing (samples/s), statistical analysis, sensor fusion |
-| **Packet** | packet, frame | Network engineering (packets/s), protocol analysis |
-
-### Tier 3: Niche but Legitimate
-
-| Dimension | Example Units | Use Cases |
-| --- | --- | --- |
-| **Vehicle** | vehicle, spacecraft | Traffic flow (vehicles/hour), fleet sizing |
-| **Request** | request, query, transaction | API capacity planning, database sizing |
-| **Cell** | cell | Battery pack design (cells in series/parallel) |
-| **Gene / Base pair** | bp, kbp, Mbp | Bioinformatics, genome sizing |
-| **Dose** | dose | Pharmacokinetics, radiation treatment planning |
-| **Story point** | SP | Software project estimation (SP/sprint) |
-
-### Cross-Cutting Pattern: "Counting Dimensions"
-
-Most Tier 2/3 examples are **counting dimensions** — they represent discrete, countable quantities that need to be kept distinct from each other and from dimensionless numbers. The key safety property: `5 crew_member + 3 packet` should be a compile-time error, even though both are "just numbers."
-
-This is exactly the use case for bodyless `dimension` declarations:
+This is exactly what Graphcal's **Spaces** feature ([06](./06-spaces.md)) provides. Spaces are orthogonal semantic tags that prevent cross-context mixing:
 
 ```
-dimension Information;
-dimension Money;
-dimension Pixel;
+// A single Count dimension + space tags for type safety:
+dimension Count;
+unit count: Count;
 
-// Each is orthogonal to all others and to all SI dimensions
+space Countable {
+    Person;
+    Pixel;
+    Cycle;
+    Packet;
+    Vehicle;
+}
+
+param crew: Count in Countable.Person = 7 count;
+param sensors: Count in Countable.Pixel = 4096 count;
+
+node bad = @crew + @sensors;
+//  error[S001]: space mismatch: Countable.Person != Countable.Pixel
 ```
+
+**Why Spaces are better than separate dimensions for counting:**
+
+1. **Conceptual clarity**: All these quantities really *are* counts. Making each one a separate base dimension pollutes the dimension algebra with artificial axes.
+2. **No spurious derived dimensions**: With separate dimensions, `Pixel / Person` would be a "meaningful" dimension — but it isn't. It's just a dimensionless ratio. With spaces, `Count in Countable.Pixel / Count in Countable.Person` requires an explicit `.untagged` call, signaling the intentional cross-context operation.
+3. **Consistent with existing design**: Spaces already exist for exactly this purpose (coordinate frames, spacecraft identity, budget categories — all same-dimension-different-context).
+4. **Scalability**: Adding 20 counting dimensions would create a 28-element exponent vector (wasteful). Spaces add no overhead to the dimension system.
+
+**When a true base dimension IS needed**: When the quantity participates in rich dimensional algebra. `Information / Time = Bandwidth` is meaningful. `Money / Mass = SpecificCost` is meaningful. These aren't just "counts of bits" or "counts of dollars" — they form families of derived dimensions with distinct physical interpretations.
 
 ### Anti-Examples: Things That DON'T Need New Base Dimensions
 
@@ -235,6 +251,8 @@ No syntax changes needed. The existing bodyless `dimension` declaration is the m
 
 ```
 // In user's .gcl file or a library:
+
+// -- True non-SI base dimensions --
 dimension Information;
 unit bit: Information;
 unit byte: Information = 8 bit;
@@ -242,43 +260,65 @@ unit kB: Information = 1000 byte;
 unit KiB: Information = 1024 byte;
 unit MB: Information = 1000 kB;
 unit MiB: Information = 1024 KiB;
+unit GB: Information = 1000 MB;
+unit GiB: Information = 1024 MiB;
 
 dimension Money;
 unit USD: Money;
-unit EUR: Money;    // Note: no conversion between currencies by default
-                    // (that would require runtime exchange rates)
+unit EUR: Money = 0.92 USD;     // snapshot rate — see currency section
+unit JPY: Money = 0.0067 USD;
 
 // Derived dimensions compose naturally:
 dimension Bandwidth = Information / Time;
 dimension DataCost = Money / Information;
+dimension SpecificCost = Money / Mass;
 
 // Type-safe calculations:
 param storage: Information = 500 GB;
 param price: DataCost = 0.023 USD / GB;
 node monthly_cost: Money = @storage * @price;
+
+// -- Counting quantities (use Count + Spaces, not new dimensions) --
+dimension Count;
+unit count: Count;
+
+space Countable {
+    Person;
+    Satellite;
+    Cycle;
+}
+
+param crew: Count in Countable.Person = 7 count;
+param sats: Count in Countable.Satellite = 24 count;
 ```
 
-### Currency: A Special Consideration
+### Currency: Single Dimension with Unit-Based Conversion
 
-Currency is interesting because exchange rates are **not constant** — they vary over time. Two approaches:
-
-1. **Incommensurable currencies** (recommended default): Each currency is its own base dimension. `1 USD + 1 EUR` is a type error. Conversion requires an explicit exchange rate parameter.
-
-2. **Single Money dimension**: All currencies share one dimension, with scale factors. Simpler but the scale factors are lies (they're not physical constants).
-
-Approach 1 is more aligned with Graphcal's safety philosophy. You would model it as:
+Currencies should be a **single `Money` base dimension** with units providing conversion factors:
 
 ```
-dimension USD;
-dimension EUR;
-unit usd: USD;
-unit eur: EUR;
-
-param exchange_rate: EUR / USD = 0.92 eur / usd;
-node cost_eur: EUR = @cost_usd * @exchange_rate;
+dimension Money;
+unit USD: Money;                   // base unit
+unit EUR: Money = 0.92 USD;       // 1 EUR = 0.92 USD
+unit JPY: Money = 0.0067 USD;     // 1 JPY = 0.0067 USD
 ```
 
-This makes the exchange rate an explicit parameter that can be varied in scenarios — exactly the right modeling pattern.
+This means `1 EUR + 1 USD` is **well-typed** (both are `Money`) and the system handles conversion via the scale factors, just like `1 km + 1 m`.
+
+**Why a single dimension is correct for currency:**
+
+1. **Currencies are commensurable**: Unlike meters and kilograms, you *can* convert USD to EUR. They measure the same thing (economic value) in different scales.
+2. **Consistent with the unit model**: Units are scaling factors within a dimension. `EUR` is to `USD` as `km` is to `m` — a different scale for the same quantity.
+3. **Practical**: Most engineering cost models need to add costs in different currencies (e.g., US-manufactured parts + European subcontractors). Blocking `USD + EUR` creates friction without adding safety.
+
+**The variable exchange rate concern**: Exchange rates change over time, unlike physical conversion factors. This is addressed by making the exchange rate a **parameter**:
+
+```
+param eur_to_usd: Dimensionless = 0.92;
+unit EUR: Money = @eur_to_usd USD;    // if dynamic unit defs are supported
+```
+
+If dynamic unit definitions are not supported (units must have compile-time-constant scales), then the user picks a snapshot rate for their analysis and documents it. This is standard practice in engineering economics — you always state your assumed exchange rate. Different rates can be explored via scenarios.
 
 ## Impact Analysis
 
@@ -335,16 +375,25 @@ pub struct Dimension {
 
 This proposal doesn't solve the Torque/Energy problem (same algebraic dimension, different semantics). That's orthogonal — it could be solved with semantic tags on top of either the fixed or dynamic representation. See [04](./04-dimensions-and-units.md) open questions.
 
+### Counting Quantities and Spaces
+
+As discussed above, most "counting dimensions" are better modeled as a single `Count` dimension with space tags from [06-spaces.md](./06-spaces.md). This keeps the dimension vector lean while providing the same type-safety guarantees through the orthogonal space layer.
+
+The test: *does this quantity form meaningful derived dimensions through algebra?*
+- **Yes** (Information, Money) → new base dimension.
+- **No** (crew members, packets, pixels) → `Count` + space tag.
+
 ### Custom Counting Units (`unit launch;`)
 
 The design doc mentions `unit launch;` auto-creating a dimension. With this proposal, the explicit form is preferred:
 
 ```
-dimension Launch;
-unit launch: Launch;
-```
+dimension Count;
+unit count: Count;
+space Countable { Launch; }
 
-Two declarations instead of one, but more explicit. If shorthand syntax is desired, it could be sugar that expands to these two declarations.
+param launches: Count in Countable.Launch = 5 count;
+```
 
 ### SI Prefix Mechanism
 
@@ -353,6 +402,7 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 ## Dependencies on Other Aspects
 
 - **Dimensions & Units** ([04](./04-dimensions-and-units.md)): This proposal directly extends it.
+- **Spaces** ([06](./06-spaces.md)): Counting quantities use spaces rather than new base dimensions.
 - **Syntax** ([02](./02-syntax-design.md)): No syntax changes needed.
 - **Namespace & Multi-File** ([09](./09-namespace.md)): Base dimensions defined in libraries need to be importable and get consistent IDs across compilation units.
 - **Phases**: This is primarily a Phase 1 (Dimensions & Units) concern, but could be deferred to Phase 4 (Multi-File) since that's when libraries defining new base dimensions become practical.
@@ -366,3 +416,9 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 3. **Maximum base dimensions**: Should there be a limit? Numbat has no limit. A practical limit of 64 or 128 would catch runaway declarations while being generous.
 
 4. **Display order**: When showing a dimension like `Information * Length / Time^2`, what order should base dimensions appear in? Registration order? Alphabetical? SI-first-then-custom?
+
+5. **Count + Spaces interaction**: When Spaces ([06](./06-spaces.md)) is implemented, should `Count` be a prelude-provided base dimension or something users always declare themselves? A prelude-provided `Count` dimension with a user-extensible `Countable` space seems most ergonomic.
+
+6. **Dynamic unit definitions**: Can unit scale factors reference parameters (`unit EUR: Money = @exchange_rate USD;`)? This would elegantly handle variable exchange rates but blurs the compile-time/runtime boundary.
+
+7. **Borderline cases**: Some quantities sit between "true dimension" and "tagged count." For example, `Pixel / Length` = spatial resolution is a useful derived dimension, suggesting Pixel might deserve its own base dimension rather than being `Count in Countable.Pixel`. The guideline ("does it form meaningful derived dimensions?") needs case-by-case judgment.
