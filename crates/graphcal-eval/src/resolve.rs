@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
+use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnBody, FnDecl, TypeExpr};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -18,9 +18,9 @@ const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
 /// These are treated as if they were declared locally, appearing before local declarations.
 #[derive(Debug, Default)]
 pub struct ImportedNames {
-    pub consts: Vec<(String, Expr, Span)>,
-    pub params: Vec<(String, Expr, Span)>,
-    pub nodes: Vec<(String, Expr, Span)>,
+    pub consts: Vec<(String, TypeExpr, Expr, Span)>,
+    pub params: Vec<(String, TypeExpr, Expr, Span)>,
+    pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     pub functions: Vec<(String, FnDecl, Span)>,
 }
 
@@ -57,6 +57,7 @@ pub struct ResolvedFile {
 ///
 /// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
+#[cfg(test)]
 pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
@@ -95,13 +96,13 @@ pub fn resolve_with_imports(
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
-    for (name, _, span) in &imported.consts {
+    for (name, _, _, span) in &imported.consts {
         names.insert(name.clone(), *span);
     }
-    for (name, _, span) in &imported.params {
+    for (name, _, _, span) in &imported.params {
         names.insert(name.clone(), *span);
     }
-    for (name, _, span) in &imported.nodes {
+    for (name, _, _, span) in &imported.nodes {
         names.insert(name.clone(), *span);
     }
     for (name, _, span) in &imported.functions {
@@ -259,24 +260,37 @@ pub fn resolve_with_imports(
     }
 
     // Prepend imported declarations so they appear before local ones in eval order.
-    let mut all_consts = imported.consts.clone();
+    // Strip TypeExpr from imported tuples since ResolvedFile uses 3-tuples.
+    let mut all_consts: Vec<(String, Expr, Span)> = imported
+        .consts
+        .iter()
+        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .collect();
     all_consts.extend(consts);
-    let mut all_params = imported.params.clone();
+    let mut all_params: Vec<(String, Expr, Span)> = imported
+        .params
+        .iter()
+        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .collect();
     all_params.extend(params);
-    let mut all_nodes = imported.nodes.clone();
+    let mut all_nodes: Vec<(String, Expr, Span)> = imported
+        .nodes
+        .iter()
+        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .collect();
     all_nodes.extend(nodes);
     let mut all_functions = imported.functions.clone();
     all_functions.extend(functions);
 
     // Prepend imported source_order entries
     let mut all_source_order: Vec<(String, DeclCategory)> = Vec::new();
-    for (name, _, _) in &imported.consts {
+    for (name, _, _, _) in &imported.consts {
         all_source_order.push((name.clone(), DeclCategory::Const));
     }
-    for (name, _, _) in &imported.params {
+    for (name, _, _, _) in &imported.params {
         all_source_order.push((name.clone(), DeclCategory::Param));
     }
-    for (name, _, _) in &imported.nodes {
+    for (name, _, _, _) in &imported.nodes {
         all_source_order.push((name.clone(), DeclCategory::Node));
     }
     all_source_order.extend(source_order);

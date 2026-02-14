@@ -7,19 +7,14 @@ use thiserror::Error;
 use indexmap::IndexMap;
 
 use crate::builtins::{builtin_constants, builtin_functions};
-use crate::const_eval::eval_consts;
-use crate::dag::{RuntimeGraph, build_dag};
-use crate::dim_check::{DeclaredType, check_dimensions};
+use crate::dim_check::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
-use crate::prelude::load_prelude;
-use crate::registry::{self, Registry};
-use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve, resolve_with_imports};
+use crate::registry::Registry;
+use crate::resolve::{DeclCategory, ImportedNames};
 use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{
-    DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, VariantName,
-};
+use graphcal_syntax::names::{DeclName, FieldName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
 
 use std::path::Path;
@@ -194,13 +189,14 @@ pub fn compile_and_eval_with_overrides(
 ) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = graphcal_syntax::parser::Parser::with_name(source, name).parse_file()?;
-    let mut resolved = resolve(&file, &src)?;
 
-    // Validate and apply overrides
+    // Lower AST → IR
+    let mut ir = crate::ir::lower(&file, &src)?;
+
+    // Validate and apply overrides to IR
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
-        // Check if the name exists at all
-        if let Some((_, cat)) = resolved.source_order.iter().find(|(n, _)| n == name_str) {
+        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
             match cat {
                 DeclCategory::Param => {}
                 DeclCategory::Const => {
@@ -222,38 +218,29 @@ pub fn compile_and_eval_with_overrides(
             }));
         }
 
-        // Replace the expression in resolved.params
-        if let Some(entry) = resolved.params.iter_mut().find(|(n, _, _)| n == name_str) {
-            entry.1 = override_expr.clone();
+        // Replace the expression in ir.params
+        if let Some(entry) = ir.params.iter_mut().find(|(n, _, _, _)| n == name_str) {
+            entry.2 = override_expr.clone();
         }
 
         // Re-extract runtime deps for the overridden param
-        let all_runtime: std::collections::HashSet<&str> = resolved
+        let all_runtime: std::collections::HashSet<&str> = ir
             .params
             .iter()
-            .chain(resolved.nodes.iter())
-            .map(|(n, _, _)| n.as_str())
+            .chain(ir.nodes.iter())
+            .map(|(n, _, _, _)| n.as_str())
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
-        resolved
-            .runtime_deps
-            .insert(name_str.to_string(), graph_refs);
+        ir.runtime_deps.insert(name_str.to_string(), graph_refs);
     }
 
-    // Build registry: prelude + user-declared dimensions/units
-    let mut registry = Registry::new();
-    load_prelude(&mut registry);
-    register_file_declarations(&file, &mut registry, &src)?;
+    // Type resolve IR → TIR
+    let tir = crate::tir::type_resolve(ir, &src)?;
 
-    // Register user-defined functions
-    register_functions(&resolved, &mut registry);
-
-    // Check for recursive function calls
-    crate::fn_check::check_no_recursion(&registry, &src)?;
-
-    // Dimension check
-    let declared_types = check_dimensions(&file, &registry, &src)?;
+    // Check
+    crate::fn_check::check_no_recursion_tir(&tir, &src)?;
+    let declared_types = crate::dim_check::check_dimensions_tir(&tir, &src)?;
 
     // Dimension-check override expressions against their param's declared type
     for (override_name, override_expr) in overrides {
@@ -261,133 +248,17 @@ pub fn compile_and_eval_with_overrides(
             override_expr,
             override_name.as_str(),
             &declared_types,
-            &registry,
+            &tir.registry,
             &src,
         )?;
     }
 
-    let const_values = eval_consts(&resolved, &registry, &src)?;
-    let dag = build_dag(&resolved, &src)?;
-    let result = evaluate(
-        &resolved,
-        &dag,
-        &const_values,
-        &registry,
-        &declared_types,
-        &src,
-    )?;
+    // Compile TIR → ExecPlan
+    let plan = crate::exec_plan::compile(&tir, &src)?;
+
+    // Evaluate
+    let result = evaluate_plan(&tir, &plan, &declared_types, &src)?;
     Ok(result)
-}
-
-/// Register dimensions, units, indexes, and types from a file's declarations into the registry.
-fn register_file_declarations(
-    file: &graphcal_syntax::ast::File,
-    registry: &mut Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    for decl in &file.declarations {
-        match &decl.kind {
-            DeclKind::Dimension(d) => {
-                let dim = if let Some(def) = &d.definition {
-                    registry.resolve_dim_expr(def).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: d.name.value.clone(),
-                            src: src.clone(),
-                            span: d.name.span.into(),
-                        }
-                    })?
-                } else {
-                    continue;
-                };
-                registry.register_dimension(d.name.value.clone(), dim);
-            }
-            DeclKind::Unit(u) => {
-                let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
-                    GraphcalError::UnknownDimension {
-                        name: DimName::new(u.name.value.as_str()),
-                        src: src.clone(),
-                        span: u.name.span.into(),
-                    }
-                })?;
-                let scale = if let Some(def) = &u.definition {
-                    let (_unit_dim, base_scale) = registry
-                        .resolve_unit_expr(&def.unit_expr)
-                        .ok_or_else(|| GraphcalError::UnknownUnit {
-                            name: u.name.value.clone(),
-                            src: src.clone(),
-                            span: def.span.into(),
-                        })?;
-                    def.scale * base_scale
-                } else {
-                    1.0
-                };
-                registry.register_unit(u.name.value.clone(), dim, scale);
-            }
-            DeclKind::Index(idx) => {
-                registry.register_index(registry::IndexDef {
-                    name: idx.name.value.clone(),
-                    variants: idx.variants.iter().map(|v| v.value.clone()).collect(),
-                });
-            }
-            DeclKind::Type(t) => {
-                let mut fields = Vec::new();
-                for field in &t.fields {
-                    let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: DimName::new(field.name.value.as_str()),
-                            src: src.clone(),
-                            span: field.name.span.into(),
-                        }
-                    })?;
-                    fields.push(registry::StructField {
-                        name: field.name.value.clone(),
-                        dimension: dim,
-                    });
-                }
-                registry.register_struct(registry::StructDef {
-                    name: t.name.value.clone(),
-                    fields,
-                });
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-/// Register user-defined functions from a `ResolvedFile` into the registry.
-fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
-    for (name, fn_decl, span) in &resolved.functions {
-        registry.register_function(registry::FnDef {
-            name: FnName::new(name),
-            generic_params: fn_decl
-                .generic_params
-                .iter()
-                .map(|g| registry::FnGenericParam {
-                    name: g.name.value.clone(),
-                    constraint: match g.constraint {
-                        graphcal_syntax::ast::GenericConstraint::Dim => {
-                            registry::FnGenericConstraint::Dim
-                        }
-                        graphcal_syntax::ast::GenericConstraint::Index => {
-                            registry::FnGenericConstraint::Index
-                        }
-                    },
-                })
-                .collect(),
-            params: fn_decl
-                .params
-                .iter()
-                .map(|p| registry::FnParamDef {
-                    name: p.name.name.clone(),
-                    type_expr: p.type_ann.clone(),
-                })
-                .collect(),
-            return_type_expr: fn_decl.return_type.clone(),
-            body: fn_decl.body.clone(),
-            span: *span,
-        });
-    }
 }
 
 /// Full pipeline for multi-file projects with parameter overrides.
@@ -412,32 +283,11 @@ pub fn compile_and_eval_project(
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::load_project(root_path)?;
 
-    // Build registry starting with prelude
-    let mut registry = Registry::new();
-    load_prelude(&mut registry);
-
-    // Collect imported names for the root file
-    let mut imported = ImportedNames::default();
-
     let root_file = &project.files[&project.root];
     let root_src = &root_file.named_source;
 
-    // Process imported files (all except root, in load order = deps first)
-    for file_path in &project.load_order {
-        if *file_path == project.root {
-            continue;
-        }
-        let loaded = &project.files[file_path];
-
-        // Register dimensions, units, indexes, types from imported file
-        register_file_declarations(&loaded.ast, &mut registry, &loaded.named_source)?;
-    }
-
-    // Register root file declarations too
-    register_file_declarations(&root_file.ast, &mut registry, root_src)?;
-
-    // Now collect exported declarations from imported files based on `use` statements.
-    // Walk the root file's use declarations and validate names.
+    // Collect imported names from imported files based on `use` statements.
+    let mut imported = ImportedNames::default();
     for decl in &root_file.ast.declarations {
         if let DeclKind::Use(use_decl) = &decl.kind {
             let import_path = root_path
@@ -454,19 +304,18 @@ pub fn compile_and_eval_project(
 
             let imported_file = &project.files[&import_canonical];
 
-            // For each requested name, find the matching declaration
             for requested_name in &use_decl.names {
                 let found = find_declaration_in_file(&imported_file.ast, &requested_name.name);
 
                 match found {
-                    Some(ImportedDecl::Const(name, expr, span)) => {
-                        imported.consts.push((name, expr, span));
+                    Some(ImportedDecl::Const(name, type_ann, expr, span)) => {
+                        imported.consts.push((name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Param(name, expr, span)) => {
-                        imported.params.push((name, expr, span));
+                    Some(ImportedDecl::Param(name, type_ann, expr, span)) => {
+                        imported.params.push((name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Node(name, expr, span)) => {
-                        imported.nodes.push((name, expr, span));
+                    Some(ImportedDecl::Node(name, type_ann, expr, span)) => {
+                        imported.nodes.push((name, type_ann, expr, span));
                     }
                     Some(ImportedDecl::Fn(name, fn_decl, span)) => {
                         imported.functions.push((name, fn_decl, span));
@@ -484,13 +333,22 @@ pub fn compile_and_eval_project(
         }
     }
 
-    // Resolve root file with imported names
-    let mut resolved = resolve_with_imports(&root_file.ast, root_src, &imported)?;
+    // Lower root AST → IR (includes root file declarations + functions in registry)
+    let mut ir = crate::ir::lower_with_imports(&root_file.ast, root_src, &imported)?;
 
-    // Validate and apply overrides (same logic as compile_and_eval_with_overrides)
+    // Register imported file declarations (dims/units/indexes/structs) into IR's registry
+    for file_path in &project.load_order {
+        if *file_path == project.root {
+            continue;
+        }
+        let loaded = &project.files[file_path];
+        crate::ir::register_file_declarations(&loaded.ast, &mut ir.registry, &loaded.named_source)?;
+    }
+
+    // Validate and apply overrides to IR
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
-        if let Some((_, cat)) = resolved.source_order.iter().find(|(n, _)| n == name_str) {
+        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
             match cat {
                 DeclCategory::Param => {}
                 DeclCategory::Const => {
@@ -512,76 +370,30 @@ pub fn compile_and_eval_project(
             }));
         }
 
-        if let Some(entry) = resolved.params.iter_mut().find(|(n, _, _)| n == name_str) {
-            entry.1 = override_expr.clone();
+        if let Some(entry) = ir.params.iter_mut().find(|(n, _, _, _)| n == name_str) {
+            entry.2 = override_expr.clone();
         }
 
-        let all_runtime: std::collections::HashSet<&str> = resolved
+        let all_runtime: std::collections::HashSet<&str> = ir
             .params
             .iter()
-            .chain(resolved.nodes.iter())
-            .map(|(n, _, _)| n.as_str())
+            .chain(ir.nodes.iter())
+            .map(|(n, _, _, _)| n.as_str())
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
-        resolved
-            .runtime_deps
-            .insert(name_str.to_string(), graph_refs);
+        ir.runtime_deps.insert(name_str.to_string(), graph_refs);
     }
 
-    // Register user-defined functions
-    register_functions(&resolved, &mut registry);
+    // Type resolve IR → TIR
+    let tir = crate::tir::type_resolve(ir, root_src)?;
 
-    // Check for recursive function calls
-    crate::fn_check::check_no_recursion(&registry, root_src)?;
+    // Check
+    crate::fn_check::check_no_recursion_tir(&tir, root_src)?;
 
-    // Build imported type declarations for dimension checking.
-    // The imported declarations' type annotations must be resolved so dim_check
-    // knows the dimensions of imported `@` references used in the root file.
-    let mut imported_types: HashMap<String, crate::dim_check::DeclaredType> = HashMap::new();
-    for file_path in &project.load_order {
-        if *file_path == project.root {
-            continue;
-        }
-        let loaded = &project.files[file_path];
-        for decl in &loaded.ast.declarations {
-            match &decl.kind {
-                DeclKind::Const(c) => {
-                    let dt = crate::dim_check::resolve_type_annotation(
-                        &c.type_ann,
-                        &registry,
-                        &loaded.named_source,
-                    )?;
-                    imported_types.insert(c.name.value.to_string(), dt);
-                }
-                DeclKind::Param(p) => {
-                    let dt = crate::dim_check::resolve_type_annotation(
-                        &p.type_ann,
-                        &registry,
-                        &loaded.named_source,
-                    )?;
-                    imported_types.insert(p.name.value.to_string(), dt);
-                }
-                DeclKind::Node(n) => {
-                    let dt = crate::dim_check::resolve_type_annotation(
-                        &n.type_ann,
-                        &registry,
-                        &loaded.named_source,
-                    )?;
-                    imported_types.insert(n.name.value.to_string(), dt);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Dimension check
-    let declared_types = crate::dim_check::check_dimensions_with_imports(
-        &root_file.ast,
-        &registry,
-        root_src,
-        &imported_types,
-    )?;
+    // Dimension check — TIR already includes imported declarations with their real types,
+    // so no separate `imported_types` map is needed.
+    let declared_types = crate::dim_check::check_dimensions_tir(&tir, root_src)?;
 
     // Dimension-check override expressions
     for (override_name, override_expr) in overrides {
@@ -589,21 +401,16 @@ pub fn compile_and_eval_project(
             override_expr,
             override_name.as_str(),
             &declared_types,
-            &registry,
+            &tir.registry,
             root_src,
         )?;
     }
 
-    let const_values = eval_consts(&resolved, &registry, root_src)?;
-    let dag = build_dag(&resolved, root_src)?;
-    let result = evaluate(
-        &resolved,
-        &dag,
-        &const_values,
-        &registry,
-        &declared_types,
-        root_src,
-    )?;
+    // Compile TIR → ExecPlan
+    let plan = crate::exec_plan::compile(&tir, root_src)?;
+
+    // Evaluate
+    let result = evaluate_plan(&tir, &plan, &declared_types, root_src)?;
     Ok(result)
 }
 
@@ -611,16 +418,19 @@ pub fn compile_and_eval_project(
 enum ImportedDecl {
     Const(
         String,
+        graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
     Param(
         String,
+        graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
     Node(
         String,
+        graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
@@ -638,6 +448,7 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             DeclKind::Const(c) if c.name.value.as_str() == name => {
                 return Some(ImportedDecl::Const(
                     c.name.value.to_string(),
+                    c.type_ann.clone(),
                     c.value.clone(),
                     decl.span,
                 ));
@@ -645,6 +456,7 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             DeclKind::Param(p) if p.name.value.as_str() == name => {
                 return Some(ImportedDecl::Param(
                     p.name.value.to_string(),
+                    p.type_ann.clone(),
                     p.value.clone(),
                     decl.span,
                 ));
@@ -652,6 +464,7 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             DeclKind::Node(n) if n.name.value.as_str() == name => {
                 return Some(ImportedDecl::Node(
                     n.name.value.to_string(),
+                    n.type_ann.clone(),
                     n.value.clone(),
                     decl.span,
                 ));
@@ -741,12 +554,10 @@ fn runtime_to_value(
     }
 }
 
-/// Evaluate the runtime DAG given resolved const values.
-fn evaluate(
-    resolved: &ResolvedFile,
-    dag: &RuntimeGraph,
-    const_values: &HashMap<String, RuntimeValue>,
-    registry: &Registry,
+/// Evaluate using TIR + `ExecPlan` (new linear pipeline).
+fn evaluate_plan(
+    tir: &crate::tir::TIR,
+    plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<EvalResult, GraphcalError> {
@@ -757,79 +568,75 @@ fn evaluate(
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
 
     // Insert const values into the lookup table
-    for (name, val) in const_values {
+    for (name, val) in &plan.const_values {
         values.insert(name.clone(), val.clone());
     }
 
     // Evaluate in topological order (params first, then nodes that depend on them)
-    for idx in &dag.topo_order {
-        let name = &dag.graph[*idx];
+    for name in &plan.topo_order {
         if values.contains_key(name) {
             continue;
         }
-        let expr = &dag.expressions[name];
+        let expr = &plan.expressions[name];
         let val = eval_expr(
             expr,
             &values,
             &empty_locals,
             &builtin_consts,
             &builtin_fns,
-            registry,
+            &tir.registry,
             src,
         )?;
         values.insert(name.clone(), val);
     }
 
     // Build a map from name -> expression for display unit extraction
-    let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = resolved
+    let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = tir
         .consts
         .iter()
-        .chain(resolved.params.iter())
-        .chain(resolved.nodes.iter())
-        .map(|(name, expr, _)| (name.as_str(), expr))
+        .chain(tir.params.iter())
+        .chain(tir.nodes.iter())
+        .map(|(name, _, expr, _)| (name.as_str(), expr))
         .collect();
 
-    // Helper to build a Value for a given declaration name
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
         let display_unit = expr_map
             .get(name)
-            .and_then(|expr| extract_display_unit(expr, registry));
-        runtime_to_value(rv, declared_types.get(name), display_unit, registry)
+            .and_then(|expr| extract_display_unit(expr, &tir.registry));
+        runtime_to_value(rv, declared_types.get(name), display_unit, &tir.registry)
     };
 
-    // Collect results in source order
-    let consts = resolved
+    let consts = tir
         .consts
         .iter()
-        .map(|(name, _, _)| {
-            let val = make_value(name, &const_values[name]);
+        .map(|(name, _, _, _)| {
+            let val = make_value(name, &plan.const_values[name]);
             (DeclName::new(name), val)
         })
         .collect();
-    let params = resolved
+    let params = tir
         .params
         .iter()
-        .map(|(name, _, _)| {
+        .map(|(name, _, _, _)| {
             let val = make_value(name, &values[name]);
             (DeclName::new(name), val)
         })
         .collect();
-    let nodes = resolved
+    let nodes = tir
         .nodes
         .iter()
-        .map(|(name, _, _)| {
+        .map(|(name, _, _, _)| {
             let val = make_value(name, &values[name]);
             (DeclName::new(name), val)
         })
         .collect();
 
-    // Build the `all` list in source order
-    let all = resolved
+    let all = tir
         .source_order
         .iter()
         .map(|(name, cat)| {
             let rv = match cat {
-                DeclCategory::Const => &const_values[name],
+                DeclCategory::Const => &plan.const_values[name],
                 DeclCategory::Param | DeclCategory::Node => &values[name],
             };
             let val = make_value(name, rv);
