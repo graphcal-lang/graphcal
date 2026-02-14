@@ -205,10 +205,14 @@ module.exports = grammar({
 
     _type_expr_base: $ => choice(
       $.dimensionless,
+      $.bool_type,
+      $.int_type,
       $.dim_expr,
     ),
 
     dimensionless: $ => "Dimensionless",
+    bool_type: $ => "Bool",
+    int_type: $ => "Int",
 
     // Indexed type: Velocity[Maneuver] or Dimensionless[A, B]
     indexed_type: $ => seq(
@@ -287,6 +291,7 @@ module.exports = grammar({
       prec.left(PREC.ADD, seq(field("left", $._expr), "-", field("right", $._expr))),
       prec.left(PREC.MUL, seq(field("left", $._expr), "*", field("right", $._expr))),
       prec.left(PREC.MUL, seq(field("left", $._expr), "/", field("right", $._expr))),
+      prec.left(PREC.MUL, seq(field("left", $._expr), "%", field("right", $._expr))),
       prec.right(PREC.POWER, seq(field("left", $._expr), "^", field("right", $._expr))),
     ),
 

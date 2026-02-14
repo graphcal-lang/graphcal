@@ -1426,11 +1426,19 @@
         "required": true,
         "types": [
           {
+            "type": "bool_type",
+            "named": true
+          },
+          {
             "type": "dim_expr",
             "named": true
           },
           {
             "type": "dimensionless",
+            "named": true
+          },
+          {
+            "type": "int_type",
             "named": true
           }
         ]
@@ -2346,6 +2354,10 @@
       "required": true,
       "types": [
         {
+          "type": "bool_type",
+          "named": true
+        },
+        {
           "type": "dim_expr",
           "named": true
         },
@@ -2355,6 +2367,10 @@
         },
         {
           "type": "indexed_type",
+          "named": true
+        },
+        {
+          "type": "int_type",
           "named": true
         }
       ]
@@ -2623,6 +2639,10 @@
     "named": false
   },
   {
+    "type": "%",
+    "named": false
+  },
+  {
     "type": "&&",
     "named": false
   },
@@ -2723,6 +2743,10 @@
     "named": false
   },
   {
+    "type": "bool_type",
+    "named": true
+  },
+  {
     "type": "const",
     "named": false
   },
@@ -2761,6 +2785,10 @@
   {
     "type": "index",
     "named": false
+  },
+  {
+    "type": "int_type",
+    "named": true
   },
   {
     "type": "let",

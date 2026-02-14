@@ -838,6 +838,14 @@
         },
         {
           "type": "SYMBOL",
+          "name": "bool_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "int_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "dim_expr"
         }
       ]
@@ -845,6 +853,14 @@
     "dimensionless": {
       "type": "STRING",
       "value": "Dimensionless"
+    },
+    "bool_type": {
+      "type": "STRING",
+      "value": "Bool"
+    },
+    "int_type": {
+      "type": "STRING",
+      "value": "Int"
     },
     "indexed_type": {
       "type": "SEQ",
@@ -1445,6 +1461,35 @@
               {
                 "type": "STRING",
                 "value": "/"
+              },
+              {
+                "type": "FIELD",
+                "name": "right",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_expr"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "PREC_LEFT",
+          "value": 6,
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "left",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_expr"
+                }
+              },
+              {
+                "type": "STRING",
+                "value": "%"
               },
               {
                 "type": "FIELD",
