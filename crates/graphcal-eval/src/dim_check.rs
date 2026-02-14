@@ -3,15 +3,16 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{BinOp, Expr, ExprKind, MulDivOp, TypeExprKind};
+use graphcal_syntax::ast::{BinOp, Expr, ExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{
-    DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
+    FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
 };
 
-use crate::builtins::{DimSignature, builtin_constants, builtin_functions};
+use crate::builtins::{DimSignature, builtin_functions};
 use crate::error::GraphcalError;
 use crate::registry::Registry;
+use crate::tir::ResolvedFnSig;
 
 /// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,12 +53,10 @@ pub enum InferredType {
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
 /// Check dimensions for all declarations using a TIR.
 ///
-/// Builds `declared_types` from `tir.resolved_decl_types` (which were resolved
-/// during `type_resolve`), then validates that every RHS expression matches its
-/// declared type annotation.
+/// Uses `tir.build_declared_types()` (derived from `resolved_decl_types`) to validate that
+/// every RHS expression matches its declared type annotation.
 ///
-/// Returns the `declared_types` map (needed by `check_override_dimension` and
-/// `runtime_to_value` during evaluation).
+/// This is a pure validation step — returns `()` on success.
 ///
 /// # Errors
 ///
@@ -65,39 +64,9 @@ pub enum InferredType {
 pub fn check_dimensions_tir(
     tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    check_dimensions_tir_with_imports(tir, src, &HashMap::new())
-}
-
-/// Check dimensions using TIR with pre-populated declared types from imports.
-fn check_dimensions_tir_with_imports(
-    tir: &crate::tir::TIR,
-    src: &NamedSource<Arc<String>>,
-    imported_types: &HashMap<String, DeclaredType>,
-) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    let builtin_consts = builtin_constants();
+) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
-
-    let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
-
-    // Include imported types
-    for (name, dt) in imported_types {
-        declared_types.insert(name.clone(), dt.clone());
-    }
-
-    // Built-in constants are Dimensionless
-    for name in builtin_consts.keys() {
-        declared_types.insert(
-            (*name).to_string(),
-            DeclaredType::Scalar(Dimension::DIMENSIONLESS),
-        );
-    }
-
-    // Build declared types from TIR's pre-resolved type annotations
-    for (name, resolved) in &tir.resolved_decl_types {
-        let dt = crate::tir::resolved_to_declared_type(resolved, src)?;
-        declared_types.insert(name.clone(), dt);
-    }
+    let declared_types = tir.build_declared_types(src)?;
 
     // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
@@ -115,6 +84,7 @@ fn check_dimensions_tir_with_imports(
             &empty_locals,
             &tir.registry,
             &builtin_fns,
+            &tir.resolved_fn_sigs,
             src,
         )?;
 
@@ -128,7 +98,7 @@ fn check_dimensions_tir_with_imports(
         }
     }
 
-    Ok(declared_types)
+    Ok(())
 }
 
 /// Check that an override expression has the correct dimension for the given param.
@@ -142,6 +112,7 @@ pub fn check_override_dimension(
     param_name: &str,
     declared_types: &HashMap<String, DeclaredType>,
     registry: &Registry,
+    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
@@ -154,6 +125,7 @@ pub fn check_override_dimension(
         &empty_locals,
         registry,
         &builtin_fns,
+        resolved_fn_sigs,
         src,
     )?;
 
@@ -233,80 +205,6 @@ fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
     }
 }
 
-/// Resolve a type annotation to a `DeclaredType`.
-///
-/// Checks the struct registry first (for single-term `DimExpr` that match a struct name),
-/// then falls back to dimension resolution.
-pub fn resolve_type_annotation(
-    type_ann: &graphcal_syntax::ast::TypeExpr,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<DeclaredType, GraphcalError> {
-    match &type_ann.kind {
-        TypeExprKind::Bool => Ok(DeclaredType::Bool),
-        TypeExprKind::Int => Ok(DeclaredType::Int),
-        TypeExprKind::Indexed { base, indexes } => {
-            // Resolve the base type, then wrap with each index (right to left for nesting)
-            let mut result = resolve_type_annotation(base, registry, src)?;
-            for idx in indexes.iter().rev() {
-                let idx_name = &idx.name;
-                if registry.get_index(idx_name).is_none() {
-                    return Err(GraphcalError::UnknownIndex {
-                        name: idx.as_index_name(),
-                        src: src.clone(),
-                        span: idx.span.into(),
-                    });
-                }
-                result = DeclaredType::Indexed {
-                    element: Box::new(result),
-                    index: idx.as_index_name(),
-                };
-            }
-            Ok(result)
-        }
-        _ => {
-            // Check if this is a single-term DimExpr that matches a struct name
-            if let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
-                && dim_expr.terms.len() == 1
-                && dim_expr.terms[0].term.power.is_none()
-            {
-                let name = &dim_expr.terms[0].term.name.name;
-                if registry.get_struct(name).is_some() {
-                    return Ok(DeclaredType::Struct(StructTypeName::new(name)));
-                }
-            }
-
-            // Fall back to dimension resolution
-            let dim = registry
-                .resolve_type_expr(type_ann)
-                .ok_or_else(|| unknown_dim_in_type(type_ann, src))?;
-            Ok(DeclaredType::Scalar(dim))
-        }
-    }
-}
-
-/// Produce a helpful error when a type annotation references an unknown dimension.
-fn unknown_dim_in_type(
-    type_ann: &graphcal_syntax::ast::TypeExpr,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    // Try to find the first unknown dimension name in the type expression
-    if let graphcal_syntax::ast::TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
-        && let Some(item) = dim_expr.terms.first()
-    {
-        return GraphcalError::UnknownDimension {
-            name: item.term.name.as_dim_name(),
-            src: src.clone(),
-            span: item.term.span.into(),
-        };
-    }
-    GraphcalError::UnknownDimension {
-        name: DimName::new("unknown"),
-        src: src.clone(),
-        span: type_ann.span.into(),
-    }
-}
-
 /// Helper: extract scalar dimension from `InferredType`, returning error if struct.
 fn expect_scalar(
     inferred: &InferredType,
@@ -336,6 +234,7 @@ fn infer_type(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match &expr.kind {
@@ -397,10 +296,24 @@ fn infer_type(
         }
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            let lhs_type =
-                infer_type(lhs, declared_types, local_types, registry, builtin_fns, src)?;
-            let rhs_type =
-                infer_type(rhs, declared_types, local_types, registry, builtin_fns, src)?;
+            let lhs_type = infer_type(
+                lhs,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
+            let rhs_type = infer_type(
+                rhs,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
 
             match op {
                 // Logical operators: require Bool operands, return Bool
@@ -615,6 +528,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             match op {
@@ -659,6 +573,7 @@ fn infer_type(
                     local_types,
                     registry,
                     builtin_fns,
+                    resolved_fn_sigs,
                     src,
                 )?;
                 if let InferredType::Indexed { element, .. } = arg_type {
@@ -688,6 +603,7 @@ fn infer_type(
                     local_types,
                     registry,
                     builtin_fns,
+                    resolved_fn_sigs,
                     src,
                 )?;
                 if arg_type != InferredType::Int {
@@ -717,6 +633,7 @@ fn infer_type(
                     local_types,
                     registry,
                     builtin_fns,
+                    resolved_fn_sigs,
                     src,
                 )?;
                 let arg_dim = expect_scalar(&arg_type, src, args[0].span)?;
@@ -737,16 +654,24 @@ fn infer_type(
                 let arg_dims: Vec<Dimension> = args
                     .iter()
                     .map(|a| {
-                        let t =
-                            infer_type(a, declared_types, local_types, registry, builtin_fns, src)?;
+                        let t = infer_type(
+                            a,
+                            declared_types,
+                            local_types,
+                            registry,
+                            builtin_fns,
+                            resolved_fn_sigs,
+                            src,
+                        )?;
                         expect_scalar(&t, src, a.span)
                     })
                     .collect::<Result<_, _>>()?;
                 return infer_fn_dim(func.dim_sig, &arg_dims, args, src).map(InferredType::Scalar);
             }
 
-            // Try user-defined function
-            let fn_def = registry.get_function(name.value.as_str()).ok_or_else(|| {
+            // Try user-defined function via resolved signatures
+            let fn_name_key = FnName::new(name.value.as_str());
+            let sig = resolved_fn_sigs.get(&fn_name_key).ok_or_else(|| {
                 GraphcalError::UnknownFunction {
                     name: name.value.clone(),
                     src: src.clone(),
@@ -755,10 +680,10 @@ fn infer_type(
             })?;
 
             // Arity check
-            if args.len() != fn_def.params.len() {
+            if args.len() != sig.params.len() {
                 return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
-                    expected: fn_def.params.len(),
+                    expected: sig.params.len(),
                     got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),
@@ -768,13 +693,24 @@ fn infer_type(
             // Infer arg types
             let arg_types: Vec<InferredType> = args
                 .iter()
-                .map(|a| infer_type(a, declared_types, local_types, registry, builtin_fns, src))
+                .map(|a| {
+                    infer_type(
+                        a,
+                        declared_types,
+                        local_types,
+                        registry,
+                        builtin_fns,
+                        resolved_fn_sigs,
+                        src,
+                    )
+                })
                 .collect::<Result<_, _>>()?;
 
-            if fn_def.generic_params.is_empty() {
-                // Non-generic: resolve each param type and check
-                for (i, param) in fn_def.params.iter().enumerate() {
-                    let expected = resolve_type_annotation(&param.type_expr, registry, src)?;
+            if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
+                // Non-generic: check each param type using resolved signature
+                for (i, param) in sig.params.iter().enumerate() {
+                    let expected =
+                        crate::tir::resolved_to_declared_type(&param.resolved_type, src)?;
                     let expected_inferred = declared_to_inferred(&expected);
                     if arg_types[i] != expected_inferred {
                         return Err(GraphcalError::DimensionMismatch {
@@ -790,43 +726,27 @@ fn infer_type(
                     }
                 }
                 // Resolve return type
-                let ret = resolve_type_annotation(&fn_def.return_type_expr, registry, src)?;
+                let ret = crate::tir::resolved_to_declared_type(&sig.return_type, src)?;
                 Ok(declared_to_inferred(&ret))
             } else {
                 // Generic: unify generic params from arg types
-                let dim_param_names: Vec<GenericParamName> = fn_def
-                    .generic_params
-                    .iter()
-                    .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Dim)
-                    .map(|g| g.name.clone())
-                    .collect();
-                let index_param_names: Vec<GenericParamName> = fn_def
-                    .generic_params
-                    .iter()
-                    .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Index)
-                    .map(|g| g.name.clone())
-                    .collect();
                 let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
                 let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
-                for (i, param) in fn_def.params.iter().enumerate() {
-                    unify_type_expr_generic(
-                        &param.type_expr,
+                for (i, param) in sig.params.iter().enumerate() {
+                    crate::tir::unify_resolved_type(
+                        &param.resolved_type,
                         &arg_types[i],
-                        &dim_param_names,
-                        &index_param_names,
                         &mut dim_sub,
                         &mut index_sub,
-                        registry,
                         src,
                         args[i].span,
                     )?;
                 }
                 // Resolve return type with substitution
-                let ret_type = resolve_type_with_substitution(
-                    &fn_def.return_type_expr,
+                let ret_type = crate::tir::substitute_resolved_type(
+                    &sig.return_type,
                     &dim_sub,
                     &index_sub,
-                    registry,
                     src,
                 )?;
                 Ok(ret_type)
@@ -844,6 +764,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             if cond_type != InferredType::Bool {
@@ -862,6 +783,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             let else_type = infer_type(
@@ -870,6 +792,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
 
@@ -896,6 +819,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             let expr_dim = expect_scalar(&inner_type, src, inner.span)?;
@@ -953,12 +877,15 @@ fn infer_type(
                     &block_locals,
                     registry,
                     builtin_fns,
+                    resolved_fn_sigs,
                     src,
                 )?;
 
                 // If type annotation provided, check it matches
                 if let Some(type_ann) = &binding.type_ann {
-                    let ann_type = resolve_type_annotation(type_ann, registry, src)?;
+                    let resolved =
+                        crate::tir::resolve_type_expr(type_ann, registry, &[], &[], src)?;
+                    let ann_type = crate::tir::resolved_to_declared_type(&resolved, src)?;
                     let ann_inferred = declared_to_inferred(&ann_type);
                     if ann_inferred != rhs_type {
                         return Err(GraphcalError::DimensionMismatchInAnnotation {
@@ -978,6 +905,7 @@ fn infer_type(
                 &block_locals,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )
         }
@@ -989,6 +917,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             match &inner_type {
@@ -1080,6 +1009,7 @@ fn infer_type(
                         local_types,
                         registry,
                         builtin_fns,
+                        resolved_fn_sigs,
                         src,
                     )?
                 } else {
@@ -1133,6 +1063,7 @@ fn infer_type(
                 &inner_locals,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             // Wrap body type with index layers (outermost binding first)
@@ -1211,6 +1142,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             for entry in &entries[1..] {
@@ -1220,6 +1152,7 @@ fn infer_type(
                     local_types,
                     registry,
                     builtin_fns,
+                    resolved_fn_sigs,
                     src,
                 )?;
                 if entry_type != first_type {
@@ -1244,6 +1177,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             // Peel off one index layer per argument
@@ -1333,6 +1267,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             let InferredType::Indexed { element, index } = source_type else {
@@ -1348,6 +1283,7 @@ fn infer_type(
                 local_types,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             // init and element must have the same type
@@ -1370,6 +1306,7 @@ fn infer_type(
                 &scan_locals,
                 registry,
                 builtin_fns,
+                resolved_fn_sigs,
                 src,
             )?;
             if body_type != *element {
@@ -1383,267 +1320,6 @@ fn infer_type(
             }
             // scan produces an indexed result with the same index
             Ok(InferredType::Indexed { element, index })
-        }
-    }
-}
-
-/// Unify a parameter's type expression against an actual inferred type,
-/// binding generic dimension and index names.
-///
-/// For example, if `type_expr` is `D` and `actual` is `Scalar(Length)`, binds `D = Length`.
-/// If `type_expr` is `D[I]` and `actual` is `Indexed { Scalar(Velocity), "Maneuver" }`,
-/// binds `D = Velocity_dim` and `I = "Maneuver"`.
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "complex generic unification requires many parameters and match arms"
-)]
-fn unify_type_expr_generic(
-    type_expr: &graphcal_syntax::ast::TypeExpr,
-    actual: &InferredType,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    dim_sub: &mut HashMap<GenericParamName, Dimension>,
-    index_sub: &mut HashMap<GenericParamName, IndexName>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    span: graphcal_syntax::span::Span,
-) -> Result<(), GraphcalError> {
-    match &type_expr.kind {
-        TypeExprKind::Indexed { base, indexes } => {
-            // Peel off index layers from actual type, binding index generics
-            let mut current = actual;
-            for idx in indexes.iter().rev() {
-                let idx_name = &idx.name;
-                let InferredType::Indexed {
-                    element,
-                    index: actual_idx,
-                } = current
-                else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format!("indexed type with index `{idx_name}`"),
-                        found: format_inferred_type(current),
-                        src: src.clone(),
-                        span: span.into(),
-                        help: "expected an indexed value".to_string(),
-                    });
-                };
-                // If this is a generic index param, bind it
-                if let Some(generic_param) = index_params.iter().find(|p| p.as_str() == idx_name) {
-                    if let Some(prev) = index_sub.get(generic_param) {
-                        if *prev != *actual_idx {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: prev.clone(),
-                                found: actual_idx.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
-                        }
-                    } else {
-                        index_sub.insert(generic_param.clone(), actual_idx.clone());
-                    }
-                } else if *idx_name != actual_idx.as_str() {
-                    // Concrete index name — must match exactly
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: IndexName::new(idx_name),
-                        found: actual_idx.clone(),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-                } else {
-                    // Concrete index name matches — OK
-                }
-                current = element;
-            }
-            // Now unify the base type against the peeled element
-            unify_type_expr_generic(
-                base,
-                current,
-                dim_params,
-                index_params,
-                dim_sub,
-                index_sub,
-                registry,
-                src,
-                span,
-            )
-        }
-        TypeExprKind::Bool => {
-            if *actual != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(actual),
-                    src: src.clone(),
-                    span: span.into(),
-                    help: "expected Bool argument".to_string(),
-                });
-            }
-            Ok(())
-        }
-        TypeExprKind::Int => {
-            if *actual != InferredType::Int {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Int".to_string(),
-                    found: format_inferred_type(actual),
-                    src: src.clone(),
-                    span: span.into(),
-                    help: "expected Int argument".to_string(),
-                });
-            }
-            Ok(())
-        }
-        TypeExprKind::Dimensionless => {
-            let actual_dim = expect_scalar(actual, src, span)?;
-            if !actual_dim.is_dimensionless() {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Dimensionless".to_string(),
-                    found: format!("{actual_dim}"),
-                    src: src.clone(),
-                    span: span.into(),
-                    help: "expected Dimensionless argument".to_string(),
-                });
-            }
-            Ok(())
-        }
-        TypeExprKind::DimExpr(dim_expr) => {
-            let actual_dim = expect_scalar(actual, src, span)?;
-
-            // Check if this is a single generic param (most common case: `D` or `D^n`)
-            if dim_expr.terms.len() == 1 {
-                let item = &dim_expr.terms[0];
-                let name = &item.term.name.name;
-                if let Some(generic_param) = dim_params.iter().find(|p| p.as_str() == name) {
-                    let exp = item.term.power.unwrap_or(1);
-                    let bound_dim = if exp == 1 {
-                        actual_dim
-                    } else {
-                        actual_dim.pow(Rational::new(1, exp))
-                    };
-                    if let Some(prev) = dim_sub.get(generic_param) {
-                        if *prev != bound_dim {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format!("{prev}"),
-                                found: format!("{bound_dim}"),
-                                src: src.clone(),
-                                span: span.into(),
-                                help: format!(
-                                    "generic `{name}` was bound to {prev} but this argument requires {bound_dim}"
-                                ),
-                            });
-                        }
-                    } else {
-                        dim_sub.insert(generic_param.clone(), bound_dim);
-                    }
-                    return Ok(());
-                }
-            }
-
-            // General case: resolve terms
-            let mut expected_dim = Dimension::DIMENSIONLESS;
-            for item in &dim_expr.terms {
-                let name = &item.term.name.name;
-                let exp = item.term.power.unwrap_or(1);
-
-                let term_dim =
-                    if let Some(generic_param) = dim_params.iter().find(|p| p.as_str() == name) {
-                        if let Some(prev) = dim_sub.get(generic_param) {
-                            prev.pow(Rational::from_int(exp))
-                        } else {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format!("generic `{name}` (unresolved)"),
-                                found: format!("{actual_dim}"),
-                                src: src.clone(),
-                                span: span.into(),
-                                help: format!(
-                                    "generic `{name}` could not be inferred from this argument"
-                                ),
-                            });
-                        }
-                    } else {
-                        let base = registry.get_dimension(name).ok_or_else(|| {
-                            GraphcalError::UnknownDimension {
-                                name: DimName::new(name),
-                                src: src.clone(),
-                                span: item.term.span.into(),
-                            }
-                        })?;
-                        base.pow(Rational::from_int(exp))
-                    };
-
-                expected_dim = match item.op {
-                    MulDivOp::Mul => expected_dim * term_dim,
-                    MulDivOp::Div => expected_dim / term_dim,
-                };
-            }
-
-            if expected_dim != actual_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("{expected_dim}"),
-                    found: format!("{actual_dim}"),
-                    src: src.clone(),
-                    span: span.into(),
-                    help: "dimension mismatch in function argument".to_string(),
-                });
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Resolve a type expression to an `InferredType`, substituting generic dim and index names.
-fn resolve_type_with_substitution(
-    type_expr: &graphcal_syntax::ast::TypeExpr,
-    dim_sub: &HashMap<GenericParamName, Dimension>,
-    index_sub: &HashMap<GenericParamName, IndexName>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    match &type_expr.kind {
-        TypeExprKind::Dimensionless => Ok(InferredType::Scalar(Dimension::DIMENSIONLESS)),
-        TypeExprKind::Bool => Ok(InferredType::Bool),
-        TypeExprKind::Int => Ok(InferredType::Int),
-        TypeExprKind::DimExpr(dim_expr) => {
-            let mut result = Dimension::DIMENSIONLESS;
-            for item in &dim_expr.terms {
-                let name = &item.term.name.name;
-                let exp = item.term.power.unwrap_or(1);
-
-                let base = if let Some(dim) = dim_sub.get(name.as_str()) {
-                    *dim
-                } else if let Some(dim) = registry.get_dimension(name) {
-                    *dim
-                } else {
-                    return Err(GraphcalError::UnknownDimension {
-                        name: DimName::new(name),
-                        src: src.clone(),
-                        span: item.term.span.into(),
-                    });
-                };
-
-                let term_dim = base.pow(Rational::from_int(exp));
-                result = match item.op {
-                    MulDivOp::Mul => result * term_dim,
-                    MulDivOp::Div => result / term_dim,
-                };
-            }
-            Ok(InferredType::Scalar(result))
-        }
-        TypeExprKind::Indexed { base, indexes } => {
-            let mut result =
-                resolve_type_with_substitution(base, dim_sub, index_sub, registry, src)?;
-            for idx in indexes.iter().rev() {
-                let idx_name = &idx.name;
-                // Look up in index substitution, then use as-is
-                let resolved_idx = index_sub
-                    .get(idx_name.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| IndexName::new(idx_name));
-                result = InferredType::Indexed {
-                    element: Box::new(result),
-                    index: resolved_idx,
-                };
-            }
-            Ok(result)
         }
     }
 }
@@ -1745,7 +1421,8 @@ mod tests {
         let src = make_src(source);
         let ir = crate::ir::lower(&file, &src)?;
         let tir = crate::tir::type_resolve(ir, &src)?;
-        check_dimensions_tir(&tir, &src)
+        check_dimensions_tir(&tir, &src)?;
+        tir.build_declared_types(&src)
     }
 
     #[test]

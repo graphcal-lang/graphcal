@@ -142,6 +142,35 @@ pub struct TIR {
     pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
 }
 
+impl TIR {
+    /// Build a concrete `DeclaredType` map from resolved types.
+    ///
+    /// Converts each entry in `resolved_decl_types` via [`resolved_to_declared_type`]
+    /// and adds builtin constants as `Dimensionless`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
+    /// parameters.
+    pub fn build_declared_types(
+        &self,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<HashMap<String, crate::dim_check::DeclaredType>, GraphcalError> {
+        let mut declared_types = HashMap::new();
+        for name in crate::builtins::builtin_constants().keys() {
+            declared_types.insert(
+                (*name).to_string(),
+                crate::dim_check::DeclaredType::Scalar(Dimension::DIMENSIONLESS),
+            );
+        }
+        for (name, resolved) in &self.resolved_decl_types {
+            let dt = resolved_to_declared_type(resolved, src)?;
+            declared_types.insert(name.clone(), dt);
+        }
+        Ok(declared_types)
+    }
+}
+
 /// Resolve all type annotations in an [`IR`], producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic

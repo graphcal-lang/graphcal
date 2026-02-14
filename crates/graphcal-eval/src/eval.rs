@@ -240,15 +240,17 @@ pub fn compile_and_eval_with_overrides(
 
     // Check
     crate::fn_check::check_no_recursion_tir(&tir, &src)?;
-    let declared_types = crate::dim_check::check_dimensions_tir(&tir, &src)?;
+    crate::dim_check::check_dimensions_tir(&tir, &src)?;
 
     // Dimension-check override expressions against their param's declared type
+    let declared_types = tir.build_declared_types(&src)?;
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
             override_name.as_str(),
             &declared_types,
             &tir.registry,
+            &tir.resolved_fn_sigs,
             &src,
         )?;
     }
@@ -393,15 +395,17 @@ pub fn compile_and_eval_project(
 
     // Dimension check — TIR already includes imported declarations with their real types,
     // so no separate `imported_types` map is needed.
-    let declared_types = crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+    crate::dim_check::check_dimensions_tir(&tir, root_src)?;
 
     // Dimension-check override expressions
+    let declared_types = tir.build_declared_types(root_src)?;
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
             override_name.as_str(),
             &declared_types,
             &tir.registry,
+            &tir.resolved_fn_sigs,
             root_src,
         )?;
     }
@@ -558,7 +562,7 @@ fn runtime_to_value(
 fn evaluate_plan(
     tir: &crate::tir::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<String, crate::dim_check::DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<EvalResult, GraphcalError> {
     let builtin_consts = builtin_constants();
