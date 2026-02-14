@@ -265,7 +265,7 @@
     },
 
     "builtin-types": {
-      "match": "\\b(Dimensionless|Dim|Index)\\b",
+      "match": "\\b(Dimensionless|Bool|Int|Dim|Index)\\b",
       "name": "support.type.graphcal"
     },
 
@@ -300,7 +300,7 @@
           "name": "keyword.operator.logical.graphcal"
         },
         {
-          "match": "[+\\-*/^]",
+          "match": "[+\\-*/^%]",
           "name": "keyword.operator.arithmetic.graphcal"
         },
         {
