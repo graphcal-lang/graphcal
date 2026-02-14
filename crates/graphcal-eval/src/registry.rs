@@ -394,7 +394,7 @@ mod tests {
         });
         let def = r.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
-        let variant_strs: Vec<&str> = def.variants.iter().map(|v| v.as_str()).collect();
+        let variant_strs: Vec<&str> = def.variants.iter().map(VariantName::as_str).collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.get_index("NonExistent").is_none());
     }

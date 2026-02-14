@@ -384,26 +384,24 @@ fn infer_type(
         }
 
         ExprKind::ConstRef(ident) => {
-            let dt =
-                declared_types
-                    .get(ident.value.as_str())
-                    .ok_or_else(|| GraphcalError::UnknownConstRef {
-                        name: ident.value.clone(),
-                        src: src.clone(),
-                        span: ident.span.into(),
-                    })?;
+            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownConstRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                }
+            })?;
             Ok(declared_to_inferred(dt))
         }
 
         ExprKind::GraphRef(ident) => {
-            let dt =
-                declared_types
-                    .get(ident.value.as_str())
-                    .ok_or_else(|| GraphcalError::UnknownGraphRef {
-                        name: ident.value.clone(),
-                        src: src.clone(),
-                        span: ident.span.into(),
-                    })?;
+            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownGraphRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                }
+            })?;
             Ok(declared_to_inferred(dt))
         }
 
@@ -670,8 +668,10 @@ fn infer_type(
 
         ExprKind::FnCall { name, args } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
-            if matches!(name.value.as_str(), "sum" | "min" | "max" | "mean" | "count")
-                && args.len() == 1
+            if matches!(
+                name.value.as_str(),
+                "sum" | "min" | "max" | "mean" | "count"
+            ) && args.len() == 1
             {
                 let arg_type = infer_type(
                     &args[0],
@@ -1041,13 +1041,13 @@ fn infer_type(
         }
 
         ExprKind::StructConstruction { type_name, fields } => {
-            let struct_def = registry.get_struct(type_name.value.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
+            let struct_def = registry
+                .get_struct(type_name.value.as_str())
+                .ok_or_else(|| GraphcalError::UnknownStructType {
                     name: type_name.value.clone(),
                     src: src.clone(),
                     span: type_name.span.into(),
-                }
-            })?;
+                })?;
 
             // Check for extra fields
             let def_field_names: std::collections::HashSet<&str> =
@@ -1177,14 +1177,13 @@ fn infer_type(
             // All entries must have the same index name
             let idx_name = &entries[0].index.value;
             // Validate index exists
-            let idx_def =
-                registry
-                    .get_index(idx_name.as_str())
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: entries[0].index.value.clone(),
-                        src: src.clone(),
-                        span: entries[0].index.span.into(),
-                    })?;
+            let idx_def = registry.get_index(idx_name.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: entries[0].index.value.clone(),
+                    src: src.clone(),
+                    span: entries[0].index.span.into(),
+                }
+            })?;
             // Validate all entries use the same index
             for entry in entries {
                 if entry.index.value != *idx_name {
@@ -1296,7 +1295,11 @@ fn infer_type(
                         let idx_def = registry
                             .get_index(idx_name.as_str())
                             .expect("index validated");
-                        if !idx_def.variants.iter().any(|v| v.as_str() == variant.value.as_str()) {
+                        if !idx_def
+                            .variants
+                            .iter()
+                            .any(|v| v.as_str() == variant.value.as_str())
+                        {
                             return Err(GraphcalError::UnknownVariant {
                                 index_name: idx_name,
                                 variant_name: variant.value.clone(),

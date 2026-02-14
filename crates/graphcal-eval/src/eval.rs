@@ -17,7 +17,9 @@ use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve, resolve_with_imports};
 use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, VariantName};
+use graphcal_syntax::names::{
+    DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, VariantName,
+};
 use graphcal_syntax::parser::ParseError;
 
 use std::path::Path;
@@ -324,11 +326,7 @@ fn register_file_declarations(
             DeclKind::Index(idx) => {
                 registry.register_index(registry::IndexDef {
                     name: idx.name.value.clone(),
-                    variants: idx
-                        .variants
-                        .iter()
-                        .map(|v| v.value.clone())
-                        .collect(),
+                    variants: idx.variants.iter().map(|v| v.value.clone()).collect(),
                 });
             }
             DeclKind::Type(t) => {
@@ -659,7 +657,11 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
                 ));
             }
             DeclKind::Fn(f) if f.name.value.as_str() == name => {
-                return Some(ImportedDecl::Fn(f.name.value.to_string(), f.clone(), decl.span));
+                return Some(ImportedDecl::Fn(
+                    f.name.value.to_string(),
+                    f.clone(),
+                    decl.span,
+                ));
             }
             _ => {}
         }

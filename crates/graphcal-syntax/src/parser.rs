@@ -158,7 +158,8 @@ impl<'src> Parser<'src> {
 
     fn parse_param(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Param)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
             .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
@@ -178,7 +179,8 @@ impl<'src> Parser<'src> {
 
     fn parse_node(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Node)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
             .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
@@ -198,7 +200,8 @@ impl<'src> Parser<'src> {
 
     fn parse_const(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Const)?;
-        let name = self.parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
+        let name = self
+            .parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
             .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
@@ -267,7 +270,8 @@ impl<'src> Parser<'src> {
 
     fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Type)?;
-        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+        let name = self
+            .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<StructTypeName>();
         self.expect(Token::LBrace)?;
 
@@ -278,9 +282,9 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
-            let field_name =
-                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-                    .into_spanned::<FieldName>();
+            let field_name = self
+                .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+                .into_spanned::<FieldName>();
             self.expect(Token::Colon)?;
             let type_ann = self.parse_type_expr()?;
             fields.push(FieldDecl {
@@ -381,7 +385,8 @@ impl<'src> Parser<'src> {
     /// `index Maneuver = { Departure, Correction, Insertion }`
     fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
-        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+        let name = self
+            .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<IndexName>();
         self.expect(Token::Eq)?;
         self.expect(Token::LBrace)?;
@@ -391,7 +396,8 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            let variant = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
                 .into_spanned::<VariantName>();
             variants.push(variant);
             if self.lexer.peek() == Some(&Token::Comma) {
@@ -421,7 +427,8 @@ impl<'src> Parser<'src> {
     /// `fn NAME<GENERICS>(PARAMS) -> TYPE { STMTS EXPR }`
     fn parse_fn_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Fn)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
             .into_spanned::<FnName>();
 
         // Optional generic params: <D: Dim, E: Dim>
@@ -1350,7 +1357,10 @@ impl<'src> Parser<'src> {
 
     /// Parse struct construction after the type name has been consumed:
     /// `{ field1: expr, field2, ... }`
-    fn parse_struct_construction(&mut self, type_name: Spanned<StructTypeName>) -> Result<Expr, ParseError> {
+    fn parse_struct_construction(
+        &mut self,
+        type_name: Spanned<StructTypeName>,
+    ) -> Result<Expr, ParseError> {
         self.expect(Token::LBrace)?;
         let mut fields = Vec::new();
 
@@ -1397,7 +1407,8 @@ impl<'src> Parser<'src> {
         loop {
             let var = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
             self.expect(Token::Colon)?;
-            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            let index = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
                 .into_spanned::<IndexName>();
             bindings.push(ForBinding { var, index });
             if self.lexer.peek() == Some(&Token::Comma) {
@@ -1430,7 +1441,8 @@ impl<'src> Parser<'src> {
     ) -> Result<Expr, ParseError> {
         // Consume `::` (we already peeked and confirmed it)
         self.expect(Token::ColonColon)?;
-        let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+        let variant = self
+            .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<VariantName>();
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
@@ -1445,10 +1457,12 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break; // trailing comma
             }
-            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            let index = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
                 .into_spanned::<IndexName>();
             self.expect(Token::ColonColon)?;
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            let variant = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
                 .into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
@@ -1493,7 +1507,10 @@ impl<'src> Parser<'src> {
         // It could be a struct construction (PascalCase { ... }) or a ConstRef.
         let first_expr = if is_pascal_case(ident_name) && self.lexer.peek() == Some(&Token::LBrace)
         {
-            self.parse_struct_construction(Spanned::new(StructTypeName::new(ident_name), ident_span))?
+            self.parse_struct_construction(Spanned::new(
+                StructTypeName::new(ident_name),
+                ident_span,
+            ))?
         } else {
             // Treat as ConstRef (UPPER_SNAKE_CASE or PascalCase used as const)
             Expr {
@@ -1590,7 +1607,8 @@ impl<'src> Parser<'src> {
         if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
             // Qualified variant: Index::Variant
             self.lexer.next_token(); // consume '::'
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            let variant = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
                 .into_spanned::<VariantName>();
             Ok(IndexArg::Variant {
                 index: Spanned::new(IndexName::new(name), span),
@@ -1733,7 +1751,7 @@ mod tests {
         assert_eq!(file.declarations.len(), 1);
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert_eq!(p.name.name, "x");
+                assert_eq!(p.name.value.as_str(), "x");
                 assert!(matches!(p.type_ann.kind, TypeExprKind::Dimensionless));
                 assert!(
                     matches!(p.value.kind, ExprKind::Number(n) if (n - 42.0).abs() < f64::EPSILON)
@@ -1750,7 +1768,7 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert_eq!(p.name.name, "alt");
+                assert_eq!(p.name.value.as_str(), "alt");
                 match &p.type_ann.kind {
                     TypeExprKind::DimExpr(d) => {
                         assert_eq!(d.terms.len(), 1);
@@ -1771,7 +1789,7 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => {
-                assert_eq!(n.name.name, "gm");
+                assert_eq!(n.name.value.as_str(), "gm");
                 match &n.type_ann.kind {
                     TypeExprKind::DimExpr(d) => {
                         assert_eq!(d.terms.len(), 2);
@@ -1795,7 +1813,7 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Const(c) => {
-                assert_eq!(c.name.name, "G0");
+                assert_eq!(c.name.value.as_str(), "G0");
                 assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
             }
             _ => panic!("expected const"),
@@ -1809,7 +1827,7 @@ mod tests {
         let file = Parser::new("dimension Length;").parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Dimension(d) => {
-                assert_eq!(d.name.name, "Length");
+                assert_eq!(d.name.value.as_str(), "Length");
                 assert!(d.definition.is_none());
             }
             _ => panic!("expected dimension"),
@@ -1823,7 +1841,7 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Dimension(d) => {
-                assert_eq!(d.name.name, "Velocity");
+                assert_eq!(d.name.value.as_str(), "Velocity");
                 let def = d.definition.as_ref().unwrap();
                 assert_eq!(def.terms.len(), 2);
                 assert_eq!(def.terms[0].term.name.name, "Length");
@@ -1841,7 +1859,7 @@ mod tests {
         let file = Parser::new("unit m: Length;").parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Unit(u) => {
-                assert_eq!(u.name.name, "m");
+                assert_eq!(u.name.value.as_str(), "m");
                 assert_eq!(u.dim_type.terms[0].term.name.name, "Length");
                 assert!(u.definition.is_none());
             }
@@ -1856,11 +1874,11 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Unit(u) => {
-                assert_eq!(u.name.name, "km");
+                assert_eq!(u.name.value.as_str(), "km");
                 let def = u.definition.as_ref().unwrap();
                 assert!((def.scale - 1000.0).abs() < f64::EPSILON);
                 assert_eq!(def.unit_expr.terms.len(), 1);
-                assert_eq!(def.unit_expr.terms[0].name.name, "m");
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "m");
             }
             _ => panic!("expected unit"),
         }
@@ -1873,15 +1891,15 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Unit(u) => {
-                assert_eq!(u.name.name, "N");
+                assert_eq!(u.name.value.as_str(), "N");
                 let def = u.definition.as_ref().unwrap();
                 assert!((def.scale - 1.0).abs() < f64::EPSILON);
                 assert_eq!(def.unit_expr.terms.len(), 3);
-                assert_eq!(def.unit_expr.terms[0].name.name, "kg");
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "kg");
                 assert_eq!(def.unit_expr.terms[1].op, MulDivOp::Mul);
-                assert_eq!(def.unit_expr.terms[1].name.name, "m");
+                assert_eq!(def.unit_expr.terms[1].name.value.as_str(), "m");
                 assert_eq!(def.unit_expr.terms[2].op, MulDivOp::Div);
-                assert_eq!(def.unit_expr.terms[2].name.name, "s");
+                assert_eq!(def.unit_expr.terms[2].name.value.as_str(), "s");
                 assert_eq!(def.unit_expr.terms[2].power, Some(2));
             }
             _ => panic!("expected unit"),
@@ -1895,14 +1913,14 @@ mod tests {
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Unit(u) => {
-                assert_eq!(u.name.name, "deg");
+                assert_eq!(u.name.value.as_str(), "deg");
                 let def = u.definition.as_ref().unwrap();
                 assert!(
                     (def.scale - std::f64::consts::PI / 180.0).abs() < 1e-10,
                     "scale = {}",
                     def.scale
                 );
-                assert_eq!(def.unit_expr.terms[0].name.name, "rad");
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "rad");
             }
             _ => panic!("expected unit"),
         }
@@ -1920,7 +1938,7 @@ mod tests {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 400.0).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 1);
-                    assert_eq!(unit.terms[0].name.name, "km");
+                    assert_eq!(unit.terms[0].name.value.as_str(), "km");
                 }
                 _ => panic!("expected UnitLiteral"),
             },
@@ -1938,9 +1956,9 @@ mod tests {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 9.80665).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 2);
-                    assert_eq!(unit.terms[0].name.name, "m");
+                    assert_eq!(unit.terms[0].name.value.as_str(), "m");
                     assert_eq!(unit.terms[1].op, MulDivOp::Div);
-                    assert_eq!(unit.terms[1].name.name, "s");
+                    assert_eq!(unit.terms[1].name.value.as_str(), "s");
                     assert_eq!(unit.terms[1].power, Some(2));
                 }
                 _ => panic!("expected UnitLiteral"),
@@ -1959,11 +1977,13 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { expr, target } => {
-                    assert!(matches!(&expr.kind, ExprKind::GraphRef(id) if id.name == "speed"));
+                    assert!(
+                        matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.as_str() == "speed")
+                    );
                     assert_eq!(target.terms.len(), 2);
-                    assert_eq!(target.terms[0].name.name, "km");
+                    assert_eq!(target.terms[0].name.value.as_str(), "km");
                     assert_eq!(target.terms[1].op, MulDivOp::Div);
-                    assert_eq!(target.terms[1].name.name, "hour");
+                    assert_eq!(target.terms[1].name.value.as_str(), "hour");
                 }
                 _ => panic!("expected Convert"),
             },
@@ -1981,7 +2001,7 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
-                    assert_eq!(target.terms[0].name.name, "km");
+                    assert_eq!(target.terms[0].name.value.as_str(), "km");
                 }
                 _ => panic!("expected Convert"),
             },
@@ -2053,7 +2073,7 @@ mod tests {
     fn parse_graph_ref() {
         let expr = parse_node_expr("@x + 1.0");
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
-            assert!(matches!(&lhs.kind, ExprKind::GraphRef(id) if id.name == "x"));
+            assert!(matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.as_str() == "x"));
         } else {
             panic!("expected BinOp");
         }
@@ -2063,7 +2083,7 @@ mod tests {
     fn parse_const_ref() {
         let expr = parse_node_expr("PI * 2.0");
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
-            assert!(matches!(&lhs.kind, ExprKind::ConstRef(id) if id.name == "PI"));
+            assert!(matches!(&lhs.kind, ExprKind::ConstRef(id) if id.value.as_str() == "PI"));
         } else {
             panic!("expected BinOp");
         }
@@ -2073,9 +2093,9 @@ mod tests {
     fn parse_function_call_one_arg() {
         let expr = parse_node_expr("sqrt(@x)");
         if let ExprKind::FnCall { name, args } = &expr.kind {
-            assert_eq!(name.name, "sqrt");
+            assert_eq!(name.value.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
-            assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.name == "x"));
+            assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.as_str() == "x"));
         } else {
             panic!("expected FnCall");
         }
@@ -2085,7 +2105,7 @@ mod tests {
     fn parse_function_call_two_args() {
         let expr = parse_node_expr("atan2(@a, @b)");
         if let ExprKind::FnCall { name, args } = &expr.kind {
-            assert_eq!(name.name, "atan2");
+            assert_eq!(name.value.as_str(), "atan2");
             assert_eq!(args.len(), 2);
         } else {
             panic!("expected FnCall");
@@ -2096,7 +2116,7 @@ mod tests {
     fn parse_function_call_zero_args() {
         let expr = parse_node_expr("foo()");
         if let ExprKind::FnCall { name, args } = &expr.kind {
-            assert_eq!(name.name, "foo");
+            assert_eq!(name.value.as_str(), "foo");
             assert_eq!(args.len(), 0);
         } else {
             panic!("expected FnCall");
@@ -2118,7 +2138,7 @@ mod tests {
             ));
             assert!(matches!(
                 &then_branch.kind,
-                ExprKind::GraphRef(id) if id.name == "x"
+                ExprKind::GraphRef(id) if id.value.as_str() == "x"
             ));
             assert!(matches!(else_branch.kind, ExprKind::Number(_)));
         } else {
@@ -2184,8 +2204,12 @@ mod tests {
         let expr = parse_node_expr("@v_exhaust * ln(@mass_ratio)");
         if let ExprKind::BinOp { op, lhs, rhs } = &expr.kind {
             assert_eq!(*op, BinOp::Mul);
-            assert!(matches!(&lhs.kind, ExprKind::GraphRef(id) if id.name == "v_exhaust"));
-            assert!(matches!(&rhs.kind, ExprKind::FnCall { name, .. } if name.name == "ln"));
+            assert!(
+                matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.as_str() == "v_exhaust")
+            );
+            assert!(
+                matches!(&rhs.kind, ExprKind::FnCall { name, .. } if name.value.as_str() == "ln")
+            );
         } else {
             panic!("expected Mul");
         }
@@ -2258,14 +2282,14 @@ node speed_kmh: Velocity = @speed -> km/hour;
             .declarations
             .iter()
             .map(|d| match &d.kind {
-                DeclKind::Param(p) => p.name.name.as_str(),
-                DeclKind::Node(n) => n.name.name.as_str(),
-                DeclKind::Const(c) => c.name.name.as_str(),
-                DeclKind::Dimension(d) => d.name.name.as_str(),
-                DeclKind::Unit(u) => u.name.name.as_str(),
-                DeclKind::Type(t) => t.name.name.as_str(),
-                DeclKind::Fn(f) => f.name.name.as_str(),
-                DeclKind::Index(i) => i.name.name.as_str(),
+                DeclKind::Param(p) => p.name.value.as_str(),
+                DeclKind::Node(n) => n.name.value.as_str(),
+                DeclKind::Const(c) => c.name.value.as_str(),
+                DeclKind::Dimension(d) => d.name.value.as_str(),
+                DeclKind::Unit(u) => u.name.value.as_str(),
+                DeclKind::Type(t) => t.name.value.as_str(),
+                DeclKind::Fn(f) => f.name.value.as_str(),
+                DeclKind::Index(i) => i.name.value.as_str(),
                 DeclKind::Use(_) => "<use>",
             })
             .collect();
@@ -2292,9 +2316,9 @@ node speed_kmh: Velocity = @speed -> km/hour;
         assert_eq!(file.declarations.len(), 1);
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
-                assert_eq!(t.name.name, "Orbit");
+                assert_eq!(t.name.value.as_str(), "Orbit");
                 assert_eq!(t.fields.len(), 1);
-                assert_eq!(t.fields[0].name.name, "sma");
+                assert_eq!(t.fields[0].name.value.as_str(), "sma");
             }
             _ => panic!("expected type declaration"),
         }
@@ -2307,10 +2331,10 @@ node speed_kmh: Velocity = @speed -> km/hour;
         assert_eq!(file.declarations.len(), 1);
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
-                assert_eq!(t.name.name, "TransferResult");
+                assert_eq!(t.name.value.as_str(), "TransferResult");
                 assert_eq!(t.fields.len(), 2);
-                assert_eq!(t.fields[0].name.name, "dv1");
-                assert_eq!(t.fields[1].name.name, "dv2");
+                assert_eq!(t.fields[0].name.value.as_str(), "dv1");
+                assert_eq!(t.fields[1].name.value.as_str(), "dv2");
             }
             _ => panic!("expected type declaration"),
         }
@@ -2358,7 +2382,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
                 assert_eq!(t.fields.len(), 1);
-                assert_eq!(t.fields[0].name.name, "dv");
+                assert_eq!(t.fields[0].name.value.as_str(), "dv");
                 // The type_ann should be a DimExpr with division
                 match &t.fields[0].type_ann.kind {
                     TypeExprKind::DimExpr(_) => {} // ok
@@ -2494,11 +2518,11 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::StructConstruction { type_name, fields } => {
-                    assert_eq!(type_name.name, "TransferResult");
+                    assert_eq!(type_name.value.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
-                    assert_eq!(fields[0].name.name, "dv1");
+                    assert_eq!(fields[0].name.value.as_str(), "dv1");
                     assert!(fields[0].value.is_some());
-                    assert_eq!(fields[1].name.name, "dv2");
+                    assert_eq!(fields[1].name.value.as_str(), "dv2");
                     assert!(fields[1].value.is_some());
                 }
                 other => panic!("expected StructConstruction, got {other:?}"),
@@ -2516,7 +2540,7 @@ param alt: Length = 400.0 km;
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Block { expr, .. } => match &expr.kind {
                     ExprKind::StructConstruction { type_name, fields } => {
-                        assert_eq!(type_name.name, "TransferResult");
+                        assert_eq!(type_name.value.as_str(), "TransferResult");
                         assert_eq!(fields.len(), 2);
                         // Shorthand: value is None
                         assert!(fields[0].value.is_none());
@@ -2553,9 +2577,9 @@ param alt: Length = 400.0 km;
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert!(
-                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.name == "transfer")
+                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.value.as_str() == "transfer")
                     );
-                    assert_eq!(field.name, "dv1");
+                    assert_eq!(field.value.as_str(), "dv1");
                 }
                 other => panic!("expected FieldAccess, got {other:?}"),
             },
@@ -2570,16 +2594,16 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::FieldAccess { expr, field } => {
-                    assert_eq!(field.name, "dv1");
+                    assert_eq!(field.value.as_str(), "dv1");
                     // Inner should be another FieldAccess
                     match &expr.kind {
                         ExprKind::FieldAccess {
                             expr: inner,
                             field: mid_field,
                         } => {
-                            assert_eq!(mid_field.name, "transfer");
+                            assert_eq!(mid_field.value.as_str(), "transfer");
                             assert!(
-                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.name == "mission")
+                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.value.as_str() == "mission")
                             );
                         }
                         other => panic!("expected inner FieldAccess, got {other:?}"),
@@ -2618,7 +2642,7 @@ param alt: Length = 400.0 km;
         assert_eq!(file.declarations.len(), 1);
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
-                assert_eq!(f.name.name, "double");
+                assert_eq!(f.name.value.as_str(), "double");
                 assert!(f.generic_params.is_empty());
                 assert_eq!(f.params.len(), 1);
                 assert_eq!(f.params[0].name.name, "x");
@@ -2634,7 +2658,7 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
-                assert_eq!(f.name.name, "add_one");
+                assert_eq!(f.name.value.as_str(), "add_one");
                 match &f.body {
                     FnBody::Block { stmts, expr } => {
                         assert_eq!(stmts.len(), 1);
@@ -2654,9 +2678,9 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
-                assert_eq!(f.name.name, "lerp");
+                assert_eq!(f.name.value.as_str(), "lerp");
                 assert_eq!(f.generic_params.len(), 1);
-                assert_eq!(f.generic_params[0].name.name, "D");
+                assert_eq!(f.generic_params[0].name.value.as_str(), "D");
                 assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
                 assert_eq!(f.params.len(), 3);
                 assert_eq!(f.params[0].name.name, "a");
@@ -2674,8 +2698,8 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
                 assert_eq!(f.generic_params.len(), 2);
-                assert_eq!(f.generic_params[0].name.name, "A");
-                assert_eq!(f.generic_params[1].name.name, "B");
+                assert_eq!(f.generic_params[0].name.value.as_str(), "A");
+                assert_eq!(f.generic_params[1].name.value.as_str(), "B");
             }
             other => panic!("expected Fn, got {other:?}"),
         }
@@ -2687,7 +2711,7 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
-                assert_eq!(f.name.name, "pi_val");
+                assert_eq!(f.name.value.as_str(), "pi_val");
                 assert!(f.params.is_empty());
             }
             other => panic!("expected Fn, got {other:?}"),
@@ -2758,11 +2782,11 @@ param alt: Length = 400.0 km;
         assert_eq!(file.declarations.len(), 1);
         match &file.declarations[0].kind {
             DeclKind::Index(idx) => {
-                assert_eq!(idx.name.name, "Maneuver");
+                assert_eq!(idx.name.value.as_str(), "Maneuver");
                 assert_eq!(idx.variants.len(), 3);
-                assert_eq!(idx.variants[0].name, "Departure");
-                assert_eq!(idx.variants[1].name, "Correction");
-                assert_eq!(idx.variants[2].name, "Insertion");
+                assert_eq!(idx.variants[0].value.as_str(), "Departure");
+                assert_eq!(idx.variants[1].value.as_str(), "Correction");
+                assert_eq!(idx.variants[2].value.as_str(), "Insertion");
             }
             _ => panic!("expected index declaration"),
         }
@@ -2774,7 +2798,7 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Index(idx) => {
-                assert_eq!(idx.name.name, "Phase");
+                assert_eq!(idx.name.value.as_str(), "Phase");
                 assert_eq!(idx.variants.len(), 2);
             }
             _ => panic!("expected index declaration"),
@@ -2787,7 +2811,7 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert_eq!(p.name.name, "dv");
+                assert_eq!(p.name.value.as_str(), "dv");
                 match &p.type_ann.kind {
                     TypeExprKind::Indexed { base, indexes } => {
                         assert!(matches!(base.kind, TypeExprKind::DimExpr(_)));
@@ -2827,7 +2851,7 @@ param alt: Length = 400.0 km;
                 ExprKind::ForComp { bindings, body } => {
                     assert_eq!(bindings.len(), 1);
                     assert_eq!(bindings[0].var.name, "m");
-                    assert_eq!(bindings[0].index.name, "Maneuver");
+                    assert_eq!(bindings[0].index.value.as_str(), "Maneuver");
                     assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
                 }
                 other => panic!("expected ForComp, got {other:?}"),
@@ -2845,9 +2869,9 @@ param alt: Length = 400.0 km;
                 ExprKind::ForComp { bindings, .. } => {
                     assert_eq!(bindings.len(), 2);
                     assert_eq!(bindings[0].var.name, "r");
-                    assert_eq!(bindings[0].index.name, "Row");
+                    assert_eq!(bindings[0].index.value.as_str(), "Row");
                     assert_eq!(bindings[1].var.name, "c");
-                    assert_eq!(bindings[1].index.name, "Col");
+                    assert_eq!(bindings[1].index.value.as_str(), "Col");
                 }
                 other => panic!("expected ForComp, got {other:?}"),
             },
@@ -2866,8 +2890,8 @@ param alt: Length = 400.0 km;
                     assert_eq!(args.len(), 1);
                     match &args[0] {
                         IndexArg::Variant { index, variant } => {
-                            assert_eq!(index.name, "Maneuver");
-                            assert_eq!(variant.name, "Departure");
+                            assert_eq!(index.value.as_str(), "Maneuver");
+                            assert_eq!(variant.value.as_str(), "Departure");
                         }
                         other @ IndexArg::Var(_) => panic!("expected Variant, got {other:?}"),
                     }
@@ -2910,10 +2934,10 @@ param alt: Length = 400.0 km;
             DeclKind::Param(p) => match &p.value.kind {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
-                    assert_eq!(entries[0].index.name, "Maneuver");
-                    assert_eq!(entries[0].variant.name, "Departure");
-                    assert_eq!(entries[1].index.name, "Maneuver");
-                    assert_eq!(entries[1].variant.name, "Correction");
+                    assert_eq!(entries[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[1].variant.value.as_str(), "Correction");
                 }
                 other => panic!("expected MapLiteral, got {other:?}"),
             },
@@ -2946,9 +2970,9 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Fn(f) => {
                 assert_eq!(f.generic_params.len(), 2);
-                assert_eq!(f.generic_params[0].name.name, "D");
+                assert_eq!(f.generic_params[0].name.value.as_str(), "D");
                 assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
-                assert_eq!(f.generic_params[1].name.name, "I");
+                assert_eq!(f.generic_params[1].name.value.as_str(), "I");
                 assert_eq!(f.generic_params[1].constraint, GenericConstraint::Index);
             }
             _ => panic!("expected fn"),

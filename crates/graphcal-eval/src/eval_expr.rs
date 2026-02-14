@@ -324,8 +324,10 @@ pub fn eval_expr(
         },
         ExprKind::FnCall { name, args } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
-            if matches!(name.value.as_str(), "sum" | "min" | "max" | "mean" | "count")
-                && args.len() == 1
+            if matches!(
+                name.value.as_str(),
+                "sum" | "min" | "max" | "mean" | "count"
+            ) && args.len() == 1
             {
                 let arg_val = eval_expr(
                     &args[0],
@@ -442,19 +444,21 @@ pub fn eval_expr(
                     .collect::<Result<_, _>>()?;
                 let result = (builtin.eval)(&arg_values);
                 return Ok(RuntimeValue::Scalar(check_finite(
-                    result, name.value.as_str(), src, expr.span,
+                    result,
+                    name.value.as_str(),
+                    src,
+                    expr.span,
                 )?));
             }
 
             // Try user-defined function
-            let fn_def =
-                registry
-                    .get_function(name.value.as_str())
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("unknown function `{}`", name.value),
-                        src: src.clone(),
-                        span: name.span.into(),
-                    })?;
+            let fn_def = registry.get_function(name.value.as_str()).ok_or_else(|| {
+                GraphcalError::EvalError {
+                    message: format!("unknown function `{}`", name.value),
+                    src: src.clone(),
+                    span: name.span.into(),
+                }
+            })?;
 
             // Evaluate arguments
             let arg_values: Vec<RuntimeValue> = args

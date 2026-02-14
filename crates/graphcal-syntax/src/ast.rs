@@ -334,7 +334,10 @@ pub enum ExprKind {
     /// Unary operation: `-x`, `!x`
     UnaryOp { op: UnaryOp, operand: Box<Expr> },
     /// Function call: `sqrt(x)`, `atan2(y, x)`
-    FnCall { name: Spanned<FnName>, args: Vec<Expr> },
+    FnCall {
+        name: Spanned<FnName>,
+        args: Vec<Expr>,
+    },
     /// Conditional: `if cond { then_expr } else { else_expr }`
     If {
         condition: Box<Expr>,
@@ -353,7 +356,10 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
-    FieldAccess { expr: Box<Expr>, field: Spanned<FieldName> },
+    FieldAccess {
+        expr: Box<Expr>,
+        field: Spanned<FieldName>,
+    },
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
     StructConstruction {
         type_name: Spanned<StructTypeName>,
@@ -410,7 +416,10 @@ pub struct ForBinding {
 #[derive(Debug, Clone)]
 pub enum IndexArg {
     /// Qualified variant: `Maneuver::Departure`
-    Variant { index: Spanned<IndexName>, variant: Spanned<VariantName> },
+    Variant {
+        index: Spanned<IndexName>,
+        variant: Spanned<VariantName>,
+    },
     /// Loop variable: `m`
     Var(Ident),
 }
