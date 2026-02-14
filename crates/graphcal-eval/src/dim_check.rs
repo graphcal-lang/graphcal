@@ -9,7 +9,7 @@ use graphcal_syntax::names::{
     DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
 };
 
-use crate::builtins::{DimSignature, builtin_constants, builtin_functions};
+use crate::builtins::{DimSignature, builtin_functions};
 use crate::error::GraphcalError;
 use crate::registry::Registry;
 
@@ -56,8 +56,8 @@ pub enum InferredType {
 /// during `type_resolve`), then validates that every RHS expression matches its
 /// declared type annotation.
 ///
-/// Returns the `declared_types` map (needed by `check_override_dimension` and
-/// `runtime_to_value` during evaluation).
+/// This is a pure validation step — returns `()` on success.
+/// Use [`crate::tir::build_declared_types`] to obtain the `DeclaredType` map.
 ///
 /// # Errors
 ///
@@ -65,39 +65,11 @@ pub enum InferredType {
 pub fn check_dimensions_tir(
     tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    check_dimensions_tir_with_imports(tir, src, &HashMap::new())
-}
-
-/// Check dimensions using TIR with pre-populated declared types from imports.
-fn check_dimensions_tir_with_imports(
-    tir: &crate::tir::TIR,
-    src: &NamedSource<Arc<String>>,
-    imported_types: &HashMap<String, DeclaredType>,
-) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    let builtin_consts = builtin_constants();
+) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
 
-    let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
-
-    // Include imported types
-    for (name, dt) in imported_types {
-        declared_types.insert(name.clone(), dt.clone());
-    }
-
-    // Built-in constants are Dimensionless
-    for name in builtin_consts.keys() {
-        declared_types.insert(
-            (*name).to_string(),
-            DeclaredType::Scalar(Dimension::DIMENSIONLESS),
-        );
-    }
-
-    // Build declared types from TIR's pre-resolved type annotations
-    for (name, resolved) in &tir.resolved_decl_types {
-        let dt = crate::tir::resolved_to_declared_type(resolved, src)?;
-        declared_types.insert(name.clone(), dt);
-    }
+    // Build declared types from TIR
+    let declared_types = crate::tir::build_declared_types(tir, src)?;
 
     // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
@@ -128,7 +100,7 @@ fn check_dimensions_tir_with_imports(
         }
     }
 
-    Ok(declared_types)
+    Ok(())
 }
 
 /// Check that an override expression has the correct dimension for the given param.
@@ -1745,7 +1717,8 @@ mod tests {
         let src = make_src(source);
         let ir = crate::ir::lower(&file, &src)?;
         let tir = crate::tir::type_resolve(ir, &src)?;
-        check_dimensions_tir(&tir, &src)
+        check_dimensions_tir(&tir, &src)?;
+        crate::tir::build_declared_types(&tir, &src)
     }
 
     #[test]

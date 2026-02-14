@@ -240,7 +240,10 @@ pub fn compile_and_eval_with_overrides(
 
     // Check
     crate::fn_check::check_no_recursion_tir(&tir, &src)?;
-    let declared_types = crate::dim_check::check_dimensions_tir(&tir, &src)?;
+    crate::dim_check::check_dimensions_tir(&tir, &src)?;
+
+    // Build declared types from TIR for override checking and evaluation
+    let declared_types = crate::tir::build_declared_types(&tir, &src)?;
 
     // Dimension-check override expressions against their param's declared type
     for (override_name, override_expr) in overrides {
@@ -393,7 +396,10 @@ pub fn compile_and_eval_project(
 
     // Dimension check — TIR already includes imported declarations with their real types,
     // so no separate `imported_types` map is needed.
-    let declared_types = crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+    crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+
+    // Build declared types from TIR for override checking and evaluation
+    let declared_types = crate::tir::build_declared_types(&tir, root_src)?;
 
     // Dimension-check override expressions
     for (override_name, override_expr) in overrides {

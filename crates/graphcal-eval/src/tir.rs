@@ -290,6 +290,41 @@ pub fn resolved_to_declared_type(
     }
 }
 
+/// Build a `declared_types` map from a TIR's resolved types.
+///
+/// Converts each entry in `tir.resolved_decl_types` via [`resolved_to_declared_type`]
+/// and adds builtin constants as `Dimensionless`.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
+/// parameters.
+pub fn build_declared_types(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<String, crate::dim_check::DeclaredType>, GraphcalError> {
+    use crate::builtins::builtin_constants;
+    use crate::dim_check::DeclaredType;
+
+    let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
+
+    // Built-in constants are Dimensionless
+    for name in builtin_constants().keys() {
+        declared_types.insert(
+            (*name).to_string(),
+            DeclaredType::Scalar(Dimension::DIMENSIONLESS),
+        );
+    }
+
+    // Convert resolved types from TIR
+    for (name, resolved) in &tir.resolved_decl_types {
+        let dt = resolved_to_declared_type(resolved, src)?;
+        declared_types.insert(name.clone(), dt);
+    }
+
+    Ok(declared_types)
+}
+
 // ---------------------------------------------------------------------------
 // Unification
 // ---------------------------------------------------------------------------
