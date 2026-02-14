@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Concept established, design details open. The core idea (compile-time tags that prevent mixing same-dimension values from different contexts) is sound, but arithmetic propagation rules, multi-space composition, and several other design questions remain unresolved.
+**Decision level:** Advancing. Syntax converging on **`tag` + generics `<>` + `as` cast** (Option E). Tag propagation formalized as a `merge` function operating family-by-family alongside dimension algebra. Some questions remain (see Open Questions).
 
 ## Summary
 
@@ -245,92 +245,256 @@ param pos: Length[#Frame.ECI]            // Hash signals "tag"
 
 The bare vs. qualified distinction is arguably natural — asking for "all maneuvers" (table) vs. "specifically ECI" (tag) — but needs to be validated with more examples.
 
-### Recommendation
+### Recommendation: Option E — `tag` + Generics `<>` + `as` Cast
 
-No final recommendation yet — this section presents the trade-offs for discussion. The strongest contenders are:
+After exploring options A–D, a fifth option emerged that resolves most open questions cleanly: **tags are type parameters on dimensions**, using existing generics syntax, with `as` for explicit cast/untag.
 
-1. **`tag` + `[brackets]`** (Option C): Most universal, most concise, most "PL-like." Needs index disambiguation.
-2. **`tag` + `for`** (Option D): Most readable English, but "for" is slightly wrong for coordinate frames.
-3. **`tag` + `in`** (Option B): Keeps familiar annotation, better declaration keyword.
+```
+tag Frame { Body, ECI, ECEF, LVLH }
+tag Species { O2, N2, CO2 }
+tag Countable { Person, Satellite, Cycle }
+tag CostCategory { Development, Production, Operations }
 
-The current `space` + `in` (Option A) is the weakest because it optimizes for coordinate frames at the expense of the broader use cases now envisioned.
+param pos: Length<Frame.ECI> = 6878 km;
+param p_O2: Pressure<Species.O2> = 21.3 kPa;
+param crew: Count<Countable.Person> = 7 count;
+param fy: Pressure<Material.Steel_A36> = 250 MPa;
+param thrust: Vec3<Force<Frame.Body>> = ...;
+param dev_cost: Money<CostCategory.Development> = 50 M_USD;
 
-## Crossing Space Boundaries
+// Multi-tag (independent families, comma-separated):
+param force: Force<Frame.ECI, Craft.Chaser> = ...;
 
-Two mechanisms for intentional cross-space operations:
+// Untag via `as` cast — explicit, deliberate, familiar:
+node total_pressure: Pressure =
+    @p_O2 as Pressure + @p_N2 as Pressure;
 
-### 1. Escape Hatch (`.untagged` / `.untag`)
+// Partial untag — strip one family, keep others:
+node force_eci: Force<Frame.ECI> = @force as Force<Frame.ECI>;
 
-```rust
-// Using current syntax (space + in):
-node combined_mass: Mass =
-    @chaser_mass.untagged + @target_mass.untagged;
-
-// Using bracket syntax (tag + []):
-node combined_mass: Mass =
-    @chaser_mass.untag + @target_mass.untag;
+// Generic functions:
+fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length = ...;
 ```
 
-The escape call is a signal to reviewers that a cross-space operation is intentional.
+**Why generics over brackets:**
 
-### 2. `Transform` -- Typed Conversion (Coordinate Frames Only)
+| Aspect | `[brackets]` (Option C) | `<generics>` (Option E) |
+| --- | --- | --- |
+| Index disambiguation | Ambiguous: `Velocity[Maneuver]` (index) vs `Length[Frame.ECI]` (tag) | Clean: `[...]` = index, `<...>` = type parameter |
+| Nesting | `Vec3<Force>[Frame.Body]` — tag on the Vec3 | `Vec3<Force<Frame.Body>>` — tag on the Force (correct) |
+| Multi-tag | `Force[Frame.ECI][Craft.Chaser]` — chained brackets | `Force<Frame.ECI, Craft.Chaser>` — comma-separated params |
+| Partial untag | No obvious syntax | `@x as Force<Frame.ECI>` — natural |
+| Escape mechanism | `.untag` (method-like) | `as` (cast, familiar from Rust/TS/Python) |
+| Generics | `fn f<S: Frame>(x: Length[S])` — mixed brackets | `fn f<F: Frame>(x: Length<F>)` — uniform `<>` |
 
-```rust
-// Using current syntax:
+## Formal Type Model
+
+### Type Representation
+
+A value's type is a pair of a **dimension** and a **tag set**:
+
+```
+Type = (Dimension, TagSet)
+TagSet = { family₁: variant₁, family₂: variant₂, ... }   // may be empty
+```
+
+Examples:
+
+| Graphcal Syntax | Internal Representation |
+| --- | --- |
+| `Length` | `(Length, {})` |
+| `Length<Frame.ECI>` | `(Length, {Frame: ECI})` |
+| `Force<Frame.Body, Craft.Chaser>` | `(M·L·T⁻², {Frame: Body, Craft: Chaser})` |
+| `Dimensionless` | `(1, {})` |
+
+### Tag Merge Function
+
+The core of tag propagation is the `merge` function, which combines two tag sets family-by-family:
+
+```
+merge(T₁, T₂):
+    result = {}
+    for each family F present in T₁ or T₂:
+        if F ∈ T₁ and F ∈ T₂:
+            if T₁[F] == T₂[F]:   result[F] = T₁[F]    // same variant → keep
+            else:                  COMPILE ERROR          // conflict → reject
+        if F ∈ T₁ only:           result[F] = T₁[F]     // sticky: tagged × untagged → keep
+        if F ∈ T₂ only:           result[F] = T₂[F]     // sticky: untagged × tagged → keep
+    return result
+```
+
+### Arithmetic Rules
+
+| Operation | Dimension Rule | Tag Rule | Result |
+| --- | --- | --- | --- |
+| `a + b` | `D₁ == D₂` (must match) | `T₁ == T₂` (must match) | `(D₁, T₁)` |
+| `a - b` | `D₁ == D₂` (must match) | `T₁ == T₂` (must match) | `(D₁, T₁)` |
+| `a * b` | `D₁ * D₂` (multiply) | `merge(T₁, T₂)` | `(D₁*D₂, merge(T₁,T₂))` |
+| `a / b` | `D₁ / D₂` (divide) | `merge(T₁, T₂)` | `(D₁/D₂, merge(T₁,T₂))` |
+| `a ^ n` | `D₁ ^ n` (power) | `T₁` (preserve) | `(D₁^n, T₁)` |
+| `sqrt(a)` | `D₁ ^ ½` | `T₁` (preserve) | `(D₁^½, T₁)` |
+| `sin(a)` | `D₁ == Angle` | `T₁` must be `{}` | `(1, {})` |
+| `exp(a)` | `D₁ == 1` | `T₁` must be `{}` | `(1, {})` |
+| `a -> unit` | unchanged | unchanged | `(D₁, T₁)` |
+| `a as D` | `D₁ ~> D` (cast) | stripped/narrowed | `(D, T_target)` |
+
+**Why `+`/`-` require exact tag match but `*`/`/` use merge:**
+
+Addition combines *same-kind* quantities — adding pressure to pressure. If one is O2's partial pressure and the other is N2's, that's likely a mistake. You must explicitly `as Pressure` first.
+
+Multiplication produces a *new kind* of quantity — force times distance is energy. The frame context carries through: force in Body frame times lever arm in Body frame gives torque in Body frame. An untagged operand (like time) doesn't strip the tag — you want `Force<Frame.Body> * Time` = `Impulse<Frame.Body>`.
+
+### Worked Traces
+
+```
+// Velocity in ECI * Time = Length in ECI
+Velocity<Frame.ECI> * Time
+= (L·T⁻¹, {Frame: ECI}) * (T, {})
+  Dimension: L·T⁻¹ * T = L ✓
+  Tags: merge({Frame: ECI}, {}) = {Frame: ECI}
+= Length<Frame.ECI> ✓
+
+// Force in Body * Length in Body = Energy in Body
+Force<Frame.Body> * Length<Frame.Body>
+= (M·L·T⁻², {Frame: Body}) * (L, {Frame: Body})
+  Dimension: M·L²·T⁻² ✓
+  Tags: merge({Frame: Body}, {Frame: Body}) = {Frame: Body}
+= Energy<Frame.Body> ✓
+
+// Count of persons * mass-per-person = mass of persons
+Count<Countable.Person> * (Mass / Count)<Countable.Person>
+= (Count, {Countable: Person}) * (M·Count⁻¹, {Countable: Person})
+  Dimension: M ✓
+  Tags: merge({Countable: Person}, {Countable: Person}) = {Countable: Person}
+= Mass<Countable.Person> ✓
+
+// Mixing frames → error
+Force<Frame.Body> * Length<Frame.ECI>
+  Tags: merge({Frame: Body}, {Frame: ECI})
+  Frame: Body ≠ ECI → COMPILE ERROR ✓
+
+// Multi-tag * untagged → tags preserved
+Force<Frame.ECI, Craft.Chaser> * Time
+= (M·L·T⁻², {Frame: ECI, Craft: Chaser}) * (T, {})
+  Dimension: M·L·T⁻¹ ✓
+  Tags: merge({Frame: ECI, Craft: Chaser}, {}) = {Frame: ECI, Craft: Chaser}
+= Impulse<Frame.ECI, Craft.Chaser> ✓
+
+// Addition with mismatched tags → error
+Pressure<Species.O2> + Pressure<Species.N2>
+  Tags: {Species: O2} ≠ {Species: N2} → COMPILE ERROR ✓
+  Fix: (@p_O2 as Pressure) + (@p_N2 as Pressure)
+```
+
+### The `as` Cast
+
+`as` performs an explicit type cast that can strip or narrow tags:
+
+```
+// Full untag (strip all tags):
+@p_O2 as Pressure
+= (Pressure, {Species: O2}) → (Pressure, {})
+
+// Partial untag (strip one family, keep others):
+@force as Force<Frame.ECI>
+= (M·L·T⁻², {Frame: ECI, Craft: Chaser}) → (M·L·T⁻², {Frame: ECI})
+
+// The dimension must be compatible — you cannot cast Length to Mass:
+@pos as Mass   // COMPILE ERROR: dimension mismatch
+
+// Tagging (adding a tag) at a declaration site:
+param p_O2: Pressure<Species.O2> = 21.3 kPa;
+// The literal 21.3 kPa is (Pressure, {}). The type annotation adds the tag.
+// This is the primary way to create tagged values.
+
+// Tagging via as (adding a tag to an untagged value):
+node p_tagged: Pressure<Species.O2> = @raw_pressure as Pressure<Species.O2>;
+// This is the "downcast" direction — programmer asserts the tag is correct.
+```
+
+### Generic Functions
+
+Tags integrate with the existing `<D: Dim>` generics:
+
+```
+// Generic over a tag variant:
+fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length =
+    sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+// Magnitude is frame-independent, so the result is untagged Length.
+
+// Generic over dimension — tags flow through automatically:
+fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D =
+    a + (b - a) * t;
+// If called with Length<Frame.ECI>, D binds to the full tagged type.
+// Result is Length<Frame.ECI>.
+
+// Generic over both dimension and tag:
+fn scale<D: Dim, F: Frame>(v: D<F>, s: Dimensionless) -> D<F> =
+    v * s;
+// Requires higher-kinded types (D is a type constructor parameterized by F).
+// May be deferred — the simpler `fn scale<D: Dim>(v: D, s: Dimensionless) -> D`
+// already handles this if D binds to the full tagged type.
+```
+
+## Crossing Tag Boundaries
+
+Two mechanisms for intentional cross-tag operations:
+
+### 1. `as` Cast (General Mechanism)
+
+```
+node total_pressure: Pressure =
+    @p_O2 as Pressure + @p_N2 as Pressure;
+
+node total_cost: Money =
+    @dev_cost as Money + @prod_cost as Money;
+```
+
+The `as` keyword is familiar from Rust, TypeScript, Python, and Kotlin. It signals a deliberate, explicit type operation — the programmer is asserting that stripping the tag is intentional.
+
+### 2. `Transform` (Coordinate Frames Only)
+
+```
 node eci_to_body: Transform<Frame.ECI, Frame.Body> = {
     Transform.from_rotation(@attitude_quaternion)
 };
-node thrust_eci: Vec3<Force> in Frame.ECI = @eci_to_body.inverse() * @thrust_body;
+node thrust_eci: Vec3<Force<Frame.ECI>> = @eci_to_body.inverse() * @thrust_body;
 ```
 
-`Transform` is specifically suited to coordinate frame conversions. Not all tag families have a meaningful transform concept (e.g., there is no "transform" between `Species.O2` and `Species.N2`). For most tag families, the escape hatch is the only crossing mechanism.
+`Transform` is domain-specific to coordinate frames. Most tag families have no meaningful transform — for those, `as` is the only crossing mechanism.
 
 ## Interaction with Other Layers
 
 - Tags are **optional**. Untagged values are the default.
-- Tags are **orthogonal** to dimensions: the dimension and tag layers compose independently.
-- A value can potentially carry multiple tags from different families (see open questions).
+- Tags are **type parameters** on dimensions. `Length<Frame.ECI>` is a more specific type than `Length`.
+- The tag layer and dimension layer are independent: dimension algebra produces the result dimension, `merge` produces the result tag set.
+- `as` casts go from more specific (tagged) to less specific (untagged). At declaration sites, untagged values can be assigned to tagged types (the annotation provides the tag).
 
 ## Open Questions
 
 ### Critical (Must Resolve Before Implementation)
 
-- **Syntax choice:** The declaration keyword (`space` vs `tag` vs `context`), annotation syntax (`in` vs `[brackets]` vs `for`), and escape syntax (`.untagged` vs `.untag` vs others) are all open. See the Syntax Exploration section above for a detailed comparison. The current `space` + `in` reads well for coordinate frames but poorly for counting, chemistry, materials, and other non-spatial use cases.
-
-- **Arithmetic propagation rules:** How do space tags propagate through multiplication and division? This is the single most important unresolved question and blocks the counting-as-spaces use case. Candidate rules:
-
-  - **(a) Additive only:** Spaces are checked on `+`/`-` (must match). `*`/`/` always strips tags. Simple but loses information — `Force in Frame.Body * Length in Frame.Body` loses the Body tag.
-  - **(b) Propagate on match:** If both operands share the same space tag, the result inherits it. If one is untagged, result inherits the tagged operand's space. If they have *different* tags from the same space family, it's an error. This is the richest rule and handles coordinate frames (`Force in Body * Length in Body → Torque in Body`) and counting (`Count in Person * Mass/Count in Person → Mass in Person`).
-  - **(c) Propagate only for addition, error for mismatched multiplication:** `*`/`/` between differently-tagged values is a compile error. You must `.untagged` first. Very safe, possibly too restrictive.
-
-  The choice affects every downstream use case. Rule (b) seems most practical but needs careful specification for edge cases.
-
-- **Tagged × untagged interaction:** When one operand has a space tag and the other is untagged, what happens?
-  - Option 1: Result inherits the tag (`Mass in Frame.Body * Dimensionless → Mass in Frame.Body`). This is the "tag is sticky" rule.
-  - Option 2: Result is untagged. This is the "tag is fragile" rule.
-  - Option 1 seems more useful — you want `@force_body * @dt` to remain in Body frame.
-
-- **Multi-space values:** Can a value belong to multiple spaces simultaneously? E.g., `in Frame.ECI in Craft.Chaser`? If yes, each space family is tracked independently during arithmetic. This is important for real-world models (force on the chaser, in the ECI frame).
+- **`as` both directions:** Is `@raw as Pressure<Species.O2>` (adding a tag to an untagged value) allowed freely, or should it require a special marker since it's the "unsafe" direction? Adding a wrong tag is where real errors happen.
 
 ### Important (Should Resolve Before Maturity)
 
-- **Space-generic functions:** Should functions be generic over spaces? E.g., `fn magnitude<S: Frame>(v: Vec3<Length> in S) -> Length`? Essential for writing reusable code that works across space variants.
-- **Open vs closed spaces:** Can space families be extended across files? Coordinate frames are typically a closed set, but `Countable` variants may need to be extensible across libraries.
-- **Space in type position vs value position:** Is `in Frame.ECI` part of the type signature or an annotation on the value? This affects type inference, function signatures, and error messages.
-- **Transform generality:** Is `Transform<A, B>` a coordinate-frame-specific concept, or a general mechanism for all space families? Most space families (Species, Material, CostCategory) have no meaningful transform.
+- **Higher-kinded generics:** Can `D<F>` appear in function signatures where `D: Dim` and `F: Frame`? Or does `D` always bind to the full tagged type? The latter is simpler and covers most use cases.
+- **Open vs closed tags:** Can tag families be extended across files? Coordinate frames are typically a closed set, but `Countable` variants may need to be extensible across libraries.
+- **Tag-generic functions:** `fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length` — the return type is untagged. How does the checker know this is intentional and not a mistake? Perhaps `-> Length` is allowed when `F` doesn't appear in the return type (the function "consumes" the tag).
+- **Transform generality:** Is `Transform<A, B>` a coordinate-frame-specific concept, or a general mechanism for all tag families?
 
 ### Deferred
 
-- **Space arithmetic (Transform composition):** When two `Transform` types are composed, how does the type system track the chain? E.g., `Transform<A, B> * Transform<B, C> -> Transform<A, C>`?
-- **`.untagged` auditing:** Should uses of `.untagged` be flagged in a lint pass or report? This would help code review.
-- **Inheritance / hierarchy:** Can spaces have sub-spaces? E.g., `Frame.ECI` is a refinement of `Frame.Inertial`?
-- **Runtime space selection:** Can the space variant be determined at runtime (e.g., from a parameter), or is it always compile-time?
-- **Variant separators:** The examples show semicolons after each variant. Is this consistent with `index` (which uses commas)?
+- **Transform composition:** `Transform<A, B> * Transform<B, C> -> Transform<A, C>` tracking in the type system.
+- **`as` auditing:** Should uses of `as` be flagged in a lint pass or report? Helps code review.
+- **Tag hierarchy:** Can tags have sub-variants? E.g., `Frame.Inertial` as parent of `Frame.ECI`.
+- **Runtime tag selection:** Can the tag variant be determined at runtime, or is it always compile-time?
 
 ## Dependencies on Other Aspects
 
-- **Dimensions** ([04](./04-dimensions-and-units.md)): Spaces are orthogonal to dimensions; they compose.
-- **Non-SI Dimensions** ([18](./18-non-si-dimensions.md)): Counting quantities use spaces rather than separate base dimensions. Requires resolving arithmetic propagation rules.
+- **Dimensions** ([04](./04-dimensions-and-units.md)): Tags are type parameters on dimensions; the two layers compose independently.
+- **Non-SI Dimensions** ([18](./18-non-si-dimensions.md)): Counting quantities use `Count<Countable.X>` tags rather than separate base dimensions.
 - **Algebraic Data Types** ([05](./05-algebraic-data-types.md)): `Transform` may be a built-in type or user-defined.
-- **Pure Functions** ([12](./12-pure-functions.md)): Functions can accept space-tagged parameters. Space-generic functions are an open question.
-- **Scoping** ([08](./08-scoping.md)): Space tags appear in type annotations at the `@` reference site.
+- **Pure Functions** ([12](./12-pure-functions.md)): Functions can be generic over tag variants.
+- **Syntax** ([02](./02-syntax-design.md)): `tag` declaration keyword and `as` cast keyword to be added to keyword inventory.
+- **Scoping** ([08](./08-scoping.md)): Tags appear in type annotations at the `@` reference site.
