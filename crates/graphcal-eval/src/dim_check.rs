@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{BinOp, DeclKind, Expr, ExprKind, File, MulDivOp, TypeExprKind};
+use graphcal_syntax::ast::{BinOp, Expr, ExprKind, MulDivOp, TypeExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{
     DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
@@ -50,28 +50,34 @@ pub enum InferredType {
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
-pub fn check_dimensions(
-    file: &File,
-    registry: &Registry,
+/// Check dimensions for all declarations using a TIR.
+///
+/// Builds `declared_types` from `tir.resolved_decl_types` (which were resolved
+/// during `type_resolve`), then validates that every RHS expression matches its
+/// declared type annotation.
+///
+/// Returns the `declared_types` map (needed by `check_override_dimension` and
+/// `runtime_to_value` during evaluation).
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if dimensions are inconsistent.
+pub fn check_dimensions_tir(
+    tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    check_dimensions_with_imports(file, registry, src, &HashMap::new())
+    check_dimensions_tir_with_imports(tir, src, &HashMap::new())
 }
 
-/// Check dimensions with pre-populated declared types from imports.
-///
-/// `imported_types` maps imported declaration names to their declared types.
-/// These are added to `declared_types` before checking the file's own declarations.
-pub fn check_dimensions_with_imports(
-    file: &File,
-    registry: &Registry,
+/// Check dimensions using TIR with pre-populated declared types from imports.
+fn check_dimensions_tir_with_imports(
+    tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
     imported_types: &HashMap<String, DeclaredType>,
 ) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    // Collect declared types for all consts/params/nodes
     let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
 
     // Include imported types
@@ -87,53 +93,27 @@ pub fn check_dimensions_with_imports(
         );
     }
 
-    // First pass: resolve declared type annotations
-    for decl in &file.declarations {
-        match &decl.kind {
-            DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Fn(_)
-            | DeclKind::Index(_)
-            | DeclKind::Use(_) => {}
-            DeclKind::Const(c) => {
-                let dt = resolve_type_annotation(&c.type_ann, registry, src)?;
-                declared_types.insert(c.name.value.to_string(), dt);
-            }
-            DeclKind::Param(p) => {
-                let dt = resolve_type_annotation(&p.type_ann, registry, src)?;
-                declared_types.insert(p.name.value.to_string(), dt);
-            }
-            DeclKind::Node(n) => {
-                let dt = resolve_type_annotation(&n.type_ann, registry, src)?;
-                declared_types.insert(n.name.value.to_string(), dt);
-            }
-        }
+    // Build declared types from TIR's pre-resolved type annotations
+    for (name, resolved) in &tir.resolved_decl_types {
+        let dt = crate::tir::resolved_to_declared_type(resolved, src)?;
+        declared_types.insert(name.clone(), dt);
     }
 
-    // Second pass: infer types and check against annotations
+    // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
-    for decl in &file.declarations {
-        let (name, type_ann, value_expr) = match &decl.kind {
-            DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Fn(_)
-            | DeclKind::Index(_)
-            | DeclKind::Use(_) => {
-                continue;
-            }
-            DeclKind::Const(c) => (c.name.value.as_str(), &c.type_ann, &c.value),
-            DeclKind::Param(p) => (p.name.value.as_str(), &p.type_ann, &p.value),
-            DeclKind::Node(n) => (n.name.value.as_str(), &n.type_ann, &n.value),
-        };
+    let all_decls = tir
+        .consts
+        .iter()
+        .chain(tir.params.iter())
+        .chain(tir.nodes.iter());
 
-        let declared = &declared_types[name];
+    for (name, type_ann, value_expr, _span) in all_decls {
+        let declared = &declared_types[name.as_str()];
         let inferred = infer_type(
             value_expr,
             &declared_types,
             &empty_locals,
-            registry,
+            &tir.registry,
             &builtin_fns,
             src,
         )?;
@@ -1754,14 +1734,7 @@ fn infer_fn_dim(
 mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
-    use crate::prelude::load_prelude;
     use graphcal_syntax::parser::Parser;
-
-    fn make_registry() -> Registry {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        r
-    }
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test", Arc::new(source.to_string()))
@@ -1769,72 +1742,10 @@ mod tests {
 
     fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
         let file = Parser::new(source).parse_file().unwrap();
-        let mut registry = make_registry();
         let src = make_src(source);
-
-        // Register indexes, struct types, and user-defined functions (mirrors eval.rs pipeline)
-        for decl in &file.declarations {
-            if let DeclKind::Index(idx) = &decl.kind {
-                registry.register_index(crate::registry::IndexDef {
-                    name: idx.name.value.clone(),
-                    variants: idx.variants.iter().map(|v| v.value.clone()).collect(),
-                });
-            }
-        }
-        for decl in &file.declarations {
-            if let DeclKind::Type(t) = &decl.kind {
-                let fields = t
-                    .fields
-                    .iter()
-                    .map(|f| {
-                        let dim = registry.resolve_type_expr(&f.type_ann).unwrap();
-                        crate::registry::StructField {
-                            name: f.name.value.clone(),
-                            dimension: dim,
-                        }
-                    })
-                    .collect();
-                registry.register_struct(crate::registry::StructDef {
-                    name: t.name.value.clone(),
-                    fields,
-                });
-            }
-        }
-        for decl in &file.declarations {
-            if let DeclKind::Fn(fn_decl) = &decl.kind {
-                registry.register_function(crate::registry::FnDef {
-                    name: fn_decl.name.value.clone(),
-                    generic_params: fn_decl
-                        .generic_params
-                        .iter()
-                        .map(|g| crate::registry::FnGenericParam {
-                            name: g.name.value.clone(),
-                            constraint: match g.constraint {
-                                graphcal_syntax::ast::GenericConstraint::Dim => {
-                                    crate::registry::FnGenericConstraint::Dim
-                                }
-                                graphcal_syntax::ast::GenericConstraint::Index => {
-                                    crate::registry::FnGenericConstraint::Index
-                                }
-                            },
-                        })
-                        .collect(),
-                    params: fn_decl
-                        .params
-                        .iter()
-                        .map(|p| crate::registry::FnParamDef {
-                            name: p.name.name.clone(),
-                            type_expr: p.type_ann.clone(),
-                        })
-                        .collect(),
-                    return_type_expr: fn_decl.return_type.clone(),
-                    body: fn_decl.body.clone(),
-                    span: decl.span,
-                });
-            }
-        }
-
-        check_dimensions(&file, &registry, &src)
+        let ir = crate::ir::lower(&file, &src)?;
+        let tir = crate::tir::type_resolve(ir, &src)?;
+        check_dimensions_tir(&tir, &src)
     }
 
     #[test]

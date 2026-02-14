@@ -62,6 +62,16 @@ pub fn check_no_recursion(
     Ok(())
 }
 
+/// Check that user-defined functions do not form recursive call cycles, using TIR.
+///
+/// Delegates to [`check_no_recursion`] using the registry embedded in the TIR.
+pub fn check_no_recursion_tir(
+    tir: &crate::tir::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    check_no_recursion(&tir.registry, src)
+}
+
 /// Collect names of user-defined functions called from a function body.
 fn collect_fn_calls(
     body: &FnBody,

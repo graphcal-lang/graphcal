@@ -9,14 +9,15 @@
 )]
 
 pub(crate) mod builtins;
-pub(crate) mod const_eval;
-pub(crate) mod dag;
 pub(crate) mod dim_check;
 pub mod error;
 pub mod eval;
 pub(crate) mod eval_expr;
+pub mod exec_plan;
 pub(crate) mod fn_check;
+pub mod ir;
 pub mod loader;
 pub(crate) mod prelude;
 pub(crate) mod registry;
 pub(crate) mod resolve;
+pub mod tir;
