@@ -5,6 +5,9 @@ use miette::NamedSource;
 
 use graphcal_syntax::ast::{BinOp, DeclKind, Expr, ExprKind, File, MulDivOp, TypeExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
+use graphcal_syntax::names::{
+    DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
+};
 
 use crate::builtins::{DimSignature, builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
@@ -16,8 +19,11 @@ pub enum DeclaredType {
     Scalar(Dimension),
     Bool,
     Int,
-    Struct(String),
-    Indexed { element: Box<Self>, index: String },
+    Struct(StructTypeName),
+    Indexed {
+        element: Box<Self>,
+        index: IndexName,
+    },
 }
 
 /// The inferred type of an expression.
@@ -26,14 +32,14 @@ pub enum InferredType {
     Scalar(Dimension),
     Bool,
     Int,
-    Struct(String),
+    Struct(StructTypeName),
     Indexed {
         element: Box<Self>,
-        index: String,
+        index: IndexName,
     },
     /// A loop variable bound by `for m: Maneuver`.
     /// Used only in `local_types` — not a "real" value type.
-    LoopVar(String),
+    LoopVar(IndexName),
 }
 
 /// Check dimensions for all declarations in a file.
@@ -212,7 +218,7 @@ fn format_declared_type(dt: &DeclaredType) -> String {
         DeclaredType::Scalar(d) => format!("{d}"),
         DeclaredType::Bool => "Bool".to_string(),
         DeclaredType::Int => "Int".to_string(),
-        DeclaredType::Struct(name) => name.clone(),
+        DeclaredType::Struct(name) => name.to_string(),
         DeclaredType::Indexed { element, index } => {
             format!("{}[{index}]", format_declared_type(element))
         }
@@ -225,7 +231,7 @@ fn format_inferred_type(it: &InferredType) -> String {
         InferredType::Scalar(d) => format!("{d}"),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
-        InferredType::Struct(name) => name.clone(),
+        InferredType::Struct(name) => name.to_string(),
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred_type(element))
         }
@@ -266,14 +272,14 @@ pub fn resolve_type_annotation(
                 let idx_name = &idx.name;
                 if registry.get_index(idx_name).is_none() {
                     return Err(GraphcalError::UnknownIndex {
-                        name: idx_name.clone(),
+                        name: idx.as_index_name(),
                         src: src.clone(),
                         span: idx.span.into(),
                     });
                 }
                 result = DeclaredType::Indexed {
                     element: Box::new(result),
-                    index: idx_name.clone(),
+                    index: idx.as_index_name(),
                 };
             }
             Ok(result)
@@ -286,7 +292,7 @@ pub fn resolve_type_annotation(
             {
                 let name = &dim_expr.terms[0].term.name.name;
                 if registry.get_struct(name).is_some() {
-                    return Ok(DeclaredType::Struct(name.clone()));
+                    return Ok(DeclaredType::Struct(StructTypeName::new(name)));
                 }
             }
 
@@ -309,13 +315,13 @@ fn unknown_dim_in_type(
         && let Some(item) = dim_expr.terms.first()
     {
         return GraphcalError::UnknownDimension {
-            name: item.term.name.name.clone(),
+            name: item.term.name.as_dim_name(),
             src: src.clone(),
             span: item.term.span.into(),
         };
     }
     GraphcalError::UnknownDimension {
-        name: "unknown".to_string(),
+        name: DimName::new("unknown"),
         src: src.clone(),
         span: type_ann.span.into(),
     }
@@ -362,14 +368,14 @@ fn infer_type(
                 for item in &unit.terms {
                     if registry.get_unit(&item.name.name).is_none() {
                         return GraphcalError::UnknownUnit {
-                            name: item.name.name.clone(),
+                            name: item.name.as_unit_name(),
                             src: src.clone(),
                             span: item.name.span.into(),
                         };
                     }
                 }
                 GraphcalError::UnknownUnit {
-                    name: "unknown".to_string(),
+                    name: UnitName::new("unknown"),
                     src: src.clone(),
                     span: unit.span.into(),
                 }
@@ -382,7 +388,7 @@ fn infer_type(
                 declared_types
                     .get(&ident.name)
                     .ok_or_else(|| GraphcalError::UnknownConstRef {
-                        name: ident.name.clone(),
+                        name: ident.as_decl_name(),
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
@@ -394,7 +400,7 @@ fn infer_type(
                 declared_types
                     .get(&ident.name)
                     .ok_or_else(|| GraphcalError::UnknownGraphRef {
-                        name: ident.name.clone(),
+                        name: ident.as_decl_name(),
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
@@ -689,7 +695,7 @@ fn infer_type(
             if name.name == "to_float" {
                 if args.len() != 1 {
                     return Err(GraphcalError::WrongArity {
-                        name: "to_float".to_string(),
+                        name: FnName::new("to_float"),
                         expected: 1,
                         got: args.len(),
                         src: src.clone(),
@@ -718,7 +724,7 @@ fn infer_type(
             if name.name == "to_int" {
                 if args.len() != 1 {
                     return Err(GraphcalError::WrongArity {
-                        name: "to_int".to_string(),
+                        name: FnName::new("to_int"),
                         expected: 1,
                         got: args.len(),
                         src: src.clone(),
@@ -762,7 +768,7 @@ fn infer_type(
             // Try user-defined function
             let fn_def = registry.get_function(&name.name).ok_or_else(|| {
                 GraphcalError::UnknownFunction {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     src: src.clone(),
                     span: name.span.into(),
                 }
@@ -771,7 +777,7 @@ fn infer_type(
             // Arity check
             if args.len() != fn_def.params.len() {
                 return Err(GraphcalError::WrongArity {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     expected: fn_def.params.len(),
                     got: args.len(),
                     src: src.clone(),
@@ -808,20 +814,20 @@ fn infer_type(
                 Ok(declared_to_inferred(&ret))
             } else {
                 // Generic: unify generic params from arg types
-                let dim_param_names: Vec<String> = fn_def
+                let dim_param_names: Vec<GenericParamName> = fn_def
                     .generic_params
                     .iter()
                     .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Dim)
                     .map(|g| g.name.clone())
                     .collect();
-                let index_param_names: Vec<String> = fn_def
+                let index_param_names: Vec<GenericParamName> = fn_def
                     .generic_params
                     .iter()
                     .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Index)
                     .map(|g| g.name.clone())
                     .collect();
-                let mut dim_sub: HashMap<String, Dimension> = HashMap::new();
-                let mut index_sub: HashMap<String, String> = HashMap::new();
+                let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
+                let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
                 for (i, param) in fn_def.params.iter().enumerate() {
                     unify_type_expr_generic(
                         &param.type_expr,
@@ -917,14 +923,14 @@ fn infer_type(
                 for item in &target.terms {
                     if registry.get_unit(&item.name.name).is_none() {
                         return GraphcalError::UnknownUnit {
-                            name: item.name.name.clone(),
+                            name: item.name.as_unit_name(),
                             src: src.clone(),
                             span: item.name.span.into(),
                         };
                     }
                 }
                 GraphcalError::UnknownUnit {
-                    name: "unknown".to_string(),
+                    name: UnitName::new("unknown"),
                     src: src.clone(),
                     span: target.span.into(),
                 }
@@ -1007,7 +1013,7 @@ fn infer_type(
             )?;
             match &inner_type {
                 InferredType::Struct(type_name) => {
-                    let struct_def = registry.get_struct(type_name).ok_or_else(|| {
+                    let struct_def = registry.get_struct(type_name.as_str()).ok_or_else(|| {
                         GraphcalError::UnknownStructType {
                             name: type_name.clone(),
                             src: src.clone(),
@@ -1017,10 +1023,10 @@ fn infer_type(
                     let field_def = struct_def
                         .fields
                         .iter()
-                        .find(|f| f.name == field.name)
+                        .find(|f| f.name.as_str() == field.name)
                         .ok_or_else(|| GraphcalError::UnknownField {
                             type_name: type_name.clone(),
-                            field_name: field.name.clone(),
+                            field_name: field.as_field_name(),
                             src: src.clone(),
                             span: field.span.into(),
                         })?;
@@ -1037,7 +1043,7 @@ fn infer_type(
         ExprKind::StructConstruction { type_name, fields } => {
             let struct_def = registry.get_struct(&type_name.name).ok_or_else(|| {
                 GraphcalError::UnknownStructType {
-                    name: type_name.name.clone(),
+                    name: type_name.as_struct_type_name(),
                     src: src.clone(),
                     span: type_name.span.into(),
                 }
@@ -1047,14 +1053,14 @@ fn infer_type(
             let def_field_names: std::collections::HashSet<&str> =
                 struct_def.fields.iter().map(|f| f.name.as_str()).collect();
             let provided_names: Vec<&str> = fields.iter().map(|f| f.name.name.as_str()).collect();
-            let extra: Vec<String> = provided_names
+            let extra: Vec<FieldName> = provided_names
                 .iter()
                 .filter(|n| !def_field_names.contains(**n))
-                .map(|n| (*n).to_string())
+                .map(|n| FieldName::new(*n))
                 .collect();
             if !extra.is_empty() {
                 return Err(GraphcalError::ExtraFields {
-                    type_name: type_name.name.clone(),
+                    type_name: type_name.as_struct_type_name(),
                     extra,
                     src: src.clone(),
                     span: expr.span.into(),
@@ -1064,7 +1070,7 @@ fn infer_type(
             // Check for missing fields
             let provided_set: std::collections::HashSet<&str> =
                 provided_names.iter().copied().collect();
-            let missing: Vec<String> = struct_def
+            let missing: Vec<FieldName> = struct_def
                 .fields
                 .iter()
                 .filter(|f| !provided_set.contains(f.name.as_str()))
@@ -1072,7 +1078,7 @@ fn infer_type(
                 .collect();
             if !missing.is_empty() {
                 return Err(GraphcalError::MissingFields {
-                    type_name: type_name.name.clone(),
+                    type_name: type_name.as_struct_type_name(),
                     missing,
                     src: src.clone(),
                     span: expr.span.into(),
@@ -1084,7 +1090,7 @@ fn infer_type(
                 let field_def = struct_def
                     .fields
                     .iter()
-                    .find(|f| f.name == field_init.name.name)
+                    .find(|f| f.name.as_str() == field_init.name.name)
                     .expect("extra fields already checked");
 
                 let value_type = if let Some(value_expr) = &field_init.value {
@@ -1111,8 +1117,8 @@ fn infer_type(
                 let value_dim = expect_scalar(&value_type, src, field_init.name.span)?;
                 if value_dim != field_def.dimension {
                     return Err(GraphcalError::FieldDimensionMismatch {
-                        type_name: type_name.name.clone(),
-                        field_name: field_init.name.name.clone(),
+                        type_name: type_name.as_struct_type_name(),
+                        field_name: field_init.name.as_field_name(),
                         expected: format!("{}", field_def.dimension),
                         found: format!("{value_dim}"),
                         src: src.clone(),
@@ -1121,7 +1127,7 @@ fn infer_type(
                 }
             }
 
-            Ok(InferredType::Struct(type_name.name.clone()))
+            Ok(InferredType::Struct(type_name.as_struct_type_name()))
         }
 
         ExprKind::ForComp { bindings, body } => {
@@ -1131,14 +1137,14 @@ fn infer_type(
                 let idx_name = &binding.index.name;
                 if registry.get_index(idx_name).is_none() {
                     return Err(GraphcalError::UnknownIndex {
-                        name: idx_name.clone(),
+                        name: binding.index.as_index_name(),
                         src: src.clone(),
                         span: binding.index.span.into(),
                     });
                 }
                 inner_locals.insert(
                     binding.var.name.clone(),
-                    InferredType::LoopVar(idx_name.clone()),
+                    InferredType::LoopVar(binding.index.as_index_name()),
                 );
             }
             let body_type = infer_type(
@@ -1154,7 +1160,7 @@ fn infer_type(
             for binding in bindings.iter().rev() {
                 result = InferredType::Indexed {
                     element: Box::new(result),
-                    index: binding.index.name.clone(),
+                    index: binding.index.as_index_name(),
                 };
             }
             Ok(result)
@@ -1175,7 +1181,7 @@ fn infer_type(
                 registry
                     .get_index(idx_name)
                     .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: idx_name.clone(),
+                        name: entries[0].index.as_index_name(),
                         src: src.clone(),
                         span: entries[0].index.span.into(),
                     })?;
@@ -1183,8 +1189,8 @@ fn infer_type(
             for entry in entries {
                 if entry.index.name != *idx_name {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: idx_name.clone(),
-                        found: entry.index.name.clone(),
+                        expected: entries[0].index.as_index_name(),
+                        found: entry.index.as_index_name(),
                         src: src.clone(),
                         span: entry.index.span.into(),
                     });
@@ -1192,20 +1198,20 @@ fn infer_type(
             }
             // Check totality: all variants present, no extras
             let declared_variants: std::collections::HashSet<&str> =
-                idx_def.variants.iter().map(String::as_str).collect();
+                idx_def.variants.iter().map(VariantName::as_str).collect();
             let provided_variants: std::collections::HashSet<&str> =
                 entries.iter().map(|e| e.variant.name.as_str()).collect();
-            let missing: Vec<String> = declared_variants
+            let missing: Vec<VariantName> = declared_variants
                 .difference(&provided_variants)
-                .map(|s| (*s).to_string())
+                .map(|s| VariantName::new(*s))
                 .collect();
-            let extra: Vec<String> = provided_variants
+            let extra: Vec<VariantName> = provided_variants
                 .difference(&declared_variants)
-                .map(|s| (*s).to_string())
+                .map(|s| VariantName::new(*s))
                 .collect();
             if !missing.is_empty() {
                 return Err(GraphcalError::MissingVariants {
-                    index_name: idx_name.clone(),
+                    index_name: entries[0].index.as_index_name(),
                     missing,
                     src: src.clone(),
                     span: expr.span.into(),
@@ -1213,7 +1219,7 @@ fn infer_type(
             }
             if !extra.is_empty() {
                 return Err(GraphcalError::ExtraVariants {
-                    index_name: idx_name.clone(),
+                    index_name: entries[0].index.as_index_name(),
                     extra,
                     src: src.clone(),
                     span: expr.span.into(),
@@ -1248,7 +1254,7 @@ fn infer_type(
             }
             Ok(InferredType::Indexed {
                 element: Box::new(first_type),
-                index: idx_name.clone(),
+                index: entries[0].index.as_index_name(),
             })
         }
 
@@ -1278,20 +1284,22 @@ fn infer_type(
                 // Validate the argument matches the index
                 match arg {
                     graphcal_syntax::ast::IndexArg::Variant { index, variant } => {
-                        if index.name != idx_name {
+                        if index.name != idx_name.as_str() {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: idx_name,
-                                found: index.name.clone(),
+                                found: index.as_index_name(),
                                 src: src.clone(),
                                 span: index.span.into(),
                             });
                         }
                         // Validate variant exists
-                        let idx_def = registry.get_index(&idx_name).expect("index validated");
-                        if !idx_def.variants.iter().any(|v| v == &variant.name) {
+                        let idx_def = registry
+                            .get_index(idx_name.as_str())
+                            .expect("index validated");
+                        if !idx_def.variants.iter().any(|v| v.as_str() == variant.name) {
                             return Err(GraphcalError::UnknownVariant {
                                 index_name: idx_name,
-                                variant_name: variant.name.clone(),
+                                variant_name: variant.as_variant_name(),
                                 src: src.clone(),
                                 span: variant.span.into(),
                             });
@@ -1410,10 +1418,10 @@ fn infer_type(
 fn unify_type_expr_generic(
     type_expr: &graphcal_syntax::ast::TypeExpr,
     actual: &InferredType,
-    dim_params: &[String],
-    index_params: &[String],
-    dim_sub: &mut HashMap<String, Dimension>,
-    index_sub: &mut HashMap<String, String>,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    dim_sub: &mut HashMap<GenericParamName, Dimension>,
+    index_sub: &mut HashMap<GenericParamName, IndexName>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: graphcal_syntax::span::Span,
@@ -1438,9 +1446,9 @@ fn unify_type_expr_generic(
                     });
                 };
                 // If this is a generic index param, bind it
-                if index_params.contains(idx_name) {
-                    if let Some(prev) = index_sub.get(idx_name) {
-                        if prev != actual_idx {
+                if let Some(generic_param) = index_params.iter().find(|p| p.as_str() == idx_name) {
+                    if let Some(prev) = index_sub.get(generic_param) {
+                        if *prev != *actual_idx {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: prev.clone(),
                                 found: actual_idx.clone(),
@@ -1449,12 +1457,12 @@ fn unify_type_expr_generic(
                             });
                         }
                     } else {
-                        index_sub.insert(idx_name.clone(), actual_idx.clone());
+                        index_sub.insert(generic_param.clone(), actual_idx.clone());
                     }
-                } else if *idx_name != *actual_idx {
+                } else if *idx_name != actual_idx.as_str() {
                     // Concrete index name — must match exactly
                     return Err(GraphcalError::IndexMismatch {
-                        expected: idx_name.clone(),
+                        expected: IndexName::new(idx_name),
                         found: actual_idx.clone(),
                         src: src.clone(),
                         span: span.into(),
@@ -1521,14 +1529,14 @@ fn unify_type_expr_generic(
             if dim_expr.terms.len() == 1 {
                 let item = &dim_expr.terms[0];
                 let name = &item.term.name.name;
-                if dim_params.contains(name) {
+                if let Some(generic_param) = dim_params.iter().find(|p| p.as_str() == name) {
                     let exp = item.term.power.unwrap_or(1);
                     let bound_dim = if exp == 1 {
                         actual_dim
                     } else {
                         actual_dim.pow(Rational::new(1, exp))
                     };
-                    if let Some(prev) = dim_sub.get(name) {
+                    if let Some(prev) = dim_sub.get(generic_param) {
                         if *prev != bound_dim {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("{prev}"),
@@ -1541,7 +1549,7 @@ fn unify_type_expr_generic(
                             });
                         }
                     } else {
-                        dim_sub.insert(name.clone(), bound_dim);
+                        dim_sub.insert(generic_param.clone(), bound_dim);
                     }
                     return Ok(());
                 }
@@ -1553,30 +1561,31 @@ fn unify_type_expr_generic(
                 let name = &item.term.name.name;
                 let exp = item.term.power.unwrap_or(1);
 
-                let term_dim = if dim_params.contains(name) {
-                    if let Some(prev) = dim_sub.get(name) {
-                        prev.pow(Rational::from_int(exp))
-                    } else {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: format!("generic `{name}` (unresolved)"),
-                            found: format!("{actual_dim}"),
-                            src: src.clone(),
-                            span: span.into(),
-                            help: format!(
-                                "generic `{name}` could not be inferred from this argument"
-                            ),
-                        });
-                    }
-                } else {
-                    let base = registry.get_dimension(name).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: name.clone(),
-                            src: src.clone(),
-                            span: item.term.span.into(),
+                let term_dim =
+                    if let Some(generic_param) = dim_params.iter().find(|p| p.as_str() == name) {
+                        if let Some(prev) = dim_sub.get(generic_param) {
+                            prev.pow(Rational::from_int(exp))
+                        } else {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format!("generic `{name}` (unresolved)"),
+                                found: format!("{actual_dim}"),
+                                src: src.clone(),
+                                span: span.into(),
+                                help: format!(
+                                    "generic `{name}` could not be inferred from this argument"
+                                ),
+                            });
                         }
-                    })?;
-                    base.pow(Rational::from_int(exp))
-                };
+                    } else {
+                        let base = registry.get_dimension(name).ok_or_else(|| {
+                            GraphcalError::UnknownDimension {
+                                name: DimName::new(name),
+                                src: src.clone(),
+                                span: item.term.span.into(),
+                            }
+                        })?;
+                        base.pow(Rational::from_int(exp))
+                    };
 
                 expected_dim = match item.op {
                     MulDivOp::Mul => expected_dim * term_dim,
@@ -1601,8 +1610,8 @@ fn unify_type_expr_generic(
 /// Resolve a type expression to an `InferredType`, substituting generic dim and index names.
 fn resolve_type_with_substitution(
     type_expr: &graphcal_syntax::ast::TypeExpr,
-    dim_sub: &HashMap<String, Dimension>,
-    index_sub: &HashMap<String, String>,
+    dim_sub: &HashMap<GenericParamName, Dimension>,
+    index_sub: &HashMap<GenericParamName, IndexName>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1616,13 +1625,13 @@ fn resolve_type_with_substitution(
                 let name = &item.term.name.name;
                 let exp = item.term.power.unwrap_or(1);
 
-                let base = if let Some(dim) = dim_sub.get(name) {
+                let base = if let Some(dim) = dim_sub.get(name.as_str()) {
                     *dim
                 } else if let Some(dim) = registry.get_dimension(name) {
                     *dim
                 } else {
                     return Err(GraphcalError::UnknownDimension {
-                        name: name.clone(),
+                        name: DimName::new(name),
                         src: src.clone(),
                         span: item.term.span.into(),
                     });
@@ -1643,9 +1652,9 @@ fn resolve_type_with_substitution(
                 let idx_name = &idx.name;
                 // Look up in index substitution, then use as-is
                 let resolved_idx = index_sub
-                    .get(idx_name)
+                    .get(idx_name.as_str())
                     .cloned()
-                    .unwrap_or_else(|| idx_name.clone());
+                    .unwrap_or_else(|| IndexName::new(idx_name));
                 result = InferredType::Indexed {
                     element: Box::new(result),
                     index: resolved_idx,
@@ -1764,8 +1773,8 @@ mod tests {
         for decl in &file.declarations {
             if let DeclKind::Index(idx) = &decl.kind {
                 registry.register_index(crate::registry::IndexDef {
-                    name: idx.name.name.clone(),
-                    variants: idx.variants.iter().map(|v| v.name.clone()).collect(),
+                    name: idx.name.as_index_name(),
+                    variants: idx.variants.iter().map(|v| v.as_variant_name()).collect(),
                 });
             }
         }
@@ -1777,13 +1786,13 @@ mod tests {
                     .map(|f| {
                         let dim = registry.resolve_type_expr(&f.type_ann).unwrap();
                         crate::registry::StructField {
-                            name: f.name.name.clone(),
+                            name: f.name.as_field_name(),
                             dimension: dim,
                         }
                     })
                     .collect();
                 registry.register_struct(crate::registry::StructDef {
-                    name: t.name.name.clone(),
+                    name: t.name.as_struct_type_name(),
                     fields,
                 });
             }
@@ -1791,12 +1800,12 @@ mod tests {
         for decl in &file.declarations {
             if let DeclKind::Fn(fn_decl) = &decl.kind {
                 registry.register_function(crate::registry::FnDef {
-                    name: fn_decl.name.name.clone(),
+                    name: fn_decl.name.as_fn_name(),
                     generic_params: fn_decl
                         .generic_params
                         .iter()
                         .map(|g| crate::registry::FnGenericParam {
-                            name: g.name.name.clone(),
+                            name: g.name.as_generic_param_name(),
                             constraint: match g.constraint {
                                 graphcal_syntax::ast::GenericConstraint::Dim => {
                                     crate::registry::FnGenericConstraint::Dim
@@ -2034,7 +2043,7 @@ param dv: Velocity[Maneuver] = {
             types["dv"],
             DeclaredType::Indexed {
                 element: Box::new(DeclaredType::Scalar(velocity)),
-                index: "Maneuver".to_string(),
+                index: IndexName::new("Maneuver"),
             }
         );
     }

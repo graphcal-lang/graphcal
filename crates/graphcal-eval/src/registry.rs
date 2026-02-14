@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use graphcal_syntax::ast::{DimExpr, FnBody, MulDivOp, TypeExpr, TypeExprKind, UnitExpr};
 use graphcal_syntax::dimension::{Dimension, Rational};
+use graphcal_syntax::names::{
+    DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
+};
 use graphcal_syntax::span::Span;
 
 /// Information about a registered unit.
@@ -17,14 +20,14 @@ pub struct UnitInfo {
 /// A field in a struct type definition.
 #[derive(Debug, Clone)]
 pub struct StructField {
-    pub name: String,
+    pub name: FieldName,
     pub dimension: Dimension,
 }
 
 /// A struct type definition with its name and fields.
 #[derive(Debug, Clone)]
 pub struct StructDef {
-    pub name: String,
+    pub name: StructTypeName,
     pub fields: Vec<StructField>,
 }
 
@@ -47,14 +50,14 @@ pub enum FnGenericConstraint {
 /// A generic parameter with name and constraint.
 #[derive(Debug, Clone)]
 pub struct FnGenericParam {
-    pub name: String,
+    pub name: GenericParamName,
     pub constraint: FnGenericConstraint,
 }
 
 /// A user-defined function stored in the registry.
 #[derive(Debug, Clone)]
 pub struct FnDef {
-    pub name: String,
+    pub name: FnName,
     pub generic_params: Vec<FnGenericParam>,
     pub params: Vec<FnParamDef>,
     pub return_type_expr: TypeExpr,
@@ -65,18 +68,18 @@ pub struct FnDef {
 /// A declared index with its ordered variants.
 #[derive(Debug, Clone)]
 pub struct IndexDef {
-    pub name: String,
-    pub variants: Vec<String>,
+    pub name: IndexName,
+    pub variants: Vec<VariantName>,
 }
 
 /// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
 #[derive(Debug, Default)]
 pub struct Registry {
-    dimensions: HashMap<String, Dimension>,
-    units: HashMap<String, UnitInfo>,
-    structs: HashMap<String, StructDef>,
-    functions: HashMap<String, FnDef>,
-    indexes: HashMap<String, IndexDef>,
+    dimensions: HashMap<DimName, Dimension>,
+    units: HashMap<UnitName, UnitInfo>,
+    structs: HashMap<StructTypeName, StructDef>,
+    functions: HashMap<FnName, FnDef>,
+    indexes: HashMap<IndexName, IndexDef>,
 }
 
 impl Registry {
@@ -86,14 +89,13 @@ impl Registry {
     }
 
     /// Register a named dimension.
-    pub fn register_dimension(&mut self, name: &str, dim: Dimension) {
-        self.dimensions.insert(name.to_string(), dim);
+    pub fn register_dimension(&mut self, name: DimName, dim: Dimension) {
+        self.dimensions.insert(name, dim);
     }
 
     /// Register a named unit with its dimension and SI scale factor.
-    pub fn register_unit(&mut self, name: &str, dimension: Dimension, scale: f64) {
-        self.units
-            .insert(name.to_string(), UnitInfo { dimension, scale });
+    pub fn register_unit(&mut self, name: UnitName, dimension: Dimension, scale: f64) {
+        self.units.insert(name, UnitInfo { dimension, scale });
     }
 
     /// Look up a dimension by name.
@@ -353,23 +355,23 @@ mod tests {
     fn registry_struct_register_and_lookup() {
         let mut r = make_registry();
         let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
-        r.register_struct(super::StructDef {
-            name: "TransferResult".to_string(),
+        r.register_struct(StructDef {
+            name: StructTypeName::new("TransferResult"),
             fields: vec![
-                super::StructField {
-                    name: "dv1".to_string(),
+                StructField {
+                    name: FieldName::new("dv1"),
                     dimension: velocity_dim,
                 },
-                super::StructField {
-                    name: "dv2".to_string(),
+                StructField {
+                    name: FieldName::new("dv2"),
                     dimension: velocity_dim,
                 },
             ],
         });
         let def = r.get_struct("TransferResult").unwrap();
-        assert_eq!(def.name, "TransferResult");
+        assert_eq!(def.name.as_str(), "TransferResult");
         assert_eq!(def.fields.len(), 2);
-        assert_eq!(def.fields[0].name, "dv1");
+        assert_eq!(def.fields[0].name.as_str(), "dv1");
         assert_eq!(def.fields[0].dimension, velocity_dim);
         assert!(r.get_struct("NonExistent").is_none());
     }
@@ -377,17 +379,18 @@ mod tests {
     #[test]
     fn registry_index_register_and_lookup() {
         let mut r = make_registry();
-        r.register_index(super::IndexDef {
-            name: "Maneuver".to_string(),
+        r.register_index(IndexDef {
+            name: IndexName::new("Maneuver"),
             variants: vec![
-                "Departure".to_string(),
-                "Correction".to_string(),
-                "Insertion".to_string(),
+                VariantName::new("Departure"),
+                VariantName::new("Correction"),
+                VariantName::new("Insertion"),
             ],
         });
         let def = r.get_index("Maneuver").unwrap();
-        assert_eq!(def.name, "Maneuver");
-        assert_eq!(def.variants, vec!["Departure", "Correction", "Insertion"]);
+        assert_eq!(def.name.as_str(), "Maneuver");
+        let variant_strs: Vec<&str> = def.variants.iter().map(|v| v.as_str()).collect();
+        assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.get_index("NonExistent").is_none());
     }
 }

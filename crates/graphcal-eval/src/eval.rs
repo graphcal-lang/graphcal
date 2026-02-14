@@ -17,6 +17,7 @@ use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve, resolve_with_imports};
 use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
+use graphcal_syntax::names::{DeclName, FieldName, FnName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
 
 use std::path::Path;
@@ -53,16 +54,16 @@ pub enum Value {
     Int(i64),
     Struct {
         /// The struct type name.
-        type_name: String,
+        type_name: StructTypeName,
         /// Fields in definition order.
-        fields: IndexMap<String, Self>,
+        fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection: maps variant names to values.
     Indexed {
         /// The index type name.
-        index_name: String,
+        index_name: IndexName,
         /// Entries in declaration order.
-        entries: IndexMap<String, Self>,
+        entries: IndexMap<VariantName, Self>,
     },
 }
 
@@ -144,13 +145,13 @@ impl Value {
 #[derive(Debug)]
 pub struct EvalResult {
     /// Const values in source order.
-    pub consts: Vec<(String, Value)>,
+    pub consts: Vec<(DeclName, Value)>,
     /// Param values in source order.
-    pub params: Vec<(String, Value)>,
+    pub params: Vec<(DeclName, Value)>,
     /// Node values in source order.
-    pub nodes: Vec<(String, Value)>,
+    pub nodes: Vec<(DeclName, Value)>,
     /// All values in source order with their declaration type.
-    pub all: Vec<(String, Value, DeclType)>,
+    pub all: Vec<(DeclName, Value, DeclType)>,
 }
 
 /// Full pipeline: parse -> resolve -> const eval -> DAG build -> runtime eval.
@@ -187,7 +188,7 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
-    overrides: &HashMap<String, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     let src = NamedSource::new(name, Arc::new(source.to_string()));
     let file = graphcal_syntax::parser::Parser::with_name(source, name).parse_file()?;
@@ -195,12 +196,9 @@ pub fn compile_and_eval_with_overrides(
 
     // Validate and apply overrides
     for (override_name, override_expr) in overrides {
+        let name_str = override_name.as_str();
         // Check if the name exists at all
-        if let Some((_, cat)) = resolved
-            .source_order
-            .iter()
-            .find(|(n, _)| n == override_name)
-        {
+        if let Some((_, cat)) = resolved.source_order.iter().find(|(n, _)| n == name_str) {
             match cat {
                 DeclCategory::Param => {}
                 DeclCategory::Const => {
@@ -223,11 +221,7 @@ pub fn compile_and_eval_with_overrides(
         }
 
         // Replace the expression in resolved.params
-        if let Some(entry) = resolved
-            .params
-            .iter_mut()
-            .find(|(n, _, _)| n == override_name)
-        {
+        if let Some(entry) = resolved.params.iter_mut().find(|(n, _, _)| n == name_str) {
             entry.1 = override_expr.clone();
         }
 
@@ -242,7 +236,7 @@ pub fn compile_and_eval_with_overrides(
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
         resolved
             .runtime_deps
-            .insert(override_name.clone(), graph_refs);
+            .insert(name_str.to_string(), graph_refs);
     }
 
     // Build registry: prelude + user-declared dimensions/units
@@ -263,7 +257,7 @@ pub fn compile_and_eval_with_overrides(
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
-            override_name,
+            override_name.as_str(),
             &declared_types,
             &registry,
             &src,
@@ -295,7 +289,7 @@ fn register_file_declarations(
                 let dim = if let Some(def) = &d.definition {
                     registry.resolve_dim_expr(def).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
-                            name: d.name.name.clone(),
+                            name: d.name.as_dim_name(),
                             src: src.clone(),
                             span: d.name.span.into(),
                         }
@@ -303,12 +297,12 @@ fn register_file_declarations(
                 } else {
                     continue;
                 };
-                registry.register_dimension(&d.name.name, dim);
+                registry.register_dimension(d.name.as_dim_name(), dim);
             }
             DeclKind::Unit(u) => {
                 let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
                     GraphcalError::UnknownDimension {
-                        name: u.name.name.clone(),
+                        name: u.name.as_dim_name(),
                         src: src.clone(),
                         span: u.name.span.into(),
                     }
@@ -317,7 +311,7 @@ fn register_file_declarations(
                     let (_unit_dim, base_scale) = registry
                         .resolve_unit_expr(&def.unit_expr)
                         .ok_or_else(|| GraphcalError::UnknownUnit {
-                            name: u.name.name.clone(),
+                            name: u.name.as_unit_name(),
                             src: src.clone(),
                             span: def.span.into(),
                         })?;
@@ -325,12 +319,16 @@ fn register_file_declarations(
                 } else {
                     1.0
                 };
-                registry.register_unit(&u.name.name, dim, scale);
+                registry.register_unit(u.name.as_unit_name(), dim, scale);
             }
             DeclKind::Index(idx) => {
                 registry.register_index(registry::IndexDef {
-                    name: idx.name.name.clone(),
-                    variants: idx.variants.iter().map(|v| v.name.clone()).collect(),
+                    name: idx.name.as_index_name(),
+                    variants: idx
+                        .variants
+                        .iter()
+                        .map(graphcal_syntax::ast::Ident::as_variant_name)
+                        .collect(),
                 });
             }
             DeclKind::Type(t) => {
@@ -338,18 +336,18 @@ fn register_file_declarations(
                 for field in &t.fields {
                     let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
-                            name: field.name.name.clone(),
+                            name: field.name.as_dim_name(),
                             src: src.clone(),
                             span: field.name.span.into(),
                         }
                     })?;
                     fields.push(registry::StructField {
-                        name: field.name.name.clone(),
+                        name: field.name.as_field_name(),
                         dimension: dim,
                     });
                 }
                 registry.register_struct(registry::StructDef {
-                    name: t.name.name.clone(),
+                    name: t.name.as_struct_type_name(),
                     fields,
                 });
             }
@@ -363,12 +361,12 @@ fn register_file_declarations(
 fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
     for (name, fn_decl, span) in &resolved.functions {
         registry.register_function(registry::FnDef {
-            name: name.clone(),
+            name: FnName::new(name),
             generic_params: fn_decl
                 .generic_params
                 .iter()
                 .map(|g| registry::FnGenericParam {
-                    name: g.name.name.clone(),
+                    name: g.name.as_generic_param_name(),
                     constraint: match g.constraint {
                         graphcal_syntax::ast::GenericConstraint::Dim => {
                             registry::FnGenericConstraint::Dim
@@ -412,7 +410,7 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
 )]
 pub fn compile_and_eval_project(
     root_path: &Path,
-    overrides: &HashMap<String, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::load_project(root_path)?;
 
@@ -493,11 +491,8 @@ pub fn compile_and_eval_project(
 
     // Validate and apply overrides (same logic as compile_and_eval_with_overrides)
     for (override_name, override_expr) in overrides {
-        if let Some((_, cat)) = resolved
-            .source_order
-            .iter()
-            .find(|(n, _)| n == override_name)
-        {
+        let name_str = override_name.as_str();
+        if let Some((_, cat)) = resolved.source_order.iter().find(|(n, _)| n == name_str) {
             match cat {
                 DeclCategory::Param => {}
                 DeclCategory::Const => {
@@ -519,11 +514,7 @@ pub fn compile_and_eval_project(
             }));
         }
 
-        if let Some(entry) = resolved
-            .params
-            .iter_mut()
-            .find(|(n, _, _)| n == override_name)
-        {
+        if let Some(entry) = resolved.params.iter_mut().find(|(n, _, _)| n == name_str) {
             entry.1 = override_expr.clone();
         }
 
@@ -537,7 +528,7 @@ pub fn compile_and_eval_project(
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
         resolved
             .runtime_deps
-            .insert(override_name.clone(), graph_refs);
+            .insert(name_str.to_string(), graph_refs);
     }
 
     // Register user-defined functions
@@ -598,7 +589,7 @@ pub fn compile_and_eval_project(
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
-            override_name,
+            override_name.as_str(),
             &declared_types,
             &registry,
             root_src,
@@ -698,7 +689,7 @@ fn runtime_to_value(
         RuntimeValue::Bool(b) => Value::Bool(*b),
         RuntimeValue::Int(i) => Value::Int(*i),
         RuntimeValue::Struct { type_name, fields } => {
-            let struct_def = registry.get_struct(type_name);
+            let struct_def = registry.get_struct(type_name.as_str());
             let converted_fields = fields
                 .iter()
                 .map(|(field_name, field_rv)| {
@@ -810,7 +801,7 @@ fn evaluate(
         .iter()
         .map(|(name, _, _)| {
             let val = make_value(name, &const_values[name]);
-            (name.clone(), val)
+            (DeclName::new(name), val)
         })
         .collect();
     let params = resolved
@@ -818,7 +809,7 @@ fn evaluate(
         .iter()
         .map(|(name, _, _)| {
             let val = make_value(name, &values[name]);
-            (name.clone(), val)
+            (DeclName::new(name), val)
         })
         .collect();
     let nodes = resolved
@@ -826,7 +817,7 @@ fn evaluate(
         .iter()
         .map(|(name, _, _)| {
             let val = make_value(name, &values[name]);
-            (name.clone(), val)
+            (DeclName::new(name), val)
         })
         .collect();
 
@@ -845,7 +836,7 @@ fn evaluate(
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
             };
-            (name.clone(), val, decl_type)
+            (DeclName::new(name), val, decl_type)
         })
         .collect();
 
@@ -949,7 +940,7 @@ mod tests {
             .iter()
             .chain(result.params.iter())
             .chain(result.nodes.iter())
-            .find(|(n, _)| n == name)
+            .find(|(n, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .si_value()
@@ -1071,10 +1062,10 @@ mod tests {
             "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
         )
         .unwrap();
-        assert_eq!(result.params[0].0, "b");
-        assert_eq!(result.params[1].0, "a");
-        assert_eq!(result.nodes[0].0, "z");
-        assert_eq!(result.nodes[1].0, "y");
+        assert_eq!(result.params[0].0.as_str(), "b");
+        assert_eq!(result.params[1].0.as_str(), "a");
+        assert_eq!(result.nodes[0].0.as_str(), "z");
+        assert_eq!(result.nodes[1].0.as_str(), "y");
     }
 
     #[test]
@@ -1147,7 +1138,11 @@ mod tests {
         );
 
         // Check display units
-        let speed_kmh = result.nodes.iter().find(|(n, _)| n == "speed_kmh").unwrap();
+        let speed_kmh = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "speed_kmh")
+            .unwrap();
         assert_eq!(speed_kmh.1.display_label(), Some("km/hour".to_string()));
         let display_kmh = speed_kmh.1.display_value();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
@@ -1178,7 +1173,11 @@ mod tests {
         );
 
         // Check that tof_hours has display unit "hour"
-        let tof_entry = result.nodes.iter().find(|(n, _)| n == "tof_hours").unwrap();
+        let tof_entry = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "tof_hours")
+            .unwrap();
         assert_eq!(tof_entry.1.display_label(), Some("hour".to_string()));
         let tof_display = tof_entry.1.display_value();
         assert!(
@@ -1187,10 +1186,14 @@ mod tests {
         );
 
         // Check that transfer node is a struct
-        let transfer_entry = result.nodes.iter().find(|(n, _)| n == "transfer").unwrap();
+        let transfer_entry = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "transfer")
+            .unwrap();
         match &transfer_entry.1 {
             Value::Struct { type_name, fields } => {
-                assert_eq!(type_name, "TransferResult");
+                assert_eq!(type_name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 4);
                 assert!(fields.contains_key("dv1"));
                 assert!(fields.contains_key("dv2"));
@@ -1229,10 +1232,14 @@ mod tests {
         );
 
         // transfer: Hohmann LEO-to-GEO, total_dv ~3935 m/s
-        let transfer_entry = result.nodes.iter().find(|(n, _)| n == "transfer").unwrap();
+        let transfer_entry = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "transfer")
+            .unwrap();
         match &transfer_entry.1 {
             Value::Struct { type_name, fields } => {
-                assert_eq!(type_name, "TransferResult");
+                assert_eq!(type_name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 3);
                 let total_dv = fields["total_dv"].si_value();
                 assert!(
@@ -1249,7 +1256,7 @@ mod tests {
         result
             .all
             .iter()
-            .find(|(n, _, _)| n == name)
+            .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .clone()
@@ -1433,7 +1440,7 @@ mod tests {
         let default_dv = find_value(&default, "delta_v");
 
         let mut overrides = HashMap::new();
-        overrides.insert("isp".to_string(), parse_expr("450.0 s"));
+        overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
         let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
         let new_dv = find_value(&overridden, "delta_v");
 
@@ -1445,7 +1452,7 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         // isp expects Time, not Mass
         let mut overrides = HashMap::new();
-        overrides.insert("isp".to_string(), parse_expr("450.0 kg"));
+        overrides.insert(DeclName::new("isp"), parse_expr("450.0 kg"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         assert!(result.is_err());
     }
@@ -1454,11 +1461,11 @@ mod tests {
     fn override_node_errors() {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         let mut overrides = HashMap::new();
-        overrides.insert("delta_v".to_string(), parse_expr("100.0 m/s"));
+        overrides.insert(DeclName::new("delta_v"), parse_expr("100.0 m/s"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         match result {
             Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
-                assert_eq!(name, "delta_v");
+                assert_eq!(name.as_str(), "delta_v");
                 assert_eq!(actual_kind, "node");
             }
             other => panic!("expected OverrideNotAParam, got {other:?}"),
@@ -1469,11 +1476,11 @@ mod tests {
     fn override_const_errors() {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         let mut overrides = HashMap::new();
-        overrides.insert("G0".to_string(), parse_expr("10.0 m/s^2"));
+        overrides.insert(DeclName::new("G0"), parse_expr("10.0 m/s^2"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         match result {
             Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
-                assert_eq!(name, "G0");
+                assert_eq!(name.as_str(), "G0");
                 assert_eq!(actual_kind, "const");
             }
             other => panic!("expected OverrideNotAParam, got {other:?}"),
@@ -1484,11 +1491,11 @@ mod tests {
     fn override_unknown_param_errors() {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         let mut overrides = HashMap::new();
-        overrides.insert("nonexistent".to_string(), parse_expr("100"));
+        overrides.insert(DeclName::new("nonexistent"), parse_expr("100"));
         let result = compile_and_eval_with_overrides(source, "test", &overrides);
         match result {
             Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
-                assert_eq!(name, "nonexistent");
+                assert_eq!(name.as_str(), "nonexistent");
             }
             other => panic!("expected OverrideUnknownParam, got {other:?}"),
         }
@@ -1585,7 +1592,7 @@ mod tests {
         let val = &result
             .all
             .iter()
-            .find(|(n, _, _)| n == name)
+            .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1;
         match val {
@@ -1599,7 +1606,7 @@ mod tests {
         let val = &result
             .all
             .iter()
-            .find(|(n, _, _)| n == name)
+            .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1;
         match val {

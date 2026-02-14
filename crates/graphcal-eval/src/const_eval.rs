@@ -61,7 +61,7 @@ pub fn eval_consts(
             .find(|(n, _, _)| n == cycle_node)
             .map_or_else(|| Span::new(0, 0), |(_, _, s)| *s);
         GraphcalError::CyclicDependency {
-            name: cycle_node.clone(),
+            name: cycle_node.clone().into(),
             src: src.clone(),
             span: span.into(),
         }

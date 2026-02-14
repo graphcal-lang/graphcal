@@ -3,6 +3,10 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use graphcal_syntax::names::{
+    DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, UnitName, VariantName,
+};
+
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum GraphcalError {
@@ -24,7 +28,7 @@ pub enum GraphcalError {
         help("graph references must point to a `param` or `node`")
     )]
     UnknownGraphRef {
-        name: String,
+        name: DeclName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
@@ -37,7 +41,7 @@ pub enum GraphcalError {
         help("constant references must point to a `const` or built-in constant (PI, E)")
     )]
     UnknownConstRef {
-        name: String,
+        name: DeclName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
@@ -50,7 +54,7 @@ pub enum GraphcalError {
         help("check function name and ensure it is defined")
     )]
     UnknownFunction {
-        name: String,
+        name: FnName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown function")]
@@ -65,7 +69,7 @@ pub enum GraphcalError {
         )
     )]
     GraphRefInConst {
-        name: String,
+        name: DeclName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("@ reference not allowed here")]
@@ -75,7 +79,7 @@ pub enum GraphcalError {
     #[error("graph reference `@{name}` not allowed in function body")]
     #[diagnostic(code(graphcal::F001))]
     GraphRefInFn {
-        name: String,
+        name: DeclName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("@ reference not allowed here")]
@@ -90,7 +94,7 @@ pub enum GraphcalError {
         help("graphcal does not support recursive functions")
     )]
     RecursiveFunction {
-        name: String,
+        name: FnName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("involved in recursion")]
@@ -100,7 +104,7 @@ pub enum GraphcalError {
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     #[diagnostic(code(graphcal::N006))]
     WrongArity {
-        name: String,
+        name: FnName,
         expected: usize,
         got: usize,
         #[source_code]
@@ -115,7 +119,7 @@ pub enum GraphcalError {
         help("declarations cannot form dependency cycles")
     )]
     CyclicDependency {
-        name: String,
+        name: DeclName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("involved in cycle")]
@@ -165,7 +169,7 @@ pub enum GraphcalError {
         help("unit must be declared or part of the prelude")
     )]
     UnknownUnit {
-        name: String,
+        name: UnitName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown unit")]
@@ -178,7 +182,7 @@ pub enum GraphcalError {
         help("dimension must be declared or part of the prelude")
     )]
     UnknownDimension {
-        name: String,
+        name: DimName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown dimension")]
@@ -232,7 +236,7 @@ pub enum GraphcalError {
         help("struct types must be declared with `type` before use")
     )]
     UnknownStructType {
-        name: String,
+        name: StructTypeName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
@@ -242,8 +246,8 @@ pub enum GraphcalError {
     #[error("unknown field `{field_name}` on struct `{type_name}`")]
     #[diagnostic(code(graphcal::S003))]
     UnknownField {
-        type_name: String,
-        field_name: String,
+        type_name: StructTypeName,
+        field_name: FieldName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("no such field")]
@@ -256,8 +260,8 @@ pub enum GraphcalError {
         help("all fields are required when constructing a struct")
     )]
     MissingFields {
-        type_name: String,
-        missing: Vec<String>,
+        type_name: StructTypeName,
+        missing: Vec<FieldName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("incomplete construction")]
@@ -270,8 +274,8 @@ pub enum GraphcalError {
         help("only fields declared in the struct type are allowed")
     )]
     ExtraFields {
-        type_name: String,
-        extra: Vec<String>,
+        type_name: StructTypeName,
+        extra: Vec<FieldName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unexpected fields")]
@@ -281,8 +285,8 @@ pub enum GraphcalError {
     #[error("field `{field_name}` of `{type_name}`: expected dimension {expected}, found {found}")]
     #[diagnostic(code(graphcal::S006))]
     FieldDimensionMismatch {
-        type_name: String,
-        field_name: String,
+        type_name: StructTypeName,
+        field_name: FieldName,
         expected: String,
         found: String,
         #[source_code]
@@ -323,7 +327,7 @@ pub enum GraphcalError {
         help("index must be declared with `index Name = {{ Variant1, Variant2, ... }}`")
     )]
     UnknownIndex {
-        name: String,
+        name: IndexName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown index")]
@@ -333,8 +337,8 @@ pub enum GraphcalError {
     #[error("unknown variant `{variant_name}` in index `{index_name}`")]
     #[diagnostic(code(graphcal::I002))]
     UnknownVariant {
-        index_name: String,
-        variant_name: String,
+        index_name: IndexName,
+        variant_name: VariantName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a variant of `{index_name}`")]
@@ -347,8 +351,8 @@ pub enum GraphcalError {
         help("map literals must cover all variants of the index")
     )]
     MissingVariants {
-        index_name: String,
-        missing: Vec<String>,
+        index_name: IndexName,
+        missing: Vec<VariantName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("incomplete map literal")]
@@ -361,8 +365,8 @@ pub enum GraphcalError {
         help("only variants declared in the index are allowed")
     )]
     ExtraVariants {
-        index_name: String,
-        extra: Vec<String>,
+        index_name: IndexName,
+        extra: Vec<VariantName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unexpected variants")]
@@ -372,8 +376,8 @@ pub enum GraphcalError {
     #[error("index mismatch: expected `{expected}`, found `{found}`")]
     #[diagnostic(code(graphcal::I005))]
     IndexMismatch {
-        expected: String,
-        found: String,
+        expected: IndexName,
+        found: IndexName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("wrong index")]
@@ -420,12 +424,12 @@ pub enum GraphcalError {
         code(graphcal::O001),
         help("only `param` declarations can be overridden with --set")
     )]
-    OverrideNotAParam { name: String, actual_kind: String },
+    OverrideNotAParam { name: DeclName, actual_kind: String },
 
     #[error("unknown parameter `{name}` in --set override")]
     #[diagnostic(
         code(graphcal::O002),
         help("the name must match a `param` declared in the file")
     )]
-    OverrideUnknownParam { name: String },
+    OverrideUnknownParam { name: DeclName },
 }

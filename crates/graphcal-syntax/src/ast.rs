@@ -1,3 +1,7 @@
+use crate::names::{
+    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName,
+    VariantName,
+};
 use crate::span::Span;
 
 /// A complete source file.
@@ -156,6 +160,62 @@ pub enum FnBody {
 pub struct Ident {
     pub name: String,
     pub span: Span,
+}
+
+impl Ident {
+    /// Interpret this identifier as a declaration name (const/param/node).
+    #[must_use]
+    pub fn as_decl_name(&self) -> DeclName {
+        DeclName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a dimension name.
+    #[must_use]
+    pub fn as_dim_name(&self) -> DimName {
+        DimName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a unit name.
+    #[must_use]
+    pub fn as_unit_name(&self) -> UnitName {
+        UnitName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a struct type name.
+    #[must_use]
+    pub fn as_struct_type_name(&self) -> StructTypeName {
+        StructTypeName::new(&self.name)
+    }
+
+    /// Interpret this identifier as an index name.
+    #[must_use]
+    pub fn as_index_name(&self) -> IndexName {
+        IndexName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a function name.
+    #[must_use]
+    pub fn as_fn_name(&self) -> FnName {
+        FnName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a struct field name.
+    #[must_use]
+    pub fn as_field_name(&self) -> FieldName {
+        FieldName::new(&self.name)
+    }
+
+    /// Interpret this identifier as an index variant name.
+    #[must_use]
+    pub fn as_variant_name(&self) -> VariantName {
+        VariantName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a generic parameter name.
+    #[must_use]
+    pub fn as_generic_param_name(&self) -> GenericParamName {
+        GenericParamName::new(&self.name)
+    }
 }
 
 // --- Type expressions ---

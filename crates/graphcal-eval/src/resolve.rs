@@ -306,7 +306,7 @@ fn is_lower_snake_case(s: &str) -> bool {
 fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInConst {
-            name: ident.name.clone(),
+            name: ident.as_decl_name(),
             src: src.clone(),
             span: expr.span.into(),
         }),
@@ -397,7 +397,7 @@ fn check_no_graph_refs_in_fn_expr(
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInFn {
-            name: ident.name.clone(),
+            name: ident.as_decl_name(),
             src: src.clone(),
             span: expr.span.into(),
             help: format!("pass `{fn_name}` as a function parameter instead"),
@@ -515,7 +515,7 @@ fn collect_const_refs(
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
-                    name: ident.name.clone(),
+                    name: ident.as_decl_name(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
@@ -528,7 +528,7 @@ fn collect_const_refs(
                 && !CONVERSION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::UnknownFunction {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
@@ -540,7 +540,7 @@ fn collect_const_refs(
                 && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::WrongArity {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
@@ -794,7 +794,7 @@ fn collect_all_refs(
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownGraphRef {
-                    name: ident.name.clone(),
+                    name: ident.as_decl_name(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
@@ -808,7 +808,7 @@ fn collect_all_refs(
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
-                    name: ident.name.clone(),
+                    name: ident.as_decl_name(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
@@ -821,7 +821,7 @@ fn collect_all_refs(
                 && !CONVERSION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::UnknownFunction {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
@@ -831,7 +831,7 @@ fn collect_all_refs(
                 && !AGGREGATION_FNS.contains(&name.name.as_str())
             {
                 return Err(GraphcalError::WrongArity {
-                    name: name.name.clone(),
+                    name: name.as_fn_name(),
                     expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
