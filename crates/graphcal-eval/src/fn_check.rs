@@ -9,6 +9,7 @@ use graphcal_syntax::ast::{Expr, ExprKind, FnBody};
 
 use crate::error::GraphcalError;
 use crate::registry::{FnDef, Registry};
+use graphcal_syntax::names::FnName;
 
 /// Check that user-defined functions do not form recursive call cycles.
 ///
@@ -26,8 +27,8 @@ pub fn check_no_recursion(
         return Ok(());
     }
 
-    let mut graph = DiGraph::<String, ()>::new();
-    let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut graph = DiGraph::<FnName, ()>::new();
+    let mut index_map: HashMap<FnName, petgraph::graph::NodeIndex> = HashMap::new();
 
     // Add a node for each function
     for fn_def in &fn_names {
@@ -48,7 +49,9 @@ pub fn check_no_recursion(
     // Check for cycles
     toposort(&graph, None).map_err(|cycle| {
         let cycle_name = &graph[cycle.node_id()];
-        let fn_def = registry.get_function(cycle_name).expect("function exists");
+        let fn_def = registry
+            .get_function(cycle_name.as_str())
+            .expect("function exists");
         GraphcalError::RecursiveFunction {
             name: cycle_name.clone(),
             src: src.clone(),
@@ -62,8 +65,8 @@ pub fn check_no_recursion(
 /// Collect names of user-defined functions called from a function body.
 fn collect_fn_calls(
     body: &FnBody,
-    user_fns: &HashMap<String, petgraph::graph::NodeIndex>,
-) -> Vec<String> {
+    user_fns: &HashMap<FnName, petgraph::graph::NodeIndex>,
+) -> Vec<FnName> {
     let mut calls = Vec::new();
     match body {
         FnBody::Short(expr) => collect_fn_calls_in_expr(expr, user_fns, &mut calls),
@@ -79,13 +82,13 @@ fn collect_fn_calls(
 
 fn collect_fn_calls_in_expr(
     expr: &Expr,
-    user_fns: &HashMap<String, petgraph::graph::NodeIndex>,
-    calls: &mut Vec<String>,
+    user_fns: &HashMap<FnName, petgraph::graph::NodeIndex>,
+    calls: &mut Vec<FnName>,
 ) {
     match &expr.kind {
         ExprKind::FnCall { name, args } => {
-            if user_fns.contains_key(&name.name) {
-                calls.push(name.name.clone());
+            if user_fns.contains_key(name.value.as_str()) {
+                calls.push(name.value.clone());
             }
             for arg in args {
                 collect_fn_calls_in_expr(arg, user_fns, calls);
@@ -166,12 +169,12 @@ mod tests {
         load_prelude(&mut registry);
         for (name, fn_decl, span) in &resolved.functions {
             registry.register_function(FnDef {
-                name: name.clone(),
+                name: FnName::new(name),
                 generic_params: fn_decl
                     .generic_params
                     .iter()
                     .map(|g| crate::registry::FnGenericParam {
-                        name: g.name.name.clone(),
+                        name: g.name.value.clone(),
                         constraint: match g.constraint {
                             graphcal_syntax::ast::GenericConstraint::Dim => {
                                 crate::registry::FnGenericConstraint::Dim

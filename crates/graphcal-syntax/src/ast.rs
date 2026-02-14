@@ -1,3 +1,7 @@
+use crate::names::{
+    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, Spanned, StructTypeName,
+    UnitName, VariantName,
+};
 use crate::span::Span;
 
 /// A complete source file.
@@ -39,21 +43,21 @@ pub struct UseDecl {
 
 #[derive(Debug, Clone)]
 pub struct ParamDecl {
-    pub name: Ident,
+    pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
     pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
 pub struct NodeDecl {
-    pub name: Ident,
+    pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
     pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
-    pub name: Ident,
+    pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
     pub value: Expr,
 }
@@ -61,7 +65,7 @@ pub struct ConstDecl {
 /// Dimension declaration: `dimension Velocity = Length / Time;`
 #[derive(Debug, Clone)]
 pub struct DimDecl {
-    pub name: Ident,
+    pub name: Spanned<DimName>,
     /// `None` for base dimensions: `dimension Length;`
     pub definition: Option<DimExpr>,
 }
@@ -69,7 +73,7 @@ pub struct DimDecl {
 /// Unit declaration: `unit km: Length = 1000 m;`
 #[derive(Debug, Clone)]
 pub struct UnitDecl {
-    pub name: Ident,
+    pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
@@ -88,28 +92,28 @@ pub struct UnitDef {
 /// Struct type declaration: `type TransferResult { dv1: Velocity, dv2: Velocity }`
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
-    pub name: Ident,
+    pub name: Spanned<StructTypeName>,
     pub fields: Vec<FieldDecl>,
 }
 
 /// A field in a struct type declaration.
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
-    pub name: Ident,
+    pub name: Spanned<FieldName>,
     pub type_ann: TypeExpr,
 }
 
 /// Index declaration: `index Maneuver = { Departure, Correction, Insertion }`
 #[derive(Debug, Clone)]
 pub struct IndexDecl {
-    pub name: Ident,
-    pub variants: Vec<Ident>,
+    pub name: Spanned<IndexName>,
+    pub variants: Vec<Spanned<VariantName>>,
 }
 
 /// Function declaration: `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;`
 #[derive(Debug, Clone)]
 pub struct FnDecl {
-    pub name: Ident,
+    pub name: Spanned<FnName>,
     pub generic_params: Vec<GenericParam>,
     pub params: Vec<FnParam>,
     pub return_type: TypeExpr,
@@ -119,7 +123,7 @@ pub struct FnDecl {
 /// A generic parameter: `D: Dim`
 #[derive(Debug, Clone)]
 pub struct GenericParam {
-    pub name: Ident,
+    pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,
 }
 
@@ -156,6 +160,68 @@ pub enum FnBody {
 pub struct Ident {
     pub name: String,
     pub span: Span,
+}
+
+impl Ident {
+    /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
+    #[must_use]
+    pub fn into_spanned<T: From<String>>(self) -> Spanned<T> {
+        Spanned::new(T::from(self.name), self.span)
+    }
+
+    /// Interpret this identifier as a declaration name (const/param/node).
+    #[must_use]
+    pub fn as_decl_name(&self) -> DeclName {
+        DeclName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a dimension name.
+    #[must_use]
+    pub fn as_dim_name(&self) -> DimName {
+        DimName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a unit name.
+    #[must_use]
+    pub fn as_unit_name(&self) -> UnitName {
+        UnitName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a struct type name.
+    #[must_use]
+    pub fn as_struct_type_name(&self) -> StructTypeName {
+        StructTypeName::new(&self.name)
+    }
+
+    /// Interpret this identifier as an index name.
+    #[must_use]
+    pub fn as_index_name(&self) -> IndexName {
+        IndexName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a function name.
+    #[must_use]
+    pub fn as_fn_name(&self) -> FnName {
+        FnName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a struct field name.
+    #[must_use]
+    pub fn as_field_name(&self) -> FieldName {
+        FieldName::new(&self.name)
+    }
+
+    /// Interpret this identifier as an index variant name.
+    #[must_use]
+    pub fn as_variant_name(&self) -> VariantName {
+        VariantName::new(&self.name)
+    }
+
+    /// Interpret this identifier as a generic parameter name.
+    #[must_use]
+    pub fn as_generic_param_name(&self) -> GenericParamName {
+        GenericParamName::new(&self.name)
+    }
 }
 
 // --- Type expressions ---
@@ -226,7 +292,7 @@ pub struct UnitExpr {
 pub struct UnitExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub name: Ident,
+    pub name: Spanned<UnitName>,
     /// `None` means exponent 1.
     pub power: Option<i32>,
 }
@@ -256,9 +322,9 @@ pub enum ExprKind {
     /// Boolean literal: `true`, `false`
     Bool(bool),
     /// Graph reference: `@lower_name`
-    GraphRef(Ident),
+    GraphRef(Spanned<DeclName>),
     /// Const or built-in constant reference: `UPPER_NAME`, `PI`, `E`
-    ConstRef(Ident),
+    ConstRef(Spanned<DeclName>),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
         op: BinOp,
@@ -268,7 +334,10 @@ pub enum ExprKind {
     /// Unary operation: `-x`, `!x`
     UnaryOp { op: UnaryOp, operand: Box<Expr> },
     /// Function call: `sqrt(x)`, `atan2(y, x)`
-    FnCall { name: Ident, args: Vec<Expr> },
+    FnCall {
+        name: Spanned<FnName>,
+        args: Vec<Expr>,
+    },
     /// Conditional: `if cond { then_expr } else { else_expr }`
     If {
         condition: Box<Expr>,
@@ -287,10 +356,13 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
-    FieldAccess { expr: Box<Expr>, field: Ident },
+    FieldAccess {
+        expr: Box<Expr>,
+        field: Spanned<FieldName>,
+    },
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
     StructConstruction {
-        type_name: Ident,
+        type_name: Spanned<StructTypeName>,
         fields: Vec<FieldInit>,
     },
     /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
@@ -328,8 +400,8 @@ pub struct LetBinding {
 /// An entry in a map literal: `Maneuver::Departure: 2.46 km/s`
 #[derive(Debug, Clone)]
 pub struct MapEntry {
-    pub index: Ident,
-    pub variant: Ident,
+    pub index: Spanned<IndexName>,
+    pub variant: Spanned<VariantName>,
     pub value: Expr,
 }
 
@@ -337,14 +409,17 @@ pub struct MapEntry {
 #[derive(Debug, Clone)]
 pub struct ForBinding {
     pub var: Ident,
-    pub index: Ident,
+    pub index: Spanned<IndexName>,
 }
 
 /// An argument in an index access: either a qualified variant or a loop variable.
 #[derive(Debug, Clone)]
 pub enum IndexArg {
     /// Qualified variant: `Maneuver::Departure`
-    Variant { index: Ident, variant: Ident },
+    Variant {
+        index: Spanned<IndexName>,
+        variant: Spanned<VariantName>,
+    },
     /// Loop variable: `m`
     Var(Ident),
 }
@@ -352,7 +427,7 @@ pub enum IndexArg {
 /// A field initializer in struct construction.
 #[derive(Debug, Clone)]
 pub struct FieldInit {
-    pub name: Ident,
+    pub name: Spanned<FieldName>,
     /// `None` means shorthand: `{ dv1 }` is equivalent to `{ dv1: dv1 }`
     pub value: Option<Expr>,
 }
@@ -390,10 +465,7 @@ mod tests {
         let file = File {
             declarations: vec![Declaration {
                 kind: DeclKind::Param(ParamDecl {
-                    name: Ident {
-                        name: "x".into(),
-                        span: Span::new(6, 1),
-                    },
+                    name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {
                         kind: TypeExprKind::Dimensionless,
                         span: Span::new(9, 15),
@@ -413,15 +485,9 @@ mod tests {
     fn construct_fn_decl_short() {
         let s = Span::new(0, 1);
         let decl = FnDecl {
-            name: Ident {
-                name: "double".into(),
-                span: s,
-            },
+            name: Spanned::new(FnName::new("double"), s),
             generic_params: vec![GenericParam {
-                name: Ident {
-                    name: "D".into(),
-                    span: s,
-                },
+                name: Spanned::new(GenericParamName::new("D"), s),
                 constraint: GenericConstraint::Dim,
             }],
             params: vec![FnParam {
@@ -491,10 +557,7 @@ mod tests {
     fn construct_fn_decl_block() {
         let s = Span::new(0, 1);
         let decl = FnDecl {
-            name: Ident {
-                name: "add_one".into(),
-                span: s,
-            },
+            name: Spanned::new(FnName::new("add_one"), s),
             generic_params: vec![],
             params: vec![FnParam {
                 name: Ident {

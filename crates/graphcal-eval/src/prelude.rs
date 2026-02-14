@@ -1,4 +1,5 @@
 use graphcal_syntax::dimension::{BaseDim, Dimension};
+use graphcal_syntax::names::{DimName, UnitName};
 
 use crate::registry::Registry;
 
@@ -11,17 +12,23 @@ pub fn load_prelude(registry: &mut Registry) {
 }
 
 fn load_base_dimensions(r: &mut Registry) {
-    r.register_dimension("Length", Dimension::base(BaseDim::Length));
-    r.register_dimension("Time", Dimension::base(BaseDim::Time));
-    r.register_dimension("Mass", Dimension::base(BaseDim::Mass));
-    r.register_dimension("Temperature", Dimension::base(BaseDim::Temperature));
-    r.register_dimension("ElectricCurrent", Dimension::base(BaseDim::ElectricCurrent));
-    r.register_dimension("Amount", Dimension::base(BaseDim::Amount));
+    r.register_dimension(DimName::new("Length"), Dimension::base(BaseDim::Length));
+    r.register_dimension(DimName::new("Time"), Dimension::base(BaseDim::Time));
+    r.register_dimension(DimName::new("Mass"), Dimension::base(BaseDim::Mass));
     r.register_dimension(
-        "LuminousIntensity",
+        DimName::new("Temperature"),
+        Dimension::base(BaseDim::Temperature),
+    );
+    r.register_dimension(
+        DimName::new("ElectricCurrent"),
+        Dimension::base(BaseDim::ElectricCurrent),
+    );
+    r.register_dimension(DimName::new("Amount"), Dimension::base(BaseDim::Amount));
+    r.register_dimension(
+        DimName::new("LuminousIntensity"),
         Dimension::base(BaseDim::LuminousIntensity),
     );
-    r.register_dimension("Angle", Dimension::base(BaseDim::Angle));
+    r.register_dimension(DimName::new("Angle"), Dimension::base(BaseDim::Angle));
 }
 
 fn load_derived_dimensions(r: &mut Registry) {
@@ -39,26 +46,38 @@ fn load_derived_dimensions(r: &mut Registry) {
     let area = length.pow_int(2);
     let volume = length.pow_int(3);
 
-    r.register_dimension("Velocity", velocity);
-    r.register_dimension("Acceleration", acceleration);
-    r.register_dimension("Force", force);
-    r.register_dimension("Energy", energy);
-    r.register_dimension("Power", power);
-    r.register_dimension("Frequency", frequency);
-    r.register_dimension("Pressure", pressure);
-    r.register_dimension("Area", area);
-    r.register_dimension("Volume", volume);
+    r.register_dimension(DimName::new("Velocity"), velocity);
+    r.register_dimension(DimName::new("Acceleration"), acceleration);
+    r.register_dimension(DimName::new("Force"), force);
+    r.register_dimension(DimName::new("Energy"), energy);
+    r.register_dimension(DimName::new("Power"), power);
+    r.register_dimension(DimName::new("Frequency"), frequency);
+    r.register_dimension(DimName::new("Pressure"), pressure);
+    r.register_dimension(DimName::new("Area"), area);
+    r.register_dimension(DimName::new("Volume"), volume);
 }
 
 fn load_base_units(r: &mut Registry) {
-    r.register_unit("m", Dimension::base(BaseDim::Length), 1.0);
-    r.register_unit("s", Dimension::base(BaseDim::Time), 1.0);
-    r.register_unit("kg", Dimension::base(BaseDim::Mass), 1.0);
-    r.register_unit("K", Dimension::base(BaseDim::Temperature), 1.0);
-    r.register_unit("A", Dimension::base(BaseDim::ElectricCurrent), 1.0);
-    r.register_unit("mol", Dimension::base(BaseDim::Amount), 1.0);
-    r.register_unit("cd", Dimension::base(BaseDim::LuminousIntensity), 1.0);
-    r.register_unit("rad", Dimension::base(BaseDim::Angle), 1.0);
+    r.register_unit(UnitName::new("m"), Dimension::base(BaseDim::Length), 1.0);
+    r.register_unit(UnitName::new("s"), Dimension::base(BaseDim::Time), 1.0);
+    r.register_unit(UnitName::new("kg"), Dimension::base(BaseDim::Mass), 1.0);
+    r.register_unit(
+        UnitName::new("K"),
+        Dimension::base(BaseDim::Temperature),
+        1.0,
+    );
+    r.register_unit(
+        UnitName::new("A"),
+        Dimension::base(BaseDim::ElectricCurrent),
+        1.0,
+    );
+    r.register_unit(UnitName::new("mol"), Dimension::base(BaseDim::Amount), 1.0);
+    r.register_unit(
+        UnitName::new("cd"),
+        Dimension::base(BaseDim::LuminousIntensity),
+        1.0,
+    );
+    r.register_unit(UnitName::new("rad"), Dimension::base(BaseDim::Angle), 1.0);
 }
 
 fn load_derived_units(r: &mut Registry) {
@@ -74,39 +93,39 @@ fn load_derived_units(r: &mut Registry) {
     let frequency = Dimension::DIMENSIONLESS / time;
 
     // Length
-    r.register_unit("km", length, 1000.0);
-    r.register_unit("cm", length, 0.01);
-    r.register_unit("mm", length, 0.001);
+    r.register_unit(UnitName::new("km"), length, 1000.0);
+    r.register_unit(UnitName::new("cm"), length, 0.01);
+    r.register_unit(UnitName::new("mm"), length, 0.001);
 
     // Time
-    r.register_unit("hour", time, 3600.0);
-    r.register_unit("min", time, 60.0);
+    r.register_unit(UnitName::new("hour"), time, 3600.0);
+    r.register_unit(UnitName::new("min"), time, 60.0);
 
     // Angle
-    r.register_unit("deg", angle, std::f64::consts::PI / 180.0);
+    r.register_unit(UnitName::new("deg"), angle, std::f64::consts::PI / 180.0);
 
     // Mass
-    r.register_unit("g", mass, 0.001);
+    r.register_unit(UnitName::new("g"), mass, 0.001);
 
     // Force
-    r.register_unit("N", force, 1.0);
-    r.register_unit("kN", force, 1000.0);
+    r.register_unit(UnitName::new("N"), force, 1.0);
+    r.register_unit(UnitName::new("kN"), force, 1000.0);
 
     // Energy
-    r.register_unit("J", energy, 1.0);
-    r.register_unit("kJ", energy, 1000.0);
+    r.register_unit(UnitName::new("J"), energy, 1.0);
+    r.register_unit(UnitName::new("kJ"), energy, 1000.0);
 
     // Power
-    r.register_unit("W", power, 1.0);
-    r.register_unit("kW", power, 1000.0);
+    r.register_unit(UnitName::new("W"), power, 1.0);
+    r.register_unit(UnitName::new("kW"), power, 1000.0);
 
     // Pressure
-    r.register_unit("Pa", pressure, 1.0);
-    r.register_unit("kPa", pressure, 1000.0);
-    r.register_unit("MPa", pressure, 1_000_000.0);
+    r.register_unit(UnitName::new("Pa"), pressure, 1.0);
+    r.register_unit(UnitName::new("kPa"), pressure, 1000.0);
+    r.register_unit(UnitName::new("MPa"), pressure, 1_000_000.0);
 
     // Frequency
-    r.register_unit("Hz", frequency, 1.0);
+    r.register_unit(UnitName::new("Hz"), frequency, 1.0);
 }
 
 #[cfg(test)]

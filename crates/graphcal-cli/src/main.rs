@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process;
 
 use graphcal_eval::eval::{EvalResult, compile_and_eval_project};
+use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
@@ -72,7 +73,7 @@ fn main() {
                 let value_str = value_str.trim();
                 match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
                     Ok(expr) => {
-                        overrides.insert(name.to_string(), expr);
+                        overrides.insert(DeclName::new(name), expr);
                     }
                     Err(e) => {
                         eprintln!("error: failed to parse --set value for `{name}`: {e}");
@@ -108,12 +109,16 @@ fn print_text(result: &EvalResult) {
             }
             Value::Struct { fields, .. } => {
                 for (field_name, field_val) in fields {
-                    flatten_value(&format!("{prefix}.{field_name}"), field_val, lines);
+                    flatten_value(
+                        &format!("{prefix}.{}", field_name.as_str()),
+                        field_val,
+                        lines,
+                    );
                 }
             }
             Value::Indexed { entries, .. } => {
                 for (variant, entry_val) in entries {
-                    flatten_value(&format!("{prefix}[{variant}]"), entry_val, lines);
+                    flatten_value(&format!("{prefix}[{}]", variant.as_str()), entry_val, lines);
                 }
             }
         }
@@ -121,7 +126,7 @@ fn print_text(result: &EvalResult) {
 
     let mut lines: Vec<(String, &Value)> = Vec::new();
     for (name, value, _) in &result.all {
-        flatten_value(name, value, &mut lines);
+        flatten_value(name.as_str(), value, &mut lines);
     }
 
     let max_name_len = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
@@ -179,10 +184,10 @@ fn print_json(result: &EvalResult) {
                 type_name, fields, ..
             } => {
                 let mut map = serde_json::Map::new();
-                map.insert("type".to_string(), serde_json::json!(type_name));
+                map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
                 let fields_map: serde_json::Map<String, serde_json::Value> = fields
                     .iter()
-                    .map(|(name, val)| (name.clone(), value_to_json(val)))
+                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val)))
                     .collect();
                 map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
                 serde_json::Value::Object(map)
@@ -193,10 +198,10 @@ fn print_json(result: &EvalResult) {
                 ..
             } => {
                 let mut map = serde_json::Map::new();
-                map.insert("index".to_string(), serde_json::json!(index_name));
+                map.insert("index".to_string(), serde_json::json!(index_name.as_str()));
                 let entries_map: serde_json::Map<String, serde_json::Value> = entries
                     .iter()
-                    .map(|(name, val)| (name.clone(), value_to_json(val)))
+                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val)))
                     .collect();
                 map.insert(
                     "entries".to_string(),
