@@ -242,15 +242,12 @@ pub fn compile_and_eval_with_overrides(
     crate::fn_check::check_no_recursion_tir(&tir, &src)?;
     crate::dim_check::check_dimensions_tir(&tir, &src)?;
 
-    // Build declared types from TIR for override checking and evaluation
-    let declared_types = crate::tir::build_declared_types(&tir, &src)?;
-
     // Dimension-check override expressions against their param's declared type
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
             override_name.as_str(),
-            &declared_types,
+            &tir.declared_types,
             &tir.registry,
             &src,
         )?;
@@ -260,7 +257,7 @@ pub fn compile_and_eval_with_overrides(
     let plan = crate::exec_plan::compile(&tir, &src)?;
 
     // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, &src)?;
+    let result = evaluate_plan(&tir, &plan, &src)?;
     Ok(result)
 }
 
@@ -398,15 +395,12 @@ pub fn compile_and_eval_project(
     // so no separate `imported_types` map is needed.
     crate::dim_check::check_dimensions_tir(&tir, root_src)?;
 
-    // Build declared types from TIR for override checking and evaluation
-    let declared_types = crate::tir::build_declared_types(&tir, root_src)?;
-
     // Dimension-check override expressions
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
             override_name.as_str(),
-            &declared_types,
+            &tir.declared_types,
             &tir.registry,
             root_src,
         )?;
@@ -416,7 +410,7 @@ pub fn compile_and_eval_project(
     let plan = crate::exec_plan::compile(&tir, root_src)?;
 
     // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, root_src)?;
+    let result = evaluate_plan(&tir, &plan, root_src)?;
     Ok(result)
 }
 
@@ -564,7 +558,6 @@ fn runtime_to_value(
 fn evaluate_plan(
     tir: &crate::tir::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<EvalResult, GraphcalError> {
     let builtin_consts = builtin_constants();
@@ -609,7 +602,12 @@ fn evaluate_plan(
         let display_unit = expr_map
             .get(name)
             .and_then(|expr| extract_display_unit(expr, &tir.registry));
-        runtime_to_value(rv, declared_types.get(name), display_unit, &tir.registry)
+        runtime_to_value(
+            rv,
+            tir.declared_types.get(name),
+            display_unit,
+            &tir.registry,
+        )
     };
 
     let consts = tir

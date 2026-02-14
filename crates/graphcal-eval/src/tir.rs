@@ -117,7 +117,8 @@ pub struct ResolvedFnParam {
 /// Typed Intermediate Representation — the result of [`type_resolve`].
 ///
 /// Contains everything from [`IR`] plus resolved type annotations for
-/// every declaration and function signature.
+/// every declaration and function signature, and the concrete `DeclaredType`
+/// map used by dimension checking and evaluation.
 #[derive(Debug)]
 pub struct TIR {
     /// The type/unit/dimension/index/struct/function registry.
@@ -140,6 +141,11 @@ pub struct TIR {
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
     pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
+    /// Concrete declared types for each const/param/node (including builtins).
+    ///
+    /// Built from `resolved_decl_types` via [`resolved_to_declared_type`], plus
+    /// builtin constants as `Dimensionless`. Used by dimension checking and evaluation.
+    pub declared_types: HashMap<String, crate::dim_check::DeclaredType>,
 }
 
 /// Resolve all type annotations in an [`IR`], producing a [`TIR`].
@@ -214,6 +220,19 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         );
     }
 
+    // Build concrete declared_types from resolved types + builtins
+    let mut declared_types = HashMap::new();
+    for name in crate::builtins::builtin_constants().keys() {
+        declared_types.insert(
+            (*name).to_string(),
+            crate::dim_check::DeclaredType::Scalar(Dimension::DIMENSIONLESS),
+        );
+    }
+    for (name, resolved) in &resolved_decl_types {
+        let dt = resolved_to_declared_type(resolved, src)?;
+        declared_types.insert(name.clone(), dt);
+    }
+
     Ok(TIR {
         registry: ir.registry,
         consts: ir.consts,
@@ -225,6 +244,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         functions: ir.functions,
         resolved_decl_types,
         resolved_fn_sigs,
+        declared_types,
     })
 }
 
@@ -288,41 +308,6 @@ pub fn resolved_to_declared_type(
             Ok(result)
         }
     }
-}
-
-/// Build a `declared_types` map from a TIR's resolved types.
-///
-/// Converts each entry in `tir.resolved_decl_types` via [`resolved_to_declared_type`]
-/// and adds builtin constants as `Dimensionless`.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
-/// parameters.
-pub fn build_declared_types(
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, crate::dim_check::DeclaredType>, GraphcalError> {
-    use crate::builtins::builtin_constants;
-    use crate::dim_check::DeclaredType;
-
-    let mut declared_types: HashMap<String, DeclaredType> = HashMap::new();
-
-    // Built-in constants are Dimensionless
-    for name in builtin_constants().keys() {
-        declared_types.insert(
-            (*name).to_string(),
-            DeclaredType::Scalar(Dimension::DIMENSIONLESS),
-        );
-    }
-
-    // Convert resolved types from TIR
-    for (name, resolved) in &tir.resolved_decl_types {
-        let dt = resolved_to_declared_type(resolved, src)?;
-        declared_types.insert(name.clone(), dt);
-    }
-
-    Ok(declared_types)
 }
 
 // ---------------------------------------------------------------------------

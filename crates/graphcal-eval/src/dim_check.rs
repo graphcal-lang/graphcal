@@ -52,12 +52,10 @@ pub enum InferredType {
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
 /// Check dimensions for all declarations using a TIR.
 ///
-/// Builds `declared_types` from `tir.resolved_decl_types` (which were resolved
-/// during `type_resolve`), then validates that every RHS expression matches its
-/// declared type annotation.
+/// Uses `tir.declared_types` (built during `type_resolve`) to validate that
+/// every RHS expression matches its declared type annotation.
 ///
 /// This is a pure validation step — returns `()` on success.
-/// Use [`crate::tir::build_declared_types`] to obtain the `DeclaredType` map.
 ///
 /// # Errors
 ///
@@ -68,9 +66,6 @@ pub fn check_dimensions_tir(
 ) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
 
-    // Build declared types from TIR
-    let declared_types = crate::tir::build_declared_types(tir, src)?;
-
     // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
     let all_decls = tir
@@ -80,10 +75,10 @@ pub fn check_dimensions_tir(
         .chain(tir.nodes.iter());
 
     for (name, type_ann, value_expr, _span) in all_decls {
-        let declared = &declared_types[name.as_str()];
+        let declared = &tir.declared_types[name.as_str()];
         let inferred = infer_type(
             value_expr,
-            &declared_types,
+            &tir.declared_types,
             &empty_locals,
             &tir.registry,
             &builtin_fns,
@@ -1718,7 +1713,7 @@ mod tests {
         let ir = crate::ir::lower(&file, &src)?;
         let tir = crate::tir::type_resolve(ir, &src)?;
         check_dimensions_tir(&tir, &src)?;
-        crate::tir::build_declared_types(&tir, &src)
+        Ok(tir.declared_types)
     }
 
     #[test]
