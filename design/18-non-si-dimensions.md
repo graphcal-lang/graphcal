@@ -73,6 +73,8 @@ node bad = @crew + @sensors;
 
 **When a true base dimension IS needed**: When the quantity participates in rich dimensional algebra. `Information / Time = Bandwidth` is meaningful. `Money / Mass = SpecificCost` is meaningful. These aren't just "counts of bits" or "counts of dollars" — they form families of derived dimensions with distinct physical interpretations.
 
+**Important caveat**: The Count + Spaces approach depends on resolving the **arithmetic propagation rules** for space tags — specifically, how tags behave during multiplication and division. For example, `Count in Countable.Person * (Mass / Count) in Countable.Person` should yield `Mass in Countable.Person`, with the space tag propagating through the operation. This is an open design question in the Spaces feature ([06-spaces.md](./06-spaces.md)). Until it is resolved, Count + Spaces remains the recommended direction but not a settled design.
+
 ### Anti-Examples: Things That DON'T Need New Base Dimensions
 
 These are sometimes confused as needing new dimensions but can be expressed with SI:
