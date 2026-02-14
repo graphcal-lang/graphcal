@@ -22,7 +22,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 ### Files that would need modification for any new primitive type
 
 | Layer | File | What changes |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | Lexer | `token.rs` | New literal tokens (int literal, string literal, datetime literal) |
 | Parser | `parser.rs` | New `ExprKind` parsing, type annotation parsing |
 | AST | `ast.rs` | New `ExprKind` variants, new `TypeExprKind` variants |
@@ -43,6 +43,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 **Current state:** `bool` literals (`true`/`false`) exist in the lexer, parser, and AST (`ExprKind::Bool`), but are evaluated as `RuntimeValue::Scalar(0.0 | 1.0)`. The type checker treats them as `Dimensionless`.
 
 **What "first-class" means:**
+
 - `DeclaredType::Bool` / `InferredType::Bool` distinct from `Scalar(Dimensionless)`
 - `RuntimeValue::Bool(bool)` instead of encoding in f64
 - Type errors when mixing `bool` and `f64` (e.g., `true + 1.0` is an error)
@@ -55,6 +56,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 **Priority:** High. This is a correctness issue—today `true + 1.0` silently evaluates to `2.0`.
 
 **Design questions:**
+
 - Should `bool` be usable in `if` expressions only, or also in arithmetic context (C-style 0/1)?
   - Recommendation: strict separation. No implicit bool-to-number. Provide `if b { 1.0 } else { 0.0 }` for the rare case.
 - Can struct fields be `bool`-typed? (Yes—needed for flags, status, constraints.)
@@ -67,6 +69,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 **Current state:** Not implemented. All numbers parse as `f64`. The design doc lists `i64` as a planned primitive.
 
 **Use cases:**
+
 - Discrete counts (number of satellites, number of maneuvers, iterations)
 - Index arithmetic (if range-based indexes are added later)
 - Exact integer arithmetic where floating-point is inappropriate
@@ -77,7 +80,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 #### 2a. Can `i64` carry physical dimensions?
 
 | Option | Syntax | Example | Implication |
-|--------|--------|---------|-------------|
+| -------- | -------- | --------- | ------------- |
 | **A: Always dimensionless** | `i64` only | `param n_sats: i64 = 24;` | Simple. `i64` is a counter type, never has units. |
 | **B: Dimensioned integers** | `i64` with dimension | `param pixel_width: i64<Length> = 1920 px;` | Complex. Need `i64<D>` in type system. Operators like `+` must preserve int-ness. Division becomes tricky (integer division returns `i64`? or promotes to `f64`?). |
 
@@ -88,7 +91,7 @@ The type system (dim_check.rs) tracks **dimensions** via `DeclaredType` / `Infer
 The current lexer regex `[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?` accepts both `42` and `42.0`. Options:
 
 | Option | Rule | Example |
-|--------|------|---------|
+| -------- | ------ | --------- |
 | **A: Dot distinguishes** | `42` → i64, `42.0` → f64 | Simple, familiar (Rust, Python 3) |
 | **B: Suffix** | `42i` → i64, `42` → f64 | Explicit but verbose |
 | **C: Type annotation only** | `42` is polymorphic; resolved by annotation | Flexible but more complex inference |
@@ -98,7 +101,7 @@ The current lexer regex `[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?` accept
 #### 2c. `i64 ↔ f64` conversion
 
 | Option | Behavior |
-|--------|----------|
+| -------- | ---------- |
 | **A: No implicit conversion** | Explicit `to_float(n)` / `to_int(x)` required |
 | **B: i64 → f64 implicit, f64 → i64 explicit** | `42 * 1.5` works, `to_int(42.7)` needed for the reverse |
 | **C: Fully implicit both ways** | Dangerous—silent truncation |
@@ -143,12 +146,14 @@ type Status { Active, Inactive, Pending }
 ```
 
 Fieldless types provide stronger guarantees than strings:
+
 - **Exhaustiveness checking** — `match` must cover all variants
 - **Typo protection** — `FuelKind::Metahne` is a compile error, `"Metahne"` is not
 - **No need for string comparison semantics** — equality is structural, not textual
 - **No string operations to design** — no concatenation, interpolation, length, etc.
 
 The remaining `Str` use cases (free-form descriptions, file paths, formatted output) are metadata concerns that live outside the calculation graph. They can be handled by:
+
 - Comments in source files (already supported)
 - A future metadata/annotation system (e.g., `#[description = "..."]`)
 - External tooling (CLI flags, scenario files)
@@ -164,6 +169,7 @@ The remaining `Str` use cases (free-form descriptions, file paths, formatted out
 > **Deep analysis:** See [`.local/2026-02-14_datetime-primitive-deep-analysis.md`](../.local/2026-02-14_datetime-primitive-deep-analysis.md) for the full design document covering time scales, hifitime integration, operator semantics, builtin functions, and implementation strategy.
 
 **Use cases:**
+
 - Mission timelines: launch dates, maneuver epochs (TAI/TT/TDB time scales)
 - GNSS operations: GPS receiver timestamps, satellite clock corrections (GPST/GST/BDT)
 - Scheduling: deadlines, milestones (UTC)
@@ -175,7 +181,7 @@ The remaining `Str` use cases (free-form descriptions, file paths, formatted out
 #### 4a. Internal representation: `hifitime::Epoch`
 
 | Option | Representation | Precision | Range | Time Scales | Verdict |
-|--------|---------------|-----------|-------|-------------|---------|
+| -------- | --------------- | ----------- | ------- | ------------- | --------- |
 | ~~A: Unix timestamp (f64)~~ | Seconds since 1970 UTC | ~microsecond | ±285,000 years | UTC only | Rejected |
 | ~~B: Unix timestamp (i64 ns)~~ | Nanoseconds since 1970 UTC | nanosecond | ±292 years | UTC only | Rejected |
 | ~~C: Calendar struct~~ | Year/month/day/... | nanosecond | Unlimited | Custom | Rejected |
@@ -212,7 +218,7 @@ Cross-scale arithmetic (e.g., `Datetime<TT> - Datetime<GPST>`) is a type error �
 This is the most important design question. `Datetime` is a **point** in time, `Time` dimension values are **vectors** (durations). This is analogous to the point-vs-vector distinction in geometry.
 
 | Operation | Result type | Semantics |
-|-----------|-------------|-----------|
+| ----------- | ------------- | ----------- |
 | `Datetime<S> - Datetime<S>` | `Scalar(Time)` | Duration between two instants |
 | `Datetime<S> + Scalar(Time)` | `Datetime<S>` | Advance an instant by a duration |
 | `Scalar(Time) + Datetime<S>` | `Datetime<S>` | Commutative with above |
@@ -244,7 +250,7 @@ This unifies two concepts (time scale and space tag) and could replace the type 
 #### 4f. Builtin functions
 
 | Category | Functions |
-|----------|-----------|
+| ---------- | ----------- |
 | Construction | `datetime(str)`, `datetime(str, scale)`, `from_jd(f64, scale)`, `from_mjd(f64, scale)`, `from_unix(f64)` |
 | Conversion | `to_utc(dt)`, `to_tai(dt)`, `to_tt(dt)`, `to_tdb(dt)`, `to_gpst(dt)` |
 | Extraction | `year(dt)`, `month(dt)`, `day(dt)`, `hour(dt)`, `minute(dt)`, `second(dt)`, `day_of_year(dt)` |
@@ -282,6 +288,7 @@ This unifies two concepts (time scale and space tag) and could replace the type 
 **Current state:** Listed in the design doc. Not implemented.
 
 **Use cases:**
+
 - Spreadsheet import: blank cells become `None`
 - Conditional computation: "this field only has a value if condition X"
 - Optional parameters: `param backup_orbit: Option<Length> = None;`
@@ -291,7 +298,7 @@ This unifies two concepts (time scale and space tag) and could replace the type 
 #### 5a. Syntax
 
 | Aspect | Options |
-|--------|---------|
+| -------- | --------- |
 | **Type** | `Option<Length>` or `Length?` |
 | **Construction** | `Some(400 km)` / `None` or `400 km` / `None` |
 | **Access** | `match`, `unwrap_or(default)`, `??` operator |
@@ -301,6 +308,7 @@ This unifies two concepts (time scale and space tag) and could replace the type 
 #### 5b. Interaction with dimension system
 
 `Option<D>` wraps any `DeclaredType`. The dimension of the inner value is preserved:
+
 - `Option<Length>` can hold `Some(400 km)` or `None`
 - `Some(400 km) + Some(200 km)` → **error** (no implicit unwrap)
 - `unwrap_or(@x, 0 km)` → `Length` (the default must match the inner dimension)
@@ -308,6 +316,7 @@ This unifies two concepts (time scale and space tag) and could replace the type 
 #### 5c. Propagation rules
 
 Two possible models:
+
 - **Strict:** Any operation on `Option<T>` requires explicit unwrap. Safe but verbose.
 - **Null-propagating:** `None + anything = None`. Convenient but hides errors.
 
@@ -338,6 +347,7 @@ Two possible models:
 **Dimension interaction:** A complex number can carry a dimension: `Complex<Impedance>` has real and imaginary parts both in ohms.
 
 **Syntax options:**
+
 - `3.0 + 4.0i` (suffix `i` for imaginary unit)
 - `complex(3.0, 4.0)` (constructor function)
 
@@ -487,6 +497,7 @@ Currently, builtin functions use `DimSignature` which describes dimension constr
 ### JSON output
 
 The CLI's JSON output would need to represent new types:
+
 - `bool`: `true` / `false` (not `1.0` / `0.0`)
 - `i64`: integer number (not float)
 - `Datetime`: ISO 8601 string
@@ -497,7 +508,7 @@ The CLI's JSON output would need to represent new types:
 ## Summary Table
 
 | Type | Priority | Scope | Dim interaction | Key challenge |
-|------|----------|-------|-----------------|---------------|
+| ------ | ---------- | ------- | ----------------- | --------------- |
 | `bool` (first-class) | High | Low-med | None (separate) | Splitting from f64, operator return types |
 | `i64` | Medium-high | Medium | None (dimensionless) | Mixed-type promotion, int division semantics |
 | `Datetime` | Medium-high | Large | Yes (point vs vector with Time) | hifitime integration, multi-scale type param, builtin generalization |
