@@ -67,7 +67,7 @@ node bad = @crew + @sensors;
 
 **When a true base dimension IS needed**: When the quantity participates in rich dimensional algebra. `Information / Time = Bandwidth` is meaningful. `Money / Mass = SpecificCost` is meaningful. These aren't just "counts of bits" or "counts of dollars" — they form families of derived dimensions with distinct physical interpretations.
 
-**Tag propagation**: The Count + Tags approach requires the tag `merge` function to propagate tags through arithmetic. For example, `Count<Countable.Person> * (Mass / Count)<Countable.Person>` yields `Mass<Countable.Person>`, with the tag carrying through multiplication. This is now formalized in [06-spaces.md](./06-spaces.md) — all arithmetic operations use uniform `merge`, which combines tag sets family-by-family (same variant → keep, conflict → error, one missing → sticky).
+**Tag propagation**: The Count + Tags approach requires the tag `merge` function to propagate tags through arithmetic. For example, `Count<Countable.Person> * Mass / Count<Countable.Person>` yields `Mass<Countable.Person>`, with the tag carrying through multiplication. This is now formalized in [06-spaces.md](./06-spaces.md) — all arithmetic operations use uniform `merge`, which combines tag sets family-by-family (same variant → keep, conflict → error, one missing → sticky).
 
 ### Anti-Examples: Things That DON'T Need New Base Dimensions
 

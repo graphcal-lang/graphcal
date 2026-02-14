@@ -63,7 +63,7 @@ This use case is important because it **stress-tests the arithmetic propagation 
 ```
 // "7 people * 80 kg/person = 560 kg associated with crew"
 param crew: Count<Countable.Person> = 7 count;
-param mass_per_person: (Mass / Count)<Countable.Person> = 80 kg / count;
+param mass_per_person: Mass / Count<Countable.Person> = 80 kg / count;
 node crew_mass: Mass<Countable.Person> = @crew * @mass_per_person;
 
 // To combine with structural mass, explicitly strip the Person tag:
@@ -343,7 +343,10 @@ Examples:
 | `Length` | `(Length, {})` |
 | `Length<Frame.ECI>` | `(Length, {Frame: ECI})` |
 | `Force<Frame.Body, Craft.Chaser>` | `(M·L·T⁻², {Frame: Body, Craft: Chaser})` |
+| `Mass / Count<Countable.Person>` | `(M·Count⁻¹, {Countable: Person})` |
 | `Dimensionless` | `(1, {})` |
+
+**Tag binding in type expressions:** The `<>` tag binds to the immediately preceding type name, tighter than dimension arithmetic operators (`*`, `/`). So `Mass / Count<Countable.Person>` means "mass per person-count" — the tag is on `Count`, where it semantically belongs. Internally, the tag set is flat (not attached to individual dimension factors), so the representation is `(M·Count⁻¹, {Countable: Person})`. This is analogous to how `Vec3<Force<Frame.Body>>` puts the tag on `Force`, not on `Vec3`.
 
 ### Tag Merge Function
 
@@ -416,7 +419,7 @@ Force<Frame.Body> * Length<Frame.Body>
 = Energy<Frame.Body> ✓
 
 // Count of persons * mass-per-person = mass of persons
-Count<Countable.Person> * (Mass / Count)<Countable.Person>
+Count<Countable.Person> * Mass / Count<Countable.Person>
 = (Count, {Countable: Person}) * (M·Count⁻¹, {Countable: Person})
   Dimension: M ✓
   Tags: merge({Countable: Person}, {Countable: Person}) = {Countable: Person}
