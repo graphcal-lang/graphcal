@@ -14,6 +14,10 @@
   - Designed as `fn` keyword with purity enforced by `@` prohibition.
   - See [12-pure-functions.md](./12-pure-functions.md).
 
+- [x] Non-SI base dimensions (Information, Currency, counting dimensions).
+  - Replace fixed `[Rational; 8]` with sparse `BTreeMap<BaseDimId, Rational>` for user-extensible base dimensions.
+  - See [18-non-si-dimensions.md](./18-non-si-dimensions.md).
+
 ## Open Ideas
 
 - [ ] Provide parameter values via input files, command-line arguments, or environment variables.
