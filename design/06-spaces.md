@@ -4,13 +4,13 @@
 
 ## Status
 
-**Decision level:** Advancing. Syntax converging on **`tag` + generics `<>` + `as` cast** (Option E). Tag propagation formalized as a `merge` function operating family-by-family alongside dimension algebra. Some questions remain (see Open Questions).
+**Decision level:** Advancing. Syntax: **`tag` + generics `<>` + `as` cast** (Option E). Tag propagation: **uniform `merge`** across all arithmetic operations (including `+`/`-`). Some questions remain (see Open Questions).
 
 ## Summary
 
 Inspired by [Sguaba](https://github.com/helsing-ai/sguaba), which uses Rust phantom types to prevent mixing vectors from different coordinate systems. The core insight: values can share the same dimension but live in **different semantic spaces** that must not be mixed.
 
-A `space` declares a family of semantically distinct contexts. The `in` keyword tags a value with its space.
+A `tag` declares a family of semantically distinct contexts. Tags are applied as type parameters using generics syntax (`Length<Frame.ECI>`), and removed via explicit `as` cast (`@pos as Length`).
 
 ## Why Spaces (Not Alternatives)
 
@@ -20,27 +20,28 @@ Several mechanisms could solve the "same dimension, must not mix" problem. Space
 | --- | --- | --- |
 | **Separate base dimensions** | `dimension Person; dimension Packet;` — each gets its own axis | Only works for counting. Breaks for tagging same physical dimension (`Length` in ECI vs Body). Creates spurious derived dimensions (`Person / Packet`). |
 | **Branded newtypes** | Opaque wrapper types, manual unwrap | Very verbose. Doesn't compose with dimensional algebra. |
-| **Parameterized dimensions** | `Length<Frame.ECI>` — tags are part of the dimension type | Elegant but deeply couples tagging with the dimension algebra, making the type system significantly more complex. |
-| **Spaces (orthogonal tags)** | `Length in Frame.ECI` — tags are a separate layer | Composes cleanly with dimensions. Works for all use case families. Arithmetic propagation rules need design work. |
+| **Parameterized dimensions** | Tags embedded in the dimension type | Elegant but deeply couples tagging with the dimension algebra, making the type system significantly more complex. |
+| **Tags (orthogonal layer)** | `Length<Frame.ECI>` — tags are type parameters, separate from dimensions | Composes cleanly with dimensions. Works for all use case families. |
 
-The key advantage of Spaces over alternatives: the tagging is **orthogonal** to dimensional algebra. `Length in Frame.ECI * Time` doesn't require the dimension system to understand space tags — the space layer and dimension layer compose independently.
+The key advantage of tags over alternatives: the tagging is **orthogonal** to dimensional algebra. `Length<Frame.ECI> * Time` doesn't require the dimension system to understand tags — the tag layer and dimension layer compose independently via the `merge` function.
 
 ## Use Cases
 
 ### Original Use Cases (Aerospace / Physics)
 
-| Domain | Space | Variants | Prevents |
+| Domain | Tag Family | Variants | Prevents |
 | --- | --- | --- | --- |
 | Coordinate frames | `Frame` | `Body`, `ECI`, `ECEF`, `LVLH` | Mixing reference frames |
 | Spacecraft identity | `Craft` | `Chaser`, `Target`, `Depot` | Mixing per-vehicle budgets |
 | Budget categories | `Budget` | `Allocated`, `Spent`, `Remaining` | Mixing budget columns |
-| Time epochs | `Epoch` | `UTC`, `GPS`, `MissionElapsed` | Mixing time references |
+| Time epochs | `Epoch` | `UTC`, `GPS`, `TAI`, `TDB`, `MissionElapsed` | Mixing astrodynamic time scales |
+| Time zones | `TimeZone` | `UTC`, `EST`, `PST`, `JST`, `CET` | Mixing civil time references |
 
 ### Counting Discrete Things
 
-Counting dimensions (crew members, packets, pixels, etc.) are a major new use case. Rather than creating a separate base dimension per countable thing ([18-non-si-dimensions.md](./18-non-si-dimensions.md)), they should be a single `Count` dimension with space tags:
+Counting dimensions (crew members, packets, pixels, etc.) are a major new use case. Rather than creating a separate base dimension per countable thing ([18-non-si-dimensions.md](./18-non-si-dimensions.md)), they should be a single `Count` dimension with tags:
 
-| Domain | Space | Variants | Prevents |
+| Domain | Tag Family | Variants | Prevents |
 | --- | --- | --- | --- |
 | Countable entities | `Countable` | `Person`, `Satellite`, `Cycle`, `Pixel`, `Packet` | Mixing counts of different things |
 
@@ -48,64 +49,101 @@ Counting dimensions (crew members, packets, pixels, etc.) are a major new use ca
 dimension Count;
 unit count: Count;
 
-space Countable {
-    Person;
-    Satellite;
-    Cycle;
-}
+tag Countable { Person, Satellite, Cycle }
 
-param crew: Count in Countable.Person = 7 count;
-param sats: Count in Countable.Satellite = 24 count;
+param crew: Count<Countable.Person> = 7 count;
+param sats: Count<Countable.Satellite> = 24 count;
 
 node bad = @crew + @sats;
-//  error[S001]: space mismatch: Countable.Person != Countable.Satellite
+//  error[T001]: tag mismatch: Countable.Person != Countable.Satellite
 ```
 
-This use case is important because it **stress-tests the arithmetic propagation rules** (see open questions below). For counting to work with spaces, multiplication must interact correctly with tags:
+This use case is important because it **stress-tests the arithmetic propagation rules**. For counting to work with tags, multiplication must interact correctly:
 
 ```
 // "7 people * 80 kg/person = 560 kg associated with crew"
-param crew: Count in Countable.Person = 7 count;
-param mass_per_person: Mass / Count in Countable.Person = 80 kg / count;
-node crew_mass: Mass in Countable.Person = @crew * @mass_per_person;
+param crew: Count<Countable.Person> = 7 count;
+param mass_per_person: (Mass / Count)<Countable.Person> = 80 kg / count;
+node crew_mass: Mass<Countable.Person> = @crew * @mass_per_person;
 
-// To combine with structural mass, explicitly leave the Person context:
-node total_mass: Mass = @crew_mass.untagged + @structure_mass;
+// To combine with structural mass, explicitly strip the Person tag:
+node total_mass: Mass = @crew_mass as Mass + @structure_mass;
 ```
+
+### Time Zones
+
+Time zones are a universally understood tagging use case. Every programmer has dealt with time zone bugs; tags prevent them at compile time.
+
+```
+tag TimeZone { UTC, EST, PST, JST, CET }
+
+param launch_time: Time<TimeZone.UTC> = 14.5 hr;      // 14:30 UTC
+param local_display: Time<TimeZone.JST> = 23.5 hr;    // 23:30 JST
+
+// Duration (untagged Time) — timezone-independent
+param coast: Time = 45 min;
+
+// Tagged time + untagged duration → tagged time (tag sticks via merge)
+node arrival_utc: Time<TimeZone.UTC> = @launch_time + @coast;
+// merge({TimeZone: UTC}, {}) = {TimeZone: UTC} ✓
+
+// Mixing time zones → compile error
+node bad = @launch_time + @local_display;
+// merge({TimeZone: UTC}, {TimeZone: JST}) → COMPILE ERROR ✓
+
+// Explicit conversion via as:
+node combined: Time = @launch_time as Time + @local_display as Time;
+// Programmer asserts: "I know these are in different zones; I want to add the raw durations."
+```
+
+**Why this use case matters for the merge-rule debate:** Under strict `+`/`-` rules, `@launch_time + @coast` would be rejected because `{TimeZone: UTC} ≠ {}`. You'd need to write `@coast as Time<TimeZone.UTC>`, which is nonsensical — a 45-minute duration doesn't "belong to" UTC. Uniform merge handles this naturally: the untagged duration acquires the tag from the other operand. See [Arithmetic Rules](#arithmetic-rules) below.
+
+**Relationship to `Epoch`:** Time zones (`TimeZone`) and time epochs (`Epoch`) are distinct tag families:
+- `Epoch` (UTC, GPS, TAI, TDB): Different time *scales* with fixed mathematical offsets. Critical in astrodynamics.
+- `TimeZone` (UTC, EST, JST): Civil time offsets that can vary (DST). Critical in operations.
+
+A launch time could carry both: `Time<Epoch.UTC, TimeZone.UTC>` — the epoch and display zone are both UTC but convey different information.
 
 ### Engineering Domains
 
-| Domain | Space | Variants | Example | Prevents |
+| Domain | Tag Family | Variants | Example | Prevents |
 | --- | --- | --- | --- | --- |
-| Chemical species | `Species` | `O2`, `N2`, `CO2` | `param p_O2: Pressure in Species.O2 = 21.3 kPa;` | Mixing partial pressures |
-| Material grades | `Material` | `Steel_A36`, `Al_6061` | `param fy: Pressure in Material.Steel_A36 = 250 MPa;` | Using wrong material properties |
-| Load cases | `LoadCase` | `Static`, `Thermal`, `Dynamic` | `node sigma: Pressure in LoadCase.Static = ...;` | Mixing load case results |
-| Flight phases | `Phase` | `Ascent`, `Coast`, `Descent` | `param fuel: Mass in Phase.Ascent = 1000 kg;` | Mixing phase-specific budgets |
-| Cost categories | `CostCategory` | `Development`, `Production`, `Operations` | `param dev: Money in CostCategory.Development = 50M USD;` | Mixing lifecycle cost categories |
+| Chemical species | `Species` | `O2`, `N2`, `CO2` | `param p_O2: Pressure<Species.O2> = 21.3 kPa;` | Mixing partial pressures |
+| Material grades | `Material` | `Steel_A36`, `Al_6061` | `param fy: Pressure<Material.Steel_A36> = 250 MPa;` | Using wrong material properties |
+| Load cases | `LoadCase` | `Static`, `Thermal`, `Dynamic` | `node sigma: Pressure<LoadCase.Static> = ...;` | Mixing load case results |
+| Flight phases | `Phase` | `Ascent`, `Coast`, `Descent` | `param fuel: Mass<Phase.Ascent> = 1000 kg;` | Mixing phase-specific budgets |
+| Cost categories | `CostCategory` | `Development`, `Production`, `Operations` | `param dev: Money<CostCategory.Development> = 50M USD;` | Mixing lifecycle cost categories |
 
-### Cross-Space Operations in Practice
+### Cross-Tag Operations in Practice
 
-Many real calculations intentionally combine values from different space variants. Examples:
+Many real calculations intentionally combine values from different tag variants. Examples:
 
 **Dalton's law** (total pressure = sum of partial pressures):
 ```
 node total_pressure: Pressure =
-    @p_O2.untagged + @p_N2.untagged + @p_CO2.untagged;
+    @p_O2 as Pressure + @p_N2 as Pressure + @p_CO2 as Pressure;
 ```
 
 **Total lifecycle cost**:
 ```
 node total_cost: Money =
-    @dev_cost.untagged + @prod_cost.untagged + @ops_cost.untagged;
+    @dev_cost as Money + @prod_cost as Money + @ops_cost as Money;
 ```
 
 **Total fuel budget** (across flight phases):
 ```
 node total_fuel: Mass =
-    @fuel_ascent.untagged + @fuel_coast.untagged + @fuel_descent.untagged;
+    @fuel_ascent as Mass + @fuel_coast as Mass + @fuel_descent as Mass;
 ```
 
-In all cases, `.untagged` serves as an intentional marker that the cross-context combination is deliberate.
+**Time zone conversion** (display same instant in different zones):
+```
+param offset_jst: Time = 9 hr;
+node launch_jst: Time<TimeZone.JST> =
+    (@launch_utc as Time + @offset_jst) as Time<TimeZone.JST>;
+```
+
+In all cases, `as` serves as an intentional marker that the cross-tag combination is deliberate.
 
 ## Syntax Exploration
 
@@ -325,10 +363,12 @@ merge(T₁, T₂):
 
 ### Arithmetic Rules
 
+All arithmetic operations use the **uniform merge** rule for tags:
+
 | Operation | Dimension Rule | Tag Rule | Result |
 | --- | --- | --- | --- |
-| `a + b` | `D₁ == D₂` (must match) | `T₁ == T₂` (must match) | `(D₁, T₁)` |
-| `a - b` | `D₁ == D₂` (must match) | `T₁ == T₂` (must match) | `(D₁, T₁)` |
+| `a + b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `(D₁, merge(T₁,T₂))` |
+| `a - b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `(D₁, merge(T₁,T₂))` |
 | `a * b` | `D₁ * D₂` (multiply) | `merge(T₁, T₂)` | `(D₁*D₂, merge(T₁,T₂))` |
 | `a / b` | `D₁ / D₂` (divide) | `merge(T₁, T₂)` | `(D₁/D₂, merge(T₁,T₂))` |
 | `a ^ n` | `D₁ ^ n` (power) | `T₁` (preserve) | `(D₁^n, T₁)` |
@@ -338,11 +378,25 @@ merge(T₁, T₂):
 | `a -> unit` | unchanged | unchanged | `(D₁, T₁)` |
 | `a as D` | `D₁ ~> D` (cast) | stripped/narrowed | `(D, T_target)` |
 
-**Why `+`/`-` require exact tag match but `*`/`/` use merge:**
+**Why uniform merge (not strict-for-addition):**
 
-Addition combines *same-kind* quantities — adding pressure to pressure. If one is O2's partial pressure and the other is N2's, that's likely a mistake. You must explicitly `as Pressure` first.
+An earlier design used strict tag matching for `+`/`-` (requiring `T₁ == T₂` exactly) while using `merge` for `*`/`/`. The rationale: adding `Pressure<Species.O2> + Pressure` (tagged + untagged) seemed error-prone. However, this distinction is empirical, not principled, and **the time zone use case shows it breaks down**:
 
-Multiplication produces a *new kind* of quantity — force times distance is energy. The frame context carries through: force in Body frame times lever arm in Body frame gives torque in Body frame. An untagged operand (like time) doesn't strip the tag — you want `Force<Frame.Body> * Time` = `Impulse<Frame.Body>`.
+```
+param launch_utc: Time<TimeZone.UTC> = 14.5 hr;
+param coast: Time = 45 min;  // untagged duration
+
+// Under strict-for-addition: ERROR — {TimeZone: UTC} ≠ {}
+// Under uniform merge: merge({TimeZone: UTC}, {}) = {TimeZone: UTC} ✓
+node arrival: Time<TimeZone.UTC> = @launch_utc + @coast;
+```
+
+Adding a duration to a timestamped value is natural and correct. The duration is semantically "timezone-independent" — it doesn't *conflict* with UTC, it simply doesn't carry a timezone. Forcing `@coast as Time<TimeZone.UTC>` is nonsensical (a 45-minute interval doesn't belong to a timezone). The same pattern applies elsewhere:
+
+- `Force<Frame.Body> + gravitational_force` — an untagged gravity vector should be addable to a body-frame force without explicit tagging.
+- `Mass<Phase.Ascent> + tank_dry_mass` — untagged structural mass should be addable to phase-specific fuel mass.
+
+The merge function already does the right thing here: `merge({tag}, {}) = {tag}` (sticky). Only `merge({tag_A}, {tag_B})` when `A ≠ B` errors. The remaining concern — that `Pressure<Species.O2> + Pressure` might mask an error — is addressed by the observation that **if the untagged value was meant to carry a tag, it should have been tagged at its declaration site**. An untagged value is explicitly "not tagged," which is a valid semantic state, not an error.
 
 ### Worked Traces
 
@@ -382,8 +436,33 @@ Force<Frame.ECI, Craft.Chaser> * Time
 
 // Addition with mismatched tags → error
 Pressure<Species.O2> + Pressure<Species.N2>
-  Tags: {Species: O2} ≠ {Species: N2} → COMPILE ERROR ✓
+  Tags: merge({Species: O2}, {Species: N2})
+  Species: O2 ≠ N2 → COMPILE ERROR ✓
   Fix: (@p_O2 as Pressure) + (@p_N2 as Pressure)
+
+// ---- Time Zone Examples (uniform merge for addition) ----
+
+// Tagged time + untagged duration → tagged time
+Time<TimeZone.UTC> + Time
+= (T, {TimeZone: UTC}) + (T, {})
+  Dimension: T == T ✓
+  Tags: merge({TimeZone: UTC}, {}) = {TimeZone: UTC}
+= Time<TimeZone.UTC> ✓
+// "14:30 UTC + 45 min = 15:15 UTC"
+
+// Mixing time zones → error
+Time<TimeZone.UTC> + Time<TimeZone.JST>
+  Tags: merge({TimeZone: UTC}, {TimeZone: JST})
+  TimeZone: UTC ≠ JST → COMPILE ERROR ✓
+  Fix: (@t_utc as Time) + (@t_jst as Time)
+
+// Subtracting same-zone times → same-zone duration
+Time<TimeZone.UTC> - Time<TimeZone.UTC>
+= (T, {TimeZone: UTC}) - (T, {TimeZone: UTC})
+  Tags: merge({TimeZone: UTC}, {TimeZone: UTC}) = {TimeZone: UTC}
+= Time<TimeZone.UTC> ✓
+// Result is "a duration within the UTC frame." If you want an
+// untagged duration: (@t2 - @t1) as Time
 ```
 
 ### The `as` Cast

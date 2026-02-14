@@ -42,38 +42,32 @@ Many other commonly cited examples are "counts of discrete things" that need to 
 
 However, these are all **the same kind of thing** — a dimensionless count of discrete items. The safety requirement (`5 crew_member + 3 packet` must be a compile error) doesn't require separate *dimensions*; it requires separate *semantic tags*.
 
-This is exactly what Graphcal's **Spaces** feature ([06](./06-spaces.md)) provides. Spaces are orthogonal semantic tags that prevent cross-context mixing:
+This is exactly what Graphcal's **Tags** feature ([06](./06-spaces.md)) provides. Tags are orthogonal semantic labels (type parameters on dimensions) that prevent cross-context mixing:
 
 ```
-// A single Count dimension + space tags for type safety:
+// A single Count dimension + tags for type safety:
 dimension Count;
 unit count: Count;
 
-space Countable {
-    Person;
-    Pixel;
-    Cycle;
-    Packet;
-    Vehicle;
-}
+tag Countable { Person, Pixel, Cycle, Packet, Vehicle }
 
-param crew: Count in Countable.Person = 7 count;
-param sensors: Count in Countable.Pixel = 4096 count;
+param crew: Count<Countable.Person> = 7 count;
+param sensors: Count<Countable.Pixel> = 4096 count;
 
 node bad = @crew + @sensors;
-//  error[S001]: space mismatch: Countable.Person != Countable.Pixel
+//  error[T001]: tag conflict: Countable.Person ≠ Countable.Pixel
 ```
 
-**Why Spaces are better than separate dimensions for counting:**
+**Why Tags are better than separate dimensions for counting:**
 
 1. **Conceptual clarity**: All these quantities really *are* counts. Making each one a separate base dimension pollutes the dimension algebra with artificial axes.
-2. **No spurious derived dimensions**: With separate dimensions, `Pixel / Person` would be a "meaningful" dimension — but it isn't. It's just a dimensionless ratio. With spaces, `Count in Countable.Pixel / Count in Countable.Person` requires an explicit `.untagged` call, signaling the intentional cross-context operation.
-3. **Consistent with existing design**: Spaces already exist for exactly this purpose (coordinate frames, spacecraft identity, budget categories — all same-dimension-different-context).
-4. **Scalability**: Adding 20 counting dimensions would create a 28-element exponent vector (wasteful). Spaces add no overhead to the dimension system.
+2. **No spurious derived dimensions**: With separate dimensions, `Pixel / Person` would be a "meaningful" dimension — but it isn't. It's just a dimensionless ratio. With tags, `Count<Countable.Pixel> / Count<Countable.Person>` requires an explicit `as` cast, signaling the intentional cross-context operation.
+3. **Consistent with existing design**: Tags already exist for exactly this purpose (coordinate frames, spacecraft identity, budget categories, time zones — all same-dimension-different-context).
+4. **Scalability**: Adding 20 counting dimensions would create a 28-element exponent vector (wasteful). Tags add no overhead to the dimension system.
 
 **When a true base dimension IS needed**: When the quantity participates in rich dimensional algebra. `Information / Time = Bandwidth` is meaningful. `Money / Mass = SpecificCost` is meaningful. These aren't just "counts of bits" or "counts of dollars" — they form families of derived dimensions with distinct physical interpretations.
 
-**Important caveat**: The Count + Spaces approach depends on resolving the **arithmetic propagation rules** for space tags — specifically, how tags behave during multiplication and division. For example, `Count in Countable.Person * (Mass / Count) in Countable.Person` should yield `Mass in Countable.Person`, with the space tag propagating through the operation. This is an open design question in the Spaces feature ([06-spaces.md](./06-spaces.md)). Until it is resolved, Count + Spaces remains the recommended direction but not a settled design.
+**Tag propagation**: The Count + Tags approach requires the tag `merge` function to propagate tags through arithmetic. For example, `Count<Countable.Person> * (Mass / Count)<Countable.Person>` yields `Mass<Countable.Person>`, with the tag carrying through multiplication. This is now formalized in [06-spaces.md](./06-spaces.md) — all arithmetic operations use uniform `merge`, which combines tag sets family-by-family (same variant → keep, conflict → error, one missing → sticky).
 
 ### Anti-Examples: Things That DON'T Need New Base Dimensions
 
@@ -280,18 +274,14 @@ param storage: Information = 500 GB;
 param price: DataCost = 0.023 USD / GB;
 node monthly_cost: Money = @storage * @price;
 
-// -- Counting quantities (use Count + Spaces, not new dimensions) --
+// -- Counting quantities (use Count + Tags, not new dimensions) --
 dimension Count;
 unit count: Count;
 
-space Countable {
-    Person;
-    Satellite;
-    Cycle;
-}
+tag Countable { Person, Satellite, Cycle }
 
-param crew: Count in Countable.Person = 7 count;
-param sats: Count in Countable.Satellite = 24 count;
+param crew: Count<Countable.Person> = 7 count;
+param sats: Count<Countable.Satellite> = 24 count;
 ```
 
 ### Currency: Single Dimension with Unit-Based Conversion
@@ -377,13 +367,13 @@ pub struct Dimension {
 
 This proposal doesn't solve the Torque/Energy problem (same algebraic dimension, different semantics). That's orthogonal — it could be solved with semantic tags on top of either the fixed or dynamic representation. See [04](./04-dimensions-and-units.md) open questions.
 
-### Counting Quantities and Spaces
+### Counting Quantities and Tags
 
-As discussed above, most "counting dimensions" are better modeled as a single `Count` dimension with space tags from [06-spaces.md](./06-spaces.md). This keeps the dimension vector lean while providing the same type-safety guarantees through the orthogonal space layer.
+As discussed above, most "counting dimensions" are better modeled as a single `Count` dimension with tags from [06-spaces.md](./06-spaces.md). This keeps the dimension vector lean while providing the same type-safety guarantees through the orthogonal tag layer.
 
 The test: *does this quantity form meaningful derived dimensions through algebra?*
 - **Yes** (Information, Money) → new base dimension.
-- **No** (crew members, packets, pixels) → `Count` + space tag.
+- **No** (crew members, packets, pixels) → `Count` + tag.
 
 ### Custom Counting Units (`unit launch;`)
 
@@ -392,9 +382,9 @@ The design doc mentions `unit launch;` auto-creating a dimension. With this prop
 ```
 dimension Count;
 unit count: Count;
-space Countable { Launch; }
+tag Countable { Launch }
 
-param launches: Count in Countable.Launch = 5 count;
+param launches: Count<Countable.Launch> = 5 count;
 ```
 
 ### SI Prefix Mechanism
@@ -404,7 +394,7 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 ## Dependencies on Other Aspects
 
 - **Dimensions & Units** ([04](./04-dimensions-and-units.md)): This proposal directly extends it.
-- **Spaces** ([06](./06-spaces.md)): Counting quantities use spaces rather than new base dimensions.
+- **Tags / Spaces** ([06](./06-spaces.md)): Counting quantities use tags rather than new base dimensions.
 - **Syntax** ([02](./02-syntax-design.md)): No syntax changes needed.
 - **Namespace & Multi-File** ([09](./09-namespace.md)): Base dimensions defined in libraries need to be importable and get consistent IDs across compilation units.
 - **Phases**: This is primarily a Phase 1 (Dimensions & Units) concern, but could be deferred to Phase 4 (Multi-File) since that's when libraries defining new base dimensions become practical.
@@ -419,8 +409,8 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 
 4. **Display order**: When showing a dimension like `Information * Length / Time^2`, what order should base dimensions appear in? Registration order? Alphabetical? SI-first-then-custom?
 
-5. **Count + Spaces interaction**: When Spaces ([06](./06-spaces.md)) is implemented, should `Count` be a prelude-provided base dimension or something users always declare themselves? A prelude-provided `Count` dimension with a user-extensible `Countable` space seems most ergonomic.
+5. **Count + Tags interaction**: When Tags ([06](./06-spaces.md)) are implemented, should `Count` be a prelude-provided base dimension or something users always declare themselves? A prelude-provided `Count` dimension with a user-extensible `Countable` tag family seems most ergonomic.
 
 6. **Dynamic unit definitions**: Can unit scale factors reference parameters (`unit EUR: Money = @exchange_rate USD;`)? This would elegantly handle variable exchange rates but blurs the compile-time/runtime boundary.
 
-7. **Borderline cases**: Some quantities sit between "true dimension" and "tagged count." For example, `Pixel / Length` = spatial resolution is a useful derived dimension, suggesting Pixel might deserve its own base dimension rather than being `Count in Countable.Pixel`. The guideline ("does it form meaningful derived dimensions?") needs case-by-case judgment.
+7. **Borderline cases**: Some quantities sit between "true dimension" and "tagged count." For example, `Pixel / Length` = spatial resolution is a useful derived dimension, suggesting Pixel might deserve its own base dimension rather than being `Count<Countable.Pixel>`. The guideline ("does it form meaningful derived dimensions?") needs case-by-case judgment.
