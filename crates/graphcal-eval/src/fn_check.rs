@@ -87,8 +87,8 @@ fn collect_fn_calls_in_expr(
 ) {
     match &expr.kind {
         ExprKind::FnCall { name, args } => {
-            if user_fns.contains_key(name.name.as_str()) {
-                calls.push(name.as_fn_name());
+            if user_fns.contains_key(name.value.as_str()) {
+                calls.push(name.value.clone());
             }
             for arg in args {
                 collect_fn_calls_in_expr(arg, user_fns, calls);
@@ -174,7 +174,7 @@ mod tests {
                     .generic_params
                     .iter()
                     .map(|g| crate::registry::FnGenericParam {
-                        name: g.name.as_generic_param_name(),
+                        name: g.name.value.clone(),
                         constraint: match g.constraint {
                             graphcal_syntax::ast::GenericConstraint::Dim => {
                                 crate::registry::FnGenericConstraint::Dim

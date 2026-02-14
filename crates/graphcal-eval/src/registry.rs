@@ -187,7 +187,7 @@ impl Registry {
         let mut dim = Dimension::DIMENSIONLESS;
         let mut scale = 1.0;
         for item in &expr.terms {
-            let info = self.units.get(item.name.name.as_str())?;
+            let info = self.units.get(item.name.value.as_str())?;
             let exp = item.power.unwrap_or(1);
             let powered_dim = info.dimension.pow(Rational::from_int(exp));
             let powered_scale = info.scale.powi(exp);
@@ -213,6 +213,7 @@ mod tests {
     use crate::prelude::load_prelude;
     use graphcal_syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};
     use graphcal_syntax::dimension::BaseDim;
+    use graphcal_syntax::names::Spanned;
     use graphcal_syntax::span::Span;
 
     fn make_registry() -> Registry {
@@ -226,6 +227,10 @@ mod tests {
             name: name.to_string(),
             span: Span::new(0, 0),
         }
+    }
+
+    fn make_unit_name(name: &str) -> Spanned<UnitName> {
+        Spanned::new(UnitName::new(name), Span::new(0, 0))
     }
 
     #[test]
@@ -307,12 +312,12 @@ mod tests {
             terms: vec![
                 UnitExprItem {
                     op: MulDivOp::Mul,
-                    name: make_ident("m"),
+                    name: make_unit_name("m"),
                     power: None,
                 },
                 UnitExprItem {
                     op: MulDivOp::Div,
-                    name: make_ident("s"),
+                    name: make_unit_name("s"),
                     power: Some(2),
                 },
             ],
@@ -333,12 +338,12 @@ mod tests {
             terms: vec![
                 UnitExprItem {
                     op: MulDivOp::Mul,
-                    name: make_ident("km"),
+                    name: make_unit_name("km"),
                     power: None,
                 },
                 UnitExprItem {
                     op: MulDivOp::Div,
-                    name: make_ident("hour"),
+                    name: make_unit_name("hour"),
                     power: None,
                 },
             ],

@@ -6,10 +6,14 @@ use thiserror::Error;
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
     ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
-    GenericParam, Ident, IndexArg, LetBinding, MapEntry, MulDivOp, NodeDecl, ParamDecl, TypeDecl,
-    TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
+    GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MulDivOp, NodeDecl, ParamDecl,
+    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::lexer::Lexer;
+use crate::names::{
+    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, Spanned, StructTypeName,
+    UnitName, VariantName,
+};
 use crate::span::Span;
 use crate::token::Token;
 
@@ -154,7 +158,8 @@ impl<'src> Parser<'src> {
 
     fn parse_param(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Param)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -173,7 +178,8 @@ impl<'src> Parser<'src> {
 
     fn parse_node(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Node)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -192,7 +198,8 @@ impl<'src> Parser<'src> {
 
     fn parse_const(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Const)?;
-        let name = self.parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?;
+        let name = self.parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
+            .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -213,7 +220,7 @@ impl<'src> Parser<'src> {
 
     fn parse_dimension_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dimension)?;
-        let name = self.parse_any_ident()?;
+        let name = self.parse_any_ident()?.into_spanned::<DimName>();
 
         let definition = if self.lexer.peek() == Some(&Token::Eq) {
             self.lexer.next_token();
@@ -232,7 +239,7 @@ impl<'src> Parser<'src> {
 
     fn parse_unit_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Unit)?;
-        let name = self.parse_any_ident()?;
+        let name = self.parse_any_ident()?.into_spanned::<UnitName>();
         self.expect(Token::Colon)?;
         let dim_type = self.parse_dim_expr()?;
 
@@ -260,7 +267,8 @@ impl<'src> Parser<'src> {
 
     fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Type)?;
-        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            .into_spanned::<StructTypeName>();
         self.expect(Token::LBrace)?;
 
         // Parse field list: at least one field required
@@ -271,7 +279,8 @@ impl<'src> Parser<'src> {
                 break;
             }
             let field_name =
-                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+                    .into_spanned::<FieldName>();
             self.expect(Token::Colon)?;
             let type_ann = self.parse_type_expr()?;
             fields.push(FieldDecl {
@@ -372,7 +381,8 @@ impl<'src> Parser<'src> {
     /// `index Maneuver = { Departure, Correction, Insertion }`
     fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
-        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let name = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            .into_spanned::<IndexName>();
         self.expect(Token::Eq)?;
         self.expect(Token::LBrace)?;
 
@@ -381,7 +391,8 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<VariantName>();
             variants.push(variant);
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
@@ -398,7 +409,7 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
-            kind: DeclKind::Index(crate::ast::IndexDecl { name, variants }),
+            kind: DeclKind::Index(IndexDecl { name, variants }),
             span,
         })
     }
@@ -410,7 +421,8 @@ impl<'src> Parser<'src> {
     /// `fn NAME<GENERICS>(PARAMS) -> TYPE { STMTS EXPR }`
     fn parse_fn_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Fn)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<FnName>();
 
         // Optional generic params: <D: Dim, E: Dim>
         let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
@@ -480,7 +492,7 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::Gt) {
                 break;
             }
-            let name = self.parse_any_ident()?;
+            let name = self.parse_any_ident()?.into_spanned::<GenericParamName>();
             self.expect(Token::Colon)?;
             let constraint_ident = self.parse_any_ident()?;
             let constraint = match constraint_ident.name.as_str() {
@@ -584,12 +596,12 @@ impl<'src> Parser<'src> {
             ExprKind::Number(n) => Ok(*n),
             #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
             ExprKind::Integer(n) => Ok(*n as f64),
-            ExprKind::ConstRef(ident) => match ident.name.as_str() {
+            ExprKind::ConstRef(ident) => match ident.value.as_str() {
                 "PI" => Ok(std::f64::consts::PI),
                 "E" => Ok(std::f64::consts::E),
                 _ => Err(self.unexpected_token(
                     "PI or E",
-                    &format!("constant `{}`", ident.name),
+                    &format!("constant `{}`", ident.value),
                     ident.span,
                 )),
             },
@@ -755,9 +767,10 @@ impl<'src> Parser<'src> {
 
     /// Parse a unit expression: `IDENT (("*" | "/") IDENT ("^" INTEGER)?)*`
     fn parse_unit_expr(&mut self) -> Result<UnitExpr, ParseError> {
-        let first_name = self.parse_any_ident()?;
-        let start_span = first_name.span;
-        let mut end_span = first_name.span;
+        let first_ident = self.parse_any_ident()?;
+        let start_span = first_ident.span;
+        let mut end_span = first_ident.span;
+        let first_name = first_ident.into_spanned::<UnitName>();
 
         let first_power = if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
@@ -778,8 +791,9 @@ impl<'src> Parser<'src> {
             match self.lexer.peek() {
                 Some(Token::Star) => {
                     self.lexer.next_token();
-                    let name = self.parse_any_ident()?;
-                    end_span = name.span;
+                    let ident = self.parse_any_ident()?;
+                    end_span = ident.span;
+                    let name = ident.into_spanned::<UnitName>();
                     let power = if self.lexer.peek() == Some(&Token::Caret) {
                         self.lexer.next_token();
                         let (neg, value, span) = self.parse_integer_literal()?;
@@ -796,8 +810,9 @@ impl<'src> Parser<'src> {
                 }
                 Some(Token::Slash) => {
                     self.lexer.next_token();
-                    let name = self.parse_any_ident()?;
-                    end_span = name.span;
+                    let ident = self.parse_any_ident()?;
+                    end_span = ident.span;
+                    let name = ident.into_spanned::<UnitName>();
                     let power = if self.lexer.peek() == Some(&Token::Caret) {
                         self.lexer.next_token();
                         let (neg, value, span) = self.parse_integer_literal()?;
@@ -1077,12 +1092,12 @@ impl<'src> Parser<'src> {
             match self.lexer.peek() {
                 Some(Token::Dot) => {
                     self.lexer.next_token(); // consume '.'
-                    let field = self.parse_any_ident()?;
-                    let span = expr.span.merge(field.span);
+                    let field_ident = self.parse_any_ident()?;
+                    let span = expr.span.merge(field_ident.span);
                     expr = Expr {
                         kind: ExprKind::FieldAccess {
                             expr: Box::new(expr),
-                            field,
+                            field: field_ident.into_spanned::<FieldName>(),
                         },
                         span,
                     };
@@ -1200,7 +1215,7 @@ impl<'src> Parser<'src> {
                     self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
                 let span = at_span.merge(ident.span);
                 Ok(Expr {
-                    kind: ExprKind::GraphRef(ident),
+                    kind: ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
                     span,
                 })
             }
@@ -1211,12 +1226,12 @@ impl<'src> Parser<'src> {
                 if is_upper_snake_case(&name) {
                     // Const reference: PI, E, G0, UPPER_NAME
                     Ok(Expr {
-                        kind: ExprKind::ConstRef(Ident { name, span }),
+                        kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
                         span,
                     })
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
                     // Struct construction: TypeName { field1: expr, field2 }
-                    self.parse_struct_construction(Ident { name, span })
+                    self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
                 } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
                     // Scan expression: scan(source, init, |acc, val| body)
                     self.parse_scan(&Ident { name, span })
@@ -1235,7 +1250,7 @@ impl<'src> Parser<'src> {
                     let call_span = span.merge(rparen_span);
                     Ok(Expr {
                         kind: ExprKind::FnCall {
-                            name: Ident { name, span },
+                            name: Spanned::new(FnName::new(name), span),
                             args,
                         },
                         span: call_span,
@@ -1269,10 +1284,7 @@ impl<'src> Parser<'src> {
                             // Map literal: { Ident :: Variant : expr, ... }
                             self.parse_map_literal_after_first_ident(
                                 start_span,
-                                Ident {
-                                    name: saved_text,
-                                    span: saved_span,
-                                },
+                                Spanned::new(IndexName::new(saved_text), saved_span),
                             )
                         } else {
                             // Not a map literal — reparse as block with already-consumed tokens
@@ -1338,7 +1350,7 @@ impl<'src> Parser<'src> {
 
     /// Parse struct construction after the type name has been consumed:
     /// `{ field1: expr, field2, ... }`
-    fn parse_struct_construction(&mut self, type_name: Ident) -> Result<Expr, ParseError> {
+    fn parse_struct_construction(&mut self, type_name: Spanned<StructTypeName>) -> Result<Expr, ParseError> {
         self.expect(Token::LBrace)?;
         let mut fields = Vec::new();
 
@@ -1346,7 +1358,7 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
-            let field_name = self.parse_any_ident()?;
+            let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
 
             // Check for `:` (explicit value) or shorthand (just name)
             let value = if self.lexer.peek() == Some(&Token::Colon) {
@@ -1385,7 +1397,8 @@ impl<'src> Parser<'src> {
         loop {
             let var = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
             self.expect(Token::Colon)?;
-            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<IndexName>();
             bindings.push(ForBinding { var, index });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
@@ -1413,11 +1426,12 @@ impl<'src> Parser<'src> {
     fn parse_map_literal_after_first_ident(
         &mut self,
         brace_span: Span,
-        first_index: Ident,
+        first_index: Spanned<IndexName>,
     ) -> Result<Expr, ParseError> {
         // Consume `::` (we already peeked and confirmed it)
         self.expect(Token::ColonColon)?;
-        let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+            .into_spanned::<VariantName>();
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
@@ -1431,9 +1445,11 @@ impl<'src> Parser<'src> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break; // trailing comma
             }
-            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let index = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<IndexName>();
             self.expect(Token::ColonColon)?;
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
@@ -1475,17 +1491,13 @@ impl<'src> Parser<'src> {
     ) -> Result<Expr, ParseError> {
         // The consumed PascalCase ident is the start of an expression in the block.
         // It could be a struct construction (PascalCase { ... }) or a ConstRef.
-        let ident = Ident {
-            name: ident_name.to_string(),
-            span: ident_span,
-        };
         let first_expr = if is_pascal_case(ident_name) && self.lexer.peek() == Some(&Token::LBrace)
         {
-            self.parse_struct_construction(ident)?
+            self.parse_struct_construction(Spanned::new(StructTypeName::new(ident_name), ident_span))?
         } else {
             // Treat as ConstRef (UPPER_SNAKE_CASE or PascalCase used as const)
             Expr {
-                kind: ExprKind::ConstRef(ident),
+                kind: ExprKind::ConstRef(Spanned::new(DeclName::new(ident_name), ident_span)),
                 span: ident_span,
             }
         };
@@ -1522,12 +1534,12 @@ impl<'src> Parser<'src> {
             match self.lexer.peek() {
                 Some(Token::Dot) => {
                     self.lexer.next_token();
-                    let field = self.parse_any_ident()?;
-                    let span = expr.span.merge(field.span);
+                    let field_ident = self.parse_any_ident()?;
+                    let span = expr.span.merge(field_ident.span);
                     expr = Expr {
                         kind: ExprKind::FieldAccess {
                             expr: Box::new(expr),
-                            field,
+                            field: field_ident.into_spanned::<FieldName>(),
                         },
                         span,
                     };
@@ -1578,9 +1590,10 @@ impl<'src> Parser<'src> {
         if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
             // Qualified variant: Index::Variant
             self.lexer.next_token(); // consume '::'
-            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let variant = self.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<VariantName>();
             Ok(IndexArg::Variant {
-                index: Ident { name, span },
+                index: Spanned::new(IndexName::new(name), span),
                 variant,
             })
         } else if is_lower_snake_case(&name) {

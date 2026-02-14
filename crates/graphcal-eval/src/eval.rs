@@ -17,7 +17,7 @@ use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve, resolve_with_imports};
 use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{DeclName, FieldName, FnName, IndexName, StructTypeName, VariantName};
+use graphcal_syntax::names::{DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
 
 use std::path::Path;
@@ -289,7 +289,7 @@ fn register_file_declarations(
                 let dim = if let Some(def) = &d.definition {
                     registry.resolve_dim_expr(def).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
-                            name: d.name.as_dim_name(),
+                            name: d.name.value.clone(),
                             src: src.clone(),
                             span: d.name.span.into(),
                         }
@@ -297,12 +297,12 @@ fn register_file_declarations(
                 } else {
                     continue;
                 };
-                registry.register_dimension(d.name.as_dim_name(), dim);
+                registry.register_dimension(d.name.value.clone(), dim);
             }
             DeclKind::Unit(u) => {
                 let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
                     GraphcalError::UnknownDimension {
-                        name: u.name.as_dim_name(),
+                        name: DimName::new(u.name.value.as_str()),
                         src: src.clone(),
                         span: u.name.span.into(),
                     }
@@ -311,7 +311,7 @@ fn register_file_declarations(
                     let (_unit_dim, base_scale) = registry
                         .resolve_unit_expr(&def.unit_expr)
                         .ok_or_else(|| GraphcalError::UnknownUnit {
-                            name: u.name.as_unit_name(),
+                            name: u.name.value.clone(),
                             src: src.clone(),
                             span: def.span.into(),
                         })?;
@@ -319,15 +319,15 @@ fn register_file_declarations(
                 } else {
                     1.0
                 };
-                registry.register_unit(u.name.as_unit_name(), dim, scale);
+                registry.register_unit(u.name.value.clone(), dim, scale);
             }
             DeclKind::Index(idx) => {
                 registry.register_index(registry::IndexDef {
-                    name: idx.name.as_index_name(),
+                    name: idx.name.value.clone(),
                     variants: idx
                         .variants
                         .iter()
-                        .map(graphcal_syntax::ast::Ident::as_variant_name)
+                        .map(|v| v.value.clone())
                         .collect(),
                 });
             }
@@ -336,18 +336,18 @@ fn register_file_declarations(
                 for field in &t.fields {
                     let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
-                            name: field.name.as_dim_name(),
+                            name: DimName::new(field.name.value.as_str()),
                             src: src.clone(),
                             span: field.name.span.into(),
                         }
                     })?;
                     fields.push(registry::StructField {
-                        name: field.name.as_field_name(),
+                        name: field.name.value.clone(),
                         dimension: dim,
                     });
                 }
                 registry.register_struct(registry::StructDef {
-                    name: t.name.as_struct_type_name(),
+                    name: t.name.value.clone(),
                     fields,
                 });
             }
@@ -366,7 +366,7 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
                 .generic_params
                 .iter()
                 .map(|g| registry::FnGenericParam {
-                    name: g.name.as_generic_param_name(),
+                    name: g.name.value.clone(),
                     constraint: match g.constraint {
                         graphcal_syntax::ast::GenericConstraint::Dim => {
                             registry::FnGenericConstraint::Dim
@@ -554,7 +554,7 @@ pub fn compile_and_eval_project(
                         &registry,
                         &loaded.named_source,
                     )?;
-                    imported_types.insert(c.name.name.clone(), dt);
+                    imported_types.insert(c.name.value.to_string(), dt);
                 }
                 DeclKind::Param(p) => {
                     let dt = crate::dim_check::resolve_type_annotation(
@@ -562,7 +562,7 @@ pub fn compile_and_eval_project(
                         &registry,
                         &loaded.named_source,
                     )?;
-                    imported_types.insert(p.name.name.clone(), dt);
+                    imported_types.insert(p.name.value.to_string(), dt);
                 }
                 DeclKind::Node(n) => {
                     let dt = crate::dim_check::resolve_type_annotation(
@@ -570,7 +570,7 @@ pub fn compile_and_eval_project(
                         &registry,
                         &loaded.named_source,
                     )?;
-                    imported_types.insert(n.name.name.clone(), dt);
+                    imported_types.insert(n.name.value.to_string(), dt);
                 }
                 _ => {}
             }
@@ -637,29 +637,29 @@ enum ImportedDecl {
 fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Option<ImportedDecl> {
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Const(c) if c.name.name == name => {
+            DeclKind::Const(c) if c.name.value.as_str() == name => {
                 return Some(ImportedDecl::Const(
-                    c.name.name.clone(),
+                    c.name.value.to_string(),
                     c.value.clone(),
                     decl.span,
                 ));
             }
-            DeclKind::Param(p) if p.name.name == name => {
+            DeclKind::Param(p) if p.name.value.as_str() == name => {
                 return Some(ImportedDecl::Param(
-                    p.name.name.clone(),
+                    p.name.value.to_string(),
                     p.value.clone(),
                     decl.span,
                 ));
             }
-            DeclKind::Node(n) if n.name.name == name => {
+            DeclKind::Node(n) if n.name.value.as_str() == name => {
                 return Some(ImportedDecl::Node(
-                    n.name.name.clone(),
+                    n.name.value.to_string(),
                     n.value.clone(),
                     decl.span,
                 ));
             }
-            DeclKind::Fn(f) if f.name.name == name => {
-                return Some(ImportedDecl::Fn(f.name.name.clone(), f.clone(), decl.span));
+            DeclKind::Fn(f) if f.name.value.as_str() == name => {
+                return Some(ImportedDecl::Fn(f.name.value.to_string(), f.clone(), decl.span));
             }
             _ => {}
         }
@@ -893,7 +893,7 @@ fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
     let mut denominator = Vec::new();
 
     for item in &expr.terms {
-        let mut part = item.name.name.clone();
+        let mut part = item.name.value.to_string();
         if let Some(pow) = item.power
             && pow != 1
         {

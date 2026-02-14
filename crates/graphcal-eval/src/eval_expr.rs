@@ -105,24 +105,24 @@ pub fn eval_expr(
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::GraphRef(ident) => {
             values
-                .get(ident.name.as_str())
+                .get(ident.value.as_str())
                 .cloned()
                 .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("undefined graph reference `@{}`", ident.name),
+                    message: format!("undefined graph reference `@{}`", ident.value),
                     src: src.clone(),
                     span: expr.span.into(),
                 })
         }
         ExprKind::ConstRef(ident) => values
-            .get(ident.name.as_str())
+            .get(ident.value.as_str())
             .cloned()
             .or_else(|| {
                 builtin_consts
-                    .get(ident.name.as_str())
+                    .get(ident.value.as_str())
                     .map(|v| RuntimeValue::Scalar(*v))
             })
             .ok_or_else(|| GraphcalError::EvalError {
-                message: format!("undefined constant `{}`", ident.name),
+                message: format!("undefined constant `{}`", ident.value),
                 src: src.clone(),
                 span: expr.span.into(),
             }),
@@ -324,7 +324,7 @@ pub fn eval_expr(
         },
         ExprKind::FnCall { name, args } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
-            if matches!(name.name.as_str(), "sum" | "min" | "max" | "mean" | "count")
+            if matches!(name.value.as_str(), "sum" | "min" | "max" | "mean" | "count")
                 && args.len() == 1
             {
                 let arg_val = eval_expr(
@@ -337,7 +337,7 @@ pub fn eval_expr(
                     src,
                 )?;
                 if let RuntimeValue::Indexed { entries, .. } = arg_val {
-                    return Ok(match name.name.as_str() {
+                    return Ok(match name.value.as_str() {
                         "sum" => {
                             let total: f64 = entries
                                 .values()
@@ -386,7 +386,7 @@ pub fn eval_expr(
             }
 
             // Conversion builtins: to_float and to_int
-            if name.name == "to_float" {
+            if name.value.as_str() == "to_float" {
                 let arg = eval_expr(
                     &args[0],
                     values,
@@ -405,7 +405,7 @@ pub fn eval_expr(
                 )]
                 return Ok(RuntimeValue::Scalar(i as f64));
             }
-            if name.name == "to_int" {
+            if name.value.as_str() == "to_int" {
                 let arg = eval_expr(
                     &args[0],
                     values,
@@ -424,7 +424,7 @@ pub fn eval_expr(
             }
 
             // Try builtin first
-            if let Some(builtin) = builtin_fns.get(name.name.as_str()) {
+            if let Some(builtin) = builtin_fns.get(name.value.as_str()) {
                 let arg_values: Vec<f64> = args
                     .iter()
                     .map(|a| {
@@ -442,16 +442,16 @@ pub fn eval_expr(
                     .collect::<Result<_, _>>()?;
                 let result = (builtin.eval)(&arg_values);
                 return Ok(RuntimeValue::Scalar(check_finite(
-                    result, &name.name, src, expr.span,
+                    result, name.value.as_str(), src, expr.span,
                 )?));
             }
 
             // Try user-defined function
             let fn_def =
                 registry
-                    .get_function(&name.name)
+                    .get_function(name.value.as_str())
                     .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("unknown function `{}`", name.name),
+                        message: format!("unknown function `{}`", name.value),
                         src: src.clone(),
                         span: name.span.into(),
                     })?;
@@ -600,10 +600,10 @@ pub fn eval_expr(
             )?;
             match inner_val {
                 RuntimeValue::Struct { fields, .. } => fields
-                    .get(field.name.as_str())
+                    .get(field.value.as_str())
                     .cloned()
                     .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("no field `{}` on struct", field.name),
+                        message: format!("no field `{}` on struct", field.value),
                         src: src.clone(),
                         span: field.span.into(),
                     }),
@@ -630,28 +630,28 @@ pub fn eval_expr(
                 } else {
                     // Shorthand: look up name in local scope, then graph scope
                     local_values
-                        .get(&field_init.name.name)
-                        .or_else(|| values.get(&field_init.name.name))
+                        .get(field_init.name.value.as_str())
+                        .or_else(|| values.get(field_init.name.value.as_str()))
                         .cloned()
                         .ok_or_else(|| GraphcalError::EvalError {
                             message: format!(
                                 "undefined variable `{}` for shorthand field",
-                                field_init.name.name
+                                field_init.name.value
                             ),
                             src: src.clone(),
                             span: field_init.name.span.into(),
                         })?
                 };
-                field_map.insert(field_init.name.as_field_name(), val);
+                field_map.insert(field_init.name.value.clone(), val);
             }
             Ok(RuntimeValue::Struct {
-                type_name: type_name.as_struct_type_name(),
+                type_name: type_name.value.clone(),
                 fields: field_map,
             })
         }
 
         ExprKind::MapLiteral { entries } => {
-            let idx_name = entries[0].index.as_index_name();
+            let idx_name = entries[0].index.value.clone();
             let mut result = IndexMap::new();
             for entry in entries {
                 let val = eval_expr(
@@ -663,7 +663,7 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?;
-                result.insert(entry.variant.as_variant_name(), val);
+                result.insert(entry.variant.value.clone(), val);
             }
             Ok(RuntimeValue::Indexed {
                 index_name: idx_name,
@@ -705,7 +705,7 @@ pub fn eval_expr(
                 };
                 let variant_name: VariantName = match arg {
                     graphcal_syntax::ast::IndexArg::Variant { variant, .. } => {
-                        variant.as_variant_name()
+                        variant.value.clone()
                     }
                     graphcal_syntax::ast::IndexArg::Var(ident) => {
                         let var_val = local_values.get(&ident.name).ok_or_else(|| {
@@ -819,7 +819,7 @@ fn eval_for_comp(
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let binding = &bindings[0];
-    let idx_name = binding.index.as_index_name();
+    let idx_name = binding.index.value.clone();
     let idx_def = registry
         .get_index(idx_name.as_str())
         .expect("index validated by dim_check");

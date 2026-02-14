@@ -118,6 +118,47 @@ define_name_type! {
     pub struct GenericParamName;
 }
 
+// --- Spanned wrapper ---
+
+use crate::span::Span;
+
+/// A value paired with its source span.
+///
+/// `PartialEq`/`Eq`/`Hash` delegate to `value` only, so two occurrences
+/// of the same name at different source positions are considered equal.
+#[derive(Debug, Clone)]
+pub struct Spanned<T> {
+    pub value: T,
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    /// Create a new spanned value.
+    pub const fn new(value: T, span: Span) -> Self {
+        Self { value, span }
+    }
+}
+
+impl<T: PartialEq> PartialEq for Spanned<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T: Eq> Eq for Spanned<T> {}
+
+impl<T: std::hash::Hash> std::hash::Hash for Spanned<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +213,31 @@ mod tests {
         let a = FnName::new("alpha");
         let b = FnName::new("beta");
         assert!(a < b);
+    }
+
+    #[test]
+    fn spanned_eq_ignores_span() {
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn spanned_ne_different_value() {
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("y"), Span::new(0, 1));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn spanned_hash_ignores_span() {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        let mut ha = DefaultHasher::new();
+        a.hash(&mut ha);
+        let mut hb = DefaultHasher::new();
+        b.hash(&mut hb);
+        assert_eq!(ha.finish(), hb.finish());
     }
 }

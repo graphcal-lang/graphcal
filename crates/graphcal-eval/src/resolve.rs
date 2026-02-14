@@ -113,21 +113,22 @@ pub fn resolve_with_imports(
     for decl in &file.declarations {
         // Dimension and Unit declarations are handled by the registry, not the resolver
         let (name, name_span, is_const) = match &decl.kind {
-            DeclKind::Param(p) => (p.name.name.clone(), p.name.span, false),
-            DeclKind::Node(n) => (n.name.name.clone(), n.name.span, false),
-            DeclKind::Const(c) => (c.name.name.clone(), c.name.span, true),
+            DeclKind::Param(p) => (p.name.value.to_string(), p.name.span, false),
+            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
+            DeclKind::Const(c) => (c.name.value.to_string(), c.name.span, true),
             DeclKind::Fn(f) => {
+                let fn_name_str = f.name.value.to_string();
                 // Check fn name for duplicates (same namespace as param/node/const)
-                if let Some(first_span) = names.get(&f.name.name) {
+                if let Some(first_span) = names.get(&fn_name_str) {
                     return Err(GraphcalError::DuplicateName {
-                        name: f.name.name.clone(),
+                        name: fn_name_str,
                         src: src.clone(),
                         duplicate: f.name.span.into(),
                         first: (*first_span).into(),
                     });
                 }
-                names.insert(f.name.name.clone(), f.name.span);
-                user_fn_names.insert(f.name.name.clone());
+                names.insert(fn_name_str.clone(), f.name.span);
+                user_fn_names.insert(fn_name_str);
                 continue;
             }
             DeclKind::Dimension(_)
@@ -210,7 +211,7 @@ pub fn resolve_with_imports(
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
-                functions.push((f.name.name.clone(), f.clone(), decl.span));
+                functions.push((f.name.value.to_string(), f.clone(), decl.span));
             }
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
@@ -222,8 +223,9 @@ pub fn resolve_with_imports(
                     &user_fn_names,
                     src,
                 )?;
-                const_deps.insert(c.name.name.clone(), deps);
-                consts.push((c.name.name.clone(), c.value.clone(), decl.span));
+                let cname = c.name.value.to_string();
+                const_deps.insert(cname.clone(), deps);
+                consts.push((cname, c.value.clone(), decl.span));
             }
             DeclKind::Param(p) => {
                 let (graph_refs, _const_refs) = extract_all_refs(
@@ -235,8 +237,9 @@ pub fn resolve_with_imports(
                     &user_fn_names,
                     src,
                 )?;
-                runtime_deps.insert(p.name.name.clone(), graph_refs);
-                params.push((p.name.name.clone(), p.value.clone(), decl.span));
+                let pname = p.name.value.to_string();
+                runtime_deps.insert(pname.clone(), graph_refs);
+                params.push((pname, p.value.clone(), decl.span));
             }
             DeclKind::Node(n) => {
                 let (graph_refs, _const_refs) = extract_all_refs(
@@ -248,8 +251,9 @@ pub fn resolve_with_imports(
                     &user_fn_names,
                     src,
                 )?;
-                runtime_deps.insert(n.name.name.clone(), graph_refs);
-                nodes.push((n.name.name.clone(), n.value.clone(), decl.span));
+                let nname = n.name.value.to_string();
+                runtime_deps.insert(nname.clone(), graph_refs);
+                nodes.push((nname, n.value.clone(), decl.span));
             }
         }
     }
@@ -306,7 +310,7 @@ fn is_lower_snake_case(s: &str) -> bool {
 fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInConst {
-            name: ident.as_decl_name(),
+            name: ident.value.clone(),
             src: src.clone(),
             span: expr.span.into(),
         }),
@@ -377,7 +381,7 @@ fn check_no_graph_refs_in_fn(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let check = |expr: &Expr| -> Result<(), GraphcalError> {
-        check_no_graph_refs_in_fn_expr(expr, &fn_decl.name.name, src)
+        check_no_graph_refs_in_fn_expr(expr, fn_decl.name.value.as_str(), src)
     };
     match &fn_decl.body {
         FnBody::Short(expr) => check(expr),
@@ -397,7 +401,7 @@ fn check_no_graph_refs_in_fn_expr(
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
         ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInFn {
-            name: ident.as_decl_name(),
+            name: ident.value.clone(),
             src: src.clone(),
             span: expr.span.into(),
             help: format!("pass `{fn_name}` as a function parameter instead"),
@@ -508,39 +512,40 @@ fn collect_const_refs(
         | ExprKind::LocalRef(_) => Ok(()),
         ExprKind::GraphRef(_) => unreachable!("should be caught by check_no_graph_refs"),
         ExprKind::ConstRef(ident) => {
-            if builtin_consts.contains_key(ident.name.as_str()) {
+            if builtin_consts.contains_key(ident.value.as_str()) {
                 Ok(())
-            } else if all_const_names.contains(ident.name.as_str()) {
-                deps.insert(ident.name.clone());
+            } else if all_const_names.contains(ident.value.as_str()) {
+                deps.insert(ident.value.to_string());
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
-                    name: ident.as_decl_name(),
+                    name: ident.value.clone(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str())
-                && !user_fn_names.contains(&name.name)
-                && !AGGREGATION_FNS.contains(&name.name.as_str())
-                && !CONVERSION_FNS.contains(&name.name.as_str())
+            let name_str = name.value.as_str();
+            if !builtin_fns.contains_key(name_str)
+                && !user_fn_names.contains(name_str)
+                && !AGGREGATION_FNS.contains(&name_str)
+                && !CONVERSION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
-                    name: name.as_fn_name(),
+                    name: name.value.clone(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
             }
             // Only check arity for builtins (user fn arity checked later in dim_check).
             // Skip arity check for aggregation/conversion functions.
-            if let Some(builtin) = builtin_fns.get(name.name.as_str())
+            if let Some(builtin) = builtin_fns.get(name_str)
                 && args.len() != builtin.arity
-                && !AGGREGATION_FNS.contains(&name.name.as_str())
+                && !AGGREGATION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::WrongArity {
-                    name: name.as_fn_name(),
+                    name: name.value.clone(),
                     expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
@@ -789,49 +794,50 @@ fn collect_all_refs(
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_) => Ok(()),
         ExprKind::GraphRef(ident) => {
-            if all_runtime_names.contains(ident.name.as_str()) {
-                graph_refs.insert(ident.name.clone());
+            if all_runtime_names.contains(ident.value.as_str()) {
+                graph_refs.insert(ident.value.to_string());
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownGraphRef {
-                    name: ident.as_decl_name(),
+                    name: ident.value.clone(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
             }
         }
         ExprKind::ConstRef(ident) => {
-            if builtin_consts.contains_key(ident.name.as_str()) {
+            if builtin_consts.contains_key(ident.value.as_str()) {
                 Ok(())
-            } else if all_const_names.contains(ident.name.as_str()) {
-                const_refs.insert(ident.name.clone());
+            } else if all_const_names.contains(ident.value.as_str()) {
+                const_refs.insert(ident.value.to_string());
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
-                    name: ident.as_decl_name(),
+                    name: ident.value.clone(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
             }
         }
         ExprKind::FnCall { name, args } => {
-            if !builtin_fns.contains_key(name.name.as_str())
-                && !user_fn_names.contains(&name.name)
-                && !AGGREGATION_FNS.contains(&name.name.as_str())
-                && !CONVERSION_FNS.contains(&name.name.as_str())
+            let name_str = name.value.as_str();
+            if !builtin_fns.contains_key(name_str)
+                && !user_fn_names.contains(name_str)
+                && !AGGREGATION_FNS.contains(&name_str)
+                && !CONVERSION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
-                    name: name.as_fn_name(),
+                    name: name.value.clone(),
                     src: src.clone(),
                     span: name.span.into(),
                 });
             }
-            if let Some(builtin) = builtin_fns.get(name.name.as_str())
+            if let Some(builtin) = builtin_fns.get(name_str)
                 && args.len() != builtin.arity
-                && !AGGREGATION_FNS.contains(&name.name.as_str())
+                && !AGGREGATION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::WrongArity {
-                    name: name.as_fn_name(),
+                    name: name.value.clone(),
                     expected: builtin.arity,
                     got: args.len(),
                     src: src.clone(),
@@ -1074,8 +1080,8 @@ pub fn collect_graph_refs(
 ) {
     match &expr.kind {
         ExprKind::GraphRef(ident) => {
-            if all_runtime_names.contains(ident.name.as_str()) {
-                refs.insert(ident.name.clone());
+            if all_runtime_names.contains(ident.value.as_str()) {
+                refs.insert(ident.value.to_string());
             }
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
