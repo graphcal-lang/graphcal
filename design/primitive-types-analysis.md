@@ -161,77 +161,119 @@ The remaining `Str` use cases (free-form descriptions, file paths, formatted out
 
 **Current state:** Listed in the design doc as TBD. Not implemented anywhere.
 
+> **Deep analysis:** See [`.local/2026-02-14_datetime-primitive-deep-analysis.md`](../.local/2026-02-14_datetime-primitive-deep-analysis.md) for the full design document covering time scales, hifitime integration, operator semantics, builtin functions, and implementation strategy.
+
 **Use cases:**
-- Mission timelines: launch dates, maneuver epochs
-- Scheduling: deadlines, milestones
+- Mission timelines: launch dates, maneuver epochs (TAI/TT/TDB time scales)
+- GNSS operations: GPS receiver timestamps, satellite clock corrections (GPST/GST/BDT)
+- Scheduling: deadlines, milestones (UTC)
 - Time-series data: timestamps on measurements
 - Duration calculations: "days between launch and arrival"
 
-**Design decisions needed:**
+**Design decisions (settled in deep analysis):**
 
-#### 4a. Internal representation
+#### 4a. Internal representation: `hifitime::Epoch`
 
-| Option | Representation | Precision | Range |
-|--------|---------------|-----------|-------|
-| **A: Unix timestamp (f64)** | Seconds since 1970-01-01 UTC | ~microsecond | ±285,000 years |
-| **B: Unix timestamp (i64 nanoseconds)** | Nanoseconds since 1970-01-01 UTC | nanosecond | ±292 years |
-| **C: Calendar struct** | Year/month/day/hour/min/sec/nanos | nanosecond | Unlimited |
-| **D: chrono::DateTime<Utc>** | Use the `chrono` crate | nanosecond | ±262,000 years |
-| **E: TAI-based (astro)** | Seconds since J2000 (2000-01-12T11:58:55.816 UTC) | sub-microsecond | Sufficient for space missions |
+| Option | Representation | Precision | Range | Time Scales | Verdict |
+|--------|---------------|-----------|-------|-------------|---------|
+| ~~A: Unix timestamp (f64)~~ | Seconds since 1970 UTC | ~microsecond | ±285,000 years | UTC only | Rejected |
+| ~~B: Unix timestamp (i64 ns)~~ | Nanoseconds since 1970 UTC | nanosecond | ±292 years | UTC only | Rejected |
+| ~~C: Calendar struct~~ | Year/month/day/... | nanosecond | Unlimited | Custom | Rejected |
+| ~~D: chrono::DateTime<Utc>~~ | chrono internal | nanosecond | ±262,000 years | UTC only | **Rejected** |
+| **E: hifitime::Epoch** | i16 centuries + u64 ns (10 bytes) | nanosecond | ±32,768 centuries | TAI, UTC, TT, TDB, ET, GPST, GST, BDT | **Chosen** |
 
-**Recommendation:** Option D for general use (chrono is the Rust ecosystem standard). For an engineering/aerospace audience, consider also supporting TAI/TDB/TT time scales via a library like `hifitime`. Initial implementation can use `chrono::DateTime<Utc>` and defer multi-time-scale support.
+**Recommendation: `hifitime::Epoch`** — purpose-built for aerospace, validated against NASA SPICE (zero-nanosecond difference post-1972), integer-based (no floating-point drift), supports 9 time scales natively. Neither `chrono` nor `jiff` support multi-scale time — they are designed for civil timekeeping only.
 
-#### 4b. Literal syntax
+#### 4b. Literal syntax: function-style with ISO 8601 strings
 
-| Option | Syntax |
-|--------|--------|
-| **A: ISO 8601 string** | `datetime("2024-11-05T12:00:00Z")` |
-| **B: Native literal** | `2024-11-05T12:00:00Z` (lexer recognizes ISO format) |
-| **C: Constructor** | `datetime(2024, 11, 5, 12, 0, 0)` |
+```graphcal
+// Daily use (UTC default)
+param launch: Datetime = datetime("2024-11-05T12:00:00Z");
 
-**Recommendation:** Option A (function-style with ISO string). It avoids complex lexer changes and is unambiguous. Option B is nicer but requires the lexer to recognize ISO 8601 patterns, which conflicts with number/identifier parsing (e.g., `2024-11` looks like `2024 - 11`).
+// Aerospace use (explicit time scale)
+param epoch: Datetime<TT> = datetime("2024-11-05T12:00:00", TT);
+param gps_fix: Datetime<GPST> = datetime("2024-11-05T11:59:42", GPST);
 
-#### 4c. Interaction with the `Time` dimension
+// From Julian Date
+param j2000: Datetime<TT> = from_jd(2451545.0, TT);
+```
 
-This is the most important design question. The `Time` dimension represents physical durations (seconds, hours), while `Datetime` is an absolute point in time.
+Native literal syntax (`2024-11-05T12:00:00Z` without quotes) is rejected because `2024-11` parses as `2024 - 11` (integer subtraction).
+
+#### 4c. Two-tier type design: simple default + scale-aware aerospace mode
+
+**Tier 1 (daily use):** `Datetime` with no type parameter defaults to UTC.
+**Tier 2 (aerospace):** `Datetime<TT>`, `Datetime<TAI>`, etc. with compile-time scale checking.
+
+Cross-scale arithmetic (e.g., `Datetime<TT> - Datetime<GPST>`) is a type error — explicit conversion required via `to_tt()`, `to_gpst()`, etc.
+
+#### 4d. Interaction with the `Time` dimension (point vs vector)
+
+This is the most important design question. `Datetime` is a **point** in time, `Time` dimension values are **vectors** (durations). This is analogous to the point-vs-vector distinction in geometry.
 
 | Operation | Result type | Semantics |
 |-----------|-------------|-----------|
-| `Datetime - Datetime` | `Time` (duration) | Time difference between two instants |
-| `Datetime + Time` | `Datetime` | Advance an instant by a duration |
-| `Datetime - Time` | `Datetime` | Go back by a duration |
+| `Datetime<S> - Datetime<S>` | `Scalar(Time)` | Duration between two instants |
+| `Datetime<S> + Scalar(Time)` | `Datetime<S>` | Advance an instant by a duration |
+| `Scalar(Time) + Datetime<S>` | `Datetime<S>` | Commutative with above |
+| `Datetime<S> - Scalar(Time)` | `Datetime<S>` | Go back by a duration |
 | `Time + Time` | `Time` | Add durations (already works) |
-| `Datetime + Datetime` | **Error** | Adding two instants is meaningless |
-| `Datetime * anything` | **Error** | Multiplication of instants is meaningless |
-| `Datetime / anything` | **Error** | Division of instants is meaningless |
+| `Datetime + Datetime` | **Type Error** | Adding two points is meaningless |
+| `Datetime * anything` | **Type Error** | Scaling a point is meaningless |
+| `Datetime / anything` | **Type Error** | Dividing a point is meaningless |
+| `Datetime<S1> - Datetime<S2>` | **Type Error** (if S1 ≠ S2) | Must convert to same scale first |
 
-This is analogous to the point-vs-vector distinction in geometry. Datetime is a "point" in time, `Time` dimension values are "vectors."
+No separate `Duration` primitive needed — the existing `Time` dimension serves this role.
 
-**This interacts with the planned Spaces feature (Phase 9).** A Datetime could be modeled as a "point in Time-space" while a duration is a "vector in Time-space." However, this may be over-engineering for the initial implementation.
+**Interaction with Spaces (Phase 9):** When Spaces are implemented, time scales can be modeled as a built-in space:
 
-**Recommendation:** Implement `Datetime` as a distinct type (not a dimension). The type checker enforces the point-vs-vector algebra above. Internally, store as `i64` nanoseconds or `chrono::DateTime<Utc>`.
+```graphcal
+space TimeScale { TAI; UTC; TT; TDB; GPST; }
+param launch: Datetime in TimeScale.TT = ...;
+```
 
-#### 4d. Display and conversion
+This unifies two concepts (time scale and space tag) and could replace the type parameter approach. The point-vs-vector semantics also naturally fit an "affine space" extension of the Spaces feature.
 
-- Display format: ISO 8601 by default, customizable via format strings
-- Timezone handling: store UTC internally, convert for display
-  - `@launch_time -> "America/New_York"` (stretch goal)
-- Duration display: `@arrival - @launch -> days` (uses existing `Time` dimension units)
+#### 4e. Display and conversion
 
-#### 4e. Implementation scope
+- Display format: ISO 8601 with time scale suffix: `2024-11-05T12:00:32.184000000 TT`
+- For UTC-only datetimes: standard ISO 8601: `2024-11-05T12:00:00Z`
+- JSON output: `{"type": "datetime", "value": "2024-11-05T12:00:00", "scale": "TT"}`
+- No `now()` function (breaks determinism) — inject current time via `param`
 
-- **New dependency:** `chrono` crate (or similar)
-- **Lexer:** No change needed if using function-style literals
-- **AST:** `ExprKind::DatetimeLiteral` or handled via `FnCall` to `datetime()`
-- **TypeExprKind:** New `Datetime` variant
-- **DeclaredType/InferredType:** New `Datetime` variant
-- **RuntimeValue:** New `Datetime(chrono::DateTime<Utc>)` variant
-- **Operators:** Custom rules for datetime±duration, datetime-datetime
-- **Builtins:** `datetime()`, `now()`, `year()`, `month()`, `day()`, `hour()`, `minute()`, `second()`
+#### 4f. Builtin functions
 
-**Estimated scope:** Large. The interaction with the Time dimension requires careful type-checker work. The operator overloading (datetime + duration → datetime) is a new pattern not present in the current type system.
+| Category | Functions |
+|----------|-----------|
+| Construction | `datetime(str)`, `datetime(str, scale)`, `from_jd(f64, scale)`, `from_mjd(f64, scale)`, `from_unix(f64)` |
+| Conversion | `to_utc(dt)`, `to_tai(dt)`, `to_tt(dt)`, `to_tdb(dt)`, `to_gpst(dt)` |
+| Extraction | `year(dt)`, `month(dt)`, `day(dt)`, `hour(dt)`, `minute(dt)`, `second(dt)`, `day_of_year(dt)` |
+| Julian | `to_jd(dt)`, `to_mjd(dt)`, `to_unix(dt)`, `leap_seconds(dt)` |
+| Rounding | `floor_dt(dt, interval)`, `ceil_dt(dt, interval)`, `round_dt(dt, interval)` |
+| Aggregation | `min(dt[I])`, `max(dt[I])` (but NOT `sum` or `mean` — adding points is meaningless) |
 
-**Priority:** Medium-high for aerospace/mission planning use cases. Can be deferred for general engineering.
+#### 4g. Open questions
+
+- **Str prerequisite?** `datetime("...")` needs string literal parsing. Recommendation: support string literals in the lexer/parser without making `Str` a full runtime type (Option A from the deep analysis).
+- **TimeScale representation:** Initially as builtin constants (like `true`/`false`). Migrate to a builtin enum when tagged unions (Phase 10) arrive.
+- **Additional time units:** Add `day` (86400 s) and `week` (604800 s) to the prelude. Do NOT add `month` or `year` as time units (variable length). Add `julian_year` (365.25 days) for astronomical use.
+- **Precision note:** `Datetime +/- f64(Time)` has ~100ns precision at Unix epoch magnitude due to f64 limitations. Document clearly. Users needing higher precision should use `Datetime - Datetime` (stays in integer math internally).
+
+#### 4h. Implementation scope
+
+- **New dependency:** `hifitime` crate (v4)
+- **Lexer:** String literal support (minimal — for `datetime()` arguments)
+- **Parser:** `Datetime` and `Datetime<Scale>` type annotations, time scale constants
+- **AST:** `TypeExprKind::Datetime` / `TypeExprKind::DatetimeScaled { scale }`
+- **DeclaredType/InferredType:** `Datetime(Option<TimeScale>)` variant
+- **RuntimeValue:** `Datetime(hifitime::Epoch)` variant
+- **Operators:** Custom point-vs-vector rules (new pattern, but well-defined)
+- **Builtins:** Datetime functions require generalizing the builtin system beyond `fn(&[f64]) -> f64`
+- **Output:** ISO 8601 with scale, JSON with type/value/scale
+
+**Estimated scope:** Large. Comparable to i64 plus new crate dependency and builtin system generalization.
+
+**Priority:** Medium-high for aerospace/mission planning. The two-tier design ensures daily-life users aren't burdened by aerospace complexity.
 
 ---
 
@@ -400,12 +442,12 @@ Alternatively, `Bool`, `Int`, `Datetime` could be recognized as builtin type nam
 ```
 // Proposed
 enum DeclaredType {
-    Scalar(Dimension),    // dimensioned f64
-    Integer,              // i64 (dimensionless)
-    Bool,                 // bool
-    Datetime,             // datetime
-    Optional(Box<Self>),  // Option<T>
-    Struct(String),       // user-defined struct
+    Scalar(Dimension),              // dimensioned f64
+    Integer,                        // i64 (dimensionless)
+    Bool,                           // bool
+    Datetime(Option<TimeScale>),    // datetime (None = UTC default, Some = explicit scale)
+    Optional(Box<Self>),            // Option<T>
+    Struct(String),                 // user-defined struct
     Indexed { element: Box<Self>, index: String },
 }
 ```
@@ -418,7 +460,7 @@ enum RuntimeValue {
     Scalar(f64),
     Integer(i64),
     Bool(bool),
-    Datetime(chrono::DateTime<Utc>),
+    Datetime(hifitime::Epoch),  // 10 bytes, time-scale aware, nanosecond precision
     Optional(Option<Box<Self>>),
     Struct { type_name: String, fields: IndexMap<String, Self> },
     Indexed { index_name: String, entries: IndexMap<String, Self> },
@@ -458,7 +500,7 @@ The CLI's JSON output would need to represent new types:
 |------|----------|-------|-----------------|---------------|
 | `bool` (first-class) | High | Low-med | None (separate) | Splitting from f64, operator return types |
 | `i64` | Medium-high | Medium | None (dimensionless) | Mixed-type promotion, int division semantics |
-| `Datetime` | Medium-high | Large | Yes (point vs vector with Time) | Operator semantics, crate dependency |
+| `Datetime` | Medium-high | Large | Yes (point vs vector with Time) | hifitime integration, multi-scale type param, builtin generalization |
 | `Option<T>` | Medium | Large | Wraps any type | Generic type in checker, unwrap semantics |
 | ~~`Str`~~ | ~~Removed~~ | — | — | Superseded by fieldless `type` (enums) |
 | `Complex` | Low | Large | Yes (same dim for re/im) | Operator overloading, function signatures |
