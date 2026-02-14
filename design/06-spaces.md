@@ -348,6 +348,24 @@ Examples:
 
 **Tag binding in type expressions:** The `<>` tag binds to the immediately preceding type name, tighter than dimension arithmetic operators (`*`, `/`). So `Mass / Count<Countable.Person>` means "mass per person-count" — the tag is on `Count`, where it semantically belongs. Internally, the tag set is flat (not attached to individual dimension factors), so the representation is `(M·Count⁻¹, {Countable: Person})`. This is analogous to how `Vec3<Force<Frame.Body>>` puts the tag on `Force`, not on `Vec3`.
 
+### Why a Flat Tag Set (Not Per-Factor)
+
+Three representations were considered:
+
+| Model | Representation | Idea |
+| --- | --- | --- |
+| **A: Flat** | `(Dimension, TagSet)` | Tags on the whole type |
+| **B: Per-factor** | `Map<BaseDimId, (exp, TagSet)>` | Each base dimension factor carries its own tags |
+| **C: Tags-as-keys** | `Map<(BaseDimId, TagSet), exp>` | Tagged and untagged dims are different axes |
+
+**Model C is fatally flawed.** When `Velocity<Frame.ECI>` (which expands to `L·T⁻¹` with all factors tagged ECI) is multiplied by untagged `Time`, the `Time<ECI>⁻¹` and `Time` factors sit on *different axes* and don't cancel. The result is a nonsensical three-factor type instead of `Length<Frame.ECI>`.
+
+**Model B has an unsolvable tag-distribution problem.** When the user writes `Force<Frame.Body>`, which of the three base factors (`M`, `L`, `T⁻²`) receives the Body tag? The only workable answer is "all of them," but this creates semantically dubious per-factor tags (`Mass<Frame.Body>` — mass in a frame?). Model B also loses tag provenance through cancellation: `Count<Person> * Mass / Count<Person>` gives plain `Mass` because the Person tag was on Count, Count cancelled, and the tag is lost with it.
+
+**Model A (flat) is correct because tags describe the *value*, not individual dimension factors.** When we say `Force<Frame.Body>`, we mean "this force is in the body frame" — the whole quantity, not its Mass or Length components. Similarly, `Mass / Count<Countable.Person>` means "this mass-per-count quantity is in the Person context." The syntax puts `<>` on a specific type name for readability, but the semantic context applies to the whole value.
+
+**Flat tag set weakness and fix:** The flat model has one undesirable behavior — when same-tagged, same-dimensioned values divide, the tag survives on a dimensionless result: `Length<ECI> / Length<ECI>` → `Dimensionless<Frame.ECI>`. A pure ratio has no physical dimension to "belong to" a context. This is fixed by the **dimensionless auto-clear** rule (see below).
+
 ### Tag Merge Function
 
 The core of tag propagation is the `merge` function, which combines two tag sets family-by-family:
@@ -364,18 +382,45 @@ merge(T₁, T₂):
     return result
 ```
 
+### Dimensionless Auto-Clear Rule
+
+When an arithmetic operation produces a **dimensionless** result, the tag set is automatically cleared:
+
+```
+apply_tags(D_result, T_merged):
+    if D_result == Dimensionless:
+        return (D_result, {})     // tags cleared — a pure ratio has no context
+    else:
+        return (D_result, T_merged)
+```
+
+This prevents the flat model from producing useless tagged-dimensionless values:
+
+```
+// Without auto-clear: Length<ECI> / Length<ECI> → Dimensionless<Frame.ECI>  (bad)
+// With auto-clear:    Length<ECI> / Length<ECI> → Dimensionless              (good)
+
+// Without auto-clear: Count<Person> / Count<Person> → Dimensionless<Person> (bad)
+// With auto-clear:    Count<Person> / Count<Person> → Dimensionless          (good)
+
+// Non-dimensionless results are unaffected:
+// Count<Person> * Mass / Count<Person> → Mass<Countable.Person>  (tag survives, good)
+```
+
+The rationale: a dimensionless ratio is a pure number. `Length<ECI> / Length<ECI>` is just a scaling factor; it doesn't "belong to" the ECI frame. Tags describe the semantic context of a *dimensioned* value — when the dimension cancels completely, the context has no anchor.
+
 ### Arithmetic Rules
 
-All arithmetic operations use the **uniform merge** rule for tags:
+All arithmetic operations use the **uniform merge** rule for tags, with **dimensionless auto-clear**:
 
 | Operation | Dimension Rule | Tag Rule | Result |
 | --- | --- | --- | --- |
-| `a + b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `(D₁, merge(T₁,T₂))` |
-| `a - b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `(D₁, merge(T₁,T₂))` |
-| `a * b` | `D₁ * D₂` (multiply) | `merge(T₁, T₂)` | `(D₁*D₂, merge(T₁,T₂))` |
-| `a / b` | `D₁ / D₂` (divide) | `merge(T₁, T₂)` | `(D₁/D₂, merge(T₁,T₂))` |
-| `a ^ n` | `D₁ ^ n` (power) | `T₁` (preserve) | `(D₁^n, T₁)` |
-| `sqrt(a)` | `D₁ ^ ½` | `T₁` (preserve) | `(D₁^½, T₁)` |
+| `a + b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `apply_tags(D₁, merge(T₁,T₂))` |
+| `a - b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `apply_tags(D₁, merge(T₁,T₂))` |
+| `a * b` | `D₁ * D₂` (multiply) | `merge(T₁, T₂)` | `apply_tags(D₁*D₂, merge(T₁,T₂))` |
+| `a / b` | `D₁ / D₂` (divide) | `merge(T₁, T₂)` | `apply_tags(D₁/D₂, merge(T₁,T₂))` |
+| `a ^ n` | `D₁ ^ n` (power) | `T₁` (preserve) | `apply_tags(D₁^n, T₁)` |
+| `sqrt(a)` | `D₁ ^ ½` | `T₁` (preserve) | `apply_tags(D₁^½, T₁)` |
 | `sin(a)` | `D₁ == Angle` | `T₁` must be `{}` | `(1, {})` |
 | `exp(a)` | `D₁ == 1` | `T₁` must be `{}` | `(1, {})` |
 | `a -> unit` | unchanged | unchanged | `(D₁, T₁)` |
@@ -462,10 +507,36 @@ Time<TimeZone.UTC> + Time<TimeZone.JST>
 // Subtracting same-zone times → same-zone duration
 Time<TimeZone.UTC> - Time<TimeZone.UTC>
 = (T, {TimeZone: UTC}) - (T, {TimeZone: UTC})
+  Dimension: T - T = T (subtraction preserves dimension for +/-)
   Tags: merge({TimeZone: UTC}, {TimeZone: UTC}) = {TimeZone: UTC}
+  apply_tags: T ≠ Dimensionless, so tags preserved
 = Time<TimeZone.UTC> ✓
-// Result is "a duration within the UTC frame." If you want an
-// untagged duration: (@t2 - @t1) as Time
+
+// ---- Dimensionless Auto-Clear Examples ----
+
+// Ratio of same-tagged lengths → pure dimensionless
+Length<Frame.ECI> / Length<Frame.ECI>
+= (L, {Frame: ECI}) / (L, {Frame: ECI})
+  Dimension: L / L = Dimensionless
+  Tags: merge({Frame: ECI}, {Frame: ECI}) = {Frame: ECI}
+  apply_tags: Dimensionless → tags cleared!
+= Dimensionless ✓
+// A ratio of two ECI lengths is just a number, not "an ECI number."
+
+// Ratio of same-tagged counts → pure dimensionless
+Count<Countable.Person> / Count<Countable.Person>
+= (Count, {Countable: Person}) / (Count, {Countable: Person})
+  Dimension: Dimensionless
+  Tags: merge → {Countable: Person}
+  apply_tags: Dimensionless → tags cleared!
+= Dimensionless ✓
+// "What fraction of crew has PhDs?" → plain number, usable as a scalar.
+
+// Non-dimensionless: tags survive (Count cancels but Mass remains)
+Count<Countable.Person> * Mass / Count<Countable.Person>
+  Dimension: M (not Dimensionless)
+  apply_tags: M ≠ Dimensionless, so tags preserved
+= Mass<Countable.Person> ✓
 ```
 
 ### The `as` Cast
