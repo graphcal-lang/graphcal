@@ -1,20 +1,22 @@
 # Type System -- Spaces
 
-> Layer 5: Semantic context tags preventing cross-context mixing (Sguaba-inspired).
+> Layer 5: Semantic context safety via phantom type parameters, opt-in derive, and user-defined operators (Sguaba-inspired).
 
 ## Status
 
-**Decision level:** Advancing. Syntax: **`tag` + generics `<>` + `as` cast** (Option E). Tag propagation: **uniform `merge`** across all arithmetic operations (including `+`/`-`). Some questions remain (see Open Questions).
+**Decision level:** Redesigning. Moving from a built-in tag system (`tag` keyword, `merge` rules, `as` cast) to a generics-based approach: **phantom type parameters on user-defined structs + opt-in `derive` + user-defined operators**. This replaces the special-purpose tag subsystem with general-purpose language primitives.
 
 ## Summary
 
 Inspired by [Sguaba](https://github.com/helsing-ai/sguaba), which uses Rust phantom types to prevent mixing vectors from different coordinate systems. The core insight: values can share the same dimension but live in **different semantic spaces** that must not be mixed.
 
-A `tag` declares a family of semantically distinct contexts. Tags are applied as type parameters using generics syntax (`Length<Frame.ECI>`), and removed via explicit `as` cast (`@pos as Length`).
+Rather than a built-in tag layer with special rules (`merge`, `dimensionless auto-clear`, `as` cast), Graphcal provides general-purpose tools — **generic structs with phantom type parameters**, **opt-in operator derive**, and **user-defined operators** — that let users build Sguaba-style safety themselves. The compiler enforces frame safety through type unification, not through special tag algebra.
+
+**Primary use cases:** Coordinate frames and time zones. These are the domains where mixing is always wrong and consequences are severe. Lighter labeling use cases (chemical species, cost categories) don't justify the annotation cost.
 
 ## Sguaba: Prior Art and Lessons
 
-[Sguaba](https://github.com/helsing-ai/sguaba) is the primary inspiration for tags. It uses Rust phantom types to prevent mixing vectors from different coordinate frames. Key design patterns and how Graphcal adapts them:
+[Sguaba](https://github.com/helsing-ai/sguaba) is the primary inspiration. It uses Rust phantom types to prevent mixing vectors from different coordinate frames.
 
 ### How Sguaba Works
 
@@ -42,665 +44,373 @@ pub struct Rotation<From, To> { inner: UnitQuaternion, ... }
 
 Constructing a transform is `unsafe` — not for memory safety, but because the programmer is asserting "these numbers really do represent the claimed frame relationship." This is Sguaba's trust boundary.
 
-### What Graphcal Adopts
+Key Sguaba properties:
+- **No untagged spatial values.** Every `Vector` and `Coordinate` must have a frame. Scalars (`f64`, `Length`) are frameless because they are separate types.
+- **No implicit frame conversions.** All frame changes require explicit transforms or `unsafe` casts.
+- **Affine space distinction.** `Coordinate` (point) vs `Vector` (displacement) with different algebraic rules: `Point - Point = Vector`, `Point + Vector = Point`, `Point + Point` is undefined.
+- **Convention-based axis naming.** Two-level system: frame identity (`PlaneNed`) + convention (`NedLike` with north/east/down accessors).
+
+### What Graphcal Adapts from Sguaba
 
 | Sguaba Pattern | Graphcal Adaptation |
 | --- | --- |
-| Phantom type parameter per value | `Length<Frame.ECI>` — tags as type parameters on dimensions |
-| Compiler rejects mismatched frames | `merge` rejects conflicting tags at compile time |
-| `unsafe` transform construction | `as` cast as the trust boundary (explicit, auditable) |
-| `Rotation<A, B> * Rotation<B, C> → Rotation<A, C>` | `Transform<A, B>` with middle-type cancellation (deferred) |
-| No implicit frame conversions, ever | No implicit tag stripping — always explicit `as` |
-| Scalars are frameless; `vector.magnitude()` returns frameless `Length` | Untagged values are the default; dimensionless auto-clear strips tags from pure ratios |
+| Phantom type parameter per value | Generic struct type parameters (e.g., `Vec3<D, F>`) |
+| Zero-sized frame marker structs | Empty `type` declarations (e.g., `type ECI {}`) |
+| Compiler rejects mismatched frames | Generic type unification rejects `Vec3<D, ECI> + Vec3<D, Body>` |
+| `unsafe` transform construction | User-defined cross-type operators as trust boundary |
+| `Rotation<A, B> * Rotation<B, C> → Rotation<A, C>` | User-defined operators with multi-parameter generics |
+| No implicit frame conversions | No operator derives for cross-type; all explicit |
+| Affine `Coordinate` vs `Vector` distinction | User-defined as separate types with different operators |
 
-### Where Graphcal Diverges
+### Where Graphcal Differs from Sguaba
 
-**Sguaba has no untagged spatial values.** Every `Vector` and `Coordinate` must have a frame. Scalars (`f64`, `Length`, `Time`) are inherently frameless because they're separate types. Sguaba can enforce this because it's a specialized coordinate library.
+**Sguaba is a library; Graphcal is a language.** Sguaba requires `PhantomData<T>` boilerplate and manual trait implementations. Graphcal makes phantom type parameters and operator derive first-class language features — no boilerplate for the struct declaration, opt-in derive for common operators.
 
-Graphcal is a general-purpose calculation language where many values are legitimately context-free. The sticky merge rule (`tagged + untagged → tagged`) is Graphcal's generalization: an untagged value means "I don't have a context" — a valid semantic state — rather than "I'm in an unknown context." This enables `Time<TimeZone.UTC> + duration` without requiring the duration to be tagged.
+**Sguaba's operator implementations are manual.** Every `impl Add for Vector<In>` is hand-written. Graphcal's `derive(Add)` auto-generates same-type component-wise operators, while user-defined operators handle cross-type cases.
 
-**Sguaba distinguishes Coordinate (point) from Vector (displacement).** This is the affine space model: `Coordinate - Coordinate = Vector`, `Coordinate + Vector = Coordinate`, `Coordinate + Coordinate` is undefined. Graphcal does not yet distinguish points from displacements — both would be `Length<Frame.ECI>`. This may be worth revisiting (see Open Questions).
+## The Approach
 
-**Sguaba uses conventions (NED, FRD, ENU) as a separate axis from frame identity.** A frame has both an identity (`PlaneNed`) and a convention (`NedLike`) that determines axis naming. Graphcal's tag system could support this with a two-level declaration: `tag Frame : NED { Plane, Ship }` — but this is a future refinement.
+Three mechanisms work together:
 
-## Why Spaces (Not Alternatives)
+### 1. Generic Structs with Phantom Type Parameters
 
-Several mechanisms could solve the "same dimension, must not mix" problem. Spaces are the best fit for the full range of use cases:
+Types can have type parameters that appear in the type signature but not in the runtime data. These serve as compile-time markers:
 
-| Mechanism | How It Works | Limitations |
+```
+// Frame markers — empty types, zero runtime cost
+type ECI {}
+type Body {}
+type LVLH {}
+
+// A 3D vector parameterized by dimension and frame
+type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
+    x: D,
+    y: D,
+    z: D,
+}
+
+// F is a phantom parameter — it doesn't correspond to a field,
+// but it prevents mixing: Vec3<Length, ECI> + Vec3<Length, Body> is a type error.
+```
+
+The phantom type parameter `F` does not appear in the struct's fields — it exists purely in the type system. The compiler rejects operations between `Vec3<Length, ECI>` and `Vec3<Length, Body>` because the types don't unify, the same way `Vec3<Length, ECI> + Vec3<Velocity, ECI>` fails because `Length ≠ Velocity`.
+
+### 2. Opt-In Operator Derive
+
+Operators are NOT available by default on user-defined types. Each derivable operator must be explicitly requested, following the Rust principle that even `Debug` is opt-in:
+
+```
+// No derive → no operators at all. This is a pure data container.
+type Timestamp<TZ> {
+    epoch_seconds: Time,
+}
+
+// Opt-in derive → only the listed operators are generated.
+type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
+    x: D,
+    y: D,
+    z: D,
+}
+```
+
+**What derive generates:** For each derived operator, a component-wise implementation where both operands and the result are the same concrete type:
+
+| Derive | Generated Signature | Semantics |
 | --- | --- | --- |
-| **Separate base dimensions** | `dimension Person; dimension Packet;` — each gets its own axis | Only works for counting. Breaks for tagging same physical dimension (`Length` in ECI vs Body). Creates spurious derived dimensions (`Person / Packet`). |
-| **Branded newtypes** | Opaque wrapper types, manual unwrap | Very verbose. Doesn't compose with dimensional algebra. |
-| **Parameterized dimensions** | Tags embedded in the dimension type | Elegant but deeply couples tagging with the dimension algebra, making the type system significantly more complex. |
-| **Tags (orthogonal layer)** | `Length<Frame.ECI>` — tags are type parameters, separate from dimensions | Composes cleanly with dimensions. Works for all use case families. |
+| `Add` | `(Self, Self) -> Self` | Component-wise `+` on each field |
+| `Sub` | `(Self, Self) -> Self` | Component-wise `-` on each field |
+| `Neg` | `Self -> Self` | Component-wise negation on each field |
+| `Eq` | `(Self, Self) -> Bool` | Component-wise `==`, all must match |
+| `Ord` | `(Self, Self) -> Bool` | Requires total ordering on all fields |
 
-The key advantage of tags over alternatives: the tagging is **orthogonal** to dimensional algebra. `Length<Frame.ECI> * Time` doesn't require the dimension system to understand tags — the tag layer and dimension layer compose independently via the `merge` function.
+**Derive constraints:** A derive is only valid if each field's type supports the underlying operation. `derive(Add)` on a struct with a `Str` field is a compile error.
+
+**No implicit cross-type derive.** Operations like scalar multiplication (`Vec3 * Dimensionless`), dimension-changing multiplication (`Vec3<Velocity, F> * Time`), and cross-frame transforms are NEVER derived. They require explicit user-defined operators.
+
+### 3. User-Defined Operators
+
+For operations where the operand types differ or the result type differs from the operands, users define custom operators:
+
+```
+// Scalar multiplication — different operand types, same result type
+fn operator*<D: Dim, F>(v: Vec3<D, F>, s: Dimensionless) -> Vec3<D, F> =
+    Vec3 { x: v.x * s, y: v.y * s, z: v.z * s };
+
+// Dimension-changing multiplication — result type changes
+fn operator*<D: Dim, F>(v: Vec3<D, F>, t: Time) -> Vec3<D * Time, F> =
+    Vec3 { x: v.x * t, y: v.y * t, z: v.z * t };
+
+// Transform application — frame changes (the dangerous operation)
+type Rotation<From, To> {
+    // quaternion representation fields
+}
+fn operator*<A, B>(r: Rotation<A, B>, v: Vec3<Length, A>) -> Vec3<Length, B> = {
+    // rotation logic
+};
+
+// Transform composition — middle-type cancellation
+fn operator*<A, B, C>(r1: Rotation<A, B>, r2: Rotation<B, C>) -> Rotation<A, C> = {
+    // quaternion multiplication
+};
+
+// Magnitude — consumes the frame, returns frameless scalar
+fn magnitude<D: Dim, F>(v: Vec3<D, F>) -> D =
+    sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+```
+
+**Cross-type operators are the trust boundary.** Sguaba uses Rust's `unsafe` to mark "the programmer asserts this frame relationship is correct." In Graphcal, user-defined cross-type operators serve the same role — they are the explicit, auditable locations where frame relationships are established.
 
 ## Use Cases
 
-### Original Use Cases (Aerospace / Physics)
+### Coordinate Frames
 
-| Domain | Tag Family | Variants | Prevents |
-| --- | --- | --- | --- |
-| Coordinate frames | `Frame` | `Body`, `ECI`, `ECEF`, `LVLH` | Mixing reference frames |
-| Spacecraft identity | `Craft` | `Chaser`, `Target`, `Depot` | Mixing per-vehicle budgets |
-| Budget categories | `Budget` | `Allocated`, `Spent`, `Remaining` | Mixing budget columns |
-| Time epochs | `Epoch` | `UTC`, `GPS`, `TAI`, `TDB`, `MissionElapsed` | Mixing astrodynamic time scales |
-| Time zones | `TimeZone` | `UTC`, `EST`, `PST`, `JST`, `CET` | Mixing civil time references |
-
-### Counting Discrete Things
-
-Counting dimensions (crew members, packets, pixels, etc.) are a major new use case. Rather than creating a separate base dimension per countable thing ([18-non-si-dimensions.md](./18-non-si-dimensions.md)), they should be a single `Count` dimension with tags:
-
-| Domain | Tag Family | Variants | Prevents |
-| --- | --- | --- | --- |
-| Countable entities | `Countable` | `Person`, `Satellite`, `Cycle`, `Pixel`, `Packet` | Mixing counts of different things |
+The primary use case. Mixing reference frames is always wrong and has caused real mission failures (Mars Climate Orbiter).
 
 ```
-dimension Count;
-unit count: Count;
+// Frame marker types
+type ECI {}
+type Body {}
+type LVLH {}
 
-tag Countable { Person, Satellite, Cycle }
+// Framed 3D vector
+type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
+    x: D, y: D, z: D,
+}
 
-param crew: Count<Countable.Person> = 7 count;
-param sats: Count<Countable.Satellite> = 24 count;
+// Position and velocity in ECI
+param pos: Vec3<Length, ECI> = Vec3 { x: 6878 km, y: 0 km, z: 0 km };
+param vel: Vec3<Velocity, ECI> = Vec3 { x: 0 km/s, y: 7.5 km/s, z: 0 km/s };
 
-node bad = @crew + @sats;
-//  error[T001]: tag mismatch: Countable.Person != Countable.Satellite
-```
+// Same-frame addition — derived, just works
+node total_force: Vec3<Force, Body> = @thrust + @drag;
 
-This use case is important because it **stress-tests the arithmetic propagation rules**. For counting to work with tags, multiplication must interact correctly:
+// Cross-frame — compile error, types don't unify
+node bad = @thrust_body + @gravity_eci;
+//         ^^^^^^^^^^^^   ^^^^^^^^^^^^
+//         Vec3<Force, Body>  Vec3<Force, ECI>  — type error
 
-```
-// "7 people * 80 kg/person = 560 kg associated with crew"
-param crew: Count<Countable.Person> = 7 count;
-param mass_per_person: Mass / Count<Countable.Person> = 80 kg / count;
-node crew_mass: Mass<Countable.Person> = @crew * @mass_per_person;
-
-// To combine with structural mass, explicitly strip the Person tag:
-node total_mass: Mass = @crew_mass as Mass + @structure_mass;
+// Frame transform — user-defined operator, explicit
+param attitude: Rotation<ECI, Body> = ...;
+node gravity_body: Vec3<Force, Body> = @attitude * @gravity_eci;
 ```
 
 ### Time Zones
 
-Time zones are a universally understood tagging use case. Every programmer has dealt with time zone bugs; tags prevent them at compile time.
+Time zone bugs are universally understood. Mixing UTC with JST is always wrong.
 
 ```
-tag TimeZone { UTC, EST, PST, JST, CET }
+type UTC {}
+type JST {}
+type EST {}
 
-param launch_time: Time<TimeZone.UTC> = 14.5 hr;      // 14:30 UTC
-param local_display: Time<TimeZone.JST> = 23.5 hr;    // 23:30 JST
+type Timestamp<TZ> {
+    epoch_seconds: Time,
+}
 
-// Duration (untagged Time) — timezone-independent
+// Duration is a separate, unframed type — no timezone parameter
+// (this is just the built-in Time dimension)
+
+// User-defined: timestamp + duration → timestamp (timezone preserved)
+fn operator+<TZ>(t: Timestamp<TZ>, d: Time) -> Timestamp<TZ> =
+    Timestamp { epoch_seconds: t.epoch_seconds + d };
+
+// User-defined: timestamp - timestamp → duration (timezone consumed)
+fn operator-<TZ>(a: Timestamp<TZ>, b: Timestamp<TZ>) -> Time =
+    a.epoch_seconds - b.epoch_seconds;
+
+param launch: Timestamp<UTC> = Timestamp { epoch_seconds: 14.5 hr };
 param coast: Time = 45 min;
 
-// Tagged time + untagged duration → tagged time (tag sticks via merge)
-node arrival_utc: Time<TimeZone.UTC> = @launch_time + @coast;
-// merge({TimeZone: UTC}, {}) = {TimeZone: UTC} ✓
+// Timezone-safe addition — user-defined operator
+node arrival: Timestamp<UTC> = @launch + @coast;
 
-// Mixing time zones → compile error
-node bad = @launch_time + @local_display;
-// merge({TimeZone: UTC}, {TimeZone: JST}) → COMPILE ERROR ✓
+// Mixing timezones — compile error
+param display_jst: Timestamp<JST> = ...;
+node bad = @launch + @display_jst;   // type error: Timestamp<UTC> vs Timestamp<JST>
 
-// Explicit conversion via as:
-node combined: Time = @launch_time as Time + @local_display as Time;
-// Programmer asserts: "I know these are in different zones; I want to add the raw durations."
+// Timezone conversion — explicit user-defined function
+fn utc_to_jst(t: Timestamp<UTC>) -> Timestamp<JST> =
+    Timestamp { epoch_seconds: t.epoch_seconds + 9 hr };
 ```
 
-**Why this use case matters for the merge-rule debate:** Under strict `+`/`-` rules, `@launch_time + @coast` would be rejected because `{TimeZone: UTC} ≠ {}`. You'd need to write `@coast as Time<TimeZone.UTC>`, which is nonsensical — a 45-minute duration doesn't "belong to" UTC. Uniform merge handles this naturally: the untagged duration acquires the tag from the other operand. See [Arithmetic Rules](#arithmetic-rules) below.
+**Key difference from the old tag design:** Duration (`Time`) is not an "untagged Timestamp" — it's a completely different type. There is no "sticky merge" where `Timestamp<UTC> + Time → Timestamp<UTC>` happens via magic rules. Instead, the user explicitly defines `operator+(Timestamp<TZ>, Time) -> Timestamp<TZ>`. This is one line of code and makes the semantics visible.
 
-**Relationship to `Epoch`:** Time zones (`TimeZone`) and time epochs (`Epoch`) are distinct tag families:
-- `Epoch` (UTC, GPS, TAI, TDB): Different time *scales* with fixed mathematical offsets. Critical in astrodynamics.
-- `TimeZone` (UTC, EST, JST): Civil time offsets that can vary (DST). Critical in operations.
+### Affine Space (Points vs Displacements)
 
-A launch time could carry both: `Time<Epoch.UTC, TimeZone.UTC>` — the epoch and display zone are both UTC but convey different information.
+The generics approach naturally supports the affine space distinction that was awkward in the old tag system:
 
-### Engineering Domains
-
-| Domain | Tag Family | Variants | Example | Prevents |
-| --- | --- | --- | --- | --- |
-| Chemical species | `Species` | `O2`, `N2`, `CO2` | `param p_O2: Pressure<Species.O2> = 21.3 kPa;` | Mixing partial pressures |
-| Material grades | `Material` | `Steel_A36`, `Al_6061` | `param fy: Pressure<Material.Steel_A36> = 250 MPa;` | Using wrong material properties |
-| Load cases | `LoadCase` | `Static`, `Thermal`, `Dynamic` | `node sigma: Pressure<LoadCase.Static> = ...;` | Mixing load case results |
-| Flight phases | `Phase` | `Ascent`, `Coast`, `Descent` | `param fuel: Mass<Phase.Ascent> = 1000 kg;` | Mixing phase-specific budgets |
-| Cost categories | `CostCategory` | `Development`, `Production`, `Operations` | `param dev: Money<CostCategory.Development> = 50M USD;` | Mixing lifecycle cost categories |
-
-### Cross-Tag Operations in Practice
-
-Many real calculations intentionally combine values from different tag variants. Examples:
-
-**Dalton's law** (total pressure = sum of partial pressures):
 ```
-node total_pressure: Pressure =
-    @p_O2 as Pressure + @p_N2 as Pressure + @p_CO2 as Pressure;
-```
+type Position<F> derive(Eq) {
+    x: Length, y: Length, z: Length,
+}
 
-**Total lifecycle cost**:
-```
-node total_cost: Money =
-    @dev_cost as Money + @prod_cost as Money + @ops_cost as Money;
+type Displacement<F> derive(Add, Sub, Neg) {
+    x: Length, y: Length, z: Length,
+}
+
+// Position - Position = Displacement (user-defined)
+fn operator-<F>(a: Position<F>, b: Position<F>) -> Displacement<F> =
+    Displacement { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+
+// Position + Displacement = Position (user-defined)
+fn operator+<F>(p: Position<F>, d: Displacement<F>) -> Position<F> =
+    Position { x: p.x + d.x, y: p.y + d.y, z: p.z + d.z };
+
+// Position + Position → NOT DEFINED → compile error
+// Displacement + Displacement → derived via derive(Add)
 ```
 
-**Total fuel budget** (across flight phases):
+This was a deferred open question under the old design. With user-defined operators, it's straightforward.
+
+### Transform Composition
+
 ```
-node total_fuel: Mass =
-    @fuel_ascent as Mass + @fuel_coast as Mass + @fuel_descent as Mass;
+type Rotation<From, To> { /* quaternion fields */ }
+
+// Application: Rotation<A, B> * Displacement<A> → Displacement<B>
+fn operator*<A, B>(r: Rotation<A, B>, v: Displacement<A>) -> Displacement<B> = ...;
+
+// Composition: Rotation<A, B> * Rotation<B, C> → Rotation<A, C>
+fn operator*<A, B, C>(r1: Rotation<A, B>, r2: Rotation<B, C>) -> Rotation<A, C> = ...;
+
+// Inverse
+fn inverse<A, B>(r: Rotation<A, B>) -> Rotation<B, A> = ...;
 ```
 
-**Time zone conversion** (display same instant in different zones):
-```
-param offset_jst: Time = 9 hr;
-node launch_jst: Time<TimeZone.JST> =
-    (@launch_utc as Time + @offset_jst) as Time<TimeZone.JST>;
-```
+The middle-type cancellation (`B` must match in composition) falls out of generic type unification — no special language rule needed.
 
-In all cases, `as` serves as an intentional marker that the cross-tag combination is deliberate.
+## Comparison with Previous Tag System
 
-## Syntax Exploration
+The old design used a built-in `tag` keyword with special rules. Here is why the new approach is preferred:
 
-The syntax has three independent axes: (1) declaration keyword, (2) annotation syntax for tagging values, and (3) escape syntax for removing tags. Each is evaluated below.
-
-### Axis 1: Declaration Keyword
-
-The word `space` was chosen because of the coordinate-frame origin (Sguaba). As the feature broadens to non-spatial use cases, does the name still work?
-
-| Keyword | Reads Well For | Reads Poorly For |
+| Aspect | Old: Built-in Tags | New: Generics + Derive + Operators |
 | --- | --- | --- |
-| `space` | Coordinate frames (`space Frame`), mathematical spaces | Chemical species (`space Species`??), material grades (`space Material`??) |
-| `tag` | All use cases — it's what the feature IS | Slightly informal/mechanical |
-| `context` | Budget, phases, epochs ("the development context") | Coordinate frames ("the ECI context" is unusual) |
-| `label` | Counting, categories | Coordinate frames, chemical species |
-| `brand` | Type-theory accuracy | Too obscure for engineering users |
-| `family` | Categorization | Too abstract, no clear precedent in PLs |
+| **Mechanism count** | Special `tag` keyword, `merge` function, `dimensionless auto-clear`, `as` cast — four new concepts | Generic structs, `derive`, `fn operator` — three concepts that serve many purposes |
+| **Safety enforcement** | Built-in merge rules | Type unification (the same mechanism that catches `Length + Mass`) |
+| **Affine space** | Deferred open question | User-defined naturally (Position vs Displacement types) |
+| **Transform composition** | Deferred open question | User-defined naturally (multi-parameter generics) |
+| **Sticky merge** | Automatic: `tagged + untagged → tagged` | Explicit: user defines `operator+(Timestamp<TZ>, Time)` |
+| **Dimensionless auto-clear** | Built-in rule | Not needed — types are structural, no flat tag set to clear |
+| **Use case scope** | Tried to cover everything (species, materials, budgets, cost categories) | Focused on high-value cases (coordinate frames, time zones) |
+| **Operator behavior** | Hardcoded, same for all tag families | User-defined per type, can express domain-specific algebra |
+| **Learning cost** | New concepts unique to Graphcal | Patterns familiar from Rust, Haskell, C++ (phantom types, operator overloading) |
+| **Explicitness** | `merge` rules run implicitly on every arithmetic op | Every operator is visibly defined or derived |
 
-**Evaluation**: `space` is domain-specific jargon that works for physics but confuses elsewhere. `tag` is the most honest name — it describes exactly what the feature does (attach a compile-time tag) without pretending to be domain-specific. `context` is a reasonable runner-up.
+## Known Gaps
 
-### Axis 2: Annotation Syntax
+### 1. No Bare Scalar Tagging
 
-This is where the current design is weakest. `in` reads naturally for spatial/container contexts but breaks down for classification, properties, and counting.
-
-Read each column top-to-bottom to feel how the syntax reads across diverse use cases:
-
-```
-  USE CASE                 in (current)                        [brackets]                       for                            of
-
-  Coordinate frame         Length in Frame.ECI                 Length[Frame.ECI]                Length for Frame.ECI           Length of Frame.ECI
-  Spacecraft identity      Mass in Craft.Chaser                Mass[Craft.Chaser]               Mass for Craft.Chaser          Mass of Craft.Chaser
-  Counting                 Count in Countable.Person           Count[Countable.Person]          Count for Countable.Person     Count of Countable.Person
-  Partial pressure         Pressure in Species.O2              Pressure[Species.O2]             Pressure for Species.O2        Pressure of Species.O2
-  Material property        Pressure in Material.Steel_A36      Pressure[Material.Steel_A36]     Pressure for Material.Steel    Pressure of Material.Steel
-  Budget category          Money in Budget.Allocated           Money[Budget.Allocated]           Money for Budget.Allocated     Money of Budget.Allocated
-  Flight phase             Mass in Phase.Ascent                Mass[Phase.Ascent]               Mass for Phase.Ascent          Mass of Phase.Ascent
-  Cost category            Money in CostCategory.Development   Money[CostCategory.Development]  Money for CostCategory.Dev     Money of CostCategory.Dev
-```
-
-| Syntax | Pros | Cons |
-| --- | --- | --- |
-| **`in`** | Natural for spatial ("length in ECI frame"), familiar from SQL/natural language | "Pressure in Species.O2" sounds physical (the pressure is literally inside oxygen?). "Pressure in Material.Steel_A36" is worse. Misleading for non-container contexts. |
-| **`[Tag]`** (brackets) | Concise, no English-reading pretense, universal across all use cases, familiar from parameterized types in many PLs | Visually similar to existing `index` syntax `T[I]` — could `Pressure[Species.O2]` be confused with `Pressure[Species]` (indexed table)? Potentially disambiguated: bare family = index, qualified variant = tag. |
-| **`for`** | Reads well for ownership/purpose ("mass for the ascent phase", "pressure for O2", "money for development") | "Length for Frame.ECI" is awkward — it's not "for" the frame, it's "expressed in" it. |
-| **`of`** | Reads well for belonging ("pressure of O2", "mass of the chaser") | "Length of Frame.ECI" is wrong — the frame doesn't have a length. "Count of Countable.Person" is redundant. |
-
-Additional options considered and rejected:
-
-| Syntax | Why Rejected |
-| --- | --- |
-| `@Tag` suffix | Conflicts with `@name` graph references. |
-| `<Tag>` angle brackets | Conflicts with generics (`Vec3<Length>`). |
-| `::Tag` double colon | Looks like module paths (namespace confusion). |
-| `~Tag` tilde | Novel but unfamiliar, no precedent. |
-| `tagged Tag` keyword | Verbose. |
-
-### Axis 3: Escape Syntax
-
-When you intentionally cross a space boundary, how do you remove the tag?
-
-| Syntax | Example | Pros | Cons |
-| --- | --- | --- | --- |
-| `.untagged` (current) | `@p_O2.untagged` | Reads as an adjective (get the untagged version) | Long (9 chars). Looks like a field access. |
-| `.untag` | `@p_O2.untag` | Shorter. Verb form. | Looks like mutation ("untag this value"). |
-| `.raw` | `@p_O2.raw` | Very short. Clear intent. | Implies the tagged version is somehow "cooked." |
-| `.strip` | `@p_O2.strip` | Active verb. | Overloaded (string stripping in many PLs). |
-| `!` suffix | `@p_O2!` | Extremely concise. | Looks like Rust's macro syntax or Ruby's mutation convention. Could be confused with logical NOT. |
-| `untag(expr)` | `untag(@p_O2)` | Function-like syntax, visually distinct | Adds a keyword. Wrapping is more verbose for chained expressions. |
-
-### Interaction of Axis 1 + 2: Combined Syntax Options
-
-Some combinations feel more natural than others. Here are the most coherent pairings:
-
-**Option A: `space` + `in`** (current)
-```
-space Frame { Body, ECI, ECEF, LVLH }
-
-param pos: Length in Frame.ECI = 6878 km;
-param p_O2: Pressure in Species.O2 = 21.3 kPa;
-param crew: Count in Countable.Person = 7 count;
-```
-Verdict: Reads naturally for coordinates, poorly for chemistry/materials.
-
-**Option B: `tag` + `in`**
-```
-tag Frame { Body, ECI, ECEF, LVLH }
-
-param pos: Length in Frame.ECI = 6878 km;
-param p_O2: Pressure in Species.O2 = 21.3 kPa;
-param crew: Count in Countable.Person = 7 count;
-```
-Verdict: Better declaration keyword, but `in` still reads poorly for non-spatial use cases.
-
-**Option C: `tag` + `[brackets]`**
-```
-tag Frame { Body, ECI, ECEF, LVLH }
-
-param pos: Length[Frame.ECI] = 6878 km;
-param p_O2: Pressure[Species.O2] = 21.3 kPa;
-param crew: Count[Countable.Person] = 7 count;
-param fy: Pressure[Material.Steel_A36] = 250 MPa;
-
-// Escape: use .untag or similar
-node total_pressure: Pressure = @p_O2.untag + @p_N2.untag;
-
-// Generic function:
-fn magnitude<S: Frame>(v: Vec3<Length>[S]) -> Length = ...;
-
-// Multi-tag:
-param force: Force[Frame.ECI][Craft.Chaser] = ...;
-```
-Verdict: Universal readability. Concise. But the `[Tag]` vs `[Index]` disambiguation needs a rule.
-
-**Option D: `tag` + `for`**
-```
-tag Frame { Body, ECI, ECEF, LVLH }
-
-param pos: Length for Frame.ECI = 6878 km;
-param p_O2: Pressure for Species.O2 = 21.3 kPa;
-param crew: Count for Countable.Person = 7 count;
-param fuel: Mass for Phase.Ascent = 1000 kg;
-```
-Verdict: Reads well for most cases. "Length for Frame.ECI" is the weakest link.
-
-### `[Tag.Variant]` vs `[Index]` Disambiguation
-
-If brackets are chosen, there is a potential ambiguity with indexed types (`Velocity[Maneuver]` = a table of velocities). However, tags always use a **qualified variant** (`Frame.ECI`) while indexes use a **bare family name** (`Maneuver`):
+The old tag system allowed `Length<Frame.ECI>` — a tagged bare scalar with no wrapper struct. The new approach requires a struct for any tagged value:
 
 ```
-param dv: Velocity[Maneuver]             // Indexed table — one value per Maneuver variant
-param pos: Length[Frame.ECI]             // Tagged — a single value tagged with ECI
-
-// Alternatively, if the disambiguation feels fragile, a sigil could mark tags:
-param pos: Length[.Frame.ECI]            // Leading dot signals "specific variant, not table axis"
-param pos: Length[#Frame.ECI]            // Hash signals "tag"
+// Old: Length<Frame.ECI> — direct
+// New: needs a wrapper
+type FramedLength<F> derive(Add, Sub, Neg) { value: Length }
 ```
 
-The bare vs. qualified distinction is arguably natural — asking for "all maneuvers" (table) vs. "specifically ECI" (tag) — but needs to be validated with more examples.
+**Mitigation:** The primary use cases (coordinate frames, time zones) naturally involve multi-field structs (`Vec3`, `Timestamp`). The wrapper is one line for the rare 1D case. There is no use case where this is prohibitive.
 
-### Recommendation: Option E — `tag` + Generics `<>` + `as` Cast
+### 2. Unconstrained Phantom Type Parameters
 
-After exploring options A–D, a fifth option emerged that resolves most open questions cleanly: **tags are type parameters on dimensions**, using existing generics syntax, with `as` for explicit cast/untag.
-
-```
-tag Frame { Body, ECI, ECEF, LVLH }
-tag Species { O2, N2, CO2 }
-tag Countable { Person, Satellite, Cycle }
-tag CostCategory { Development, Production, Operations }
-
-param pos: Length<Frame.ECI> = 6878 km;
-param p_O2: Pressure<Species.O2> = 21.3 kPa;
-param crew: Count<Countable.Person> = 7 count;
-param fy: Pressure<Material.Steel_A36> = 250 MPa;
-param thrust: Vec3<Force<Frame.Body>> = ...;
-param dev_cost: Money<CostCategory.Development> = 50 M_USD;
-
-// Multi-tag (independent families, comma-separated):
-param force: Force<Frame.ECI, Craft.Chaser> = ...;
-
-// Untag via `as` cast — explicit, deliberate, familiar:
-node total_pressure: Pressure =
-    @p_O2 as Pressure + @p_N2 as Pressure;
-
-// Partial untag — strip one family, keep others:
-node force_eci: Force<Frame.ECI> = @force as Force<Frame.ECI>;
-
-// Generic functions:
-fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length = ...;
-```
-
-**Why generics over brackets:**
-
-| Aspect | `[brackets]` (Option C) | `<generics>` (Option E) |
-| --- | --- | --- |
-| Index disambiguation | Ambiguous: `Velocity[Maneuver]` (index) vs `Length[Frame.ECI]` (tag) | Clean: `[...]` = index, `<...>` = type parameter |
-| Nesting | `Vec3<Force>[Frame.Body]` — tag on the Vec3 | `Vec3<Force<Frame.Body>>` — tag on the Force (correct) |
-| Multi-tag | `Force[Frame.ECI][Craft.Chaser]` — chained brackets | `Force<Frame.ECI, Craft.Chaser>` — comma-separated params |
-| Partial untag | No obvious syntax | `@x as Force<Frame.ECI>` — natural |
-| Escape mechanism | `.untag` (method-like) | `as` (cast, familiar from Rust/TS/Python) |
-| Generics | `fn f<S: Frame>(x: Length[S])` — mixed brackets | `fn f<F: Frame>(x: Length<F>)` — uniform `<>` |
-
-## Formal Type Model
-
-### Type Representation
-
-A value's type is a pair of a **dimension** and a **tag set**:
+Without a trait/kind system, phantom type parameters accept any type:
 
 ```
-Type = (Dimension, TagSet)
-TagSet = { family₁: variant₁, family₂: variant₂, ... }   // may be empty
+type Vec3<D: Dim, F> { x: D, y: D, z: D }
+
+// D is constrained (D: Dim), but F is unconstrained:
+// Vec3<Length, ECI>     ✓  (intended)
+// Vec3<Length, Bool>    ✓  (compiles but nonsensical)
+// Vec3<Length, Length>  ✓  (compiles but nonsensical)
 ```
 
-Examples:
+**Mitigation:** This is not dangerous — `Vec3<Length, Bool>` still can't be mixed with `Vec3<Length, ECI>`. It's messy, not unsafe. A future constraint system (`F: Frame`) could tighten this, but it's not required for correctness.
 
-| Graphcal Syntax | Internal Representation |
-| --- | --- |
-| `Length` | `(Length, {})` |
-| `Length<Frame.ECI>` | `(Length, {Frame: ECI})` |
-| `Force<Frame.Body, Craft.Chaser>` | `(M·L·T⁻², {Frame: Body, Craft: Chaser})` |
-| `Mass / Count<Countable.Person>` | `(M·Count⁻¹, {Countable: Person})` |
-| `Dimensionless` | `(1, {})` |
+### 3. Type-Level Dimension Arithmetic in Generics
 
-**Tag binding in type expressions:** The `<>` tag binds to the immediately preceding type name, tighter than dimension arithmetic operators (`*`, `/`). So `Mass / Count<Countable.Person>` means "mass per person-count" — the tag is on `Count`, where it semantically belongs. Internally, the tag set is flat (not attached to individual dimension factors), so the representation is `(M·Count⁻¹, {Countable: Person})`. This is analogous to how `Vec3<Force<Frame.Body>>` puts the tag on `Force`, not on `Vec3`.
-
-### Why a Flat Tag Set (Not Per-Factor)
-
-Three representations were considered:
-
-| Model | Representation | Idea |
-| --- | --- | --- |
-| **A: Flat** | `(Dimension, TagSet)` | Tags on the whole type |
-| **B: Per-factor** | `Map<BaseDimId, (exp, TagSet)>` | Each base dimension factor carries its own tags |
-| **C: Tags-as-keys** | `Map<(BaseDimId, TagSet), exp>` | Tagged and untagged dims are different axes |
-
-**Model C is fatally flawed.** When `Velocity<Frame.ECI>` (which expands to `L·T⁻¹` with all factors tagged ECI) is multiplied by untagged `Time`, the `Time<ECI>⁻¹` and `Time` factors sit on *different axes* and don't cancel. The result is a nonsensical three-factor type instead of `Length<Frame.ECI>`.
-
-**Model B has an unsolvable tag-distribution problem.** When the user writes `Force<Frame.Body>`, which of the three base factors (`M`, `L`, `T⁻²`) receives the Body tag? The only workable answer is "all of them," but this creates semantically dubious per-factor tags (`Mass<Frame.Body>` — mass in a frame?). Model B also loses tag provenance through cancellation: `Count<Person> * Mass / Count<Person>` gives plain `Mass` because the Person tag was on Count, Count cancelled, and the tag is lost with it.
-
-**Model A (flat) is correct because tags describe the *value*, not individual dimension factors.** When we say `Force<Frame.Body>`, we mean "this force is in the body frame" — the whole quantity, not its Mass or Length components. Similarly, `Mass / Count<Countable.Person>` means "this mass-per-count quantity is in the Person context." The syntax puts `<>` on a specific type name for readability, but the semantic context applies to the whole value.
-
-**Flat tag set weakness and fix:** The flat model has one undesirable behavior — when same-tagged, same-dimensioned values divide, the tag survives on a dimensionless result: `Length<ECI> / Length<ECI>` → `Dimensionless<Frame.ECI>`. A pure ratio has no physical dimension to "belong to" a context. This is fixed by the **dimensionless auto-clear** rule (see below).
-
-### Tag Merge Function
-
-The core of tag propagation is the `merge` function, which combines two tag sets family-by-family:
+To avoid defining separate types per dimension (`Vec3Position`, `Vec3Velocity`, `Vec3Force`...), the type system must support dimension arithmetic in generic return types:
 
 ```
-merge(T₁, T₂):
-    result = {}
-    for each family F present in T₁ or T₂:
-        if F ∈ T₁ and F ∈ T₂:
-            if T₁[F] == T₂[F]:   result[F] = T₁[F]    // same variant → keep
-            else:                  COMPILE ERROR          // conflict → reject
-        if F ∈ T₁ only:           result[F] = T₁[F]     // sticky: tagged × untagged → keep
-        if F ∈ T₂ only:           result[F] = T₂[F]     // sticky: untagged × tagged → keep
-    return result
+// This requires evaluating D * Time at the type level:
+fn operator*<D: Dim, F>(v: Vec3<D, F>, t: Time) -> Vec3<D * Time, F> =
+    Vec3 { x: v.x * t, y: v.y * t, z: v.z * t };
 ```
 
-### Dimensionless Auto-Clear Rule
+This is a non-trivial type system feature. Without it, users must define separate types and operators for each dimension combination (type explosion). With it, one generic `Vec3<D, F>` and a few generic operators cover all cases.
 
-When an arithmetic operation produces a **dimensionless** result, the tag set is automatically cleared:
+**Mitigation:** Graphcal already has dimension algebra as a built-in. Extending it to work inside generic type expressions is a natural generalization, not a fundamentally new capability.
 
-```
-apply_tags(D_result, T_merged):
-    if D_result == Dimensionless:
-        return (D_result, {})     // tags cleared — a pure ratio has no context
-    else:
-        return (D_result, T_merged)
-```
+### 4. More Boilerplate Than Built-In Tags
 
-This prevents the flat model from producing useless tagged-dimensionless values:
+The old system required one `tag Frame { ECI, Body }` declaration. The new system requires: empty marker types, a generic struct, derive annotations, and user-defined cross-type operators. For coordinate frames:
 
 ```
-// Without auto-clear: Length<ECI> / Length<ECI> → Dimensionless<Frame.ECI>  (bad)
-// With auto-clear:    Length<ECI> / Length<ECI> → Dimensionless              (good)
+// ~15 lines of setup (defined once, used everywhere):
+type ECI {}
+type Body {}
+type LVLH {}
 
-// Without auto-clear: Count<Person> / Count<Person> → Dimensionless<Person> (bad)
-// With auto-clear:    Count<Person> / Count<Person> → Dimensionless          (good)
+type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
+    x: D, y: D, z: D,
+}
 
-// Non-dimensionless results are unaffected:
-// Count<Person> * Mass / Count<Person> → Mass<Countable.Person>  (tag survives, good)
+fn operator*<D: Dim, F>(v: Vec3<D, F>, s: Dimensionless) -> Vec3<D, F> =
+    Vec3 { x: v.x * s, y: v.y * s, z: v.z * s };
+
+fn operator*<D: Dim, F>(v: Vec3<D, F>, t: Time) -> Vec3<D * Time, F> =
+    Vec3 { x: v.x * t, y: v.y * t, z: v.z * t };
 ```
 
-The rationale: a dimensionless ratio is a pure number. `Length<ECI> / Length<ECI>` is just a scaling factor; it doesn't "belong to" the ECI frame. Tags describe the semantic context of a *dimensioned* value — when the dimension cancels completely, the context has no anchor.
+**Mitigation:** This is library code — defined once, imported everywhere. The standard library or a prelude package can provide common types (`Vec3`, `Quaternion`, `Rotation`, `Timestamp`). The boilerplate pays for itself in expressiveness (affine space, transforms, custom algebra).
 
-### Arithmetic Rules
+### 5. Operator Overloading Makes `+` Context-Dependent
 
-All arithmetic operations use the **uniform merge** rule for tags, with **dimensionless auto-clear**:
-
-| Operation | Dimension Rule | Tag Rule | Result |
-| --- | --- | --- | --- |
-| `a + b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `apply_tags(D₁, merge(T₁,T₂))` |
-| `a - b` | `D₁ == D₂` (must match) | `merge(T₁, T₂)` | `apply_tags(D₁, merge(T₁,T₂))` |
-| `a * b` | `D₁ * D₂` (multiply) | `merge(T₁, T₂)` | `apply_tags(D₁*D₂, merge(T₁,T₂))` |
-| `a / b` | `D₁ / D₂` (divide) | `merge(T₁, T₂)` | `apply_tags(D₁/D₂, merge(T₁,T₂))` |
-| `a ^ n` | `D₁ ^ n` (power) | `T₁` (preserve) | `apply_tags(D₁^n, T₁)` |
-| `sqrt(a)` | `D₁ ^ ½` | `T₁` (preserve) | `apply_tags(D₁^½, T₁)` |
-| `sin(a)` | `D₁ == Angle` | `T₁` must be `{}` | `(1, {})` |
-| `exp(a)` | `D₁ == 1` | `T₁` must be `{}` | `(1, {})` |
-| `a -> unit` | unchanged | unchanged | `(D₁, T₁)` |
-| `a as D` | `D₁ ~> D` (cast) | stripped/narrowed | `(D, T_target)` |
-
-**Why uniform merge (not strict-for-addition):**
-
-An earlier design used strict tag matching for `+`/`-` (requiring `T₁ == T₂` exactly) while using `merge` for `*`/`/`. The rationale: adding `Pressure<Species.O2> + Pressure` (tagged + untagged) seemed error-prone. However, this distinction is empirical, not principled, and **the time zone use case shows it breaks down**:
+This is the strongest objection given Graphcal's "explicitness over implicitness" philosophy. When you see `a + b`, you now need to know the types of `a` and `b` to know what `+` does:
 
 ```
-param launch_utc: Time<TimeZone.UTC> = 14.5 hr;
-param coast: Time = 45 min;  // untagged duration
-
-// Under strict-for-addition: ERROR — {TimeZone: UTC} ≠ {}
-// Under uniform merge: merge({TimeZone: UTC}, {}) = {TimeZone: UTC} ✓
-node arrival: Time<TimeZone.UTC> = @launch_utc + @coast;
+v1 + v2          // Vec3 derive(Add): component-wise
+p + d            // Position + Displacement: user-defined, returns Position
+t1 - t2          // Timestamp - Timestamp: user-defined, returns Time
 ```
 
-Adding a duration to a timestamped value is natural and correct. The duration is semantically "timezone-independent" — it doesn't *conflict* with UTC, it simply doesn't carry a timezone. Forcing `@coast as Time<TimeZone.UTC>` is nonsensical (a 45-minute interval doesn't belong to a timezone). The same pattern applies elsewhere:
-
-- `Force<Frame.Body> + gravitational_force` — an untagged gravity vector should be addable to a body-frame force without explicit tagging.
-- `Mass<Phase.Ascent> + tank_dry_mass` — untagged structural mass should be addable to phase-specific fuel mass.
-
-The merge function already does the right thing here: `merge({tag}, {}) = {tag}` (sticky). Only `merge({tag_A}, {tag_B})` when `A ≠ B` errors. The remaining concern — that `Pressure<Species.O2> + Pressure` might mask an error — is addressed by the observation that **if the untagged value was meant to carry a tag, it should have been tagged at its declaration site**. An untagged value is explicitly "not tagged," which is a valid semantic state, not an error.
-
-### Worked Traces
-
-```
-// Velocity in ECI * Time = Length in ECI
-Velocity<Frame.ECI> * Time
-= (L·T⁻¹, {Frame: ECI}) * (T, {})
-  Dimension: L·T⁻¹ * T = L ✓
-  Tags: merge({Frame: ECI}, {}) = {Frame: ECI}
-= Length<Frame.ECI> ✓
-
-// Force in Body * Length in Body = Energy in Body
-Force<Frame.Body> * Length<Frame.Body>
-= (M·L·T⁻², {Frame: Body}) * (L, {Frame: Body})
-  Dimension: M·L²·T⁻² ✓
-  Tags: merge({Frame: Body}, {Frame: Body}) = {Frame: Body}
-= Energy<Frame.Body> ✓
-
-// Count of persons * mass-per-person = mass of persons
-Count<Countable.Person> * Mass / Count<Countable.Person>
-= (Count, {Countable: Person}) * (M·Count⁻¹, {Countable: Person})
-  Dimension: M ✓
-  Tags: merge({Countable: Person}, {Countable: Person}) = {Countable: Person}
-= Mass<Countable.Person> ✓
-
-// Mixing frames → error
-Force<Frame.Body> * Length<Frame.ECI>
-  Tags: merge({Frame: Body}, {Frame: ECI})
-  Frame: Body ≠ ECI → COMPILE ERROR ✓
-
-// Multi-tag * untagged → tags preserved
-Force<Frame.ECI, Craft.Chaser> * Time
-= (M·L·T⁻², {Frame: ECI, Craft: Chaser}) * (T, {})
-  Dimension: M·L·T⁻¹ ✓
-  Tags: merge({Frame: ECI, Craft: Chaser}, {}) = {Frame: ECI, Craft: Chaser}
-= Impulse<Frame.ECI, Craft.Chaser> ✓
-
-// Addition with mismatched tags → error
-Pressure<Species.O2> + Pressure<Species.N2>
-  Tags: merge({Species: O2}, {Species: N2})
-  Species: O2 ≠ N2 → COMPILE ERROR ✓
-  Fix: (@p_O2 as Pressure) + (@p_N2 as Pressure)
-
-// ---- Time Zone Examples (uniform merge for addition) ----
-
-// Tagged time + untagged duration → tagged time
-Time<TimeZone.UTC> + Time
-= (T, {TimeZone: UTC}) + (T, {})
-  Dimension: T == T ✓
-  Tags: merge({TimeZone: UTC}, {}) = {TimeZone: UTC}
-= Time<TimeZone.UTC> ✓
-// "14:30 UTC + 45 min = 15:15 UTC"
-
-// Mixing time zones → error
-Time<TimeZone.UTC> + Time<TimeZone.JST>
-  Tags: merge({TimeZone: UTC}, {TimeZone: JST})
-  TimeZone: UTC ≠ JST → COMPILE ERROR ✓
-  Fix: (@t_utc as Time) + (@t_jst as Time)
-
-// Subtracting same-zone times → same-zone duration
-Time<TimeZone.UTC> - Time<TimeZone.UTC>
-= (T, {TimeZone: UTC}) - (T, {TimeZone: UTC})
-  Dimension: T - T = T (subtraction preserves dimension for +/-)
-  Tags: merge({TimeZone: UTC}, {TimeZone: UTC}) = {TimeZone: UTC}
-  apply_tags: T ≠ Dimensionless, so tags preserved
-= Time<TimeZone.UTC> ✓
-
-// ---- Dimensionless Auto-Clear Examples ----
-
-// Ratio of same-tagged lengths → pure dimensionless
-Length<Frame.ECI> / Length<Frame.ECI>
-= (L, {Frame: ECI}) / (L, {Frame: ECI})
-  Dimension: L / L = Dimensionless
-  Tags: merge({Frame: ECI}, {Frame: ECI}) = {Frame: ECI}
-  apply_tags: Dimensionless → tags cleared!
-= Dimensionless ✓
-// A ratio of two ECI lengths is just a number, not "an ECI number."
-
-// Ratio of same-tagged counts → pure dimensionless
-Count<Countable.Person> / Count<Countable.Person>
-= (Count, {Countable: Person}) / (Count, {Countable: Person})
-  Dimension: Dimensionless
-  Tags: merge → {Countable: Person}
-  apply_tags: Dimensionless → tags cleared!
-= Dimensionless ✓
-// "What fraction of crew has PhDs?" → plain number, usable as a scalar.
-
-// Non-dimensionless: tags survive (Count cancels but Mass remains)
-Count<Countable.Person> * Mass / Count<Countable.Person>
-  Dimension: M (not Dimensionless)
-  apply_tags: M ≠ Dimensionless, so tags preserved
-= Mass<Countable.Person> ✓
-```
-
-### The `as` Cast
-
-`as` performs an explicit type cast that can strip or narrow tags:
-
-```
-// Full untag (strip all tags):
-@p_O2 as Pressure
-= (Pressure, {Species: O2}) → (Pressure, {})
-
-// Partial untag (strip one family, keep others):
-@force as Force<Frame.ECI>
-= (M·L·T⁻², {Frame: ECI, Craft: Chaser}) → (M·L·T⁻², {Frame: ECI})
-
-// The dimension must be compatible — you cannot cast Length to Mass:
-@pos as Mass   // COMPILE ERROR: dimension mismatch
-
-// Tagging (adding a tag) at a declaration site:
-param p_O2: Pressure<Species.O2> = 21.3 kPa;
-// The literal 21.3 kPa is (Pressure, {}). The type annotation adds the tag.
-// This is the primary way to create tagged values.
-
-// Tagging via as (adding a tag to an untagged value):
-node p_tagged: Pressure<Species.O2> = @raw_pressure as Pressure<Species.O2>;
-// This is the "downcast" direction — programmer asserts the tag is correct.
-```
-
-### Generic Functions
-
-Tags integrate with the existing `<D: Dim>` generics:
-
-```
-// Generic over a tag variant:
-fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length =
-    sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-// Magnitude is frame-independent, so the result is untagged Length.
-
-// Generic over dimension — tags flow through automatically:
-fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D =
-    a + (b - a) * t;
-// If called with Length<Frame.ECI>, D binds to the full tagged type.
-// Result is Length<Frame.ECI>.
-
-// Generic over both dimension and tag:
-fn scale<D: Dim, F: Frame>(v: D<F>, s: Dimensionless) -> D<F> =
-    v * s;
-// Requires higher-kinded types (D is a type constructor parameterized by F).
-// May be deferred — the simpler `fn scale<D: Dim>(v: D, s: Dimensionless) -> D`
-// already handles this if D binds to the full tagged type.
-```
-
-## Crossing Tag Boundaries
-
-Two mechanisms for intentional cross-tag operations:
-
-### 1. `as` Cast (General Mechanism)
-
-```
-node total_pressure: Pressure =
-    @p_O2 as Pressure + @p_N2 as Pressure;
-
-node total_cost: Money =
-    @dev_cost as Money + @prod_cost as Money;
-```
-
-The `as` keyword is familiar from Rust, TypeScript, Python, and Kotlin. It signals a deliberate, explicit type operation — the programmer is asserting that stripping the tag is intentional.
-
-### 2. `Transform` (Coordinate Frames Only)
-
-```
-node eci_to_body: Transform<Frame.ECI, Frame.Body> = {
-    Transform.from_rotation(@attitude_quaternion)
-};
-node thrust_eci: Vec3<Force<Frame.ECI>> = @eci_to_body.inverse() * @thrust_body;
-```
-
-`Transform` is domain-specific to coordinate frames. Most tag families have no meaningful transform — for those, `as` is the only crossing mechanism.
-
-## Interaction with Other Layers
-
-- Tags are **optional**. Untagged values are the default.
-- Tags are **type parameters** on dimensions. `Length<Frame.ECI>` is a more specific type than `Length`.
-- The tag layer and dimension layer are independent: dimension algebra produces the result dimension, `merge` produces the result tag set.
-- `as` casts go from more specific (tagged) to less specific (untagged). At declaration sites, untagged values can be assigned to tagged types (the annotation provides the tag).
+**Mitigation:** This is the same tradeoff every language with operator overloading makes. The opt-in derive makes it visible at the type declaration site. User-defined operators are explicit function definitions that can be audited. The alternative (named functions only: `add_vec(v1, v2)`, `translate(p, d)`) is safe but significantly more verbose for math-heavy engineering calculations. The opt-in derive model is a deliberate compromise: we accept context-dependent `+` because the alternative hurts readability for the primary use case (engineering math).
 
 ## Open Questions
 
 ### Critical (Must Resolve Before Implementation)
 
-- **`as` both directions:** Is `@raw as Pressure<Species.O2>` (adding a tag to an untagged value) allowed freely, or should it require a special marker since it's the "unsafe" direction? Adding a wrong tag is where real errors happen.
+- **Derive set:** Exactly which operators can be derived? Proposed: `Add`, `Sub`, `Neg`, `Eq`, `Ord`. Should `ScalarMul` and `ScalarDiv` be derivable (they are cross-type but structurally obvious)? Or always user-defined?
+- **Operator resolution:** When both a derived operator and a user-defined operator could match, which wins? Options: (a) compile error (no ambiguity allowed), (b) user-defined wins, (c) most specific type wins.
+- **Derive syntax:** `derive(Add, Sub)` on the type declaration? Or a separate `derive Add for Vec3`? The inline syntax is simpler; the separate syntax allows deriving in a different file.
 
 ### Important (Should Resolve Before Maturity)
 
-- **Higher-kinded generics:** Can `D<F>` appear in function signatures where `D: Dim` and `F: Frame`? Or does `D` always bind to the full tagged type? The latter is simpler and covers most use cases.
-- **Open vs closed tags:** Can tag families be extended across files? Coordinate frames are typically a closed set, but `Countable` variants may need to be extensible across libraries.
-- **Tag-generic functions:** `fn magnitude<F: Frame>(v: Vec3<Length<F>>) -> Length` — the return type is untagged. How does the checker know this is intentional and not a mistake? Perhaps `-> Length` is allowed when `F` doesn't appear in the return type (the function "consumes" the tag).
-- **Transform generality:** Is `Transform<A, B>` a coordinate-frame-specific concept, or a general mechanism for all tag families?
+- **Type-level dimension arithmetic:** Can `D * Time` appear as a type expression when `D: Dim`? This is essential for avoiding type explosion (see Gap 3). Needs formal specification of what type-level expressions are allowed.
+- **Phantom parameter constraints:** Should there be a lightweight way to constrain phantom parameters (e.g., `type Vec3<D: Dim, F: marker>` where `marker` means "zero-sized type only")? Or is the unconstrained approach acceptable?
+- **Operator generality:** Can user-defined operators be generic over dimension (`<D: Dim>`)? This is needed for the `Vec3<D, F> * Time → Vec3<D * Time, F>` pattern. Requires generics in operator signatures.
+- **Standard library types:** Should the prelude include `Vec3<D, F>`, `Quaternion<F>`, `Rotation<From, To>`, `Timestamp<TZ>` with standard derives and operators? Or should these always be user-defined?
 
 ### Deferred
 
-- **Transform composition:** `Transform<A, B> * Transform<B, C> -> Transform<A, C>` — middle-type cancellation in the type system. Sguaba implements this for `Rotation` and `RigidBodyTransform`; Graphcal should support it for coordinate frame tags.
-- **`as` auditing:** Should uses of `as` be flagged in a lint pass or report? Helps code review. Sguaba uses Rust's `unsafe` for this purpose — Graphcal's `as` serves the same role as a code-review signal.
-- **Tag hierarchy:** Can tags have sub-variants? E.g., `Frame.Inertial` as parent of `Frame.ECI`.
-- **Runtime tag selection:** Can the tag variant be determined at runtime, or is it always compile-time?
-- **Affine space distinction:** Should Graphcal distinguish points (positions) from displacements (vectors)? Sguaba separates `Coordinate` from `Vector` with different algebraic rules: `Point - Point = Vector`, `Point + Vector = Point`, `Point + Point` is undefined. Currently both are `Length<Frame.ECI>` in Graphcal. This is orthogonal to tags but interacts with them.
-- **Tag conventions (axis naming):** Sguaba uses a two-level system: frame identity + convention (NED, FRD, ENU). Could Graphcal support `tag Frame : NED { Plane, Ship }` where the convention determines component names?
+- **Trait / typeclass system:** A full trait system would allow `F: Frame` constraints, default operator implementations, and more. This is a large language feature and may not be needed if the phantom parameter approach covers the primary use cases.
+- **Conventions (axis naming):** Sguaba's two-level system (frame identity + NED/FRD/ENU convention). Could be modeled as a trait: `type PlaneNed: NedConvention {}`. Deferred until traits are considered.
+- **Runtime frame selection:** Can the frame type parameter be determined at runtime? Probably not — phantom types are compile-time only. If runtime frame dispatch is needed, that's a tagged union, not a phantom type.
 
 ## Dependencies on Other Aspects
 
-- **Dimensions** ([04](./04-dimensions-and-units.md)): Tags are type parameters on dimensions; the two layers compose independently.
-- **Non-SI Dimensions** ([18](./18-non-si-dimensions.md)): Counting quantities use `Count<Countable.X>` tags rather than separate base dimensions.
-- **Algebraic Data Types** ([05](./05-algebraic-data-types.md)): `Transform` may be a built-in type or user-defined.
-- **Pure Functions** ([12](./12-pure-functions.md)): Functions can be generic over tag variants.
-- **Syntax** ([02](./02-syntax-design.md)): `tag` declaration keyword and `as` cast keyword to be added to keyword inventory.
-- **Scoping** ([08](./08-scoping.md)): Tags appear in type annotations at the `@` reference site.
+- **Dimensions** ([04](./04-dimensions-and-units.md)): Struct fields carry dimensions. Type-level dimension arithmetic (`D * Time`) extends the existing dimension algebra.
+- **Algebraic Data Types** ([05](./05-algebraic-data-types.md)): Generic structs are the foundation. `derive` extends the ADT system. Phantom type parameters are a new capability for `type` declarations.
+- **Pure Functions** ([12](./12-pure-functions.md)): `fn operator*<A, B>(...)` extends the function system with operator names and generics. Operator overloading is a new capability for `fn`.
+- **Syntax** ([02](./02-syntax-design.md)): `derive(...)` clause on type declarations. `fn operator+` / `fn operator*` / etc. for operator definitions. `type ECI {}` for zero-field marker types.
+- **Non-SI Dimensions** ([18](./18-non-si-dimensions.md)): Counting quantities may still use separate dimensions or phantom-typed wrappers — the approach doesn't prescribe either.
+
+## Superseded Designs
+
+The following concepts from the previous tag-based design are **no longer part of this approach**:
+
+- **`tag` keyword** — replaced by empty `type` declarations for markers and generic struct type parameters for tagging.
+- **`merge` function** — replaced by generic type unification. No implicit tag propagation; all operations are derived or user-defined.
+- **`dimensionless auto-clear` rule** — not needed. There is no flat tag set that needs clearing; the type system is structural.
+- **`as` cast for tag stripping** — replaced by struct field access or user-defined conversion functions. No special cast syntax for tags.
+- **Sticky merge (`tagged + untagged → tagged`)** — replaced by user-defined operators (e.g., `operator+(Timestamp<TZ>, Time) -> Timestamp<TZ>`).
+- **Tag families and variants** — replaced by plain empty types. `type ECI {}` instead of `tag Frame { ECI, ... }`. Frames are just types, not members of a declared family.
+- **Multi-family tag sets** — replaced by multiple type parameters. `Vec3<D, Frame, Craft>` instead of `Force<Frame.ECI, Craft.Chaser>`.
