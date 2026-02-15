@@ -581,7 +581,7 @@ pub fn eval_expr(
                 )
             }
         }
-        ExprKind::Convert { expr: inner, .. } => eval_expr(
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => eval_expr(
             inner,
             values,
             local_values,

@@ -1149,6 +1149,13 @@ mod tests {
         let dv_neg_z = find_value(&result, "dv_neg_z");
         assert!((dv_neg_z - (-300.0)).abs() < 0.01, "dv_neg_z = {dv_neg_z}");
 
+        // pos_body_x: as cast (phantom only), same value as pos_eci.x = 6878 km = 6878000 m
+        let pos_body_x = find_value(&result, "pos_body_x");
+        assert!(
+            (pos_body_x - 6_878_000.0).abs() < 1.0,
+            "pos_body_x = {pos_body_x}"
+        );
+
         // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
         let total_dv = find_value(&result, "total_dv");
         assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");

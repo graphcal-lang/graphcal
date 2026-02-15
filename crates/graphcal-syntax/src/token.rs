@@ -37,6 +37,8 @@ pub enum Token {
     Use,
     #[token("match")]
     Match,
+    #[token("as")]
+    As,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -140,6 +142,7 @@ impl std::fmt::Display for Token {
             Self::For => write!(f, "for"),
             Self::Use => write!(f, "use"),
             Self::Match => write!(f, "match"),
+            Self::As => write!(f, "as"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -365,8 +368,9 @@ mod tests {
     #[test]
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
-        let tokens =
-            lex_tokens("param node const if else dimension unit type let fn index for use match");
+        let tokens = lex_tokens(
+            "param node const if else dimension unit type let fn index for use match as",
+        );
         assert_eq!(
             tokens,
             vec![
@@ -384,6 +388,7 @@ mod tests {
                 Token::For,
                 Token::Use,
                 Token::Match,
+                Token::As,
             ]
         );
     }

@@ -382,6 +382,11 @@ pub enum ExprKind {
     UnitLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
     Convert { expr: Box<Expr>, target: UnitExpr },
+    /// Phantom type cast: `expr as TypeExpr`
+    AsCast {
+        expr: Box<Expr>,
+        target_type: TypeExpr,
+    },
     /// Local variable reference (bare name in block scope): `r1`, `dv1`
     LocalRef(Ident),
     /// Block expression: `{ let a = ...; let b = ...; expr }`

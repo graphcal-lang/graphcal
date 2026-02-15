@@ -1069,6 +1069,17 @@ impl<'src> Parser<'src> {
                 },
                 span,
             })
+        } else if self.lexer.peek() == Some(&Token::As) {
+            self.lexer.next_token();
+            let target_type = self.parse_type_expr()?;
+            let span = expr.span.merge(target_type.span);
+            Ok(Expr {
+                kind: ExprKind::AsCast {
+                    expr: Box::new(expr),
+                    target_type,
+                },
+                span,
+            })
         } else {
             Ok(expr)
         }
@@ -1757,9 +1768,8 @@ impl<'src> Parser<'src> {
     /// Scans the raw source string from the current position to find matching angle brackets.
     fn is_type_args_followed_by_brace(&mut self) -> bool {
         // Get the byte offset where `<` starts
-        let lt_span = match self.lexer.peek_with_span() {
-            Some((&Token::Lt, span)) => span,
-            _ => return false,
+        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
+            return false;
         };
         let bytes = self.source.as_bytes();
         let mut pos = lt_span.offset + lt_span.len; // byte after `<`
@@ -2415,6 +2425,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_as_cast() {
+        // @v as Vec3<Length, Eci> should parse as AsCast
+        let source = r"
+            type Eci {}
+            type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+            node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
+        ";
+        let file = Parser::new(source).parse_file().unwrap();
+        // The node is the 3rd declaration (after type Eci, type Vec3)
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, type_args } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                            assert_eq!(type_args.len(), 2);
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_as_cast_binds_loosely() {
+        // @a + @b as Vec3<Length, Eci> should be (@a + @b) as Vec3<Length, Eci>
+        let source = r"
+            type Eci {}
+            type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+            node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
+        ";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, .. } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
     // --- Expression parsing (preserved from Phase 0) ---
 
     /// Helper: parse a single node declaration and return its expression.
@@ -2967,7 +3031,7 @@ param alt: Length = 400.0 km;
 
     // --- TypeApplication and generic struct construction tests ---
 
-    /// Helper to extract the dimension name from a single-term DimExpr type expression.
+    /// Helper to extract the dimension name from a single-term `DimExpr` type expression.
     fn dim_expr_name(te: &TypeExpr) -> &str {
         match &te.kind {
             TypeExprKind::DimExpr(dim) => {

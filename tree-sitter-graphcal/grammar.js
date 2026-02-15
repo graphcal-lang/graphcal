@@ -313,6 +313,7 @@ module.exports = grammar({
       $.binary_expr,
       $.unary_expr,
       $.convert_expr,
+      $.as_cast_expr,
       $.if_expr,
       $.match_expr,
       $.for_expr,
@@ -325,6 +326,14 @@ module.exports = grammar({
       field("value", $._expr),
       "->",
       field("target", $.unit_expr),
+    )),
+
+    // Phantom type cast: expr as TypeExpr
+    // Uses _type_expr_base (not type_expr) to avoid ambiguity with index_access [...]
+    as_cast_expr: $ => prec.left(PREC.CONVERT, seq(
+      field("value", $._expr),
+      "as",
+      field("target_type", $._type_expr_base),
     )),
 
     binary_expr: $ => choice(

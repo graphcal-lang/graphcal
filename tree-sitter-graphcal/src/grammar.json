@@ -1356,6 +1356,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "as_cast_expr"
+        },
+        {
+          "type": "SYMBOL",
           "name": "if_expr"
         },
         {
@@ -1400,6 +1404,35 @@
             "content": {
               "type": "SYMBOL",
               "name": "unit_expr"
+            }
+          }
+        ]
+      }
+    },
+    "as_cast_expr": {
+      "type": "PREC_LEFT",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "value",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expr"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "as"
+          },
+          {
+            "type": "FIELD",
+            "name": "target_type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_type_expr_base"
             }
           }
         ]

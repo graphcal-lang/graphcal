@@ -89,6 +89,11 @@ node dv_diff_y: Velocity = @dv_diff.y;
 node dv_neg: DeriveVec3<Velocity, Eci> = -@dv_a;
 node dv_neg_z: Velocity = @dv_neg.z;
 
+// --- as cast (phantom type parameter change) ---
+// Cast a Vec3 from Eci frame to Body frame (phantom param only)
+node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+node pos_body_x: Length = @pos_body.x;
+
 // Non-generic struct still works alongside generics
 type TransferResult {
     dv1: Velocity,
