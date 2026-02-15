@@ -1111,6 +1111,24 @@ mod tests {
     }
 
     #[test]
+    fn eval_generics_milestone() {
+        let source = include_str!("../../../tests/fixtures/generics.gcl");
+        let result = compile_and_eval(source).unwrap();
+
+        // x_pos: field access on Vec3<Length, Eci>, should be 6878 km = 6878000 m
+        let x_pos = find_value(&result, "x_pos");
+        assert!((x_pos - 6_878_000.0).abs() < 1.0, "x_pos = {x_pos}");
+
+        // y_vel: field access on Vec3<Velocity, Eci>, should be 7.67 km/s = 7670 m/s
+        let y_vel = find_value(&result, "y_vel");
+        assert!((y_vel - 7670.0).abs() < 1.0, "y_vel = {y_vel}");
+
+        // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
+        let total_dv = find_value(&result, "total_dv");
+        assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");
+    }
+
+    #[test]
     fn eval_functions_milestone() {
         let source = include_str!("../../../tests/fixtures/functions.gcl");
         let result = compile_and_eval(source).unwrap();

@@ -1,0 +1,42 @@
+// generics.gcl -- Generic structs with phantom type parameters
+dimension Velocity = Length / Time;
+
+// Marker types for reference frames
+type Eci {}
+type Body {}
+
+// Generic struct with dimension param and phantom type param
+type Vec3<D: Dim, F: Type> {
+    x: D,
+    y: D,
+    z: D,
+}
+
+// Construction with explicit type args
+param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> {
+    x: 6878.0 km,
+    y: 0.0 km,
+    z: 0.0 km,
+};
+
+param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
+    x: 0.0 m/s,
+    y: 7.67 km/s,
+    z: 0.0 m/s,
+};
+
+// Field access on generic struct
+node x_pos: Length = @pos_eci.x;
+node y_vel: Velocity = @vel_eci.y;
+
+// Non-generic struct still works alongside generics
+type TransferResult {
+    dv1: Velocity,
+    dv2: Velocity,
+}
+
+node transfer: TransferResult = TransferResult {
+    dv1: 100.0 m/s,
+    dv2: 200.0 m/s,
+};
+node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;

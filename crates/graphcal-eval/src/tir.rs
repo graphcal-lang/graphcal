@@ -1245,6 +1245,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn type_resolve_generics() {
+        let source = include_str!("../../../tests/fixtures/generics.gcl");
+        let tir = parse_and_type_resolve(source).unwrap();
+        // pos_eci should be a GenericStruct with type args
+        let pos_type = &tir.resolved_decl_types["pos_eci"];
+        match pos_type {
+            ResolvedTypeExpr::GenericStruct {
+                name, type_args, ..
+            } => {
+                assert_eq!(name.as_str(), "Vec3");
+                assert_eq!(type_args.len(), 2);
+                assert_eq!(
+                    type_args[0],
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                );
+                assert!(
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
+                );
+            }
+            other => panic!("expected GenericStruct, got {other:?}"),
+        }
+        // x_pos should be scalar Length
+        assert_eq!(
+            tir.resolved_decl_types["x_pos"],
+            ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+        );
+    }
+
     // --- resolved_to_declared_type() tests ---
 
     use crate::dim_check::DeclaredType;
