@@ -198,6 +198,11 @@ mod tests {
                             graphcal_syntax::ast::GenericConstraint::Index => {
                                 crate::registry::FnGenericConstraint::Index
                             }
+                            graphcal_syntax::ast::GenericConstraint::Type => {
+                                unreachable!(
+                                    "`Type` constraint is not valid on function generic parameters"
+                                )
+                            }
                         },
                     })
                     .collect(),

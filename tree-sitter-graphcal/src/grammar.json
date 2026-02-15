@@ -345,6 +345,22 @@
           }
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "generics",
+              "content": {
+                "type": "SYMBOL",
+                "name": "generic_params"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "STRING",
           "value": "{"
         },
@@ -801,6 +817,10 @@
         {
           "type": "STRING",
           "value": "Index"
+        },
+        {
+          "type": "STRING",
+          "value": "Type"
         }
       ]
     },

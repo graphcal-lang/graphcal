@@ -274,6 +274,14 @@ impl<'src> Parser<'src> {
         let name = self
             .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<StructTypeName>();
+
+        // Optional generic params: <D: Dim, F: Type>
+        let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+
         let (_, lbrace_span) = self.expect(Token::LBrace)?;
 
         // Disambiguate: empty type, struct sugar, or multi-variant
@@ -299,7 +307,11 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
-            kind: DeclKind::Type(TypeDecl { name, variants }),
+            kind: DeclKind::Type(TypeDecl {
+                name,
+                generic_params,
+                variants,
+            }),
             span,
         })
     }
@@ -585,9 +597,10 @@ impl<'src> Parser<'src> {
             let constraint = match constraint_ident.name.as_str() {
                 "Dim" => GenericConstraint::Dim,
                 "Index" => GenericConstraint::Index,
+                "Type" => GenericConstraint::Type,
                 _ => {
                     return Err(self.unexpected_token(
-                        "`Dim` or `Index`",
+                        "`Dim`, `Index`, or `Type`",
                         &constraint_ident.name,
                         constraint_ident.span,
                     ));
@@ -2611,6 +2624,76 @@ param alt: Length = 400.0 km;
         assert!(matches!(&file.declarations[0].kind, DeclKind::Dimension(_)));
         assert!(matches!(&file.declarations[1].kind, DeclKind::Type(_)));
         assert!(matches!(&file.declarations[2].kind, DeclKind::Param(_)));
+    }
+
+    #[test]
+    fn parse_type_decl_generic_params() {
+        let source = "type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1); // struct sugar
+                assert_eq!(t.variants[0].fields.len(), 3);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_generics_empty() {
+        // Empty marker type without generics
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Eci");
+                assert!(t.generic_params.is_empty());
+                assert_eq!(t.variants.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_single_type_param() {
+        let source = "type Timestamp<TZ: Type> { epoch_seconds: Time }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Timestamp");
+                assert_eq!(t.generic_params.len(), 1);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_tagged_union() {
+        // Multi-variant type with generic params
+        let source = "type Result<D: Dim, E: Type> { Ok { value: D } Err }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Result");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.variants.len(), 2);
+                assert_eq!(t.variants[0].name.value.as_str(), "Ok");
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[1].name.value.as_str(), "Err");
+                assert_eq!(t.variants[1].fields.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
     }
 
     #[test]

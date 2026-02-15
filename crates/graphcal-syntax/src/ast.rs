@@ -100,6 +100,7 @@ pub struct UnitDef {
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
+    pub generic_params: Vec<GenericParam>,
     pub variants: Vec<VariantDecl>,
 }
 
@@ -149,6 +150,8 @@ pub enum GenericConstraint {
     Dim,
     /// `I: Index` -- the generic stands for an index.
     Index,
+    /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
+    Type,
 }
 
 /// A function parameter: `x: Length`, `t: Dimensionless`

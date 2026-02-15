@@ -2661,6 +2661,16 @@
     "type": "type_declaration",
     "named": true,
     "fields": {
+      "generics": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "generic_params",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -3104,6 +3114,10 @@
   },
   {
     "type": "Index",
+    "named": false
+  },
+  {
+    "type": "Type",
     "named": false
   },
   {

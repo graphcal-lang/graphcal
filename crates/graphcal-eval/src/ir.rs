@@ -264,6 +264,13 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
                         graphcal_syntax::ast::GenericConstraint::Index => {
                             registry::FnGenericConstraint::Index
                         }
+                        graphcal_syntax::ast::GenericConstraint::Type => {
+                            // Type constraint is for type declarations, not functions.
+                            // This should be caught by validation before reaching here.
+                            unreachable!(
+                                "`Type` constraint is not valid on function generic parameters"
+                            )
+                        }
                     },
                 })
                 .collect(),

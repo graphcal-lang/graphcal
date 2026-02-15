@@ -106,6 +106,7 @@ module.exports = grammar({
     type_declaration: $ => seq(
       "type",
       field("name", $.identifier),
+      optional(field("generics", $.generic_params)),
       "{",
       choice(
         // Empty type: type Eci {}
@@ -195,7 +196,7 @@ module.exports = grammar({
       field("constraint", $.generic_constraint),
     ),
 
-    generic_constraint: $ => choice("Dim", "Index"),
+    generic_constraint: $ => choice("Dim", "Index", "Type"),
 
     fn_param: $ => seq(
       field("name", $.identifier),
