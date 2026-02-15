@@ -24,6 +24,7 @@
   "let"
   "if"
   "else"
+  "match"
   "for"
 ] @keyword
 
@@ -45,6 +46,7 @@
   "*"
   "/"
   "^"
+  "%"
   "="
   "=="
   "!="
@@ -57,6 +59,7 @@
   "!"
   "->"
   "::"
+  "=>"
 ] @operator
 
 ; ---------------------------------------------------------------
@@ -152,8 +155,25 @@
 ; Qualified variant: Maneuver::Departure
 (qualified_variant index: (identifier) @type variant: (identifier) @constant)
 
+; Variant declarations in tagged unions: Impulsive { delta_v: Velocity }
+(variant_declaration name: (identifier) @type)
+
 ; Index declaration variants: { Departure, Correction, Insertion }
 (variant (identifier) @constant)
+
+; ---------------------------------------------------------------
+; Match expressions
+; ---------------------------------------------------------------
+
+; Match pattern variant name: Impulsive { ... } =>
+(match_pattern variant: (identifier) @type)
+
+; Wildcard pattern: _
+(wildcard) @variable.builtin
+
+; Pattern binding name (shorthand): { thrust }
+; Pattern binding with rename: { name: binding }
+(pattern_binding name: (identifier) @property)
 
 ; ---------------------------------------------------------------
 ; Let bindings
