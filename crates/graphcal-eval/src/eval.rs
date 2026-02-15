@@ -558,7 +558,11 @@ fn runtime_to_value(
                         vd.fields
                             .iter()
                             .find(|f| f.name == *field_name)
-                            .map(|f| DeclaredType::Scalar(f.dimension))
+                            .and_then(|f| {
+                                registry
+                                    .resolve_type_expr(&f.type_ann)
+                                    .map(DeclaredType::Scalar)
+                            })
                     });
                     let val = runtime_to_value(field_rv, field_declared.as_ref(), None, registry);
                     (field_name.clone(), val)

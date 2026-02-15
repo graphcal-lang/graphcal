@@ -37,8 +37,14 @@ pub enum ResolvedTypeExpr {
     Int,
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
-    /// A struct type name, e.g. `TransferResult`
+    /// A non-generic struct type name, e.g. `TransferResult`
     Struct(StructTypeName, Span),
+    /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`
+    GenericStruct {
+        name: StructTypeName,
+        type_args: Vec<Self>,
+        span: Span,
+    },
     /// A single generic dimension parameter, e.g. `D`
     GenericDimParam(GenericParamName, Span),
     /// A compound dimension expression containing at least one generic param, e.g. `D^2`
@@ -282,7 +288,16 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(*dim)),
-        ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone())),
+        ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
+        ResolvedTypeExpr::GenericStruct {
+            name, type_args, ..
+        } => {
+            let mut declared_args = Vec::with_capacity(type_args.len());
+            for arg in type_args {
+                declared_args.push(resolved_to_declared_type(arg, src)?);
+            }
+            Ok(DeclaredType::Struct(name.clone(), declared_args))
+        }
         ResolvedTypeExpr::GenericDimParam(name, span) => Err(GraphcalError::EvalError {
             message: format!("cannot use generic dimension parameter `{name}` as a concrete type"),
             src: src.clone(),
@@ -453,8 +468,20 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::Struct(name, _) => {
-            if *actual != InferredType::Struct(name.clone()) {
+        ResolvedTypeExpr::GenericStruct { name, .. } | ResolvedTypeExpr::Struct(name, _) => {
+            // For struct unification in function args, compare name only.
+            // Type args matching is not needed here since function generics
+            // don't use TypeApplication in their signatures (yet).
+            let InferredType::Struct(actual_name, _) = actual else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: name.to_string(),
+                    found: format_inferred(actual),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: format!("expected struct type `{name}`"),
+                });
+            };
+            if *name != *actual_name {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
                     found: format_inferred(actual),
@@ -590,7 +617,16 @@ pub fn substitute_resolved_type(
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(*dim)),
-        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone())),
+        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone(), vec![])),
+        ResolvedTypeExpr::GenericStruct {
+            name, type_args, ..
+        } => {
+            let mut inferred_args = Vec::with_capacity(type_args.len());
+            for arg in type_args {
+                inferred_args.push(substitute_resolved_type(arg, dim_sub, index_sub, src)?);
+            }
+            Ok(InferredType::Struct(name.clone(), inferred_args))
+        }
 
         ResolvedTypeExpr::GenericDimParam(gp, span) => dim_sub.get(gp).map_or_else(
             || {
@@ -685,7 +721,14 @@ fn format_inferred(it: &crate::dim_check::InferredType) -> String {
         InferredType::Scalar(d) => format!("{d}"),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
-        InferredType::Struct(name) => name.to_string(),
+        InferredType::Struct(name, args) => {
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(format_inferred).collect();
+                format!("{name}<{}>", args_str.join(", "))
+            }
+        }
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred(element))
         }
@@ -706,6 +749,10 @@ fn format_inferred(it: &crate::dim_check::InferredType) -> String {
 ///
 /// Returns a [`GraphcalError`] if a name cannot be resolved (not a known
 /// dimension, struct, index, or in-scope generic parameter).
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match over all TypeExprKind variants including TypeApplication"
+)]
 pub fn resolve_type_expr(
     type_ann: &TypeExpr,
     registry: &Registry,
@@ -821,12 +868,38 @@ pub fn resolve_type_expr(
             }
         }
 
-        TypeExprKind::TypeApplication { name, .. } => {
-            // TODO: implement in Commit 3 (wire generics through TIR)
-            Err(GraphcalError::UnknownDimension {
-                name: DimName::new(&name.name),
-                src: src.clone(),
-                span: type_ann.span.into(),
+        TypeExprKind::TypeApplication { name, type_args } => {
+            let type_name = &name.name;
+            // Verify this is a known generic type
+            let type_def =
+                registry
+                    .get_type(type_name)
+                    .ok_or_else(|| GraphcalError::UnknownStructType {
+                        name: StructTypeName::new(type_name),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    })?;
+            let expected_count = type_def.generic_params.len();
+            if type_args.len() != expected_count {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "type `{type_name}` expects {expected_count} type argument(s), got {}",
+                        type_args.len()
+                    ),
+                    src: src.clone(),
+                    span: type_ann.span.into(),
+                });
+            }
+            // Resolve each type argument
+            let mut resolved_args = Vec::with_capacity(type_args.len());
+            for arg in type_args {
+                let resolved = resolve_type_expr(arg, registry, dim_params, index_params, src)?;
+                resolved_args.push(resolved);
+            }
+            Ok(ResolvedTypeExpr::GenericStruct {
+                name: StructTypeName::new(type_name),
+                type_args: resolved_args,
+                span: type_ann.span,
             })
         }
     }
@@ -846,21 +919,42 @@ mod tests {
         r
     }
 
+    /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
+    fn make_dim_type_expr(name: &str) -> graphcal_syntax::ast::TypeExpr {
+        graphcal_syntax::ast::TypeExpr {
+            kind: graphcal_syntax::ast::TypeExprKind::DimExpr(graphcal_syntax::ast::DimExpr {
+                terms: vec![graphcal_syntax::ast::DimExprItem {
+                    op: graphcal_syntax::ast::MulDivOp::Mul,
+                    term: graphcal_syntax::ast::DimTerm {
+                        name: graphcal_syntax::ast::Ident {
+                            name: name.to_string(),
+                            span: Span::new(0, 0),
+                        },
+                        power: None,
+                        span: Span::new(0, 0),
+                    },
+                }],
+                span: Span::new(0, 0),
+            }),
+            span: Span::new(0, 0),
+        }
+    }
+
     fn make_registry_with_struct() -> Registry {
         let mut r = make_registry();
-        let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
         r.register_type(crate::registry::TypeDef {
             name: StructTypeName::new("TransferResult"),
+            generic_params: vec![],
             variants: vec![crate::registry::VariantDef {
                 name: graphcal_syntax::names::VariantName::new("TransferResult"),
                 fields: vec![
                     crate::registry::StructField {
                         name: graphcal_syntax::names::FieldName::new("dv1"),
-                        dimension: velocity_dim,
+                        type_ann: make_dim_type_expr("Velocity"),
                     },
                     crate::registry::StructField {
                         name: graphcal_syntax::names::FieldName::new("dv2"),
-                        dimension: velocity_dim,
+                        type_ann: make_dim_type_expr("Velocity"),
                     },
                 ],
             }],
@@ -1187,7 +1281,7 @@ mod tests {
             &make_src(),
         )
         .unwrap();
-        assert_eq!(dt, DeclaredType::Struct(StructTypeName::new("Foo")));
+        assert_eq!(dt, DeclaredType::Struct(StructTypeName::new("Foo"), vec![]));
     }
 
     #[test]

@@ -20,7 +20,8 @@ pub enum DeclaredType {
     Scalar(Dimension),
     Bool,
     Int,
-    Struct(StructTypeName),
+    /// A struct type, optionally with concrete type arguments for generic structs.
+    Struct(StructTypeName, Vec<Self>),
     Indexed {
         element: Box<Self>,
         index: IndexName,
@@ -33,7 +34,8 @@ pub enum InferredType {
     Scalar(Dimension),
     Bool,
     Int,
-    Struct(StructTypeName),
+    /// A struct type, optionally with concrete type arguments for generic structs.
+    Struct(StructTypeName, Vec<Self>),
     Indexed {
         element: Box<Self>,
         index: IndexName,
@@ -149,7 +151,14 @@ fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {
         (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
         (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
-        (DeclaredType::Struct(d), InferredType::Struct(i)) => d == i,
+        (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
+            d == i
+                && d_args.len() == i_args.len()
+                && d_args
+                    .iter()
+                    .zip(i_args)
+                    .all(|(da, ia)| types_match(da, ia))
+        }
         (
             DeclaredType::Indexed {
                 element: d_elem,
@@ -170,7 +179,14 @@ fn format_declared_type(dt: &DeclaredType) -> String {
         DeclaredType::Scalar(d) => format!("{d}"),
         DeclaredType::Bool => "Bool".to_string(),
         DeclaredType::Int => "Int".to_string(),
-        DeclaredType::Struct(name) => name.to_string(),
+        DeclaredType::Struct(name, args) => {
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(format_declared_type).collect();
+                format!("{name}<{}>", args_str.join(", "))
+            }
+        }
         DeclaredType::Indexed { element, index } => {
             format!("{}[{index}]", format_declared_type(element))
         }
@@ -183,7 +199,14 @@ fn format_inferred_type(it: &InferredType) -> String {
         InferredType::Scalar(d) => format!("{d}"),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
-        InferredType::Struct(name) => name.to_string(),
+        InferredType::Struct(name, args) => {
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(format_inferred_type).collect();
+                format!("{name}<{}>", args_str.join(", "))
+            }
+        }
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred_type(element))
         }
@@ -197,12 +220,96 @@ fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
         DeclaredType::Scalar(d) => InferredType::Scalar(*d),
         DeclaredType::Bool => InferredType::Bool,
         DeclaredType::Int => InferredType::Int,
-        DeclaredType::Struct(n) => InferredType::Struct(n.clone()),
+        DeclaredType::Struct(n, args) => {
+            InferredType::Struct(n.clone(), args.iter().map(declared_to_inferred).collect())
+        }
         DeclaredType::Indexed { element, index } => InferredType::Indexed {
             element: Box::new(declared_to_inferred(element)),
             index: index.clone(),
         },
     }
+}
+
+/// Resolve a field's `TypeExpr` to an `InferredType`, substituting generic type params.
+///
+/// For non-generic types (empty `type_args`), the field's `type_ann` is resolved directly
+/// using the registry. For generic types, generic params in the field type are substituted
+/// with the corresponding concrete type args.
+fn resolve_field_type(
+    field_type_ann: &graphcal_syntax::ast::TypeExpr,
+    type_def: &crate::registry::TypeDef,
+    type_args: &[InferredType],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use crate::registry::TypeGenericConstraint;
+
+    if type_def.generic_params.is_empty() {
+        // Non-generic type: resolve the field type_ann using the registry
+        let dim =
+            registry
+                .resolve_type_expr(field_type_ann)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: "cannot resolve field type expression".to_string(),
+                    src: src.clone(),
+                    span: field_type_ann.span.into(),
+                })?;
+        return Ok(InferredType::Scalar(dim));
+    }
+
+    // Generic type: build substitution maps from generic params + type args
+    let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
+    let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
+    // Track unconstrained (Type) params separately — they map to InferredType
+    let mut type_sub: HashMap<GenericParamName, InferredType> = HashMap::new();
+
+    for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
+        match param.constraint {
+            TypeGenericConstraint::Dim => {
+                if let InferredType::Scalar(dim) = arg {
+                    dim_sub.insert(param.name.clone(), *dim);
+                }
+            }
+            TypeGenericConstraint::Index => {
+                if let InferredType::Struct(name, _) = arg {
+                    index_sub.insert(param.name.clone(), IndexName::new(name.as_str()));
+                }
+            }
+            TypeGenericConstraint::Unconstrained => {
+                type_sub.insert(param.name.clone(), arg.clone());
+            }
+        }
+    }
+
+    // Collect dim param and index param name lists for resolve_type_expr
+    let dim_params: Vec<GenericParamName> = type_def
+        .generic_params
+        .iter()
+        .filter(|p| p.constraint == TypeGenericConstraint::Dim)
+        .map(|p| p.name.clone())
+        .collect();
+    let index_params: Vec<GenericParamName> = type_def
+        .generic_params
+        .iter()
+        .filter(|p| p.constraint == TypeGenericConstraint::Index)
+        .map(|p| p.name.clone())
+        .collect();
+
+    // Check if the field type references an unconstrained (Type) param directly
+    if let graphcal_syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
+        && dim_expr.terms.len() == 1
+        && dim_expr.terms[0].term.power.is_none()
+    {
+        let name = &dim_expr.terms[0].term.name.name;
+        if let Some(inferred) = type_sub.get(name.as_str()) {
+            return Ok(inferred.clone());
+        }
+    }
+
+    // Resolve using TIR type resolution with generic params in scope, then substitute
+    let resolved =
+        crate::tir::resolve_type_expr(field_type_ann, registry, &dim_params, &index_params, src)?;
+    crate::tir::substitute_resolved_type(&resolved, &dim_sub, &index_sub, src)
 }
 
 /// Helper: extract scalar dimension from `InferredType`, returning error if struct.
@@ -921,7 +1028,7 @@ fn infer_type(
                 src,
             )?;
             match &inner_type {
-                InferredType::Struct(type_name) => {
+                InferredType::Struct(type_name, type_args) => {
                     let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
                         GraphcalError::UnknownStructType {
                             name: type_name.clone(),
@@ -958,7 +1065,7 @@ fn infer_type(
                             src: src.clone(),
                             span: field.span.into(),
                         })?;
-                    Ok(InferredType::Scalar(field_def.dimension))
+                    resolve_field_type(&field_def.type_ann, type_def, type_args, registry, src)
                 }
                 _ => Err(GraphcalError::NotAStruct {
                     name: format_inferred_type(&inner_type),
@@ -969,11 +1076,13 @@ fn infer_type(
         }
 
         ExprKind::StructConstruction {
-            type_name, fields, ..
+            type_name,
+            type_args: constructor_type_args,
+            fields,
         } => {
             // Look up by type name first (single-variant / struct sugar),
             // then by variant name (multi-variant tagged union)
-            let (owning_type_name, variant_def) =
+            let (type_def, variant_def) =
                 if let Some(type_def) = registry.get_type(type_name.value.as_str()) {
                     // Single-variant: type_name == variant_name
                     let variant = type_def.variants.first().ok_or_else(|| {
@@ -983,11 +1092,11 @@ fn infer_type(
                             span: type_name.span.into(),
                         }
                     })?;
-                    (type_def.name.clone(), variant)
+                    (type_def, variant)
                 } else if let Some((type_def, variant)) =
                     registry.get_type_by_variant(type_name.value.as_str())
                 {
-                    (type_def.name.clone(), variant)
+                    (type_def, variant)
                 } else {
                     return Err(GraphcalError::UnknownStructType {
                         name: type_name.value.clone(),
@@ -995,6 +1104,40 @@ fn infer_type(
                         span: type_name.span.into(),
                     });
                 };
+            let owning_type_name = type_def.name.clone();
+
+            // Resolve constructor type args for generic structs
+            let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty() {
+                vec![]
+            } else {
+                let expected_count = type_def.generic_params.len();
+                if constructor_type_args.len() != expected_count {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "type `{}` expects {expected_count} type argument(s), got {}",
+                            type_name.value,
+                            constructor_type_args.len()
+                        ),
+                        src: src.clone(),
+                        span: type_name.span.into(),
+                    });
+                }
+                let no_dim_params: &[GenericParamName] = &[];
+                let no_index_params: &[GenericParamName] = &[];
+                let mut args = Vec::with_capacity(constructor_type_args.len());
+                for arg in constructor_type_args {
+                    let resolved = crate::tir::resolve_type_expr(
+                        arg,
+                        registry,
+                        no_dim_params,
+                        no_index_params,
+                        src,
+                    )?;
+                    let dt = crate::tir::resolved_to_declared_type(&resolved, src)?;
+                    args.push(declared_to_inferred(&dt));
+                }
+                args
+            };
 
             // Check for extra fields
             let def_field_names: std::collections::HashSet<&str> =
@@ -1062,20 +1205,26 @@ fn infer_type(
                         })?
                 };
 
-                let value_dim = expect_scalar(&value_type, src, field_init.name.span)?;
-                if value_dim != field_def.dimension {
+                let expected_field_type = resolve_field_type(
+                    &field_def.type_ann,
+                    type_def,
+                    &resolved_type_args,
+                    registry,
+                    src,
+                )?;
+                if value_type != expected_field_type {
                     return Err(GraphcalError::FieldDimensionMismatch {
                         type_name: type_name.value.clone(),
                         field_name: field_init.name.value.clone(),
-                        expected: format!("{}", field_def.dimension),
-                        found: format!("{value_dim}"),
+                        expected: format_inferred_type(&expected_field_type),
+                        found: format_inferred_type(&value_type),
                         src: src.clone(),
                         span: field_init.name.span.into(),
                     });
                 }
             }
 
-            Ok(InferredType::Struct(owning_type_name))
+            Ok(InferredType::Struct(owning_type_name, resolved_type_args))
         }
 
         ExprKind::ForComp { bindings, body } => {
@@ -1373,8 +1522,8 @@ fn infer_type(
                 resolved_fn_sigs,
                 src,
             )?;
-            let type_name = match &scrutinee_type {
-                InferredType::Struct(name) => name.clone(),
+            let (type_name, scrutinee_type_args) = match &scrutinee_type {
+                InferredType::Struct(name, args) => (name.clone(), args.clone()),
                 _ => {
                     return Err(GraphcalError::NotAStruct {
                         name: format_inferred_type(&scrutinee_type),
@@ -1432,10 +1581,14 @@ fn infer_type(
                                     src: src.clone(),
                                     span: field.span.into(),
                                 })?;
-                            arm_locals.insert(
-                                var.name.clone(),
-                                InferredType::Scalar(field_def.dimension),
-                            );
+                            let field_type = resolve_field_type(
+                                &field_def.type_ann,
+                                type_def,
+                                &scrutinee_type_args,
+                                registry,
+                                src,
+                            )?;
+                            arm_locals.insert(var.name.clone(), field_type);
                         }
                         graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {
                             // Wildcard: no binding needed

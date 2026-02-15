@@ -215,20 +215,21 @@ pub fn register_file_declarations(
                 });
             }
             DeclKind::Type(t) => {
+                let generic_params: Vec<registry::TypeGenericParam> = t
+                    .generic_params
+                    .iter()
+                    .map(|g| registry::TypeGenericParam {
+                        name: g.name.value.clone(),
+                        constraint: g.constraint.into(),
+                    })
+                    .collect();
                 let mut variants = Vec::new();
                 for variant in &t.variants {
                     let mut fields = Vec::new();
                     for field in &variant.fields {
-                        let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
-                            GraphcalError::UnknownDimension {
-                                name: DimName::new(field.name.value.as_str()),
-                                src: src.clone(),
-                                span: field.name.span.into(),
-                            }
-                        })?;
                         fields.push(registry::StructField {
                             name: field.name.value.clone(),
-                            dimension: dim,
+                            type_ann: field.type_ann.clone(),
                         });
                     }
                     variants.push(registry::VariantDef {
@@ -238,6 +239,7 @@ pub fn register_file_declarations(
                 }
                 registry.register_type(registry::TypeDef {
                     name: t.name.value.clone(),
+                    generic_params,
                     variants,
                 });
             }
