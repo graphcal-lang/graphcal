@@ -119,7 +119,7 @@ fn byte_offset_to_position(source: &str, offset: usize) -> Position {
 /// we fall back to single-file evaluation.
 fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
     match compile_and_eval_project(path, &HashMap::new()) {
-        Ok(_) => Vec::new(),
+        Ok(result) => eval_result_to_diagnostics(&result),
         Err(e) => compile_error_to_diagnostics(&e, source),
     }
 }
@@ -127,9 +127,27 @@ fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Dia
 /// Run `compile_and_eval_named` and convert any errors to LSP diagnostics.
 fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
     match compile_and_eval_named(source, name) {
-        Ok(_) => Vec::new(),
+        Ok(result) => eval_result_to_diagnostics(&result),
         Err(e) => compile_error_to_diagnostics(&e, source),
     }
+}
+
+/// Convert per-node runtime errors in an `EvalResult` to LSP diagnostics.
+fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (name, r, _) in &result.all {
+        if let Err(err) = r {
+            diagnostics.push(Diagnostic {
+                range: Range::default(),
+                severity: Some(DiagnosticSeverity::WARNING),
+                code: Some(NumberOrString::String("graphcal::E001".to_string())),
+                source: Some("graphcal".to_string()),
+                message: format!("{}: {err}", name.as_str()),
+                ..Default::default()
+            });
+        }
+    }
+    diagnostics
 }
 
 /// Convert a `CompileError` to a list of LSP diagnostics using the miette `Diagnostic` trait.

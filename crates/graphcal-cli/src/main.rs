@@ -83,10 +83,15 @@ fn main() {
             }
 
             match compile_and_eval_project(&file, &overrides) {
-                Ok(result) => match format {
-                    OutputFormat::Text => print_text(&result),
-                    OutputFormat::Json => print_json(&result),
-                },
+                Ok(result) => {
+                    match format {
+                        OutputFormat::Text => print_text(&result),
+                        OutputFormat::Json => print_json(&result),
+                    }
+                    if result.has_errors() {
+                        process::exit(1);
+                    }
+                }
                 Err(e) => {
                     eprintln!("{:?}", miette::Report::new(e));
                     process::exit(1);
@@ -97,15 +102,21 @@ fn main() {
 }
 
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
+#[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
 fn print_text(result: &EvalResult) {
-    use graphcal_eval::eval::Value;
+    use graphcal_eval::eval::{NodeError, Value};
+
+    enum DisplayEntry<'a> {
+        Value(String, &'a Value),
+        Error(String, &'a NodeError),
+    }
 
     // Flatten entries: scalars are one line, structs expand to `name.field` lines,
     // indexed values expand to `name[Variant]` lines
-    fn flatten_value<'a>(prefix: &str, value: &'a Value, lines: &mut Vec<(String, &'a Value)>) {
+    fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<DisplayEntry<'a>>) {
         match value {
             Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) => {
-                lines.push((prefix.to_string(), value));
+                entries.push(DisplayEntry::Value(prefix.to_string(), value));
             }
             Value::Struct {
                 variant,
@@ -118,55 +129,75 @@ fn print_text(result: &EvalResult) {
                         flatten_value(
                             &format!("{prefix}.{}", field_name.as_str()),
                             field_val,
-                            lines,
+                            entries,
                         );
                     }
                 } else if fields.is_empty() {
                     // Bare variant: show as a label
-                    lines.push((prefix.to_string(), value));
+                    entries.push(DisplayEntry::Value(prefix.to_string(), value));
                 } else {
                     // Multi-variant with fields: show variant name as prefix
                     for (field_name, field_val) in fields {
                         flatten_value(
                             &format!("{prefix}::{}.{}", variant.as_str(), field_name.as_str()),
                             field_val,
-                            lines,
+                            entries,
                         );
                     }
                 }
             }
-            Value::Indexed { entries, .. } => {
-                for (variant, entry_val) in entries {
-                    flatten_value(&format!("{prefix}[{}]", variant.as_str()), entry_val, lines);
+            Value::Indexed { entries: idx, .. } => {
+                for (variant, entry_val) in idx {
+                    flatten_value(
+                        &format!("{prefix}[{}]", variant.as_str()),
+                        entry_val,
+                        entries,
+                    );
                 }
             }
         }
     }
 
-    let mut lines: Vec<(String, &Value)> = Vec::new();
-    for (name, value, _) in &result.all {
-        flatten_value(name.as_str(), value, &mut lines);
+    let mut entries: Vec<DisplayEntry> = Vec::new();
+    for (name, node_result, _) in &result.all {
+        match node_result {
+            Ok(value) => flatten_value(name.as_str(), value, &mut entries),
+            Err(err) => {
+                entries.push(DisplayEntry::Error(name.as_str().to_string(), err));
+            }
+        }
     }
 
-    let max_name_len = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    let max_name_len = entries
+        .iter()
+        .map(|e| match e {
+            DisplayEntry::Value(n, _) | DisplayEntry::Error(n, _) => n.len(),
+        })
+        .max()
+        .unwrap_or(0);
 
-    for (name, value) in &lines {
+    for entry in &entries {
         let width = max_name_len;
-        match value {
-            Value::Bool(b) => println!("{name:width$} = {b}"),
-            Value::Int(i) => println!("{name:width$} = {i}"),
-            Value::Struct { variant, .. } => {
-                // Bare variant (no fields) — display the variant name
-                println!("{name:width$} = {}", variant.as_str());
+        match entry {
+            DisplayEntry::Error(name, err) => {
+                eprintln!("{name:width$} = ERROR: {err}");
             }
-            _ => {
-                let formatted = format_number(value.display_value());
-                if let Some(label) = value.display_label() {
-                    println!("{name:width$} = {formatted} {label}");
-                } else {
-                    println!("{name:width$} = {formatted}");
+            DisplayEntry::Value(name, value) => match value {
+                Value::Bool(b) => println!("{name:width$} = {b}"),
+                Value::Int(i) => println!("{name:width$} = {i}"),
+                Value::Struct { variant, .. } => {
+                    // Bare variant (no fields) — display the variant name
+                    println!("{name:width$} = {}", variant.as_str());
                 }
-            }
+                _ => {
+                    let formatted = format_number(value.display_value());
+                    if let Some(label) = value.display_label() {
+                        println!("{name:width$} = {formatted} {label}");
+                    } else {
+                        println!("{name:width$} = {formatted}");
+                    }
+                }
+            },
         }
     }
 }
@@ -176,8 +207,12 @@ fn print_text(result: &EvalResult) {
     reason = "serde_json serialization cannot fail for these types"
 )]
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "JSON output formatting is clearest as a single function"
+)]
 fn print_json(result: &EvalResult) {
-    use graphcal_eval::eval::Value;
+    use graphcal_eval::eval::{NodeError, Value};
 
     fn value_to_json(v: &Value) -> serde_json::Value {
         match v {
@@ -241,6 +276,35 @@ fn print_json(result: &EvalResult) {
         }
     }
 
+    fn node_error_to_json(err: &NodeError) -> serde_json::Value {
+        match err {
+            NodeError::EvalFailed { message } => {
+                serde_json::json!({
+                    "error": {
+                        "kind": "eval_failed",
+                        "message": message,
+                    }
+                })
+            }
+            NodeError::DependencyFailed { failed_deps } => {
+                let deps: Vec<&str> = failed_deps.iter().map(DeclName::as_str).collect();
+                serde_json::json!({
+                    "error": {
+                        "kind": "dependency_failed",
+                        "failed_deps": deps,
+                    }
+                })
+            }
+        }
+    }
+
+    fn result_to_json(r: &Result<Value, NodeError>) -> serde_json::Value {
+        match r {
+            Ok(v) => value_to_json(v),
+            Err(e) => node_error_to_json(e),
+        }
+    }
+
     let mut output = serde_json::Map::new();
 
     let consts: BTreeMap<&str, serde_json::Value> = result
@@ -251,12 +315,12 @@ fn print_json(result: &EvalResult) {
     let params: BTreeMap<&str, serde_json::Value> = result
         .params
         .iter()
-        .map(|(n, v)| (n.as_str(), value_to_json(v)))
+        .map(|(n, r)| (n.as_str(), result_to_json(r)))
         .collect();
     let nodes: BTreeMap<&str, serde_json::Value> = result
         .nodes
         .iter()
-        .map(|(n, v)| (n.as_str(), value_to_json(v)))
+        .map(|(n, r)| (n.as_str(), result_to_json(r)))
         .collect();
 
     output.insert("const".to_string(), serde_json::to_value(consts).unwrap());

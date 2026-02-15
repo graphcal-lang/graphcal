@@ -1,7 +1,7 @@
 //! Tests for error rendering snapshots.
 #![allow(clippy::unwrap_used, reason = "test code")]
 
-use graphcal_eval::eval::compile_and_eval_named;
+use graphcal_eval::eval::{NodeError, compile_and_eval_named};
 use miette::{Diagnostic, NarratableReportHandler};
 
 /// Compile the given source and return the rendered error string.
@@ -14,6 +14,22 @@ fn render_error(source: &str, name: &str) -> String {
         .render_report(&mut buf, diagnostic)
         .unwrap();
     buf
+}
+
+/// Compile the given source and return the per-node error message for a specific node.
+/// Used for runtime errors that are now contained per-node.
+fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
+    let result = compile_and_eval_named(source, name).unwrap();
+    let (_, node_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == node_name)
+        .unwrap_or_else(|| panic!("node `{node_name}` not found"));
+    match node_result {
+        Err(NodeError::EvalFailed { message }) => message.clone(),
+        Err(other) => panic!("expected EvalFailed, got {other}"),
+        Ok(val) => panic!("expected error for `{node_name}`, got {val:?}"),
+    }
 }
 
 #[test]
@@ -243,14 +259,14 @@ fn error_boolean_dim_error() {
 #[test]
 fn error_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/errors/division_by_zero.gcl");
-    let rendered = render_error(source, "division_by_zero.gcl");
+    let rendered = render_node_error(source, "division_by_zero.gcl", "y");
     insta::assert_snapshot!(rendered);
 }
 
 #[test]
 fn error_sqrt_negative() {
     let source = include_str!("../../../tests/fixtures/errors/sqrt_negative.gcl");
-    let rendered = render_error(source, "sqrt_negative.gcl");
+    let rendered = render_node_error(source, "sqrt_negative.gcl", "y");
     insta::assert_snapshot!(rendered);
 }
 
