@@ -1488,6 +1488,10 @@
           {
             "type": "int_type",
             "named": true
+          },
+          {
+            "type": "type_application",
+            "named": true
           }
         ]
       }
@@ -2644,6 +2648,16 @@
             "named": true
           }
         ]
+      },
+      "type_arg": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
@@ -2655,6 +2669,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "type_application",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type_arg": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -2723,6 +2763,10 @@
         },
         {
           "type": "int_type",
+          "named": true
+        },
+        {
+          "type": "type_application",
           "named": true
         }
       ]

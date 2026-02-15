@@ -268,6 +268,11 @@ pub enum TypeExprKind {
         base: Box<TypeExpr>,
         indexes: Vec<Ident>,
     },
+    /// A generic type application like `Vec3<Length, ECI>` or `Timestamp<UTC>`
+    TypeApplication {
+        name: Ident,
+        type_args: Vec<TypeExpr>,
+    },
 }
 
 /// A dimension expression: product/quotient of dimension terms.
@@ -379,8 +384,10 @@ pub enum ExprKind {
         field: Spanned<FieldName>,
     },
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
+    /// or with type args: `Vec3<Length, ECI> { x: 1 km, y: 0 km, z: 0 km }`
     StructConstruction {
         type_name: Spanned<StructTypeName>,
+        type_args: Vec<TypeExpr>,
         fields: Vec<FieldInit>,
     },
     /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`

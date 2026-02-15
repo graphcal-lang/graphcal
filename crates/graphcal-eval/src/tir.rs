@@ -820,6 +820,15 @@ pub fn resolve_type_expr(
                 Ok(ResolvedTypeExpr::Scalar(result))
             }
         }
+
+        TypeExprKind::TypeApplication { name, .. } => {
+            // TODO: implement in Commit 3 (wire generics through TIR)
+            Err(GraphcalError::UnknownDimension {
+                name: DimName::new(&name.name),
+                src: src.clone(),
+                span: type_ann.span.into(),
+            })
+        }
     }
 }
 

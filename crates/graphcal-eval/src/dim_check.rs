@@ -968,7 +968,9 @@ fn infer_type(
             }
         }
 
-        ExprKind::StructConstruction { type_name, fields } => {
+        ExprKind::StructConstruction {
+            type_name, fields, ..
+        } => {
             // Look up by type name first (single-variant / struct sugar),
             // then by variant name (multi-variant tagged union)
             let (owning_type_name, variant_def) =

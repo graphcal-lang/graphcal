@@ -756,6 +756,19 @@ impl<'src> Parser<'src> {
                     kind: TypeExprKind::Int,
                     span,
                 }
+            } else if is_pascal_case(text) && self.is_lt_after_ident(span) {
+                // Type application: Vec3<Length, ECI>
+                let ident = self.parse_any_ident()?;
+                let type_args = self.parse_type_arg_list()?;
+                let end_span = type_args.last().map_or(ident.span, |a| a.span);
+                let span = ident.span.merge(end_span);
+                TypeExpr {
+                    kind: TypeExprKind::TypeApplication {
+                        name: ident,
+                        type_args,
+                    },
+                    span,
+                }
             } else {
                 let dim_expr = self.parse_dim_expr()?;
                 let span = dim_expr.span;
@@ -1329,6 +1342,16 @@ impl<'src> Parser<'src> {
                         kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
                         span,
                     })
+                } else if is_pascal_case(&name)
+                    && self.lexer.peek() == Some(&Token::Lt)
+                    && self.is_type_args_followed_by_brace()
+                {
+                    // Generic struct construction: Vec3<Length, ECI> { x: 1 km, ... }
+                    let type_args = self.parse_type_arg_list()?;
+                    self.parse_struct_construction_with_type_args(
+                        Spanned::new(StructTypeName::new(name), span),
+                        type_args,
+                    )
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
                     // Struct/variant construction with fields: TypeName { field1: expr, field2 }
                     self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
@@ -1337,6 +1360,7 @@ impl<'src> Parser<'src> {
                     Ok(Expr {
                         kind: ExprKind::StructConstruction {
                             type_name: Spanned::new(StructTypeName::new(name), span),
+                            type_args: Vec::new(),
                             fields: Vec::new(),
                         },
                         span,
@@ -1597,9 +1621,125 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = type_name.span.merge(end_span);
         Ok(Expr {
-            kind: ExprKind::StructConstruction { type_name, fields },
+            kind: ExprKind::StructConstruction {
+                type_name,
+                type_args: Vec::new(),
+                fields,
+            },
             span,
         })
+    }
+
+    /// Parse struct construction with explicit type args: `Vec3<Length, ECI> { x: 1 km, ... }`
+    /// Called after the type args have already been parsed.
+    fn parse_struct_construction_with_type_args(
+        &mut self,
+        type_name: Spanned<StructTypeName>,
+        type_args: Vec<TypeExpr>,
+    ) -> Result<Expr, ParseError> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
+
+            let value = if self.lexer.peek() == Some(&Token::Colon) {
+                self.lexer.next_token();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            fields.push(FieldInit {
+                name: field_name,
+                value,
+            });
+
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = type_name.span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::StructConstruction {
+                type_name,
+                type_args,
+                fields,
+            },
+            span,
+        })
+    }
+
+    /// Check if `<` follows the current ident token (used for type application detection).
+    /// Scans the raw source after the ident span to find `<` (skipping whitespace).
+    fn is_lt_after_ident(&self, ident_span: Span) -> bool {
+        let bytes = self.source.as_bytes();
+        let mut pos = ident_span.offset + ident_span.len;
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        pos < bytes.len() && bytes[pos] == b'<'
+    }
+
+    /// Look ahead to check if `<...>` is followed by `{`.
+    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
+    /// from `Foo < bar` (comparison).
+    ///
+    /// Scans the raw source string from the current position to find matching angle brackets.
+    fn is_type_args_followed_by_brace(&mut self) -> bool {
+        // Get the byte offset where `<` starts
+        let lt_span = match self.lexer.peek_with_span() {
+            Some((&Token::Lt, span)) => span,
+            _ => return false,
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = lt_span.offset + lt_span.len; // byte after `<`
+        let mut depth: usize = 1;
+        while pos < bytes.len() {
+            match bytes[pos] {
+                b'<' => depth += 1,
+                b'>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Skip whitespace after `>`
+                        let mut p = pos + 1;
+                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+                            p += 1;
+                        }
+                        return p < bytes.len() && bytes[p] == b'{';
+                    }
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+        false
+    }
+
+    /// Parse a type argument list: `<TypeExpr, TypeExpr, ...>`
+    fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
+        self.expect(Token::Lt)?;
+        let mut args = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::Gt) {
+                break;
+            }
+            args.push(self.parse_type_expr()?);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::Gt)?;
+        Ok(args)
     }
 
     // --- For comprehension ---
@@ -2696,6 +2836,113 @@ param alt: Length = 400.0 km;
         }
     }
 
+    // --- TypeApplication and generic struct construction tests ---
+
+    /// Helper to extract the dimension name from a single-term DimExpr type expression.
+    fn dim_expr_name(te: &TypeExpr) -> &str {
+        match &te.kind {
+            TypeExprKind::DimExpr(dim) => {
+                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
+                dim.terms[0].term.name.name.as_str()
+            }
+            other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_in_annotation() {
+        // Type annotation with type args: `Vec3<Length, ECI>`
+        let source = "param v: Vec3<Length, ECI> = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_single_arg() {
+        let source = "param t: Timestamp<UTC> = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Timestamp");
+                    assert_eq!(type_args.len(), 1);
+                    assert_eq!(dim_expr_name(&type_args[0]), "UTC");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_type_still_works() {
+        // Non-generic type annotation should still parse as DimExpr, not TypeApplication
+        let source = "param v: Length = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_generic_struct_construction() {
+        let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI> { x: 1.0, y: 2.0, z: 3.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                    assert_eq!(fields.len(), 3);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_struct_construction_still_works() {
+        // Non-generic struct construction: no type args
+        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "TransferResult");
+                    assert!(type_args.is_empty());
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
     #[test]
     fn is_pascal_case_examples() {
         assert!(is_pascal_case("TransferResult"));
@@ -2804,7 +3051,9 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction { type_name, fields } => {
+                ExprKind::StructConstruction {
+                    type_name, fields, ..
+                } => {
                     assert_eq!(type_name.value.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
@@ -2826,7 +3075,9 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Block { expr, .. } => match &expr.kind {
-                    ExprKind::StructConstruction { type_name, fields } => {
+                    ExprKind::StructConstruction {
+                        type_name, fields, ..
+                    } => {
                         assert_eq!(type_name.value.as_str(), "TransferResult");
                         assert_eq!(fields.len(), 2);
                         // Shorthand: value is None

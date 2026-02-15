@@ -213,6 +213,7 @@ impl Registry {
             TypeExprKind::Bool | TypeExprKind::Int => None, // Bool/Int are not dimension types
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
             TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
+            TypeExprKind::TypeApplication { .. } => None, // Generic types resolved in TIR phase
         }
     }
 

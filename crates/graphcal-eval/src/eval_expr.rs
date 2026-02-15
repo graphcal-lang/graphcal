@@ -619,7 +619,9 @@ pub fn eval_expr(
                 }),
             }
         }
-        ExprKind::StructConstruction { type_name, fields } => {
+        ExprKind::StructConstruction {
+            type_name, fields, ..
+        } => {
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = if let Some(value_expr) = &field_init.value {

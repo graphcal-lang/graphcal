@@ -231,7 +231,18 @@ module.exports = grammar({
       $.dimensionless,
       $.bool_type,
       $.int_type,
+      $.type_application,
       $.dim_expr,
+    ),
+
+    // Generic type application: Vec3<Length, ECI>
+    type_application: $ => seq(
+      field("name", $.identifier),
+      "<",
+      field("type_arg", $.type_expr),
+      repeat(seq(",", field("type_arg", $.type_expr))),
+      optional(","),
+      ">",
     ),
 
     dimensionless: $ => "Dimensionless",
@@ -481,6 +492,13 @@ module.exports = grammar({
     // TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }
     struct_construction: $ => seq(
       field("type", $.identifier),
+      optional(seq(
+        "<",
+        field("type_arg", $.type_expr),
+        repeat(seq(",", field("type_arg", $.type_expr))),
+        optional(","),
+        ">",
+      )),
       "{",
       optional(seq(
         $.field_init,
