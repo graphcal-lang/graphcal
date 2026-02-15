@@ -10,7 +10,9 @@
 
 Inspired by [Sguaba](https://github.com/helsing-ai/sguaba), which uses Rust phantom types to prevent mixing vectors from different coordinate systems. The core insight: values can share the same dimension but live in **different semantic spaces** that must not be mixed.
 
-Rather than a built-in tag layer with special rules (`merge`, `dimensionless auto-clear`, `as` cast), Graphcal provides general-purpose tools — **generic structs with phantom type parameters**, **opt-in operator derive**, and **user-defined operators** — that let users build Sguaba-style safety themselves. The compiler enforces frame safety through type unification, not through special tag algebra.
+Rather than a built-in tag layer with special rules (`merge`, `dimensionless auto-clear`, `as` cast), Graphcal provides general-purpose tools — **generic structs with phantom type parameters**, **default type parameters**, **opt-in operator derive**, **user-defined operators**, and **`as` cast for escape** — that let users build Sguaba-style safety themselves. The compiler enforces frame safety through type unification, not through special tag algebra.
+
+Two usability features keep the system accessible: **default type parameters** let users write `Vec3<Length>` when they don't care about frames, and **`as` cast** provides a per-value escape hatch for deliberate cross-frame operations.
 
 **Primary use cases:** Coordinate frames and time zones. These are the domains where mixing is always wrong and consequences are severe. Lighter labeling use cases (chemical species, cost categories) don't justify the annotation cost.
 
@@ -57,7 +59,7 @@ Key Sguaba properties:
 | Phantom type parameter per value | Generic struct type parameters (e.g., `Vec3<D, F>`) |
 | Zero-sized frame marker structs | Empty `type` declarations (e.g., `type ECI {}`) |
 | Compiler rejects mismatched frames | Generic type unification rejects `Vec3<D, ECI> + Vec3<D, Body>` |
-| `unsafe` transform construction | User-defined cross-type operators as trust boundary |
+| `unsafe` transform construction | `as` cast (per-value escape hatch) + user-defined cross-type operators |
 | `Rotation<A, B> * Rotation<B, C> → Rotation<A, C>` | User-defined operators with multi-parameter generics |
 | No implicit frame conversions | No operator derives for cross-type; all explicit |
 | Affine `Coordinate` vs `Vector` distinction | User-defined as separate types with different operators |
@@ -70,7 +72,7 @@ Key Sguaba properties:
 
 ## The Approach
 
-Three mechanisms work together:
+Five mechanisms work together — three for safety, two for usability:
 
 ### 1. Generic Structs with Phantom Type Parameters
 
@@ -95,7 +97,36 @@ type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
 
 The phantom type parameter `F` does not appear in the struct's fields — it exists purely in the type system. The compiler rejects operations between `Vec3<Length, ECI>` and `Vec3<Length, Body>` because the types don't unify, the same way `Vec3<Length, ECI> + Vec3<Velocity, ECI>` fails because `Length ≠ Velocity`.
 
-### 2. Opt-In Operator Derive
+### 2. Default Type Parameters
+
+Many users don't need frame safety — they're doing simple calculations where everything is in one implicit frame. Forcing them to write `Vec3<Length, ECI>` everywhere is unnecessary friction. **Default type parameters** let the type author specify a default for phantom parameters:
+
+```
+type Unframed {}
+
+type Vec3<D: Dim, F = Unframed> derive(Add, Sub, Neg) {
+    x: D, y: D, z: D,
+}
+
+// Users who don't care about frames — just use Vec3 as a simple 3D vector:
+param velocity: Vec3<Velocity> = Vec3 { x: 1 km/s, y: 2 km/s, z: 3 km/s };
+// F defaults to Unframed. This is Vec3<Velocity, Unframed>.
+
+// Users who want frame safety — specify the frame:
+param pos_eci: Vec3<Length, ECI> = Vec3 { x: 6878 km, y: 0 km, z: 0 km };
+// This is Vec3<Length, ECI>.
+```
+
+**Key properties:**
+
+- **The default is chosen by the type author**, not the language. `Vec3` defaults to `Unframed` because the author decided that's sensible. `Timestamp<TZ>` might have no default — forcing every timestamp to declare its timezone.
+- **`Unframed` is not special.** It's a regular empty type like `ECI` or `Body`. The compiler treats `Vec3<Length, Unframed>` exactly like `Vec3<Length, ECI>` — they are different types that cannot be mixed.
+- **Gradual adoption.** A team can start with unframed vectors (`Vec3<Length>`) and add frame annotations later as the project matures, without changing the type definition. The change is per-usage-site, not per-type.
+- **Mixing framed and unframed is a type error.** `Vec3<Length, Unframed> + Vec3<Length, ECI>` fails because `Unframed ≠ ECI`. This is deliberate — if you introduce frame tracking, you must be consistent.
+
+**Syntax follows Rust/C++ convention:** `F = Unframed` in the type parameter list. Default parameters must come after non-default parameters.
+
+### 3. Opt-In Operator Derive (Safety)
 
 Operators are NOT available by default on user-defined types. Each derivable operator must be explicitly requested, following the Rust principle that even `Debug` is opt-in:
 
@@ -127,7 +158,7 @@ type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
 
 **No implicit cross-type derive.** Operations like scalar multiplication (`Vec3 * Dimensionless`), dimension-changing multiplication (`Vec3<Velocity, F> * Time`), and cross-frame transforms are NEVER derived. They require explicit user-defined operators.
 
-### 3. User-Defined Operators
+### 4. User-Defined Operators (Safety)
 
 For operations where the operand types differ or the result type differs from the operands, users define custom operators:
 
@@ -160,6 +191,56 @@ fn magnitude<D: Dim, F>(v: Vec3<D, F>) -> D =
 
 **Cross-type operators are the trust boundary.** Sguaba uses Rust's `unsafe` to mark "the programmer asserts this frame relationship is correct." In Graphcal, user-defined cross-type operators serve the same role — they are the explicit, auditable locations where frame relationships are established.
 
+### 5. `as` Cast (Escape Hatch)
+
+Sometimes you need to deliberately override the type system — you're writing a test, initializing a value from raw data, or you know two frames are aligned. The `as` cast provides a **per-value escape hatch** that changes phantom type parameters:
+
+```
+// Reframe a vector — the programmer asserts this is correct:
+node v_eci = @v_body as Vec3<Length, ECI>;
+
+// Reframe a timestamp:
+node t_jst = @t_utc as Timestamp<JST>;
+
+// Strip frames (go back to Unframed):
+node v_plain = @v_eci as Vec3<Length, Unframed>;
+// Now v_plain is Vec3<Length>, usable without frame tracking.
+```
+
+**Validity rule:** `expr as T` is valid if and only if:
+1. The source and target are instantiations of the **same generic type** (same type constructor).
+2. After substituting type parameters, **all fields have identical types**.
+
+This means only phantom parameters (which don't affect field types) can be changed via `as`. Parameters that affect field types are rejected:
+
+```
+// ✓ Valid: F is phantom (doesn't appear in fields), so changing it is safe.
+@v_body as Vec3<Length, ECI>
+// Source fields: x: Length, y: Length, z: Length
+// Target fields: x: Length, y: Length, z: Length  — match ✓
+
+// ✗ Invalid: D affects field types, so changing it is rejected.
+@v_body as Vec3<Velocity, Body>
+// Source fields: x: Length, y: Length, z: Length
+// Target fields: x: Velocity, y: Velocity, z: Velocity  — mismatch ✗
+
+// ✗ Invalid: different type constructors.
+@some_pair as Vec3<Length, ECI>
+// Pair ≠ Vec3  — different types ✗
+```
+
+**Why per-value, not block-scoped:**
+
+Sguaba uses Rust's `unsafe` blocks, where everything inside the block bypasses safety checks. Graphcal uses per-value `as` instead because:
+
+- **Minimal blast radius.** Each cast is one value, one assertion. An `unchecked {}` block silently downgrades ALL type checking inside it, including non-phantom parameters — you could accidentally add `Vec3<Length>` and `Vec3<Velocity>` without noticing.
+- **Auditable.** Every `as` cast is grep-able. Code review can find all frame assertions by searching for `as Vec3` or `as Timestamp`.
+- **Composable.** You can cast one operand and keep the other checked: `@v_eci + (@v_body as Vec3<Force, ECI>)` — the first operand is still type-checked.
+
+**Relationship to `Rotation`:** The `as` cast and `Rotation<A, B>` serve different purposes:
+- `Rotation<A, B>` is a **physically meaningful transform** — it rotates the vector's components.
+- `as` is a **type assertion** — it changes the type without changing the value. Use it when you know the frames are aligned (e.g., at epoch, Body ≈ ECI) or when you're constructing values from raw data.
+
 ## Use Cases
 
 ### Coordinate Frames
@@ -171,11 +252,20 @@ The primary use case. Mixing reference frames is always wrong and has caused rea
 type ECI {}
 type Body {}
 type LVLH {}
+type Unframed {}
 
-// Framed 3D vector
-type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
+// Framed 3D vector — F defaults to Unframed for users who don't need frames
+type Vec3<D: Dim, F = Unframed> derive(Add, Sub, Neg) {
     x: D, y: D, z: D,
 }
+
+// ---- Simple usage (no frame tracking) ----
+
+// Users who don't care about frames just write Vec3<Velocity>:
+param delta_v: Vec3<Velocity> = Vec3 { x: 0.1 km/s, y: 0 km/s, z: 0 km/s };
+// This is Vec3<Velocity, Unframed>. Simple, no cognitive overhead.
+
+// ---- Frame-safe usage ----
 
 // Position and velocity in ECI
 param pos: Vec3<Length, ECI> = Vec3 { x: 6878 km, y: 0 km, z: 0 km };
@@ -189,9 +279,18 @@ node bad = @thrust_body + @gravity_eci;
 //         ^^^^^^^^^^^^   ^^^^^^^^^^^^
 //         Vec3<Force, Body>  Vec3<Force, ECI>  — type error
 
+// Mixing framed and unframed — also a compile error
+node also_bad = @pos + @delta_v;
+//              ^^^^   ^^^^^^^^
+//              Vec3<_, ECI>  Vec3<_, Unframed>  — type error (good! be explicit)
+
 // Frame transform — user-defined operator, explicit
 param attitude: Rotation<ECI, Body> = ...;
 node gravity_body: Vec3<Force, Body> = @attitude * @gravity_eci;
+
+// Escape hatch — deliberate reframing via as cast
+node gravity_approx: Vec3<Force, Body> = @gravity_eci as Vec3<Force, Body>;
+// Programmer asserts: "I know ECI ≈ Body for this calculation."
 ```
 
 ### Time Zones
@@ -228,9 +327,13 @@ node arrival: Timestamp<UTC> = @launch + @coast;
 param display_jst: Timestamp<JST> = ...;
 node bad = @launch + @display_jst;   // type error: Timestamp<UTC> vs Timestamp<JST>
 
-// Timezone conversion — explicit user-defined function
+// Timezone conversion — explicit user-defined function (knows the offset)
 fn utc_to_jst(t: Timestamp<UTC>) -> Timestamp<JST> =
     Timestamp { epoch_seconds: t.epoch_seconds + 9 hr };
+
+// Escape hatch — reframe via as when you know what you're doing
+// (e.g., test data, or the offset has already been applied)
+node t_jst_raw = @some_utc_timestamp as Timestamp<JST>;
 ```
 
 **Key difference from the old tag design:** Duration (`Time`) is not an "untagged Timestamp" — it's a completely different type. There is no "sticky merge" where `Timestamp<UTC> + Time → Timestamp<UTC>` happens via magic rules. Instead, the user explicitly defines `operator+(Timestamp<TZ>, Time) -> Timestamp<TZ>`. This is one line of code and makes the semantics visible.
@@ -285,7 +388,7 @@ The old design used a built-in `tag` keyword with special rules. Here is why the
 
 | Aspect | Old: Built-in Tags | New: Generics + Derive + Operators |
 | --- | --- | --- |
-| **Mechanism count** | Special `tag` keyword, `merge` function, `dimensionless auto-clear`, `as` cast — four new concepts | Generic structs, `derive`, `fn operator` — three concepts that serve many purposes |
+| **Mechanism count** | Special `tag` keyword, `merge` function, `dimensionless auto-clear`, `as` cast — four new concepts | Generic structs, default params, `derive`, `fn operator`, `as` cast — five concepts that each serve many purposes |
 | **Safety enforcement** | Built-in merge rules | Type unification (the same mechanism that catches `Length + Mass`) |
 | **Affine space** | Deferred open question | User-defined naturally (Position vs Displacement types) |
 | **Transform composition** | Deferred open question | User-defined naturally (multi-parameter generics) |
@@ -410,7 +513,7 @@ The following concepts from the previous tag-based design are **no longer part o
 - **`tag` keyword** — replaced by empty `type` declarations for markers and generic struct type parameters for tagging.
 - **`merge` function** — replaced by generic type unification. No implicit tag propagation; all operations are derived or user-defined.
 - **`dimensionless auto-clear` rule** — not needed. There is no flat tag set that needs clearing; the type system is structural.
-- **`as` cast for tag stripping** — replaced by struct field access or user-defined conversion functions. No special cast syntax for tags.
+- **`as` cast for tag stripping** — repurposed. `as` now changes phantom type parameters on generic structs (e.g., `@v as Vec3<Length, ECI>`), validated by field-type compatibility. No longer operates on bare dimensions.
 - **Sticky merge (`tagged + untagged → tagged`)** — replaced by user-defined operators (e.g., `operator+(Timestamp<TZ>, Time) -> Timestamp<TZ>`).
 - **Tag families and variants** — replaced by plain empty types. `type ECI {}` instead of `tag Frame { ECI, ... }`. Frames are just types, not members of a declared family.
 - **Multi-family tag sets** — replaced by multiple type parameters. `Vec3<D, Frame, Craft>` instead of `Force<Frame.ECI, Craft.Chaser>`.
