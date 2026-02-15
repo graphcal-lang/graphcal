@@ -140,17 +140,52 @@ impl Value {
     }
 }
 
+/// A runtime error associated with a specific node or param evaluation.
+#[derive(Debug, Clone)]
+pub enum NodeError {
+    /// The expression evaluation failed directly (e.g., division by zero).
+    EvalFailed {
+        /// Human-readable error message.
+        message: String,
+    },
+    /// Could not evaluate because one or more dependencies failed.
+    DependencyFailed {
+        /// Names of the dependencies that failed.
+        failed_deps: Vec<DeclName>,
+    },
+}
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EvalFailed { message } => write!(f, "{message}"),
+            Self::DependencyFailed { failed_deps } => {
+                let names: Vec<&str> = failed_deps.iter().map(DeclName::as_str).collect();
+                write!(f, "dependency failed: {}", names.join(", "))
+            }
+        }
+    }
+}
+
 /// The result of evaluating a `.gcl` file.
 #[derive(Debug)]
 pub struct EvalResult {
-    /// Const values in source order.
+    /// Const values in source order (consts are compile-time and never fail at runtime).
     pub consts: Vec<(DeclName, Value)>,
-    /// Param values in source order.
-    pub params: Vec<(DeclName, Value)>,
-    /// Node values in source order.
-    pub nodes: Vec<(DeclName, Value)>,
+    /// Param values in source order (may contain per-node errors).
+    pub params: Vec<(DeclName, Result<Value, NodeError>)>,
+    /// Node values in source order (may contain per-node errors).
+    pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
-    pub all: Vec<(DeclName, Value, DeclType)>,
+    pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
+}
+
+impl EvalResult {
+    /// Returns `true` if all params and nodes evaluated successfully.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.params.iter().any(|(_, r)| r.is_err()) || self.nodes.iter().any(|(_, r)| r.is_err())
+    }
 }
 
 /// Full pipeline: parse -> resolve -> const eval -> DAG build -> runtime eval.
@@ -261,7 +296,7 @@ pub fn compile_and_eval_with_overrides(
     let plan = crate::exec_plan::compile(&tir, &src)?;
 
     // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, &src)?;
+    let result = evaluate_plan(&tir, &plan, &declared_types, &src);
     Ok(result)
 }
 
@@ -416,7 +451,7 @@ pub fn compile_and_eval_project(
     let plan = crate::exec_plan::compile(&tir, root_src)?;
 
     // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, root_src)?;
+    let result = evaluate_plan(&tir, &plan, &declared_types, root_src);
     Ok(result)
 }
 
@@ -567,17 +602,25 @@ fn runtime_to_value(
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
+///
+/// Runtime errors are contained per-node: if a node fails, independent nodes
+/// still evaluate, and dependent nodes receive a `DependencyFailed` error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear evaluation pipeline is clearest as a single function"
+)]
 fn evaluate_plan(
     tir: &crate::tir::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<String, crate::dim_check::DeclaredType>,
     src: &NamedSource<Arc<String>>,
-) -> Result<EvalResult, GraphcalError> {
+) -> EvalResult {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut errors: HashMap<String, NodeError> = HashMap::new();
 
     // Insert const values into the lookup table
     for (name, val) in &plan.const_values {
@@ -589,8 +632,26 @@ fn evaluate_plan(
         if values.contains_key(name) {
             continue;
         }
+
+        // Check if any dependency has failed
+        let failed_deps: Vec<DeclName> = tir
+            .runtime_deps
+            .get(name)
+            .map(|deps| {
+                deps.iter()
+                    .filter(|dep| errors.contains_key(*dep))
+                    .map(DeclName::new)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !failed_deps.is_empty() {
+            errors.insert(name.clone(), NodeError::DependencyFailed { failed_deps });
+            continue;
+        }
+
         let expr = &plan.expressions[name];
-        let val = eval_expr(
+        match eval_expr(
             expr,
             &values,
             &empty_locals,
@@ -598,8 +659,18 @@ fn evaluate_plan(
             &builtin_fns,
             &tir.registry,
             src,
-        )?;
-        values.insert(name.clone(), val);
+        ) {
+            Ok(val) => {
+                values.insert(name.clone(), val);
+            }
+            Err(e) => {
+                let message = match &e {
+                    GraphcalError::EvalError { message, .. } => message.clone(),
+                    other => format!("{other}"),
+                };
+                errors.insert(name.clone(), NodeError::EvalFailed { message });
+            }
+        }
     }
 
     // Build a map from name -> expression for display unit extraction
@@ -618,6 +689,13 @@ fn evaluate_plan(
         runtime_to_value(rv, declared_types.get(name), display_unit, &tir.registry)
     };
 
+    let make_result = |name: &str| -> Result<Value, NodeError> {
+        errors.get(name).map_or_else(
+            || Ok(make_value(name, &values[name])),
+            |err| Err(err.clone()),
+        )
+    };
+
     let consts = tir
         .consts
         .iter()
@@ -629,44 +707,37 @@ fn evaluate_plan(
     let params = tir
         .params
         .iter()
-        .map(|(name, _, _, _)| {
-            let val = make_value(name, &values[name]);
-            (DeclName::new(name), val)
-        })
+        .map(|(name, _, _, _)| (DeclName::new(name), make_result(name)))
         .collect();
     let nodes = tir
         .nodes
         .iter()
-        .map(|(name, _, _, _)| {
-            let val = make_value(name, &values[name]);
-            (DeclName::new(name), val)
-        })
+        .map(|(name, _, _, _)| (DeclName::new(name), make_result(name)))
         .collect();
 
     let all = tir
         .source_order
         .iter()
         .map(|(name, cat)| {
-            let rv = match cat {
-                DeclCategory::Const => &plan.const_values[name],
-                DeclCategory::Param | DeclCategory::Node => &values[name],
-            };
-            let val = make_value(name, rv);
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
             };
-            (DeclName::new(name), val, decl_type)
+            let result = match cat {
+                DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
+                DeclCategory::Param | DeclCategory::Node => make_result(name),
+            };
+            (DeclName::new(name), result, decl_type)
         })
         .collect();
 
-    Ok(EvalResult {
+    EvalResult {
         consts,
         params,
         nodes,
         all,
-    })
+    }
 }
 
 /// Extract display unit from an expression.
@@ -756,14 +827,20 @@ mod tests {
 
     /// Find the SI value of a named scalar declaration.
     fn find_value(result: &EvalResult, name: &str) -> f64 {
+        // Check consts first (they are not wrapped in Result)
+        if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
+            return val.si_value();
+        }
+        // Check params and nodes (wrapped in Result)
         result
-            .consts
+            .params
             .iter()
-            .chain(result.params.iter())
             .chain(result.nodes.iter())
             .find(|(n, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
             .si_value()
     }
 
@@ -964,8 +1041,9 @@ mod tests {
             .iter()
             .find(|(n, _)| n.as_str() == "speed_kmh")
             .unwrap();
-        assert_eq!(speed_kmh.1.display_label(), Some("km/hour".to_string()));
-        let display_kmh = speed_kmh.1.display_value();
+        let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
+        assert_eq!(speed_kmh_val.display_label(), Some("km/hour".to_string()));
+        let display_kmh = speed_kmh_val.display_value();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
         assert!(
             (display_kmh - expected_kmh).abs() < 0.01,
@@ -999,8 +1077,9 @@ mod tests {
             .iter()
             .find(|(n, _)| n.as_str() == "tof_hours")
             .unwrap();
-        assert_eq!(tof_entry.1.display_label(), Some("hour".to_string()));
-        let tof_display = tof_entry.1.display_value();
+        let tof_val = tof_entry.1.as_ref().unwrap();
+        assert_eq!(tof_val.display_label(), Some("hour".to_string()));
+        let tof_display = tof_val.display_value();
         assert!(
             tof_display > 5.0 && tof_display < 6.0,
             "tof display = {tof_display} hours"
@@ -1012,7 +1091,7 @@ mod tests {
             .iter()
             .find(|(n, _)| n.as_str() == "transfer")
             .unwrap();
-        match &transfer_entry.1 {
+        match transfer_entry.1.as_ref().unwrap() {
             Value::Struct {
                 type_name, fields, ..
             } => {
@@ -1060,7 +1139,7 @@ mod tests {
             .iter()
             .find(|(n, _)| n.as_str() == "transfer")
             .unwrap();
-        match &transfer_entry.1 {
+        match transfer_entry.1.as_ref().unwrap() {
             Value::Struct {
                 type_name, fields, ..
             } => {
@@ -1084,6 +1163,8 @@ mod tests {
             .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
             .clone()
     }
 
@@ -1341,59 +1422,68 @@ mod tests {
 
     // --- Runtime arithmetic error tests ---
 
-    /// Helper: assert that `compile_and_eval` fails with an `EvalError` whose message contains `needle`.
-    fn assert_eval_error(source: &str, needle: &str) {
-        let err = compile_and_eval(source).unwrap_err();
-        match &err {
-            CompileError::Eval(GraphcalError::EvalError { message, .. }) => {
+    /// Helper: assert that a specific node in the result has a `NodeError::EvalFailed`
+    /// whose message contains `needle`.
+    fn assert_node_error(source: &str, node_name: &str, needle: &str) {
+        let result = compile_and_eval(source).unwrap();
+        let (_, node_result, _) = result
+            .all
+            .iter()
+            .find(|(n, _, _)| n.as_str() == node_name)
+            .unwrap_or_else(|| panic!("node `{node_name}` not found"));
+        match node_result {
+            Err(NodeError::EvalFailed { message }) => {
                 assert!(
                     message.contains(needle),
                     "expected error containing {needle:?}, got {message:?}"
                 );
             }
-            other => panic!("expected EvalError containing {needle:?}, got {other:?}"),
+            Err(other) => panic!("expected EvalFailed containing {needle:?}, got {other:?}"),
+            Ok(val) => panic!("expected error for `{node_name}`, got value {val:?}"),
         }
     }
 
     #[test]
     fn eval_division_by_zero() {
-        assert_eval_error(
+        assert_node_error(
             "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x / 0.0;",
+            "y",
             "division by zero",
         );
     }
 
     #[test]
     fn eval_zero_divided_by_zero() {
-        assert_eval_error(
+        assert_node_error(
             "param x: Dimensionless = 0.0;\nnode y: Dimensionless = @x / 0.0;",
+            "y",
             "division by zero",
         );
     }
 
     #[test]
     fn eval_sqrt_negative() {
-        assert_eval_error("node y: Dimensionless = sqrt(-1.0);", "NaN");
+        assert_node_error("node y: Dimensionless = sqrt(-1.0);", "y", "NaN");
     }
 
     #[test]
     fn eval_ln_zero() {
-        assert_eval_error("node y: Dimensionless = ln(0.0);", "infinite");
+        assert_node_error("node y: Dimensionless = ln(0.0);", "y", "infinite");
     }
 
     #[test]
     fn eval_ln_negative() {
-        assert_eval_error("node y: Dimensionless = ln(-1.0);", "NaN");
+        assert_node_error("node y: Dimensionless = ln(-1.0);", "y", "NaN");
     }
 
     #[test]
     fn eval_exp_overflow() {
-        assert_eval_error("node y: Dimensionless = exp(1000.0);", "infinite");
+        assert_node_error("node y: Dimensionless = exp(1000.0);", "y", "infinite");
     }
 
     #[test]
     fn eval_power_negative_base_frac_exp() {
-        assert_eval_error("node y: Dimensionless = (-1.0) ^ 0.5;", "NaN");
+        assert_node_error("node y: Dimensionless = (-1.0) ^ 0.5;", "y", "NaN");
     }
 
     #[test]
@@ -1410,16 +1500,84 @@ mod tests {
         assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
     }
 
+    // --- Error containment tests ---
+
+    #[test]
+    fn eval_error_does_not_block_independent_nodes() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 1.0;\n\
+             node bad: Dimensionless = @x / 0.0;\n\
+             node good: Dimensionless = @x + 1.0;",
+        )
+        .unwrap();
+        // bad should have an error
+        assert!(
+            result
+                .nodes
+                .iter()
+                .find(|(n, _)| n.as_str() == "bad")
+                .unwrap()
+                .1
+                .is_err()
+        );
+        // good should succeed because it does not depend on bad
+        assert!((find_value(&result, "good") - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn eval_error_propagates_to_dependents() {
+        let result = compile_and_eval(
+            "param x: Dimensionless = 1.0;\n\
+             node bad: Dimensionless = @x / 0.0;\n\
+             node downstream: Dimensionless = @bad + 1.0;",
+        )
+        .unwrap();
+        // bad fails with EvalFailed
+        let bad_result = &result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "bad")
+            .unwrap()
+            .1;
+        assert!(matches!(bad_result, Err(NodeError::EvalFailed { .. })));
+        // downstream fails with DependencyFailed
+        let ds_result = &result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "downstream")
+            .unwrap()
+            .1;
+        assert!(matches!(ds_result, Err(NodeError::DependencyFailed { .. })));
+    }
+
+    #[test]
+    fn eval_has_errors_true_when_node_fails() {
+        let result =
+            compile_and_eval("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x / 0.0;")
+                .unwrap();
+        assert!(result.has_errors());
+    }
+
+    #[test]
+    fn eval_has_errors_false_when_all_ok() {
+        let result =
+            compile_and_eval("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;")
+                .unwrap();
+        assert!(!result.has_errors());
+    }
+
     // --- Integer type tests ---
 
     /// Helper: find a named Int value.
     fn find_int_value(result: &EvalResult, name: &str) -> i64 {
-        let val = &result
+        let val = result
             .all
             .iter()
             .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
-            .1;
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
         match val {
             Value::Int(i) => *i,
             other => panic!("expected Int for `{name}`, got {other:?}"),
@@ -1428,12 +1586,14 @@ mod tests {
 
     /// Helper: find a named Bool value.
     fn find_bool_value(result: &EvalResult, name: &str) -> bool {
-        let val = &result
+        let val = result
             .all
             .iter()
             .find(|(n, _, _)| n.as_str() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
-            .1;
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
         match val {
             Value::Bool(b) => *b,
             other => panic!("expected Bool for `{name}`, got {other:?}"),
@@ -1470,16 +1630,18 @@ mod tests {
 
     #[test]
     fn eval_int_division_by_zero() {
-        assert_eval_error(
+        assert_node_error(
             "param x: Int = 10;\nnode y: Int = @x / 0;",
+            "y",
             "integer division by zero",
         );
     }
 
     #[test]
     fn eval_int_modulo_by_zero() {
-        assert_eval_error(
+        assert_node_error(
             "param x: Int = 10;\nnode y: Int = @x % 0;",
+            "y",
             "integer modulo by zero",
         );
     }
@@ -1520,13 +1682,16 @@ mod tests {
                 let source = format!(
                     "param x: Dimensionless = {a:e};\nparam y: Dimensionless = {b:e};\nnode z: Dimensionless = @x / @y;"
                 );
-                let result = compile_and_eval(&source);
-                match result {
-                    Ok(r) => {
-                        let z = find_value(&r, "z");
+                let r = compile_and_eval(&source).unwrap();
+                let z_result = &r.all.iter()
+                    .find(|(n, _, _)| n.as_str() == "z")
+                    .unwrap().1;
+                match z_result {
+                    Ok(val) => {
+                        let z = val.si_value();
                         prop_assert!(z.is_finite(), "division produced non-finite: {z}");
                     }
-                    Err(CompileError::Eval(GraphcalError::EvalError { message, .. })) => {
+                    Err(NodeError::EvalFailed { message }) => {
                         // Overflow to infinity is correctly caught
                         prop_assert!(
                             message.contains("overflow") || message.contains("infinite"),
