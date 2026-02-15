@@ -100,7 +100,7 @@ The entire dimension and unit system is defined in the standard library prelude,
 - **Temperature handling:** Temperature conversions are affine (not linear). How should Celsius/Fahrenheit be handled alongside Kelvin? Numbat handles this; the approach should be documented.
 - **Display units:** When rendering a value, which unit should be used? The one from the declaration? The "most natural" one? User-configurable per output?
 - **Dimension aliases:** Can users create aliases for complex dimensions (e.g., `dimension Torque = Force * Length` where `Torque` and `Energy` have the same physical dimension but different semantics)? Should they be treated as the same or distinct?
-- **User-defined base dimensions:** Can users add new base dimensions beyond the standard physical ones?
+- **User-defined base dimensions:** Can users add new base dimensions beyond the standard physical ones? See [18-non-si-dimensions.md](./18-non-si-dimensions.md) for a detailed proposal.
 - **Unit prefixes:** Should SI prefixes (`kilo`, `mega`, `milli`, etc.) be supported as a mechanism, or must each prefixed unit be declared individually?
 - **Internal representation:** Are values always stored in base SI units internally? Or is the internal representation configurable per project?
 

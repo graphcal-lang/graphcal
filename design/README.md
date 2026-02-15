@@ -57,6 +57,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [15](./15-python-interop.md) | Python Interop | Conceptual | PyO3 bindings, `#[python]` nodes, parameter sweeps |
 | [16](./16-git-workflow.md) | Git Workflow & Scenarios | Mostly settled | `.graph` as source of truth, `.scenario` overlays |
 | [17](./17-error-messages.md) | Error Messages & Diagnostics | Design settled | Error codes, format, miette-based diagnostic system |
+| [18](./18-non-si-dimensions.md) | Non-SI Base Dimensions | Proposal | User-defined base dimensions (Information, Currency, etc.) |
 
 ## How to Use These Files
 
