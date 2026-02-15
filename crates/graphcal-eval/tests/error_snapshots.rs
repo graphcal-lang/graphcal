@@ -253,3 +253,33 @@ fn error_sqrt_negative() {
     let rendered = render_error(source, "sqrt_negative.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Tagged union error tests ---
+
+#[test]
+fn error_non_exhaustive_match() {
+    let source = include_str!("../../../tests/fixtures/errors/non_exhaustive_match.gcl");
+    let rendered = render_error(source, "non_exhaustive_match.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_match_arm() {
+    let source = include_str!("../../../tests/fixtures/errors/duplicate_match_arm.gcl");
+    let rendered = render_error(source, "duplicate_match_arm.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_arm_type_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/match_arm_type_mismatch.gcl");
+    let rendered = render_error(source, "match_arm_type_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_field_access_multi_variant() {
+    let source = include_str!("../../../tests/fixtures/errors/field_access_multi_variant.gcl");
+    let rendered = render_error(source, "field_access_multi_variant.gcl");
+    insta::assert_snapshot!(rendered);
+}

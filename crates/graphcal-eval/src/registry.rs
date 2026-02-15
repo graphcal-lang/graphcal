@@ -17,18 +17,40 @@ pub struct UnitInfo {
     pub scale: f64,
 }
 
-/// A field in a struct type definition.
+/// A field in a type variant definition.
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub name: FieldName,
     pub dimension: Dimension,
 }
 
-/// A struct type definition with its name and fields.
+/// A variant within a type definition.
 #[derive(Debug, Clone)]
-pub struct StructDef {
-    pub name: StructTypeName,
+pub struct VariantDef {
+    pub name: VariantName,
     pub fields: Vec<StructField>,
+}
+
+/// A type definition: may have zero variants (empty/marker type),
+/// one variant (struct sugar), or multiple variants (tagged union).
+#[derive(Debug, Clone)]
+pub struct TypeDef {
+    pub name: StructTypeName,
+    pub variants: Vec<VariantDef>,
+}
+
+impl TypeDef {
+    /// Returns true if this is a single-variant type (struct sugar).
+    #[must_use]
+    pub const fn is_single_variant(&self) -> bool {
+        self.variants.len() == 1
+    }
+
+    /// Look up a variant by name.
+    #[must_use]
+    pub fn get_variant(&self, name: &str) -> Option<&VariantDef> {
+        self.variants.iter().find(|v| v.name.as_str() == name)
+    }
 }
 
 /// A user-defined function parameter.
@@ -77,7 +99,9 @@ pub struct IndexDef {
 pub struct Registry {
     dimensions: HashMap<DimName, Dimension>,
     units: HashMap<UnitName, UnitInfo>,
-    structs: HashMap<StructTypeName, StructDef>,
+    types: HashMap<StructTypeName, TypeDef>,
+    /// Reverse lookup: variant name → owning type name.
+    variant_to_type: HashMap<VariantName, StructTypeName>,
     functions: HashMap<FnName, FnDef>,
     indexes: HashMap<IndexName, IndexDef>,
 }
@@ -110,15 +134,28 @@ impl Registry {
         self.units.get(name)
     }
 
-    /// Register a struct type definition.
-    pub fn register_struct(&mut self, def: StructDef) {
-        self.structs.insert(def.name.clone(), def);
+    /// Register a type definition (single-variant struct sugar or multi-variant tagged union).
+    pub fn register_type(&mut self, def: TypeDef) {
+        for variant in &def.variants {
+            self.variant_to_type
+                .insert(variant.name.clone(), def.name.clone());
+        }
+        self.types.insert(def.name.clone(), def);
     }
 
-    /// Look up a struct type definition by name.
+    /// Look up a type definition by type name.
     #[must_use]
-    pub fn get_struct(&self, name: &str) -> Option<&StructDef> {
-        self.structs.get(name)
+    pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
+        self.types.get(name)
+    }
+
+    /// Look up a type definition and specific variant by variant name.
+    #[must_use]
+    pub fn get_type_by_variant(&self, variant_name: &str) -> Option<(&TypeDef, &VariantDef)> {
+        let type_name = self.variant_to_type.get(variant_name)?;
+        let type_def = self.types.get(type_name.as_str())?;
+        let variant_def = type_def.get_variant(variant_name)?;
+        Some((type_def, variant_def))
     }
 
     /// Register a user-defined function.
@@ -357,28 +394,38 @@ mod tests {
     }
 
     #[test]
-    fn registry_struct_register_and_lookup() {
+    fn registry_type_register_and_lookup() {
         let mut r = make_registry();
         let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
-        r.register_struct(StructDef {
+        r.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
-            fields: vec![
-                StructField {
-                    name: FieldName::new("dv1"),
-                    dimension: velocity_dim,
-                },
-                StructField {
-                    name: FieldName::new("dv2"),
-                    dimension: velocity_dim,
-                },
-            ],
+            variants: vec![VariantDef {
+                name: VariantName::new("TransferResult"),
+                fields: vec![
+                    StructField {
+                        name: FieldName::new("dv1"),
+                        dimension: velocity_dim,
+                    },
+                    StructField {
+                        name: FieldName::new("dv2"),
+                        dimension: velocity_dim,
+                    },
+                ],
+            }],
         });
-        let def = r.get_struct("TransferResult").unwrap();
+        let def = r.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
-        assert_eq!(def.fields.len(), 2);
-        assert_eq!(def.fields[0].name.as_str(), "dv1");
-        assert_eq!(def.fields[0].dimension, velocity_dim);
-        assert!(r.get_struct("NonExistent").is_none());
+        assert!(def.is_single_variant());
+        let variant = def.get_variant("TransferResult").unwrap();
+        assert_eq!(variant.fields.len(), 2);
+        assert_eq!(variant.fields[0].name.as_str(), "dv1");
+        assert_eq!(variant.fields[0].dimension, velocity_dim);
+        assert!(r.get_type("NonExistent").is_none());
+
+        // variant_to_type reverse lookup
+        let (type_def, variant_def) = r.get_type_by_variant("TransferResult").unwrap();
+        assert_eq!(type_def.name.as_str(), "TransferResult");
+        assert_eq!(variant_def.name.as_str(), "TransferResult");
     }
 
     #[test]

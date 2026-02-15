@@ -1,0 +1,13 @@
+// Error: duplicate match arm
+type Status {
+    Nominal
+    Warning { code: Dimensionless }
+}
+
+param s: Status = Nominal;
+
+node result: Dimensionless = match @s {
+    Nominal => 0.0,
+    Nominal => 1.0,
+    Warning { code } => code,
+};

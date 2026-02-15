@@ -1,0 +1,52 @@
+// tagged_union.gcl -- Tagged unions (multi-variant types) and match expressions
+dimension Velocity = Length / Time;
+dimension Force = Mass * Length / Time^2;
+
+// Multi-variant tagged union
+type ManeuverKind {
+    Impulsive { delta_v: Velocity }
+    LowThrust { thrust: Force, duration: Time }
+}
+
+// Single-variant (struct sugar) -- existing syntax, should still work
+type TransferResult {
+    dv1: Velocity,
+    dv2: Velocity,
+}
+
+param thrust_level: Force = 0.5 N;
+param burn_duration: Time = 3600.0 s;
+
+// Construct a variant with fields
+node maneuver: ManeuverKind = LowThrust {
+    thrust: @thrust_level,
+    duration: @burn_duration,
+};
+
+// Match expression to extract data from a tagged union
+node fuel_proxy: Force = match @maneuver {
+    Impulsive { delta_v: _ } => 0.0 N,
+    LowThrust { thrust, duration: _ } => thrust,
+};
+
+// Struct sugar construction (unchanged)
+node transfer: TransferResult = TransferResult {
+    dv1: 100.0 m/s,
+    dv2: 200.0 m/s,
+};
+
+// Field access on struct sugar (unchanged)
+node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;
+
+// Tagged union with bare variant (no fields)
+type Status {
+    Nominal
+    Warning { code: Dimensionless }
+}
+
+node current_status: Status = Nominal;
+
+node status_code: Dimensionless = match @current_status {
+    Nominal => 0.0,
+    Warning { code } => code,
+};

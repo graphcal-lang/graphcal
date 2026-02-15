@@ -52,6 +52,8 @@ pub enum Value {
     Struct {
         /// The struct type name.
         type_name: StructTypeName,
+        /// The variant name (= type name for single-variant struct sugar).
+        variant: VariantName,
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
@@ -507,13 +509,18 @@ fn runtime_to_value(
         }
         RuntimeValue::Bool(b) => Value::Bool(*b),
         RuntimeValue::Int(i) => Value::Int(*i),
-        RuntimeValue::Struct { type_name, fields } => {
-            let struct_def = registry.get_struct(type_name.as_str());
+        RuntimeValue::Struct {
+            type_name,
+            variant,
+            fields,
+        } => {
+            let type_def = registry.get_type(type_name.as_str());
+            let variant_def = type_def.and_then(|td| td.get_variant(variant.as_str()));
             let converted_fields = fields
                 .iter()
                 .map(|(field_name, field_rv)| {
-                    let field_declared = struct_def.and_then(|sd| {
-                        sd.fields
+                    let field_declared = variant_def.and_then(|vd| {
+                        vd.fields
                             .iter()
                             .find(|f| f.name == *field_name)
                             .map(|f| DeclaredType::Scalar(f.dimension))
@@ -524,6 +531,7 @@ fn runtime_to_value(
                 .collect();
             Value::Struct {
                 type_name: type_name.clone(),
+                variant: variant.clone(),
                 fields: converted_fields,
             }
         }
@@ -1005,7 +1013,9 @@ mod tests {
             .find(|(n, _)| n.as_str() == "transfer")
             .unwrap();
         match &transfer_entry.1 {
-            Value::Struct { type_name, fields } => {
+            Value::Struct {
+                type_name, fields, ..
+            } => {
                 assert_eq!(type_name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 4);
                 assert!(fields.contains_key("dv1"));
@@ -1051,7 +1061,9 @@ mod tests {
             .find(|(n, _)| n.as_str() == "transfer")
             .unwrap();
         match &transfer_entry.1 {
-            Value::Struct { type_name, fields } => {
+            Value::Struct {
+                type_name, fields, ..
+            } => {
                 assert_eq!(type_name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 3);
                 let total_dv = fields["total_dv"].si_value();

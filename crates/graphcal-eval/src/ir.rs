@@ -215,23 +215,30 @@ pub fn register_file_declarations(
                 });
             }
             DeclKind::Type(t) => {
-                let mut fields = Vec::new();
-                for field in &t.fields {
-                    let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: DimName::new(field.name.value.as_str()),
-                            src: src.clone(),
-                            span: field.name.span.into(),
-                        }
-                    })?;
-                    fields.push(registry::StructField {
-                        name: field.name.value.clone(),
-                        dimension: dim,
+                let mut variants = Vec::new();
+                for variant in &t.variants {
+                    let mut fields = Vec::new();
+                    for field in &variant.fields {
+                        let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
+                            GraphcalError::UnknownDimension {
+                                name: DimName::new(field.name.value.as_str()),
+                                src: src.clone(),
+                                span: field.name.span.into(),
+                            }
+                        })?;
+                        fields.push(registry::StructField {
+                            name: field.name.value.clone(),
+                            dimension: dim,
+                        });
+                    }
+                    variants.push(registry::VariantDef {
+                        name: variant.name.value.clone(),
+                        fields,
                     });
                 }
-                registry.register_struct(registry::StructDef {
+                registry.register_type(registry::TypeDef {
                     name: t.name.value.clone(),
-                    fields,
+                    variants,
                 });
             }
             _ => {}
@@ -330,7 +337,7 @@ mod tests {
     fn lower_hohmann() {
         let source = include_str!("../../../tests/fixtures/hohmann.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert!(ir.registry.get_struct("TransferResult").is_some());
+        assert!(ir.registry.get_type("TransferResult").is_some());
     }
 
     #[test]

@@ -89,14 +89,29 @@ pub struct UnitDef {
     pub span: Span,
 }
 
-/// Struct type declaration: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+/// Type declaration: structs, tagged unions, and empty marker types.
+///
+/// Struct sugar: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+///   → desugars to a single variant named `TransferResult`.
+///
+/// Tagged union: `type Status { Nominal  Warning { message: Str } }`
+///
+/// Empty marker type: `type ECI {}`
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
-    pub fields: Vec<FieldDecl>,
+    pub variants: Vec<VariantDecl>,
 }
 
-/// A field in a struct type declaration.
+/// A variant in a type declaration: `Impulsive { delta_v: Velocity }` or bare `Nominal`.
+#[derive(Debug, Clone)]
+pub struct VariantDecl {
+    pub name: Spanned<VariantName>,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// A field in a variant or struct type declaration.
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
     pub name: Spanned<FieldName>,
@@ -385,6 +400,11 @@ pub enum ExprKind {
         val_name: Ident,
         body: Box<Expr>,
     },
+    /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
 }
 
 /// A `let` binding inside a block body.
@@ -430,6 +450,37 @@ pub struct FieldInit {
     pub name: Spanned<FieldName>,
     /// `None` means shorthand: `{ dv1 }` is equivalent to `{ dv1: dv1 }`
     pub value: Option<Expr>,
+}
+
+/// One arm of a `match` expression: `Impulsive { delta_v } => expr`
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Warning { message: _ }`
+#[derive(Debug, Clone)]
+pub struct MatchPattern {
+    pub variant_name: Spanned<VariantName>,
+    pub bindings: Vec<PatternBinding>,
+    pub span: Span,
+}
+
+/// A binding in a match pattern.
+#[derive(Debug, Clone)]
+pub enum PatternBinding {
+    /// Bind a field to a variable: `delta_v` (shorthand) or `message: msg` (rename)
+    Bind {
+        field: Spanned<FieldName>,
+        var: Ident,
+    },
+    /// Wildcard: `message: _`
+    Wildcard {
+        field: Spanned<FieldName>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

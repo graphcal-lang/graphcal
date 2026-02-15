@@ -748,8 +748,8 @@ pub fn resolve_type_expr(
                 let name = &dim_expr.terms[0].term.name.name;
                 let span = dim_expr.terms[0].term.span;
 
-                // Check struct first
-                if registry.get_struct(name).is_some() {
+                // Check type (struct sugar or tagged union) first
+                if registry.get_type(name).is_some() {
                     return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
                 }
 
@@ -840,18 +840,21 @@ mod tests {
     fn make_registry_with_struct() -> Registry {
         let mut r = make_registry();
         let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
-        r.register_struct(crate::registry::StructDef {
+        r.register_type(crate::registry::TypeDef {
             name: StructTypeName::new("TransferResult"),
-            fields: vec![
-                crate::registry::StructField {
-                    name: graphcal_syntax::names::FieldName::new("dv1"),
-                    dimension: velocity_dim,
-                },
-                crate::registry::StructField {
-                    name: graphcal_syntax::names::FieldName::new("dv2"),
-                    dimension: velocity_dim,
-                },
-            ],
+            variants: vec![crate::registry::VariantDef {
+                name: graphcal_syntax::names::VariantName::new("TransferResult"),
+                fields: vec![
+                    crate::registry::StructField {
+                        name: graphcal_syntax::names::FieldName::new("dv1"),
+                        dimension: velocity_dim,
+                    },
+                    crate::registry::StructField {
+                        name: graphcal_syntax::names::FieldName::new("dv2"),
+                        dimension: velocity_dim,
+                    },
+                ],
+            }],
         });
         r
     }

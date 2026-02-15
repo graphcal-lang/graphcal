@@ -1,0 +1,11 @@
+// Error: field access on multi-variant type (should use match instead)
+dimension Velocity = Length / Time;
+
+type ManeuverKind {
+    Impulsive { delta_v: Velocity }
+    Coasting
+}
+
+param m: ManeuverKind = Coasting;
+
+node v: Velocity = @m.delta_v;

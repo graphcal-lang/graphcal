@@ -100,16 +100,25 @@ module.exports = grammar({
       ";",
     ),
 
-    // type TransferResult { dv1: Velocity, dv2: Velocity }
+    // type TransferResult { dv1: Velocity, dv2: Velocity }       -- struct sugar
+    // type ManeuverKind { Impulsive { dv: Velocity } Coasting }  -- multi-variant
+    // type Eci {}                                                 -- empty marker type
     type_declaration: $ => seq(
       "type",
       field("name", $.identifier),
       "{",
-      optional(seq(
-        $.field_declaration,
-        repeat(seq(",", $.field_declaration)),
-        optional(","),
-      )),
+      choice(
+        // Empty type: type Eci {}
+        seq(),
+        // Struct sugar: field declarations separated by commas
+        seq(
+          $.field_declaration,
+          repeat(seq(",", $.field_declaration)),
+          optional(","),
+        ),
+        // Multi-variant: one or more variant declarations (no separators)
+        repeat1($.variant_declaration),
+      ),
       "}",
     ),
 
@@ -117,6 +126,20 @@ module.exports = grammar({
       field("name", $.identifier),
       ":",
       field("type", $.type_expr),
+    ),
+
+    // Variant in a tagged union: Impulsive { delta_v: Velocity } or Coasting
+    variant_declaration: $ => seq(
+      field("name", $.identifier),
+      optional(seq(
+        "{",
+        optional(seq(
+          $.field_declaration,
+          repeat(seq(",", $.field_declaration)),
+          optional(","),
+        )),
+        "}",
+      )),
     ),
 
     // index Maneuver = { Departure, Correction, Insertion }
@@ -266,6 +289,7 @@ module.exports = grammar({
       $.unary_expr,
       $.convert_expr,
       $.if_expr,
+      $.match_expr,
       $.for_expr,
       $.scan_expr,
       $._postfix_expr,
@@ -307,6 +331,49 @@ module.exports = grammar({
       "else",
       field("else", $.brace_body),
     )),
+
+    // match @maneuver { Impulsive { delta_v } => ..., Coasting => ... }
+    match_expr: $ => seq(
+      "match",
+      field("scrutinee", $._expr),
+      "{",
+      optional(seq(
+        $.match_arm,
+        repeat(seq(",", $.match_arm)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    match_arm: $ => seq(
+      field("pattern", $.match_pattern),
+      "=>",
+      field("body", $._expr),
+    ),
+
+    match_pattern: $ => seq(
+      field("variant", $.identifier),
+      optional(seq(
+        "{",
+        optional(seq(
+          $.pattern_binding,
+          repeat(seq(",", $.pattern_binding)),
+          optional(","),
+        )),
+        "}",
+      )),
+    ),
+
+    pattern_binding: $ => choice(
+      // field_name: _  (wildcard)
+      seq(field("name", $.identifier), ":", $.wildcard),
+      // field_name: var_name  (rename)
+      seq(field("name", $.identifier), ":", field("binding", $.identifier)),
+      // field_name  (shorthand: bind to same name)
+      field("name", $.identifier),
+    ),
+
+    wildcard: $ => "_",
 
     // for m: Maneuver { ... }
     for_expr: $ => seq(
