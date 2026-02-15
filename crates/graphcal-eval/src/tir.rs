@@ -965,6 +965,7 @@ mod tests {
         r.register_type(crate::registry::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
+            derives: vec![],
             variants: vec![crate::registry::VariantDef {
                 name: graphcal_syntax::names::VariantName::new("TransferResult"),
                 fields: vec![

@@ -107,6 +107,7 @@ module.exports = grammar({
       "type",
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
+      optional(field("derives", $.derive_clause)),
       "{",
       choice(
         // Empty type: type Eci {}
@@ -198,6 +199,17 @@ module.exports = grammar({
     ),
 
     generic_constraint: $ => choice("Dim", "Index", "Type"),
+
+    derive_clause: $ => seq(
+      "derive",
+      "(",
+      $.derive_op,
+      repeat(seq(",", $.derive_op)),
+      optional(","),
+      ")",
+    ),
+
+    derive_op: $ => choice("Add", "Sub", "Neg"),
 
     fn_param: $ => seq(
       field("name", $.identifier),

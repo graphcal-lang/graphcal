@@ -101,7 +101,16 @@ pub struct UnitDef {
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam>,
+    pub derives: Vec<Spanned<DeriveOp>>,
     pub variants: Vec<VariantDecl>,
+}
+
+/// An operator that can be derived for a struct type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeriveOp {
+    Add,
+    Sub,
+    Neg,
 }
 
 /// A variant in a type declaration: `Impulsive { delta_v: Velocity }` or bare `Nominal`.

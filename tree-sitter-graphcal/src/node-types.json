@@ -567,6 +567,26 @@
     }
   },
   {
+    "type": "derive_clause",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "derive_op",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "derive_op",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "dim_expr",
     "named": true,
     "fields": {},
@@ -2711,6 +2731,16 @@
     "type": "type_declaration",
     "named": true,
     "fields": {
+      "derives": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "derive_clause",
+            "named": true
+          }
+        ]
+      },
       "generics": {
         "multiple": false,
         "required": false,
@@ -3163,11 +3193,23 @@
     "named": false
   },
   {
+    "type": "Add",
+    "named": false
+  },
+  {
     "type": "Dim",
     "named": false
   },
   {
     "type": "Index",
+    "named": false
+  },
+  {
+    "type": "Neg",
+    "named": false
+  },
+  {
+    "type": "Sub",
     "named": false
   },
   {
@@ -3192,6 +3234,10 @@
   },
   {
     "type": "const",
+    "named": false
+  },
+  {
+    "type": "derive",
     "named": false
   },
   {

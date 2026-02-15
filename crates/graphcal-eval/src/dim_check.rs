@@ -313,6 +313,102 @@ fn resolve_field_type(
 }
 
 /// Helper: extract scalar dimension from `InferredType`, returning error if struct.
+/// Check if a binary operation (Add/Sub) is valid via derive on a struct type.
+/// Returns `Some(result_type)` if the operation is derived, `None` if not a struct type.
+fn check_derived_binop(
+    lhs_type: &InferredType,
+    rhs_type: &InferredType,
+    derive_op: graphcal_syntax::ast::DeriveOp,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    lhs_span: graphcal_syntax::span::Span,
+    rhs_span: graphcal_syntax::span::Span,
+) -> Result<Option<InferredType>, GraphcalError> {
+    let InferredType::Struct(lhs_name, lhs_args) = lhs_type else {
+        return Ok(None);
+    };
+    let InferredType::Struct(rhs_name, rhs_args) = rhs_type else {
+        return Err(GraphcalError::DimensionMismatch {
+            expected: format_inferred_type(lhs_type),
+            found: format_inferred_type(rhs_type),
+            src: src.clone(),
+            span: rhs_span.into(),
+            help: "both operands must be the same struct type".to_string(),
+        });
+    };
+    if lhs_name != rhs_name || lhs_args != rhs_args {
+        return Err(GraphcalError::DimensionMismatch {
+            expected: format_inferred_type(lhs_type),
+            found: format_inferred_type(rhs_type),
+            src: src.clone(),
+            span: rhs_span.into(),
+            help: "both operands must be the same struct type with the same type arguments"
+                .to_string(),
+        });
+    }
+    let type_def =
+        registry
+            .get_type(lhs_name.as_str())
+            .ok_or_else(|| GraphcalError::UnknownStructType {
+                name: lhs_name.clone(),
+                src: src.clone(),
+                span: lhs_span.into(),
+            })?;
+    let op_name = match derive_op {
+        graphcal_syntax::ast::DeriveOp::Add => "Add",
+        graphcal_syntax::ast::DeriveOp::Sub => "Sub",
+        graphcal_syntax::ast::DeriveOp::Neg => "Neg",
+    };
+    if !type_def.derives.contains(&derive_op) {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `{}` does not derive `{op_name}`, cannot use `{}` operator",
+                lhs_name,
+                if derive_op == graphcal_syntax::ast::DeriveOp::Add {
+                    "+"
+                } else {
+                    "-"
+                }
+            ),
+            src: src.clone(),
+            span: lhs_span.into(),
+        });
+    }
+    Ok(Some(lhs_type.clone()))
+}
+
+/// Check if unary negation is valid via derive(Neg) on a struct type.
+/// Returns `Some(result_type)` if the operation is derived, `None` if not a struct type.
+fn check_derived_neg(
+    operand_type: &InferredType,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    operand_span: graphcal_syntax::span::Span,
+) -> Result<Option<InferredType>, GraphcalError> {
+    let InferredType::Struct(name, _args) = operand_type else {
+        return Ok(None);
+    };
+    let type_def =
+        registry
+            .get_type(name.as_str())
+            .ok_or_else(|| GraphcalError::UnknownStructType {
+                name: name.clone(),
+                src: src.clone(),
+                span: operand_span.into(),
+            })?;
+    if !type_def
+        .derives
+        .contains(&graphcal_syntax::ast::DeriveOp::Neg)
+    {
+        return Err(GraphcalError::EvalError {
+            message: format!("type `{name}` does not derive `Neg`, cannot use unary `-` operator"),
+            src: src.clone(),
+            span: operand_span.into(),
+        });
+    }
+    Ok(Some(operand_type.clone()))
+}
+
 fn expect_scalar(
     inferred: &InferredType,
     src: &NamedSource<Arc<String>>,
@@ -505,9 +601,21 @@ fn infer_type(
                     Ok(InferredType::Bool)
                 }
                 // Arithmetic operators: require matching numeric operands (Int or Scalar)
+                // or structs with derive(Add)/derive(Sub)
                 BinOp::Add | BinOp::Sub => {
                     if lhs_type == InferredType::Int && rhs_type == InferredType::Int {
                         return Ok(InferredType::Int);
+                    }
+                    // Check for derive(Add)/derive(Sub) on struct types
+                    let derive_op = if *op == BinOp::Add {
+                        graphcal_syntax::ast::DeriveOp::Add
+                    } else {
+                        graphcal_syntax::ast::DeriveOp::Sub
+                    };
+                    if let Some(result) = check_derived_binop(
+                        &lhs_type, &rhs_type, derive_op, registry, src, lhs.span, rhs.span,
+                    )? {
+                        return Ok(result);
                     }
                     let lhs_dim = expect_scalar(&lhs_type, src, lhs.span)?;
                     let rhs_dim = expect_scalar(&rhs_type, src, rhs.span)?;
@@ -660,6 +768,12 @@ fn infer_type(
                             span: operand.span.into(),
                             help: "negation requires a numeric operand, not Bool".to_string(),
                         });
+                    }
+                    // Check for derive(Neg) on struct types
+                    if let Some(result) =
+                        check_derived_neg(&operand_type, registry, src, operand.span)?
+                    {
+                        return Ok(result);
                     }
                     // Negation preserves the type (Scalar or Int)
                     Ok(operand_type)

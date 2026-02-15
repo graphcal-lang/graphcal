@@ -241,6 +241,7 @@ pub fn register_file_declarations(
                 registry.register_type(registry::TypeDef {
                     name: t.name.value.clone(),
                     generic_params,
+                    derives: t.derives.iter().map(|d| d.value).collect(),
                     variants,
                 });
             }

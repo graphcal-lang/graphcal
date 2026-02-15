@@ -1137,6 +1137,18 @@ mod tests {
             "pos3_default_y = {pos3_default_y}"
         );
 
+        // dv_sum_x: derive(Add), 100 + 10 = 110 m/s
+        let dv_sum_x = find_value(&result, "dv_sum_x");
+        assert!((dv_sum_x - 110.0).abs() < 0.01, "dv_sum_x = {dv_sum_x}");
+
+        // dv_diff_y: derive(Sub), 200 - 20 = 180 m/s
+        let dv_diff_y = find_value(&result, "dv_diff_y");
+        assert!((dv_diff_y - 180.0).abs() < 0.01, "dv_diff_y = {dv_diff_y}");
+
+        // dv_neg_z: derive(Neg), -(300 m/s) = -300 m/s
+        let dv_neg_z = find_value(&result, "dv_neg_z");
+        assert!((dv_neg_z - (-300.0)).abs() < 0.01, "dv_neg_z = {dv_neg_z}");
+
         // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
         let total_dv = find_value(&result, "total_dv");
         assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");

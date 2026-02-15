@@ -4,11 +4,11 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::ast::{
-    BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
-    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
-    GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm, MatchPattern,
-    MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp,
-    UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
+    BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimExprItem, DimTerm,
+    Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding,
+    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm,
+    MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind,
+    UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -282,6 +282,22 @@ impl<'src> Parser<'src> {
             Vec::new()
         };
 
+        // Optional derive clause: derive(Add, Sub, Neg)
+        let derives = if self.lexer.peek() == Some(&Token::Ident) {
+            let peeked = self.lexer.peek_with_span();
+            if let Some((&Token::Ident, span)) = peeked {
+                if self.lexer.slice_at(span) == "derive" {
+                    self.parse_derive_clause()?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         let (_, lbrace_span) = self.expect(Token::LBrace)?;
 
         // Disambiguate: empty type, struct sugar, or multi-variant
@@ -310,6 +326,7 @@ impl<'src> Parser<'src> {
             kind: DeclKind::Type(TypeDecl {
                 name,
                 generic_params,
+                derives,
                 variants,
             }),
             span,
@@ -626,6 +643,40 @@ impl<'src> Parser<'src> {
         }
         self.expect(Token::Gt)?;
         Ok(params)
+    }
+
+    /// Parse a derive clause: `derive(Add, Sub, Neg)`
+    fn parse_derive_clause(&mut self) -> Result<Vec<Spanned<DeriveOp>>, ParseError> {
+        // Consume the `derive` identifier
+        self.lexer.next_token();
+        self.expect(Token::LParen)?;
+        let mut derives = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RParen) {
+                break;
+            }
+            let op_ident = self.parse_any_ident()?;
+            let op = match op_ident.name.as_str() {
+                "Add" => DeriveOp::Add,
+                "Sub" => DeriveOp::Sub,
+                "Neg" => DeriveOp::Neg,
+                _ => {
+                    return Err(self.unexpected_token(
+                        "`Add`, `Sub`, or `Neg`",
+                        &op_ident.name,
+                        op_ident.span,
+                    ));
+                }
+            };
+            derives.push(Spanned::new(op, op_ident.span));
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RParen)?;
+        Ok(derives)
     }
 
     /// Parse a function parameter: `name: TypeExpr`
@@ -2879,6 +2930,36 @@ param alt: Length = 400.0 km;
                 assert_eq!(t.generic_params.len(), 2);
                 assert!(t.generic_params[0].default.is_none());
                 assert!(t.generic_params[1].default.is_none());
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_derive_clause() {
+        let source = "type Vec3<D: Dim, F: Type> derive(Add, Sub, Neg) { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.derives.len(), 3);
+                assert_eq!(t.derives[0].value, DeriveOp::Add);
+                assert_eq!(t.derives[1].value, DeriveOp::Sub);
+                assert_eq!(t.derives[2].value, DeriveOp::Neg);
+                assert_eq!(t.variants.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_derive() {
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert!(t.derives.is_empty());
             }
             _ => panic!("expected type declaration"),
         }

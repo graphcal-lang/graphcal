@@ -69,6 +69,7 @@ pub struct TypeGenericParam {
 pub struct TypeDef {
     pub name: StructTypeName,
     pub generic_params: Vec<TypeGenericParam>,
+    pub derives: Vec<graphcal_syntax::ast::DeriveOp>,
     pub variants: Vec<VariantDef>,
 }
 
@@ -453,6 +454,7 @@ mod tests {
         r.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
+            derives: vec![],
             variants: vec![VariantDef {
                 name: VariantName::new("TransferResult"),
                 fields: vec![
