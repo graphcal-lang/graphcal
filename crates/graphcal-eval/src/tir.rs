@@ -879,21 +879,41 @@ pub fn resolve_type_expr(
                         src: src.clone(),
                         span: name.span.into(),
                     })?;
-            let expected_count = type_def.generic_params.len();
-            if type_args.len() != expected_count {
+            let total_params = type_def.generic_params.len();
+            // Count required params (those without defaults)
+            let required_count = type_def
+                .generic_params
+                .iter()
+                .take_while(|p| p.default.is_none())
+                .count();
+            if type_args.len() < required_count || type_args.len() > total_params {
+                let hint = if required_count == total_params {
+                    format!("{total_params}")
+                } else {
+                    format!("{required_count}..{total_params}")
+                };
                 return Err(GraphcalError::EvalError {
                     message: format!(
-                        "type `{type_name}` expects {expected_count} type argument(s), got {}",
+                        "type `{type_name}` expects {hint} type argument(s), got {}",
                         type_args.len()
                     ),
                     src: src.clone(),
                     span: type_ann.span.into(),
                 });
             }
-            // Resolve each type argument
-            let mut resolved_args = Vec::with_capacity(type_args.len());
+            // Resolve each explicit type argument, then fill in defaults
+            let mut resolved_args = Vec::with_capacity(total_params);
             for arg in type_args {
                 let resolved = resolve_type_expr(arg, registry, dim_params, index_params, src)?;
+                resolved_args.push(resolved);
+            }
+            // Fill in defaults for any remaining params
+            for param in type_def.generic_params.iter().skip(type_args.len()) {
+                let default_expr = param.default.as_ref().expect(
+                    "params without defaults should have been caught by the count check above",
+                );
+                let resolved =
+                    resolve_type_expr(default_expr, registry, dim_params, index_params, src)?;
                 resolved_args.push(resolved);
             }
             Ok(ResolvedTypeExpr::GenericStruct {
@@ -1272,6 +1292,52 @@ mod tests {
             tir.resolved_decl_types["x_pos"],
             ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
         );
+    }
+
+    #[test]
+    fn type_resolve_default_type_params() {
+        let source = include_str!("../../../tests/fixtures/generics.gcl");
+        let tir = parse_and_type_resolve(source).unwrap();
+
+        // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
+        let pos3_eci = &tir.resolved_decl_types["pos3_eci"];
+        match pos3_eci {
+            ResolvedTypeExpr::GenericStruct {
+                name, type_args, ..
+            } => {
+                assert_eq!(name.as_str(), "Pos3");
+                assert_eq!(type_args.len(), 2);
+                assert_eq!(
+                    type_args[0],
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                );
+                assert!(
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
+                );
+            }
+            other => panic!("expected GenericStruct, got {other:?}"),
+        }
+
+        // pos3_default: Pos3<Length> — default fills in Unframed
+        let pos3_default = &tir.resolved_decl_types["pos3_default"];
+        match pos3_default {
+            ResolvedTypeExpr::GenericStruct {
+                name, type_args, ..
+            } => {
+                assert_eq!(name.as_str(), "Pos3");
+                assert_eq!(type_args.len(), 2);
+                assert_eq!(
+                    type_args[0],
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                );
+                assert!(
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
+                    "expected Struct(Unframed), got {:?}",
+                    type_args[1]
+                );
+            }
+            other => panic!("expected GenericStruct, got {other:?}"),
+        }
     }
 
     // --- resolved_to_declared_type() tests ---

@@ -221,6 +221,7 @@ pub fn register_file_declarations(
                     .map(|g| registry::TypeGenericParam {
                         name: g.name.value.clone(),
                         constraint: g.constraint.into(),
+                        default: g.default.clone(),
                     })
                     .collect();
                 let mut variants = Vec::new();

@@ -194,6 +194,7 @@ module.exports = grammar({
       field("name", $.identifier),
       ":",
       field("constraint", $.generic_constraint),
+      optional(seq("=", field("default", $.type_expr))),
     ),
 
     generic_constraint: $ => choice("Dim", "Index", "Type"),

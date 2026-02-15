@@ -1107,37 +1107,71 @@ fn infer_type(
             let owning_type_name = type_def.name.clone();
 
             // Resolve constructor type args for generic structs
-            let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty() {
-                vec![]
-            } else {
-                let expected_count = type_def.generic_params.len();
-                if constructor_type_args.len() != expected_count {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "type `{}` expects {expected_count} type argument(s), got {}",
-                            type_name.value,
-                            constructor_type_args.len()
-                        ),
-                        src: src.clone(),
-                        span: type_name.span.into(),
-                    });
-                }
-                let no_dim_params: &[GenericParamName] = &[];
-                let no_index_params: &[GenericParamName] = &[];
-                let mut args = Vec::with_capacity(constructor_type_args.len());
-                for arg in constructor_type_args {
-                    let resolved = crate::tir::resolve_type_expr(
-                        arg,
-                        registry,
-                        no_dim_params,
-                        no_index_params,
-                        src,
-                    )?;
-                    let dt = crate::tir::resolved_to_declared_type(&resolved, src)?;
-                    args.push(declared_to_inferred(&dt));
-                }
-                args
-            };
+            let resolved_type_args: Vec<InferredType> =
+                if constructor_type_args.is_empty() && type_def.generic_params.is_empty() {
+                    vec![]
+                } else if !type_def.generic_params.is_empty() {
+                    let total_params = type_def.generic_params.len();
+                    let required_count = type_def
+                        .generic_params
+                        .iter()
+                        .take_while(|p| p.default.is_none())
+                        .count();
+                    if constructor_type_args.len() < required_count
+                        || constructor_type_args.len() > total_params
+                    {
+                        let hint = if required_count == total_params {
+                            format!("{total_params}")
+                        } else {
+                            format!("{required_count}..{total_params}")
+                        };
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "type `{}` expects {hint} type argument(s), got {}",
+                                type_name.value,
+                                constructor_type_args.len()
+                            ),
+                            src: src.clone(),
+                            span: type_name.span.into(),
+                        });
+                    }
+                    let no_dim_params: &[GenericParamName] = &[];
+                    let no_index_params: &[GenericParamName] = &[];
+                    let mut args = Vec::with_capacity(total_params);
+                    for arg in constructor_type_args {
+                        let resolved = crate::tir::resolve_type_expr(
+                            arg,
+                            registry,
+                            no_dim_params,
+                            no_index_params,
+                            src,
+                        )?;
+                        let dt = crate::tir::resolved_to_declared_type(&resolved, src)?;
+                        args.push(declared_to_inferred(&dt));
+                    }
+                    // Fill in defaults for remaining params
+                    for param in type_def
+                        .generic_params
+                        .iter()
+                        .skip(constructor_type_args.len())
+                    {
+                        let default_expr = param.default.as_ref().expect(
+                            "params without defaults should have been caught by count check above",
+                        );
+                        let resolved = crate::tir::resolve_type_expr(
+                            default_expr,
+                            registry,
+                            no_dim_params,
+                            no_index_params,
+                            src,
+                        )?;
+                        let dt = crate::tir::resolved_to_declared_type(&resolved, src)?;
+                        args.push(declared_to_inferred(&dt));
+                    }
+                    args
+                } else {
+                    vec![]
+                };
 
             // Check for extra fields
             let def_field_names: std::collections::HashSet<&str> =

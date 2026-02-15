@@ -1123,6 +1123,20 @@ mod tests {
         let y_vel = find_value(&result, "y_vel");
         assert!((y_vel - 7670.0).abs() < 1.0, "y_vel = {y_vel}");
 
+        // pos3_eci_x: explicit type args, 100 km = 100000 m
+        let pos3_eci_x = find_value(&result, "pos3_eci_x");
+        assert!(
+            (pos3_eci_x - 100_000.0).abs() < 1.0,
+            "pos3_eci_x = {pos3_eci_x}"
+        );
+
+        // pos3_default_y: default type param (F = Unframed), 20 km = 20000 m
+        let pos3_default_y = find_value(&result, "pos3_default_y");
+        assert!(
+            (pos3_default_y - 20_000.0).abs() < 1.0,
+            "pos3_default_y = {pos3_default_y}"
+        );
+
         // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
         let total_dv = find_value(&result, "total_dv");
         assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");

@@ -606,7 +606,18 @@ impl<'src> Parser<'src> {
                     ));
                 }
             };
-            params.push(GenericParam { name, constraint });
+            // Optional default: `= TypeExpr`
+            let default = if self.lexer.peek() == Some(&Token::Eq) {
+                self.lexer.next_token(); // consume `=`
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
+            params.push(GenericParam {
+                name,
+                constraint,
+                default,
+            });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {
@@ -2831,6 +2842,43 @@ param alt: Length = 400.0 km;
                 assert_eq!(t.variants[0].fields.len(), 1);
                 assert_eq!(t.variants[1].name.value.as_str(), "Err");
                 assert_eq!(t.variants[1].fields.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_default_type_param() {
+        let source = "type Vec3<D: Dim, F: Type = Unframed> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                // First param: D: Dim (no default)
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert!(t.generic_params[0].default.is_none());
+                // Second param: F: Type = Unframed
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                let default = t.generic_params[1].default.as_ref().unwrap();
+                assert_eq!(dim_expr_name(default), "Unframed");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_no_default() {
+        // All params without defaults — default field should be None
+        let source = "type Pair<A: Dim, B: Dim> { a: A, b: B }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.generic_params.len(), 2);
+                assert!(t.generic_params[0].default.is_none());
+                assert!(t.generic_params[1].default.is_none());
             }
             _ => panic!("expected type declaration"),
         }

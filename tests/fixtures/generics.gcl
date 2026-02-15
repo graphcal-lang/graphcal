@@ -29,6 +29,34 @@ param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
 node x_pos: Length = @pos_eci.x;
 node y_vel: Velocity = @vel_eci.y;
 
+// --- Default type parameters ---
+// Unframed marker type
+type Unframed {}
+
+// Generic struct with default type param: F defaults to Unframed
+type Pos3<D: Dim, F: Type = Unframed> {
+    x: D,
+    y: D,
+    z: D,
+}
+
+// Use with all args explicitly
+param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci> {
+    x: 100.0 km,
+    y: 200.0 km,
+    z: 300.0 km,
+};
+
+// Use with default (omit F, gets Unframed)
+param pos3_default: Pos3<Length> = Pos3<Length> {
+    x: 10.0 km,
+    y: 20.0 km,
+    z: 30.0 km,
+};
+
+node pos3_eci_x: Length = @pos3_eci.x;
+node pos3_default_y: Length = @pos3_default.y;
+
 // Non-generic struct still works alongside generics
 type TransferResult {
     dv1: Velocity,

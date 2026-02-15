@@ -59,6 +59,8 @@ impl From<GenericConstraint> for TypeGenericConstraint {
 pub struct TypeGenericParam {
     pub name: GenericParamName,
     pub constraint: TypeGenericConstraint,
+    /// Optional default type expression, e.g. `F: Type = Unframed`.
+    pub default: Option<graphcal_syntax::ast::TypeExpr>,
 }
 
 /// A type definition: may have zero variants (empty/marker type),

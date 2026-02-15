@@ -141,6 +141,8 @@ pub struct FnDecl {
 pub struct GenericParam {
     pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,
+    /// Optional default type, e.g. `F: Type = Unframed`.
+    pub default: Option<TypeExpr>,
 }
 
 /// Constraint on a generic parameter.
@@ -550,6 +552,7 @@ mod tests {
             generic_params: vec![GenericParam {
                 name: Spanned::new(GenericParamName::new("D"), s),
                 constraint: GenericConstraint::Dim,
+                default: None,
             }],
             params: vec![FnParam {
                 name: Ident {
