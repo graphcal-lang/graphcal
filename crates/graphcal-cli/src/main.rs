@@ -107,13 +107,32 @@ fn print_text(result: &EvalResult) {
             Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) => {
                 lines.push((prefix.to_string(), value));
             }
-            Value::Struct { fields, .. } => {
-                for (field_name, field_val) in fields {
-                    flatten_value(
-                        &format!("{prefix}.{}", field_name.as_str()),
-                        field_val,
-                        lines,
-                    );
+            Value::Struct {
+                variant,
+                type_name,
+                fields,
+            } => {
+                if variant.as_str() == type_name.as_str() {
+                    // Single-variant (struct sugar): show fields directly
+                    for (field_name, field_val) in fields {
+                        flatten_value(
+                            &format!("{prefix}.{}", field_name.as_str()),
+                            field_val,
+                            lines,
+                        );
+                    }
+                } else if fields.is_empty() {
+                    // Bare variant: show as a label
+                    lines.push((prefix.to_string(), value));
+                } else {
+                    // Multi-variant with fields: show variant name as prefix
+                    for (field_name, field_val) in fields {
+                        flatten_value(
+                            &format!("{prefix}::{}.{}", variant.as_str(), field_name.as_str()),
+                            field_val,
+                            lines,
+                        );
+                    }
                 }
             }
             Value::Indexed { entries, .. } => {
@@ -136,6 +155,10 @@ fn print_text(result: &EvalResult) {
         match value {
             Value::Bool(b) => println!("{name:width$} = {b}"),
             Value::Int(i) => println!("{name:width$} = {i}"),
+            Value::Struct { variant, .. } => {
+                // Bare variant (no fields) — display the variant name
+                println!("{name:width$} = {}", variant.as_str());
+            }
             _ => {
                 let formatted = format_number(value.display_value());
                 if let Some(label) = value.display_label() {
@@ -181,10 +204,16 @@ fn print_json(result: &EvalResult) {
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(i) => serde_json::Value::Number((*i).into()),
             Value::Struct {
-                type_name, fields, ..
+                type_name,
+                variant,
+                fields,
             } => {
                 let mut map = serde_json::Map::new();
                 map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
+                // Include variant name only for multi-variant types (where variant != type name)
+                if variant.as_str() != type_name.as_str() {
+                    map.insert("variant".to_string(), serde_json::json!(variant.as_str()));
+                }
                 let fields_map: serde_json::Map<String, serde_json::Value> = fields
                     .iter()
                     .map(|(name, val)| (name.as_str().to_string(), value_to_json(val)))

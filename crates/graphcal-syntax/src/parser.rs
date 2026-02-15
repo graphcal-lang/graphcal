@@ -6,8 +6,9 @@ use thiserror::Error;
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
     ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
-    GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MulDivOp, NodeDecl, ParamDecl,
-    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem,
+    GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm, MatchPattern,
+    MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp,
+    UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -273,12 +274,52 @@ impl<'src> Parser<'src> {
         let name = self
             .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<StructTypeName>();
-        self.expect(Token::LBrace)?;
+        let (_, lbrace_span) = self.expect(Token::LBrace)?;
 
-        // Parse field list: at least one field required
+        // Disambiguate: empty type, struct sugar, or multi-variant
+        let variants = if self.lexer.peek() == Some(&Token::RBrace) {
+            // Empty type: `type ECI {}`
+            Vec::new()
+        } else if self.is_struct_sugar() {
+            // Struct sugar: `type Foo { field: Type, ... }`
+            // Desugar into a single variant with the same name as the type
+            let fields = self.parse_field_list()?;
+            let variant_span =
+                lbrace_span.merge(fields.last().map_or(lbrace_span, |f| f.type_ann.span));
+            vec![VariantDecl {
+                name: Spanned::new(VariantName::new(name.value.as_str()), name.span),
+                fields,
+                span: variant_span,
+            }]
+        } else {
+            // Multi-variant: `type Status { Nominal  Warning { message: Str } }`
+            self.parse_variant_list()?
+        };
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Declaration {
+            kind: DeclKind::Type(TypeDecl { name, variants }),
+            span,
+        })
+    }
+
+    /// Check if the type body is struct sugar (field list) vs variant list.
+    /// Struct sugar starts with `lower_snake_case :` (field name followed by colon).
+    /// Variant list starts with `PascalCase` (variant name).
+    fn is_struct_sugar(&mut self) -> bool {
+        if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
+            let name = self.lexer.slice_at(span);
+            is_lower_snake_case(name)
+        } else {
+            false
+        }
+    }
+
+    /// Parse a comma-separated field list: `field: Type, field: Type, ...`
+    fn parse_field_list(&mut self) -> Result<Vec<FieldDecl>, ParseError> {
         let mut fields = Vec::new();
         loop {
-            // Check for closing brace (empty struct or after trailing comma)
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
@@ -291,25 +332,64 @@ impl<'src> Parser<'src> {
                 name: field_name,
                 type_ann,
             });
-            // Expect comma or closing brace
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {
                 break;
             }
         }
-
         if fields.is_empty() {
             let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
             return Err(self.unexpected_token("at least one field", &tok.to_string(), span));
         }
+        Ok(fields)
+    }
 
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = start_span.merge(end_span);
-        Ok(Declaration {
-            kind: DeclKind::Type(TypeDecl { name, fields }),
-            span,
-        })
+    /// Parse a list of variant declarations (no separators between variants).
+    /// `Nominal  Warning { message: Str }  Critical { message: Str, code: Int }`
+    fn parse_variant_list(&mut self) -> Result<Vec<VariantDecl>, ParseError> {
+        let mut variants = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            variants.push(self.parse_variant_decl()?);
+        }
+        if variants.is_empty() {
+            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            return Err(self.unexpected_token("a variant declaration", &tok.to_string(), span));
+        }
+        Ok(variants)
+    }
+
+    /// Parse a single variant: `Impulsive { delta_v: Velocity }` or bare `Nominal`
+    fn parse_variant_decl(&mut self) -> Result<VariantDecl, ParseError> {
+        let variant_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let variant_name = Spanned::new(VariantName::new(&variant_ident.name), variant_ident.span);
+        let start_span = variant_ident.span;
+
+        if self.lexer.peek() == Some(&Token::LBrace) {
+            // Variant with fields: `Impulsive { delta_v: Velocity }`
+            self.lexer.next_token();
+            let fields = if self.lexer.peek() == Some(&Token::RBrace) {
+                Vec::new()
+            } else {
+                self.parse_field_list()?
+            };
+            let (_, end_span) = self.expect(Token::RBrace)?;
+            Ok(VariantDecl {
+                name: variant_name,
+                fields,
+                span: start_span.merge(end_span),
+            })
+        } else {
+            // Bare variant: `Nominal`
+            Ok(VariantDecl {
+                name: variant_name,
+                fields: Vec::new(),
+                span: start_span,
+            })
+        }
     }
 
     // --- use declaration ---
@@ -1237,8 +1317,17 @@ impl<'src> Parser<'src> {
                         span,
                     })
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
-                    // Struct construction: TypeName { field1: expr, field2 }
+                    // Struct/variant construction with fields: TypeName { field1: expr, field2 }
                     self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
+                } else if is_pascal_case(&name) {
+                    // Bare variant construction (no fields): `Nominal`
+                    Ok(Expr {
+                        kind: ExprKind::StructConstruction {
+                            type_name: Spanned::new(StructTypeName::new(name), span),
+                            fields: Vec::new(),
+                        },
+                        span,
+                    })
                 } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
                     // Scan expression: scan(source, init, |acc, val| body)
                     self.parse_scan(&Ident { name, span })
@@ -1311,6 +1400,7 @@ impl<'src> Parser<'src> {
                     self.parse_block_after_open_brace(start_span)
                 }
             }
+            Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LParen) => {
                 self.lexer.next_token();
                 let expr = self.parse_expr()?;
@@ -1353,10 +1443,111 @@ impl<'src> Parser<'src> {
         })
     }
 
+    // --- Match expression ---
+
+    /// Parse a match expression:
+    /// `match expr { Variant1 { field } => body, Variant2 => body }`
+    fn parse_match_expr(&mut self) -> Result<Expr, ParseError> {
+        let (_, start_span) = self.expect(Token::Match)?;
+        let scrutinee = Box::new(self.parse_expr()?);
+        self.expect(Token::LBrace)?;
+
+        let mut arms = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            arms.push(self.parse_match_arm()?);
+            // Optional comma between arms
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            }
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Match { scrutinee, arms },
+            span,
+        })
+    }
+
+    /// Parse a single match arm: `VariantName { field1, field2: _ } => expr`
+    fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {
+        let pattern = self.parse_match_pattern()?;
+        self.expect(Token::FatArrow)?;
+        let body = self.parse_expr()?;
+        let span = pattern.span.merge(body.span);
+        Ok(MatchArm {
+            pattern,
+            body,
+            span,
+        })
+    }
+
+    /// Parse a match pattern: `VariantName { field1, field2: binding }` or bare `VariantName`
+    fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
+        let variant_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let variant_name = Spanned::new(VariantName::new(&variant_ident.name), variant_ident.span);
+        let start_span = variant_ident.span;
+
+        let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LBrace) {
+            self.lexer.next_token(); // consume '{'
+            let mut bindings = Vec::new();
+            loop {
+                if self.lexer.peek() == Some(&Token::RBrace) {
+                    break;
+                }
+                bindings.push(self.parse_pattern_binding()?);
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            let (_, rbrace_span) = self.expect(Token::RBrace)?;
+            (bindings, rbrace_span)
+        } else {
+            // Bare variant: no bindings
+            (Vec::new(), start_span)
+        };
+
+        Ok(MatchPattern {
+            variant_name,
+            bindings,
+            span: start_span.merge(end_span),
+        })
+    }
+
+    /// Parse a single pattern binding:
+    /// - `field_name` (shorthand: bind to same name)
+    /// - `field_name: var_name` (rename)
+    /// - `field_name: _` (wildcard)
+    fn parse_pattern_binding(&mut self) -> Result<PatternBinding, ParseError> {
+        let field_ident = self.parse_any_ident()?;
+        let field = Spanned::new(FieldName::new(&field_ident.name), field_ident.span);
+
+        if self.lexer.peek() == Some(&Token::Colon) {
+            self.lexer.next_token(); // consume ':'
+            // Check for wildcard `_`
+            if self.lexer.peek() == Some(&Token::Underscore) {
+                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                return Ok(PatternBinding::Wildcard { field, span });
+            }
+            // Renamed binding: `field_name: var_name`
+            let var = self.parse_any_ident()?;
+            Ok(PatternBinding::Bind { field, var })
+        } else {
+            // Shorthand: bind to same name as field
+            Ok(PatternBinding::Bind {
+                field,
+                var: field_ident,
+            })
+        }
+    }
+
     // --- Struct construction ---
 
-    /// Parse struct construction after the type name has been consumed:
-    /// `{ field1: expr, field2, ... }`
     fn parse_struct_construction(
         &mut self,
         type_name: Spanned<StructTypeName>,
@@ -2317,8 +2508,11 @@ node speed_kmh: Velocity = @speed -> km/hour;
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
                 assert_eq!(t.name.value.as_str(), "Orbit");
-                assert_eq!(t.fields.len(), 1);
-                assert_eq!(t.fields[0].name.value.as_str(), "sma");
+                // Struct sugar desugars to single variant with same name
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].name.value.as_str(), "Orbit");
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "sma");
             }
             _ => panic!("expected type declaration"),
         }
@@ -2332,9 +2526,10 @@ node speed_kmh: Velocity = @speed -> km/hour;
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
                 assert_eq!(t.name.value.as_str(), "TransferResult");
-                assert_eq!(t.fields.len(), 2);
-                assert_eq!(t.fields[0].name.value.as_str(), "dv1");
-                assert_eq!(t.fields[1].name.value.as_str(), "dv2");
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 2);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv1");
+                assert_eq!(t.variants[0].fields[1].name.value.as_str(), "dv2");
             }
             _ => panic!("expected type declaration"),
         }
@@ -2346,17 +2541,25 @@ node speed_kmh: Velocity = @speed -> km/hour;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
-                assert_eq!(t.fields.len(), 2);
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 2);
             }
             _ => panic!("expected type declaration"),
         }
     }
 
     #[test]
-    fn parse_type_decl_empty_struct_error() {
-        let source = "type Empty {}";
-        let result = Parser::new(source).parse_file();
-        assert!(result.is_err());
+    fn parse_type_decl_empty_type() {
+        // Empty type (marker type) — zero variants
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Eci");
+                assert_eq!(t.variants.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
     }
 
     #[test]
@@ -2381,10 +2584,11 @@ node speed_kmh: Velocity = @speed -> km/hour;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
-                assert_eq!(t.fields.len(), 1);
-                assert_eq!(t.fields[0].name.value.as_str(), "dv");
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv");
                 // The type_ann should be a DimExpr with division
-                match &t.fields[0].type_ann.kind {
+                match &t.variants[0].fields[0].type_ann.kind {
                     TypeExprKind::DimExpr(_) => {} // ok
                     other => {
                         panic!("expected DimExpr, got {other:?}")

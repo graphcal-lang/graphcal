@@ -922,14 +922,33 @@ fn infer_type(
             )?;
             match &inner_type {
                 InferredType::Struct(type_name) => {
-                    let struct_def = registry.get_struct(type_name.as_str()).ok_or_else(|| {
+                    let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
                         GraphcalError::UnknownStructType {
                             name: type_name.clone(),
                             src: src.clone(),
                             span: inner.span.into(),
                         }
                     })?;
-                    let field_def = struct_def
+                    // Field access is only allowed on single-variant (struct sugar) types
+                    if !type_def.is_single_variant() {
+                        return Err(GraphcalError::NotAStruct {
+                            name: format!(
+                                "multi-variant type `{type_name}` (use `match` to access fields)"
+                            ),
+                            src: src.clone(),
+                            span: inner.span.into(),
+                        });
+                    }
+                    let variant =
+                        type_def
+                            .variants
+                            .first()
+                            .ok_or_else(|| GraphcalError::NotAStruct {
+                                name: type_name.to_string(),
+                                src: src.clone(),
+                                span: inner.span.into(),
+                            })?;
+                    let field_def = variant
                         .fields
                         .iter()
                         .find(|f| f.name.as_str() == field.value.as_str())
@@ -950,17 +969,34 @@ fn infer_type(
         }
 
         ExprKind::StructConstruction { type_name, fields } => {
-            let struct_def = registry
-                .get_struct(type_name.value.as_str())
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: type_name.value.clone(),
-                    src: src.clone(),
-                    span: type_name.span.into(),
-                })?;
+            // Look up by type name first (single-variant / struct sugar),
+            // then by variant name (multi-variant tagged union)
+            let (owning_type_name, variant_def) =
+                if let Some(type_def) = registry.get_type(type_name.value.as_str()) {
+                    // Single-variant: type_name == variant_name
+                    let variant = type_def.variants.first().ok_or_else(|| {
+                        GraphcalError::UnknownStructType {
+                            name: type_name.value.clone(),
+                            src: src.clone(),
+                            span: type_name.span.into(),
+                        }
+                    })?;
+                    (type_def.name.clone(), variant)
+                } else if let Some((type_def, variant)) =
+                    registry.get_type_by_variant(type_name.value.as_str())
+                {
+                    (type_def.name.clone(), variant)
+                } else {
+                    return Err(GraphcalError::UnknownStructType {
+                        name: type_name.value.clone(),
+                        src: src.clone(),
+                        span: type_name.span.into(),
+                    });
+                };
 
             // Check for extra fields
             let def_field_names: std::collections::HashSet<&str> =
-                struct_def.fields.iter().map(|f| f.name.as_str()).collect();
+                variant_def.fields.iter().map(|f| f.name.as_str()).collect();
             let provided_names: Vec<&str> = fields.iter().map(|f| f.name.value.as_str()).collect();
             let extra: Vec<FieldName> = provided_names
                 .iter()
@@ -979,7 +1015,7 @@ fn infer_type(
             // Check for missing fields
             let provided_set: std::collections::HashSet<&str> =
                 provided_names.iter().copied().collect();
-            let missing: Vec<FieldName> = struct_def
+            let missing: Vec<FieldName> = variant_def
                 .fields
                 .iter()
                 .filter(|f| !provided_set.contains(f.name.as_str()))
@@ -996,7 +1032,7 @@ fn infer_type(
 
             // Type-check each field's value
             for field_init in fields {
-                let field_def = struct_def
+                let field_def = variant_def
                     .fields
                     .iter()
                     .find(|f| f.name.as_str() == field_init.name.value.as_str())
@@ -1037,7 +1073,7 @@ fn infer_type(
                 }
             }
 
-            Ok(InferredType::Struct(type_name.value.clone()))
+            Ok(InferredType::Struct(owning_type_name))
         }
 
         ExprKind::ForComp { bindings, body } => {
@@ -1320,6 +1356,140 @@ fn infer_type(
             }
             // scan produces an indexed result with the same index
             Ok(InferredType::Indexed { element, index })
+        }
+
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
+            // Infer scrutinee type — must be a struct (tagged union) type
+            let scrutinee_type = infer_type(
+                scrutinee,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
+            let type_name = match &scrutinee_type {
+                InferredType::Struct(name) => name.clone(),
+                _ => {
+                    return Err(GraphcalError::NotAStruct {
+                        name: format_inferred_type(&scrutinee_type),
+                        src: src.clone(),
+                        span: scrutinee.span.into(),
+                    });
+                }
+            };
+            let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownStructType {
+                    name: type_name.clone(),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                }
+            })?;
+
+            // Track which variants are covered for exhaustiveness
+            let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut arm_types: Vec<InferredType> = Vec::new();
+
+            for arm in arms {
+                let variant_name_str = arm.pattern.variant_name.value.as_str();
+
+                // Check variant belongs to this type
+                let variant = type_def.get_variant(variant_name_str).ok_or_else(|| {
+                    GraphcalError::UnknownField {
+                        type_name: type_name.clone(),
+                        field_name: FieldName::new(variant_name_str),
+                        src: src.clone(),
+                        span: arm.pattern.variant_name.span.into(),
+                    }
+                })?;
+
+                // Check for duplicate arms
+                if !covered.insert(variant_name_str.to_string()) {
+                    return Err(GraphcalError::EvalError {
+                        message: format!("duplicate match arm for variant `{variant_name_str}`"),
+                        src: src.clone(),
+                        span: arm.pattern.span.into(),
+                    });
+                }
+
+                // Bind pattern variables as locals
+                let mut arm_locals = local_types.clone();
+                for binding in &arm.pattern.bindings {
+                    match binding {
+                        graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
+                            let field_def = variant
+                                .fields
+                                .iter()
+                                .find(|f| f.name.as_str() == field.value.as_str())
+                                .ok_or_else(|| GraphcalError::UnknownField {
+                                    type_name: type_name.clone(),
+                                    field_name: field.value.clone(),
+                                    src: src.clone(),
+                                    span: field.span.into(),
+                                })?;
+                            arm_locals.insert(
+                                var.name.clone(),
+                                InferredType::Scalar(field_def.dimension),
+                            );
+                        }
+                        graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {
+                            // Wildcard: no binding needed
+                        }
+                    }
+                }
+
+                // Infer arm body type
+                let arm_type = infer_type(
+                    &arm.body,
+                    declared_types,
+                    &arm_locals,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                arm_types.push(arm_type);
+            }
+
+            // Check exhaustiveness: all variants must be covered
+            for variant in &type_def.variants {
+                if !covered.contains(variant.name.as_str()) {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "non-exhaustive match: variant `{}` not covered",
+                            variant.name.as_str()
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+            }
+
+            // All arm types must match
+            if let Some(first) = arm_types.first() {
+                for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
+                    if arm_type != first {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format_inferred_type(first),
+                            found: format_inferred_type(arm_type),
+                            src: src.clone(),
+                            span: arms[i].body.span.into(),
+                            help: "all match arms must return the same type".to_string(),
+                        });
+                    }
+                }
+                Ok(first.clone())
+            } else {
+                // Empty match (empty type) — should not happen in practice
+                Err(GraphcalError::EvalError {
+                    message: "match expression has no arms".to_string(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })
+            }
         }
     }
 }

@@ -56,6 +56,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -131,6 +135,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -215,6 +223,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -314,6 +326,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -421,6 +437,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -512,6 +532,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -669,6 +693,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -789,6 +817,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -884,6 +916,10 @@
           "named": true
         },
         {
+          "type": "match_expr",
+          "named": true
+        },
+        {
           "type": "number",
           "named": true
         },
@@ -964,6 +1000,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -1231,6 +1271,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -1332,6 +1376,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -1532,6 +1580,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -1626,6 +1678,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -1663,6 +1719,228 @@
       "types": [
         {
           "type": "map_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "match_arm",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "match_pattern",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "match_expr",
+    "named": true,
+    "fields": {
+      "scrutinee": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "match_arm",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "match_pattern",
+    "named": true,
+    "fields": {
+      "variant": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "pattern_binding",
           "named": true
         }
       ]
@@ -1742,6 +2020,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -1849,6 +2131,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -1933,6 +2219,10 @@
           "named": true
         },
         {
+          "type": "match_expr",
+          "named": true
+        },
+        {
           "type": "number",
           "named": true
         },
@@ -1954,6 +2244,42 @@
         },
         {
           "type": "unit_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "pattern_binding",
+    "named": true,
+    "fields": {
+      "binding": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "wildcard",
           "named": true
         }
       ]
@@ -2052,6 +2378,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -2130,6 +2460,10 @@
             "named": true
           },
           {
+            "type": "match_expr",
+            "named": true
+          },
+          {
             "type": "number",
             "named": true
           },
@@ -2205,6 +2539,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -2341,6 +2679,10 @@
         {
           "type": "field_declaration",
           "named": true
+        },
+        {
+          "type": "variant_declaration",
+          "named": true
         }
       ]
     }
@@ -2430,6 +2772,10 @@
           },
           {
             "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
             "named": true
           },
           {
@@ -2631,6 +2977,32 @@
     }
   },
   {
+    "type": "variant_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "!",
     "named": false
   },
@@ -2708,6 +3080,10 @@
   },
   {
     "type": "==",
+    "named": false
+  },
+  {
+    "type": "=>",
     "named": false
   },
   {
@@ -2800,6 +3176,10 @@
     "extra": true
   },
   {
+    "type": "match",
+    "named": false
+  },
+  {
     "type": "node",
     "named": false
   },
@@ -2834,6 +3214,10 @@
   {
     "type": "use",
     "named": false
+  },
+  {
+    "type": "wildcard",
+    "named": true
   },
   {
     "type": "{",

@@ -1,0 +1,14 @@
+// Error: match arms return different types
+dimension Velocity = Length / Time;
+
+type ManeuverKind {
+    Impulsive { delta_v: Velocity }
+    Coasting
+}
+
+param m: ManeuverKind = Coasting;
+
+node result: Velocity = match @m {
+    Impulsive { delta_v } => delta_v,
+    Coasting => 0.0,
+};

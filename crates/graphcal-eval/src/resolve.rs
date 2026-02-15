@@ -386,6 +386,13 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(init, src)?;
             check_no_graph_refs(body, src)
         }
+        ExprKind::Match { scrutinee, arms } => {
+            check_no_graph_refs(scrutinee, src)?;
+            for arm in arms {
+                check_no_graph_refs(&arm.body, src)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -479,6 +486,13 @@ fn check_no_graph_refs_in_fn_expr(
             check_no_graph_refs_in_fn_expr(source, fn_name, src)?;
             check_no_graph_refs_in_fn_expr(init, fn_name, src)?;
             check_no_graph_refs_in_fn_expr(body, fn_name, src)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            check_no_graph_refs_in_fn_expr(scrutinee, fn_name, src)?;
+            for arm in arms {
+                check_no_graph_refs_in_fn_expr(&arm.body, fn_name, src)?;
+            }
+            Ok(())
         }
     }
 }
@@ -752,6 +766,29 @@ fn collect_const_refs(
                 src,
                 deps,
             )
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_const_refs(
+                scrutinee,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )?;
+            for arm in arms {
+                collect_const_refs(
+                    &arm.body,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    deps,
+                )?;
+            }
+            Ok(())
         }
     }
 }
@@ -1079,6 +1116,33 @@ fn collect_all_refs(
                 const_refs,
             )
         }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_all_refs(
+                scrutinee,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )?;
+            for arm in arms {
+                collect_all_refs(
+                    &arm.body,
+                    all_runtime_names,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    graph_refs,
+                    const_refs,
+                )?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1152,6 +1216,12 @@ pub fn collect_graph_refs(
             collect_graph_refs(source, all_runtime_names, refs);
             collect_graph_refs(init, all_runtime_names, refs);
             collect_graph_refs(body, all_runtime_names, refs);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_graph_refs(scrutinee, all_runtime_names, refs);
+            for arm in arms {
+                collect_graph_refs(&arm.body, all_runtime_names, refs);
+            }
         }
         ExprKind::Number(_)
         | ExprKind::Integer(_)

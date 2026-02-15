@@ -1,0 +1,13 @@
+// Error: non-exhaustive match — missing variant
+type Status {
+    Nominal
+    Warning { code: Dimensionless }
+    Critical { code: Dimensionless }
+}
+
+param s: Status = Nominal;
+
+node result: Dimensionless = match @s {
+    Nominal => 0.0,
+    Warning { code } => code,
+};

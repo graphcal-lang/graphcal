@@ -35,6 +35,8 @@ pub enum Token {
     For,
     #[token("use")]
     Use,
+    #[token("match")]
+    Match,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -79,6 +81,8 @@ pub enum Token {
     ColonColon,
     #[token("|")]
     Pipe,
+    #[token("=>")]
+    FatArrow,
 
     // Delimiters
     #[token("(")]
@@ -103,6 +107,10 @@ pub enum Token {
     Colon,
     #[token(".")]
     Dot,
+
+    // Wildcard pattern
+    #[token("_")]
+    Underscore,
 
     // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
     #[regex(r"[a-zA-Z][a-zA-Z0-9_]*")]
@@ -131,6 +139,7 @@ impl std::fmt::Display for Token {
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
             Self::Use => write!(f, "use"),
+            Self::Match => write!(f, "match"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -151,6 +160,7 @@ impl std::fmt::Display for Token {
             Self::Arrow => write!(f, "->"),
             Self::ColonColon => write!(f, "::"),
             Self::Pipe => write!(f, "|"),
+            Self::FatArrow => write!(f, "=>"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
@@ -162,6 +172,7 @@ impl std::fmt::Display for Token {
             Self::At => write!(f, "@"),
             Self::Colon => write!(f, ":"),
             Self::Dot => write!(f, "."),
+            Self::Underscore => write!(f, "_"),
             Self::Ident => write!(f, "identifier"),
             Self::Number => write!(f, "number"),
         }
@@ -355,7 +366,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens =
-            lex_tokens("param node const if else dimension unit type let fn index for use");
+            lex_tokens("param node const if else dimension unit type let fn index for use match");
         assert_eq!(
             tokens,
             vec![
@@ -372,6 +383,7 @@ mod tests {
                 Token::Index,
                 Token::For,
                 Token::Use,
+                Token::Match,
             ]
         );
     }

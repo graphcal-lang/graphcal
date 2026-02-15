@@ -20,6 +20,7 @@ pub enum RuntimeValue {
     Int(i64),
     Struct {
         type_name: StructTypeName,
+        variant: VariantName,
         fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection: maps variant names to values, preserving declaration order.
@@ -648,8 +649,31 @@ pub fn eval_expr(
                 };
                 field_map.insert(field_init.name.value.clone(), val);
             }
+            // Resolve owning type and variant names
+            let (owning_type, variant_name) =
+                if registry.get_type(type_name.value.as_str()).is_some() {
+                    // Single-variant: type_name == variant_name
+                    (
+                        type_name.value.clone(),
+                        VariantName::new(type_name.value.as_str()),
+                    )
+                } else if let Some((type_def, _)) =
+                    registry.get_type_by_variant(type_name.value.as_str())
+                {
+                    (
+                        type_def.name.clone(),
+                        VariantName::new(type_name.value.as_str()),
+                    )
+                } else {
+                    return Err(GraphcalError::EvalError {
+                        message: format!("unknown type or variant `{}`", type_name.value),
+                        src: src.clone(),
+                        span: type_name.span.into(),
+                    });
+                };
             Ok(RuntimeValue::Struct {
-                type_name: type_name.value.clone(),
+                type_name: owning_type,
+                variant: variant_name,
                 fields: field_map,
             })
         }
@@ -799,6 +823,73 @@ pub fn eval_expr(
                 index_name,
                 entries: result_entries,
             })
+        }
+
+        ExprKind::Match { scrutinee, arms } => {
+            let scrutinee_val = eval_expr(
+                scrutinee,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
+            let RuntimeValue::Struct {
+                variant,
+                fields: scrutinee_fields,
+                ..
+            } = &scrutinee_val
+            else {
+                return Err(GraphcalError::EvalError {
+                    message: "match scrutinee must be a struct/tagged union value".to_string(),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                });
+            };
+
+            // Find the matching arm
+            let matched_arm = arms
+                .iter()
+                .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("no match arm for variant `{variant}`"),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
+
+            // Bind pattern variables
+            let mut arm_locals = local_values.clone();
+            for binding in &matched_arm.pattern.bindings {
+                match binding {
+                    graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
+                        let field_val =
+                            scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
+                                GraphcalError::EvalError {
+                                    message: format!(
+                                        "no field `{}` on variant `{variant}`",
+                                        field.value
+                                    ),
+                                    src: src.clone(),
+                                    span: field.span.into(),
+                                }
+                            })?;
+                        arm_locals.insert(var.name.clone(), field_val.clone());
+                    }
+                    graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {}
+                }
+            }
+
+            // Evaluate the matched arm body
+            eval_expr(
+                &matched_arm.body,
+                values,
+                &arm_locals,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )
         }
     }
 }
