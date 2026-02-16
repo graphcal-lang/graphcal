@@ -4,11 +4,11 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::ast::{
-    BinOp, ConstDecl, DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, Expr,
-    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
-    GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm, MatchPattern,
-    MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp,
-    UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
+    BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimExprItem, DimTerm,
+    Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding,
+    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm,
+    MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind,
+    UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -274,6 +274,30 @@ impl<'src> Parser<'src> {
         let name = self
             .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<StructTypeName>();
+
+        // Optional generic params: <D: Dim, F: Type>
+        let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+
+        // Optional derive clause: derive(Add, Sub, Neg)
+        let derives = if self.lexer.peek() == Some(&Token::Ident) {
+            let peeked = self.lexer.peek_with_span();
+            if let Some((&Token::Ident, span)) = peeked {
+                if self.lexer.slice_at(span) == "derive" {
+                    self.parse_derive_clause()?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         let (_, lbrace_span) = self.expect(Token::LBrace)?;
 
         // Disambiguate: empty type, struct sugar, or multi-variant
@@ -299,7 +323,12 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
-            kind: DeclKind::Type(TypeDecl { name, variants }),
+            kind: DeclKind::Type(TypeDecl {
+                name,
+                generic_params,
+                derives,
+                variants,
+            }),
             span,
         })
     }
@@ -585,15 +614,27 @@ impl<'src> Parser<'src> {
             let constraint = match constraint_ident.name.as_str() {
                 "Dim" => GenericConstraint::Dim,
                 "Index" => GenericConstraint::Index,
+                "Type" => GenericConstraint::Type,
                 _ => {
                     return Err(self.unexpected_token(
-                        "`Dim` or `Index`",
+                        "`Dim`, `Index`, or `Type`",
                         &constraint_ident.name,
                         constraint_ident.span,
                     ));
                 }
             };
-            params.push(GenericParam { name, constraint });
+            // Optional default: `= TypeExpr`
+            let default = if self.lexer.peek() == Some(&Token::Eq) {
+                self.lexer.next_token(); // consume `=`
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
+            params.push(GenericParam {
+                name,
+                constraint,
+                default,
+            });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {
@@ -602,6 +643,40 @@ impl<'src> Parser<'src> {
         }
         self.expect(Token::Gt)?;
         Ok(params)
+    }
+
+    /// Parse a derive clause: `derive(Add, Sub, Neg)`
+    fn parse_derive_clause(&mut self) -> Result<Vec<Spanned<DeriveOp>>, ParseError> {
+        // Consume the `derive` identifier
+        self.lexer.next_token();
+        self.expect(Token::LParen)?;
+        let mut derives = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RParen) {
+                break;
+            }
+            let op_ident = self.parse_any_ident()?;
+            let op = match op_ident.name.as_str() {
+                "Add" => DeriveOp::Add,
+                "Sub" => DeriveOp::Sub,
+                "Neg" => DeriveOp::Neg,
+                _ => {
+                    return Err(self.unexpected_token(
+                        "`Add`, `Sub`, or `Neg`",
+                        &op_ident.name,
+                        op_ident.span,
+                    ));
+                }
+            };
+            derives.push(Spanned::new(op, op_ident.span));
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RParen)?;
+        Ok(derives)
     }
 
     /// Parse a function parameter: `name: TypeExpr`
@@ -741,6 +816,19 @@ impl<'src> Parser<'src> {
                 let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
                 TypeExpr {
                     kind: TypeExprKind::Int,
+                    span,
+                }
+            } else if is_pascal_case(text) && self.is_lt_after_ident(span) {
+                // Type application: Vec3<Length, ECI>
+                let ident = self.parse_any_ident()?;
+                let type_args = self.parse_type_arg_list()?;
+                let end_span = type_args.last().map_or(ident.span, |a| a.span);
+                let span = ident.span.merge(end_span);
+                TypeExpr {
+                    kind: TypeExprKind::TypeApplication {
+                        name: ident,
+                        type_args,
+                    },
                     span,
                 }
             } else {
@@ -978,6 +1066,17 @@ impl<'src> Parser<'src> {
                 kind: ExprKind::Convert {
                     expr: Box::new(expr),
                     target,
+                },
+                span,
+            })
+        } else if self.lexer.peek() == Some(&Token::As) {
+            self.lexer.next_token();
+            let target_type = self.parse_type_expr()?;
+            let span = expr.span.merge(target_type.span);
+            Ok(Expr {
+                kind: ExprKind::AsCast {
+                    expr: Box::new(expr),
+                    target_type,
                 },
                 span,
             })
@@ -1316,6 +1415,16 @@ impl<'src> Parser<'src> {
                         kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
                         span,
                     })
+                } else if is_pascal_case(&name)
+                    && self.lexer.peek() == Some(&Token::Lt)
+                    && self.is_type_args_followed_by_brace()
+                {
+                    // Generic struct construction: Vec3<Length, ECI> { x: 1 km, ... }
+                    let type_args = self.parse_type_arg_list()?;
+                    self.parse_struct_construction_with_type_args(
+                        Spanned::new(StructTypeName::new(name), span),
+                        type_args,
+                    )
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
                     // Struct/variant construction with fields: TypeName { field1: expr, field2 }
                     self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
@@ -1324,6 +1433,7 @@ impl<'src> Parser<'src> {
                     Ok(Expr {
                         kind: ExprKind::StructConstruction {
                             type_name: Spanned::new(StructTypeName::new(name), span),
+                            type_args: Vec::new(),
                             fields: Vec::new(),
                         },
                         span,
@@ -1584,9 +1694,124 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = type_name.span.merge(end_span);
         Ok(Expr {
-            kind: ExprKind::StructConstruction { type_name, fields },
+            kind: ExprKind::StructConstruction {
+                type_name,
+                type_args: Vec::new(),
+                fields,
+            },
             span,
         })
+    }
+
+    /// Parse struct construction with explicit type args: `Vec3<Length, ECI> { x: 1 km, ... }`
+    /// Called after the type args have already been parsed.
+    fn parse_struct_construction_with_type_args(
+        &mut self,
+        type_name: Spanned<StructTypeName>,
+        type_args: Vec<TypeExpr>,
+    ) -> Result<Expr, ParseError> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
+
+            let value = if self.lexer.peek() == Some(&Token::Colon) {
+                self.lexer.next_token();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            fields.push(FieldInit {
+                name: field_name,
+                value,
+            });
+
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = type_name.span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::StructConstruction {
+                type_name,
+                type_args,
+                fields,
+            },
+            span,
+        })
+    }
+
+    /// Check if `<` follows the current ident token (used for type application detection).
+    /// Scans the raw source after the ident span to find `<` (skipping whitespace).
+    fn is_lt_after_ident(&self, ident_span: Span) -> bool {
+        let bytes = self.source.as_bytes();
+        let mut pos = ident_span.offset + ident_span.len;
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        pos < bytes.len() && bytes[pos] == b'<'
+    }
+
+    /// Look ahead to check if `<...>` is followed by `{`.
+    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
+    /// from `Foo < bar` (comparison).
+    ///
+    /// Scans the raw source string from the current position to find matching angle brackets.
+    fn is_type_args_followed_by_brace(&mut self) -> bool {
+        // Get the byte offset where `<` starts
+        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
+            return false;
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = lt_span.offset + lt_span.len; // byte after `<`
+        let mut depth: usize = 1;
+        while pos < bytes.len() {
+            match bytes[pos] {
+                b'<' => depth += 1,
+                b'>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Skip whitespace after `>`
+                        let mut p = pos + 1;
+                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+                            p += 1;
+                        }
+                        return p < bytes.len() && bytes[p] == b'{';
+                    }
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+        false
+    }
+
+    /// Parse a type argument list: `<TypeExpr, TypeExpr, ...>`
+    fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
+        self.expect(Token::Lt)?;
+        let mut args = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::Gt) {
+                break;
+            }
+            args.push(self.parse_type_expr()?);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::Gt)?;
+        Ok(args)
     }
 
     // --- For comprehension ---
@@ -2200,6 +2425,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_as_cast() {
+        // @v as Vec3<Length, Eci> should parse as AsCast
+        let source = r"
+            type Eci {}
+            type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+            node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
+        ";
+        let file = Parser::new(source).parse_file().unwrap();
+        // The node is the 3rd declaration (after type Eci, type Vec3)
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, type_args } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                            assert_eq!(type_args.len(), 2);
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_as_cast_binds_loosely() {
+        // @a + @b as Vec3<Length, Eci> should be (@a + @b) as Vec3<Length, Eci>
+        let source = r"
+            type Eci {}
+            type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+            node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
+        ";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, .. } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
     // --- Expression parsing (preserved from Phase 0) ---
 
     /// Helper: parse a single node declaration and return its expression.
@@ -2614,6 +2893,250 @@ param alt: Length = 400.0 km;
     }
 
     #[test]
+    fn parse_type_decl_generic_params() {
+        let source = "type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1); // struct sugar
+                assert_eq!(t.variants[0].fields.len(), 3);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_generics_empty() {
+        // Empty marker type without generics
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Eci");
+                assert!(t.generic_params.is_empty());
+                assert_eq!(t.variants.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_single_type_param() {
+        let source = "type Timestamp<TZ: Type> { epoch_seconds: Time }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Timestamp");
+                assert_eq!(t.generic_params.len(), 1);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_tagged_union() {
+        // Multi-variant type with generic params
+        let source = "type Result<D: Dim, E: Type> { Ok { value: D } Err }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Result");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.variants.len(), 2);
+                assert_eq!(t.variants[0].name.value.as_str(), "Ok");
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[1].name.value.as_str(), "Err");
+                assert_eq!(t.variants[1].fields.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_default_type_param() {
+        let source = "type Vec3<D: Dim, F: Type = Unframed> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                // First param: D: Dim (no default)
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert!(t.generic_params[0].default.is_none());
+                // Second param: F: Type = Unframed
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                let default = t.generic_params[1].default.as_ref().unwrap();
+                assert_eq!(dim_expr_name(default), "Unframed");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_no_default() {
+        // All params without defaults — default field should be None
+        let source = "type Pair<A: Dim, B: Dim> { a: A, b: B }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.generic_params.len(), 2);
+                assert!(t.generic_params[0].default.is_none());
+                assert!(t.generic_params[1].default.is_none());
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_derive_clause() {
+        let source = "type Vec3<D: Dim, F: Type> derive(Add, Sub, Neg) { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.derives.len(), 3);
+                assert_eq!(t.derives[0].value, DeriveOp::Add);
+                assert_eq!(t.derives[1].value, DeriveOp::Sub);
+                assert_eq!(t.derives[2].value, DeriveOp::Neg);
+                assert_eq!(t.variants.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_derive() {
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert!(t.derives.is_empty());
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    // --- TypeApplication and generic struct construction tests ---
+
+    /// Helper to extract the dimension name from a single-term `DimExpr` type expression.
+    fn dim_expr_name(te: &TypeExpr) -> &str {
+        match &te.kind {
+            TypeExprKind::DimExpr(dim) => {
+                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
+                dim.terms[0].term.name.name.as_str()
+            }
+            other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_in_annotation() {
+        // Type annotation with type args: `Vec3<Length, ECI>`
+        let source = "param v: Vec3<Length, ECI> = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_single_arg() {
+        let source = "param t: Timestamp<UTC> = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Timestamp");
+                    assert_eq!(type_args.len(), 1);
+                    assert_eq!(dim_expr_name(&type_args[0]), "UTC");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_type_still_works() {
+        // Non-generic type annotation should still parse as DimExpr, not TypeApplication
+        let source = "param v: Length = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_generic_struct_construction() {
+        let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI> { x: 1.0, y: 2.0, z: 3.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                    assert_eq!(fields.len(), 3);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_struct_construction_still_works() {
+        // Non-generic struct construction: no type args
+        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "TransferResult");
+                    assert!(type_args.is_empty());
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
     fn is_pascal_case_examples() {
         assert!(is_pascal_case("TransferResult"));
         assert!(is_pascal_case("Orbit"));
@@ -2721,7 +3244,9 @@ param alt: Length = 400.0 km;
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction { type_name, fields } => {
+                ExprKind::StructConstruction {
+                    type_name, fields, ..
+                } => {
                     assert_eq!(type_name.value.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
@@ -2743,7 +3268,9 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Block { expr, .. } => match &expr.kind {
-                    ExprKind::StructConstruction { type_name, fields } => {
+                    ExprKind::StructConstruction {
+                        type_name, fields, ..
+                    } => {
                         assert_eq!(type_name.value.as_str(), "TransferResult");
                         assert_eq!(fields.len(), 2);
                         // Shorthand: value is None

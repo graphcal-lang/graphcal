@@ -215,20 +215,22 @@ pub fn register_file_declarations(
                 });
             }
             DeclKind::Type(t) => {
+                let generic_params: Vec<registry::TypeGenericParam> = t
+                    .generic_params
+                    .iter()
+                    .map(|g| registry::TypeGenericParam {
+                        name: g.name.value.clone(),
+                        constraint: g.constraint.into(),
+                        default: g.default.clone(),
+                    })
+                    .collect();
                 let mut variants = Vec::new();
                 for variant in &t.variants {
                     let mut fields = Vec::new();
                     for field in &variant.fields {
-                        let dim = registry.resolve_type_expr(&field.type_ann).ok_or_else(|| {
-                            GraphcalError::UnknownDimension {
-                                name: DimName::new(field.name.value.as_str()),
-                                src: src.clone(),
-                                span: field.name.span.into(),
-                            }
-                        })?;
                         fields.push(registry::StructField {
                             name: field.name.value.clone(),
-                            dimension: dim,
+                            type_ann: field.type_ann.clone(),
                         });
                     }
                     variants.push(registry::VariantDef {
@@ -238,6 +240,8 @@ pub fn register_file_declarations(
                 }
                 registry.register_type(registry::TypeDef {
                     name: t.name.value.clone(),
+                    generic_params,
+                    derives: t.derives.iter().map(|d| d.value).collect(),
                     variants,
                 });
             }
@@ -263,6 +267,13 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
                         }
                         graphcal_syntax::ast::GenericConstraint::Index => {
                             registry::FnGenericConstraint::Index
+                        }
+                        graphcal_syntax::ast::GenericConstraint::Type => {
+                            // Type constraint is for type declarations, not functions.
+                            // This should be caught by validation before reaching here.
+                            unreachable!(
+                                "`Type` constraint is not valid on function generic parameters"
+                            )
                         }
                     },
                 })

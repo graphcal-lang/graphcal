@@ -100,7 +100,17 @@ pub struct UnitDef {
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
+    pub generic_params: Vec<GenericParam>,
+    pub derives: Vec<Spanned<DeriveOp>>,
     pub variants: Vec<VariantDecl>,
+}
+
+/// An operator that can be derived for a struct type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeriveOp {
+    Add,
+    Sub,
+    Neg,
 }
 
 /// A variant in a type declaration: `Impulsive { delta_v: Velocity }` or bare `Nominal`.
@@ -140,6 +150,8 @@ pub struct FnDecl {
 pub struct GenericParam {
     pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,
+    /// Optional default type, e.g. `F: Type = Unframed`.
+    pub default: Option<TypeExpr>,
 }
 
 /// Constraint on a generic parameter.
@@ -149,6 +161,8 @@ pub enum GenericConstraint {
     Dim,
     /// `I: Index` -- the generic stands for an index.
     Index,
+    /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
+    Type,
 }
 
 /// A function parameter: `x: Length`, `t: Dimensionless`
@@ -265,6 +279,11 @@ pub enum TypeExprKind {
         base: Box<TypeExpr>,
         indexes: Vec<Ident>,
     },
+    /// A generic type application like `Vec3<Length, ECI>` or `Timestamp<UTC>`
+    TypeApplication {
+        name: Ident,
+        type_args: Vec<TypeExpr>,
+    },
 }
 
 /// A dimension expression: product/quotient of dimension terms.
@@ -363,6 +382,11 @@ pub enum ExprKind {
     UnitLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
     Convert { expr: Box<Expr>, target: UnitExpr },
+    /// Phantom type cast: `expr as TypeExpr`
+    AsCast {
+        expr: Box<Expr>,
+        target_type: TypeExpr,
+    },
     /// Local variable reference (bare name in block scope): `r1`, `dv1`
     LocalRef(Ident),
     /// Block expression: `{ let a = ...; let b = ...; expr }`
@@ -376,8 +400,10 @@ pub enum ExprKind {
         field: Spanned<FieldName>,
     },
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
+    /// or with type args: `Vec3<Length, ECI> { x: 1 km, y: 0 km, z: 0 km }`
     StructConstruction {
         type_name: Spanned<StructTypeName>,
+        type_args: Vec<TypeExpr>,
         fields: Vec<FieldInit>,
     },
     /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
@@ -540,6 +566,7 @@ mod tests {
             generic_params: vec![GenericParam {
                 name: Spanned::new(GenericParamName::new("D"), s),
                 constraint: GenericConstraint::Dim,
+                default: None,
             }],
             params: vec![FnParam {
                 name: Ident {

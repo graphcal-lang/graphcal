@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use graphcal_syntax::ast::{DimExpr, FnBody, MulDivOp, TypeExpr, TypeExprKind, UnitExpr};
+use graphcal_syntax::ast::{
+    DimExpr, FnBody, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{
     DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
@@ -21,7 +23,7 @@ pub struct UnitInfo {
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub name: FieldName,
-    pub dimension: Dimension,
+    pub type_ann: TypeExpr,
 }
 
 /// A variant within a type definition.
@@ -31,11 +33,43 @@ pub struct VariantDef {
     pub fields: Vec<StructField>,
 }
 
+/// The constraint on a generic parameter of a type definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeGenericConstraint {
+    /// `D: Dim` — the generic stands for a dimension.
+    Dim,
+    /// `I: Index` — the generic stands for an index.
+    Index,
+    /// `F: Type` — unconstrained phantom type parameter.
+    Unconstrained,
+}
+
+impl From<GenericConstraint> for TypeGenericConstraint {
+    fn from(c: GenericConstraint) -> Self {
+        match c {
+            GenericConstraint::Dim => Self::Dim,
+            GenericConstraint::Index => Self::Index,
+            GenericConstraint::Type => Self::Unconstrained,
+        }
+    }
+}
+
+/// A generic parameter on a type definition.
+#[derive(Debug, Clone)]
+pub struct TypeGenericParam {
+    pub name: GenericParamName,
+    pub constraint: TypeGenericConstraint,
+    /// Optional default type expression, e.g. `F: Type = Unframed`.
+    pub default: Option<graphcal_syntax::ast::TypeExpr>,
+}
+
 /// A type definition: may have zero variants (empty/marker type),
 /// one variant (struct sugar), or multiple variants (tagged union).
 #[derive(Debug, Clone)]
 pub struct TypeDef {
     pub name: StructTypeName,
+    pub generic_params: Vec<TypeGenericParam>,
+    pub derives: Vec<graphcal_syntax::ast::DeriveOp>,
     pub variants: Vec<VariantDef>,
 }
 
@@ -210,7 +244,7 @@ impl Registry {
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Some(Dimension::DIMENSIONLESS),
-            TypeExprKind::Bool | TypeExprKind::Int => None, // Bool/Int are not dimension types
+            TypeExprKind::Bool | TypeExprKind::Int | TypeExprKind::TypeApplication { .. } => None, // Bool/Int/generic types not resolved here
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
             TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
         }
@@ -262,6 +296,25 @@ mod tests {
     fn make_ident(name: &str) -> Ident {
         Ident {
             name: name.to_string(),
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// Create a simple dimension `TypeExpr` from a name string.
+    fn make_dim_type_expr(name: &str) -> TypeExpr {
+        use graphcal_syntax::ast::{DimExpr, DimExprItem, DimTerm};
+        TypeExpr {
+            kind: TypeExprKind::DimExpr(DimExpr {
+                terms: vec![DimExprItem {
+                    op: MulDivOp::Mul,
+                    term: DimTerm {
+                        name: make_ident(name),
+                        power: None,
+                        span: Span::new(0, 0),
+                    },
+                }],
+                span: Span::new(0, 0),
+            }),
             span: Span::new(0, 0),
         }
     }
@@ -399,16 +452,18 @@ mod tests {
         let velocity_dim = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
         r.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
+            generic_params: vec![],
+            derives: vec![],
             variants: vec![VariantDef {
                 name: VariantName::new("TransferResult"),
                 fields: vec![
                     StructField {
                         name: FieldName::new("dv1"),
-                        dimension: velocity_dim,
+                        type_ann: make_dim_type_expr("Velocity"),
                     },
                     StructField {
                         name: FieldName::new("dv2"),
-                        dimension: velocity_dim,
+                        type_ann: make_dim_type_expr("Velocity"),
                     },
                 ],
             }],
@@ -419,7 +474,10 @@ mod tests {
         let variant = def.get_variant("TransferResult").unwrap();
         assert_eq!(variant.fields.len(), 2);
         assert_eq!(variant.fields[0].name.as_str(), "dv1");
-        assert_eq!(variant.fields[0].dimension, velocity_dim);
+        assert_eq!(
+            r.resolve_type_expr(&variant.fields[0].type_ann),
+            Some(velocity_dim)
+        );
         assert!(r.get_type("NonExistent").is_none());
 
         // variant_to_type reverse lookup

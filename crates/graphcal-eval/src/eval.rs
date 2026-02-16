@@ -558,7 +558,11 @@ fn runtime_to_value(
                         vd.fields
                             .iter()
                             .find(|f| f.name == *field_name)
-                            .map(|f| DeclaredType::Scalar(f.dimension))
+                            .and_then(|f| {
+                                registry
+                                    .resolve_type_expr(&f.type_ann)
+                                    .map(DeclaredType::Scalar)
+                            })
                     });
                     let val = runtime_to_value(field_rv, field_declared.as_ref(), None, registry);
                     (field_name.clone(), val)
@@ -1104,6 +1108,57 @@ mod tests {
             }
             _ => panic!("expected struct for transfer"),
         }
+    }
+
+    #[test]
+    fn eval_generics_milestone() {
+        let source = include_str!("../../../tests/fixtures/generics.gcl");
+        let result = compile_and_eval(source).unwrap();
+
+        // x_pos: field access on Vec3<Length, Eci>, should be 6878 km = 6878000 m
+        let x_pos = find_value(&result, "x_pos");
+        assert!((x_pos - 6_878_000.0).abs() < 1.0, "x_pos = {x_pos}");
+
+        // y_vel: field access on Vec3<Velocity, Eci>, should be 7.67 km/s = 7670 m/s
+        let y_vel = find_value(&result, "y_vel");
+        assert!((y_vel - 7670.0).abs() < 1.0, "y_vel = {y_vel}");
+
+        // pos3_eci_x: explicit type args, 100 km = 100000 m
+        let pos3_eci_x = find_value(&result, "pos3_eci_x");
+        assert!(
+            (pos3_eci_x - 100_000.0).abs() < 1.0,
+            "pos3_eci_x = {pos3_eci_x}"
+        );
+
+        // pos3_default_y: default type param (F = Unframed), 20 km = 20000 m
+        let pos3_default_y = find_value(&result, "pos3_default_y");
+        assert!(
+            (pos3_default_y - 20_000.0).abs() < 1.0,
+            "pos3_default_y = {pos3_default_y}"
+        );
+
+        // dv_sum_x: derive(Add), 100 + 10 = 110 m/s
+        let dv_sum_x = find_value(&result, "dv_sum_x");
+        assert!((dv_sum_x - 110.0).abs() < 0.01, "dv_sum_x = {dv_sum_x}");
+
+        // dv_diff_y: derive(Sub), 200 - 20 = 180 m/s
+        let dv_diff_y = find_value(&result, "dv_diff_y");
+        assert!((dv_diff_y - 180.0).abs() < 0.01, "dv_diff_y = {dv_diff_y}");
+
+        // dv_neg_z: derive(Neg), -(300 m/s) = -300 m/s
+        let dv_neg_z = find_value(&result, "dv_neg_z");
+        assert!((dv_neg_z - (-300.0)).abs() < 0.01, "dv_neg_z = {dv_neg_z}");
+
+        // pos_body_x: as cast (phantom only), same value as pos_eci.x = 6878 km = 6878000 m
+        let pos_body_x = find_value(&result, "pos_body_x");
+        assert!(
+            (pos_body_x - 6_878_000.0).abs() < 1.0,
+            "pos_body_x = {pos_body_x}"
+        );
+
+        // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
+        let total_dv = find_value(&result, "total_dv");
+        assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");
     }
 
     #[test]

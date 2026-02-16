@@ -254,7 +254,7 @@ pub fn eval_expr(
                 let rv = r.expect_scalar("comparison operand");
                 Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
             }
-            // Arithmetic operators: Int or Scalar operands
+            // Arithmetic operators: Int, Scalar, or derived struct operands
             _ => {
                 let l = eval_expr(
                     lhs,
@@ -278,6 +278,22 @@ pub fn eval_expr(
                     return Ok(RuntimeValue::Int(eval_int_binop(
                         *op, *li, *ri, src, expr.span,
                     )?));
+                }
+                // Component-wise struct operations for derive(Add)/derive(Sub)
+                if let (
+                    RuntimeValue::Struct {
+                        type_name,
+                        variant,
+                        fields: lhs_fields,
+                    },
+                    RuntimeValue::Struct {
+                        fields: rhs_fields, ..
+                    },
+                ) = (&l, &r)
+                {
+                    return eval_struct_binop(
+                        *op, type_name, variant, lhs_fields, rhs_fields, src, expr.span,
+                    );
                 }
                 let lv = l.expect_scalar("binary operand");
                 let rv = r.expect_scalar("binary operand");
@@ -306,6 +322,11 @@ pub fn eval_expr(
                         })?;
                         Ok(RuntimeValue::Int(negated))
                     }
+                    RuntimeValue::Struct {
+                        type_name,
+                        variant,
+                        fields,
+                    } => eval_struct_neg(&type_name, &variant, &fields, src, expr.span),
                     _ => Ok(RuntimeValue::Scalar(-v.expect_scalar("unary negation"))),
                 }
             }
@@ -560,7 +581,7 @@ pub fn eval_expr(
                 )
             }
         }
-        ExprKind::Convert { expr: inner, .. } => eval_expr(
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => eval_expr(
             inner,
             values,
             local_values,
@@ -619,7 +640,9 @@ pub fn eval_expr(
                 }),
             }
         }
-        ExprKind::StructConstruction { type_name, fields } => {
+        ExprKind::StructConstruction {
+            type_name, fields, ..
+        } => {
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = if let Some(value_expr) = &field_init.value {
@@ -1097,4 +1120,83 @@ fn eval_binop(
     } else {
         Ok(result)
     }
+}
+
+/// Component-wise binary operation on two struct values (for derive(Add)/derive(Sub)).
+/// Type checking has already verified that both operands are the same struct type
+/// and that the struct derives the appropriate operator.
+fn eval_struct_binop(
+    op: BinOp,
+    type_name: &StructTypeName,
+    variant: &VariantName,
+    lhs_fields: &IndexMap<FieldName, RuntimeValue>,
+    rhs_fields: &IndexMap<FieldName, RuntimeValue>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    let mut result_fields = IndexMap::with_capacity(lhs_fields.len());
+    for (field_name, lhs_val) in lhs_fields {
+        let rhs_val = &rhs_fields[field_name];
+        let result_val = match (lhs_val, rhs_val) {
+            (RuntimeValue::Scalar(l), RuntimeValue::Scalar(r)) => {
+                RuntimeValue::Scalar(eval_binop(op, *l, *r, src, span)?)
+            }
+            (RuntimeValue::Int(l), RuntimeValue::Int(r)) => {
+                RuntimeValue::Int(eval_int_binop(op, *l, *r, src, span)?)
+            }
+            _ => {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "field `{field_name}` of struct `{type_name}` has unsupported type for component-wise operation"
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+        };
+        result_fields.insert(field_name.clone(), result_val);
+    }
+    Ok(RuntimeValue::Struct {
+        type_name: type_name.clone(),
+        variant: variant.clone(),
+        fields: result_fields,
+    })
+}
+
+/// Component-wise negation of a struct value (for derive(Neg)).
+fn eval_struct_neg(
+    type_name: &StructTypeName,
+    variant: &VariantName,
+    fields: &IndexMap<FieldName, RuntimeValue>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    let mut result_fields = IndexMap::with_capacity(fields.len());
+    for (field_name, val) in fields {
+        let result_val = match val {
+            RuntimeValue::Scalar(v) => RuntimeValue::Scalar(-v),
+            RuntimeValue::Int(i) => {
+                RuntimeValue::Int(i.checked_neg().ok_or_else(|| GraphcalError::EvalError {
+                    message: "integer negation overflow".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                })?)
+            }
+            _ => {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "field `{field_name}` of struct `{type_name}` has unsupported type for component-wise negation"
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+        };
+        result_fields.insert(field_name.clone(), result_val);
+    }
+    Ok(RuntimeValue::Struct {
+        type_name: type_name.clone(),
+        variant: variant.clone(),
+        fields: result_fields,
+    })
 }

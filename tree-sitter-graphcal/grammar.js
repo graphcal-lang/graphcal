@@ -106,6 +106,8 @@ module.exports = grammar({
     type_declaration: $ => seq(
       "type",
       field("name", $.identifier),
+      optional(field("generics", $.generic_params)),
+      optional(field("derives", $.derive_clause)),
       "{",
       choice(
         // Empty type: type Eci {}
@@ -193,9 +195,21 @@ module.exports = grammar({
       field("name", $.identifier),
       ":",
       field("constraint", $.generic_constraint),
+      optional(seq("=", field("default", $.type_expr))),
     ),
 
-    generic_constraint: $ => choice("Dim", "Index"),
+    generic_constraint: $ => choice("Dim", "Index", "Type"),
+
+    derive_clause: $ => seq(
+      "derive",
+      "(",
+      $.derive_op,
+      repeat(seq(",", $.derive_op)),
+      optional(","),
+      ")",
+    ),
+
+    derive_op: $ => choice("Add", "Sub", "Neg"),
 
     fn_param: $ => seq(
       field("name", $.identifier),
@@ -230,7 +244,18 @@ module.exports = grammar({
       $.dimensionless,
       $.bool_type,
       $.int_type,
+      $.type_application,
       $.dim_expr,
+    ),
+
+    // Generic type application: Vec3<Length, ECI>
+    type_application: $ => seq(
+      field("name", $.identifier),
+      "<",
+      field("type_arg", $.type_expr),
+      repeat(seq(",", field("type_arg", $.type_expr))),
+      optional(","),
+      ">",
     ),
 
     dimensionless: $ => "Dimensionless",
@@ -288,6 +313,7 @@ module.exports = grammar({
       $.binary_expr,
       $.unary_expr,
       $.convert_expr,
+      $.as_cast_expr,
       $.if_expr,
       $.match_expr,
       $.for_expr,
@@ -300,6 +326,14 @@ module.exports = grammar({
       field("value", $._expr),
       "->",
       field("target", $.unit_expr),
+    )),
+
+    // Phantom type cast: expr as TypeExpr
+    // Uses _type_expr_base (not type_expr) to avoid ambiguity with index_access [...]
+    as_cast_expr: $ => prec.left(PREC.CONVERT, seq(
+      field("value", $._expr),
+      "as",
+      field("target_type", $._type_expr_base),
     )),
 
     binary_expr: $ => choice(
@@ -480,6 +514,13 @@ module.exports = grammar({
     // TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }
     struct_construction: $ => seq(
       field("type", $.identifier),
+      optional(seq(
+        "<",
+        field("type_arg", $.type_expr),
+        repeat(seq(",", field("type_arg", $.type_expr))),
+        optional(","),
+        ">",
+      )),
       "{",
       optional(seq(
         $.field_init,

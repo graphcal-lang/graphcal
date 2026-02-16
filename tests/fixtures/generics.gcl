@@ -1,0 +1,107 @@
+// generics.gcl -- Generic structs with phantom type parameters
+dimension Velocity = Length / Time;
+
+// Marker types for reference frames
+type Eci {}
+type Body {}
+
+// Generic struct with dimension param and phantom type param
+type Vec3<D: Dim, F: Type> {
+    x: D,
+    y: D,
+    z: D,
+}
+
+// Construction with explicit type args
+param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> {
+    x: 6878.0 km,
+    y: 0.0 km,
+    z: 0.0 km,
+};
+
+param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
+    x: 0.0 m/s,
+    y: 7.67 km/s,
+    z: 0.0 m/s,
+};
+
+// Field access on generic struct
+node x_pos: Length = @pos_eci.x;
+node y_vel: Velocity = @vel_eci.y;
+
+// --- Default type parameters ---
+// Unframed marker type
+type Unframed {}
+
+// Generic struct with default type param: F defaults to Unframed
+type Pos3<D: Dim, F: Type = Unframed> {
+    x: D,
+    y: D,
+    z: D,
+}
+
+// Use with all args explicitly
+param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci> {
+    x: 100.0 km,
+    y: 200.0 km,
+    z: 300.0 km,
+};
+
+// Use with default (omit F, gets Unframed)
+param pos3_default: Pos3<Length> = Pos3<Length> {
+    x: 10.0 km,
+    y: 20.0 km,
+    z: 30.0 km,
+};
+
+node pos3_eci_x: Length = @pos3_eci.x;
+node pos3_default_y: Length = @pos3_default.y;
+
+// --- derive(Add, Sub, Neg) ---
+// DeriveVec3 has component-wise +, -, and unary -
+type DeriveVec3<D: Dim, F: Type> derive(Add, Sub, Neg) {
+    x: D,
+    y: D,
+    z: D,
+}
+
+param dv_a: DeriveVec3<Velocity, Eci> = DeriveVec3<Velocity, Eci> {
+    x: 100.0 m/s,
+    y: 200.0 m/s,
+    z: 300.0 m/s,
+};
+
+param dv_b: DeriveVec3<Velocity, Eci> = DeriveVec3<Velocity, Eci> {
+    x: 10.0 m/s,
+    y: 20.0 m/s,
+    z: 30.0 m/s,
+};
+
+// derive(Add): component-wise addition
+node dv_sum: DeriveVec3<Velocity, Eci> = @dv_a + @dv_b;
+node dv_sum_x: Velocity = @dv_sum.x;
+
+// derive(Sub): component-wise subtraction
+node dv_diff: DeriveVec3<Velocity, Eci> = @dv_a - @dv_b;
+node dv_diff_y: Velocity = @dv_diff.y;
+
+// derive(Neg): component-wise negation
+node dv_neg: DeriveVec3<Velocity, Eci> = -@dv_a;
+node dv_neg_z: Velocity = @dv_neg.z;
+
+// --- as cast (phantom type parameter change) ---
+// Cast a Vec3 from Eci frame to Body frame (phantom param only)
+node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+node pos_body_x: Length = @pos_body.x;
+
+// Non-generic struct still works alongside generics
+type TransferResult {
+    dv1: Velocity,
+    dv2: Velocity,
+}
+
+node transfer: TransferResult = TransferResult {
+    dv1: 100.0 m/s,
+    dv2: 200.0 m/s,
+};
+node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;

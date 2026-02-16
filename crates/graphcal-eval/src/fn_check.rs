@@ -120,7 +120,7 @@ fn collect_fn_calls_in_expr(
             collect_fn_calls_in_expr(then_branch, user_fns, calls);
             collect_fn_calls_in_expr(else_branch, user_fns, calls);
         }
-        ExprKind::Convert { expr: inner, .. } => {
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
             collect_fn_calls_in_expr(inner, user_fns, calls);
         }
         ExprKind::Block { stmts, expr } => {
@@ -197,6 +197,11 @@ mod tests {
                             }
                             graphcal_syntax::ast::GenericConstraint::Index => {
                                 crate::registry::FnGenericConstraint::Index
+                            }
+                            graphcal_syntax::ast::GenericConstraint::Type => {
+                                unreachable!(
+                                    "`Type` constraint is not valid on function generic parameters"
+                                )
                             }
                         },
                     })
