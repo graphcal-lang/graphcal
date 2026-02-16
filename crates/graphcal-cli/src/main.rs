@@ -191,7 +191,7 @@ fn print_text(result: &EvalResult) {
                 }
                 _ => {
                     let formatted = format_number(value.display_value());
-                    if let Some(label) = value.display_label() {
+                    if let Some(label) = value.display_label(&result.base_dim_symbols) {
                         println!("{name:width$} = {formatted} {label}");
                     } else {
                         println!("{name:width$} = {formatted}");
@@ -214,7 +214,10 @@ fn print_text(result: &EvalResult) {
 fn print_json(result: &EvalResult) {
     use graphcal_eval::eval::{NodeError, Value};
 
-    fn value_to_json(v: &Value) -> serde_json::Value {
+    fn value_to_json(
+        v: &Value,
+        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    ) -> serde_json::Value {
         match v {
             Value::Scalar {
                 si_value,
@@ -229,7 +232,7 @@ fn print_json(result: &EvalResult) {
                         serde_json::json!(v.display_value()),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
-                } else if let Some(si_unit) = v.display_label() {
+                } else if let Some(si_unit) = v.display_label(symbols) {
                     map.insert("unit".to_string(), serde_json::json!(si_unit));
                 } else {
                     // Dimensionless: no unit field
@@ -251,7 +254,7 @@ fn print_json(result: &EvalResult) {
                 }
                 let fields_map: serde_json::Map<String, serde_json::Value> = fields
                     .iter()
-                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val)))
+                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val, symbols)))
                     .collect();
                 map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
                 serde_json::Value::Object(map)
@@ -265,7 +268,7 @@ fn print_json(result: &EvalResult) {
                 map.insert("index".to_string(), serde_json::json!(index_name.as_str()));
                 let entries_map: serde_json::Map<String, serde_json::Value> = entries
                     .iter()
-                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val)))
+                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val, symbols)))
                     .collect();
                 map.insert(
                     "entries".to_string(),
@@ -298,29 +301,33 @@ fn print_json(result: &EvalResult) {
         }
     }
 
-    fn result_to_json(r: &Result<Value, NodeError>) -> serde_json::Value {
+    fn result_to_json(
+        r: &Result<Value, NodeError>,
+        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    ) -> serde_json::Value {
         match r {
-            Ok(v) => value_to_json(v),
+            Ok(v) => value_to_json(v, symbols),
             Err(e) => node_error_to_json(e),
         }
     }
 
+    let symbols = &result.base_dim_symbols;
     let mut output = serde_json::Map::new();
 
     let consts: BTreeMap<&str, serde_json::Value> = result
         .consts
         .iter()
-        .map(|(n, v)| (n.as_str(), value_to_json(v)))
+        .map(|(n, v)| (n.as_str(), value_to_json(v, symbols)))
         .collect();
     let params: BTreeMap<&str, serde_json::Value> = result
         .params
         .iter()
-        .map(|(n, r)| (n.as_str(), result_to_json(r)))
+        .map(|(n, r)| (n.as_str(), result_to_json(r, symbols)))
         .collect();
     let nodes: BTreeMap<&str, serde_json::Value> = result
         .nodes
         .iter()
-        .map(|(n, r)| (n.as_str(), result_to_json(r)))
+        .map(|(n, r)| (n.as_str(), result_to_json(r, symbols)))
         .collect();
 
     output.insert("const".to_string(), serde_json::to_value(consts).unwrap());

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
+use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
 
@@ -168,6 +169,7 @@ pub fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
+#[expect(clippy::too_many_lines, reason = "sequential declaration registration")]
 pub fn register_file_declarations(
     file: &File,
     registry: &mut Registry,
@@ -176,18 +178,20 @@ pub fn register_file_declarations(
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Dimension(d) => {
-                let dim = if let Some(def) = &d.definition {
-                    registry.resolve_dim_expr(def).ok_or_else(|| {
+                if let Some(def) = &d.definition {
+                    // Derived dimension — resolve the expression
+                    let dim = registry.resolve_dim_expr(def).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
                             name: d.name.value.clone(),
                             src: src.clone(),
                             span: d.name.span.into(),
                         }
-                    })?
+                    })?;
+                    registry.register_dimension(d.name.value.clone(), dim);
                 } else {
-                    continue;
-                };
-                registry.register_dimension(d.name.value.clone(), dim);
+                    // Base dimension — register a new orthogonal axis
+                    registry.register_base_dimension(d.name.value.clone());
+                }
             }
             DeclKind::Unit(u) => {
                 let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
@@ -209,6 +213,20 @@ pub fn register_file_declarations(
                 } else {
                     1.0
                 };
+                // If this is a base unit (scale=1, no definition) for a single
+                // base dimension, record the unit name as the SI symbol for
+                // that dimension. This handles user-defined dimensions like
+                // `unit bit: Information;` → symbol "bit" for Information.
+                if u.definition.is_none() {
+                    // Check if this dimension is a single base dimension
+                    let mut iter = dim.iter();
+                    if let Some((&id, &exp)) = iter.next()
+                        && iter.next().is_none()
+                        && exp == Rational::ONE
+                    {
+                        registry.set_base_dim_symbol(id, u.name.value.to_string());
+                    }
+                }
                 registry.register_unit(u.name.value.clone(), dim, scale);
             }
             DeclKind::Index(idx) => {
@@ -313,8 +331,8 @@ fn eval_range_expr(
     let dim = match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => registry
             .resolve_unit_expr(unit)
-            .map_or(Dimension::DIMENSIONLESS, |(dim, _)| dim),
-        _ => Dimension::DIMENSIONLESS,
+            .map_or_else(Dimension::dimensionless, |(dim, _)| dim),
+        _ => Dimension::dimensionless(),
     };
 
     Ok((si_value, dim))
@@ -338,9 +356,9 @@ fn lower_range_index(
     if start_dim != end_dim || start_dim != step_dim {
         return Err(GraphcalError::RangeIndexDimensionMismatch {
             name: name.clone(),
-            start_dim: format!("{start_dim:?}"),
-            end_dim: format!("{end_dim:?}"),
-            step_dim: format!("{step_dim:?}"),
+            start_dim: format!("Dimension({})", registry.format_dimension(&start_dim)),
+            end_dim: format!("Dimension({})", registry.format_dimension(&end_dim)),
+            step_dim: format!("Dimension({})", registry.format_dimension(&step_dim)),
             src: src.clone(),
             span: decl_span.into(),
         });
