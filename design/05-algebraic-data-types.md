@@ -14,7 +14,7 @@ Following [Gleam](https://gleam.run), Cellgraph uses a single `type` keyword for
 
 ### Struct (Single Variant)
 
-```rust
+```gcl
 type Orbit {
     semi_major_axis: Length,
     eccentricity: f64,
@@ -24,7 +24,7 @@ type Orbit {
 
 ### Tagged Union (Multiple Variants)
 
-```rust
+```gcl
 type ManeuverKind {
     Impulsive(delta_v: Velocity)
     LowThrust(thrust: Force, duration: Time)
@@ -34,7 +34,7 @@ type ManeuverKind {
 
 ### Bare Variants (No Fields)
 
-```rust
+```gcl
 type Status {
     Nominal
     Warning(message: Str)
@@ -46,7 +46,7 @@ type Status {
 
 Struct construction and field access:
 
-```rust
+```gcl
 node transfer: TransferResult = {
     let dv1 = ...;
     let dv2 = ...;
@@ -61,7 +61,7 @@ node total = @transfer.total_dv;
 
 - **Pattern matching:** How are tagged unions consumed? Is there a `match` expression?
 
-  ```rust
+  ```gcl
   node fuel = match @maneuver_kind {
       Impulsive(dv) => rocket_fuel(@dry_mass, dv, @v_exhaust),
       LowThrust(thrust, dur) => thrust * dur / @v_exhaust,

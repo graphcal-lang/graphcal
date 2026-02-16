@@ -18,7 +18,7 @@ Functions are reusable computation templates. They are **not** graph nodes -- th
 
 **Block form** (multi-line, no trailing `;`):
 
-```rust
+```gcl
 fn hohmann_transfer(gm: Length^3 / Time^2, r1: Length, r2: Length) -> TransferResult {
     let v1 = sqrt(gm / r1);
     let v2 = sqrt(gm / r2);
@@ -28,7 +28,7 @@ fn hohmann_transfer(gm: Length^3 / Time^2, r1: Length, r2: Length) -> TransferRe
 
 **Short form** (single expression, with trailing `;`):
 
-```rust
+```gcl
 fn lerp<D: Dim>(a: D, b: D, t: f64) -> D = a + (b - a) * t;
 ```
 
@@ -36,7 +36,7 @@ fn lerp<D: Dim>(a: D, b: D, t: f64) -> D = a + (b - a) * t;
 
 `@` is a compile error inside `fn` bodies:
 
-```rust
+```gcl
 fn bad(r: Length) -> Velocity {
     sqrt(@GM_earth / r)
 //       ^^^^^^^^^ error[F001]: graph reference not allowed
@@ -46,14 +46,14 @@ fn bad(r: Length) -> Velocity {
 
 ## Dimension Generics
 
-```rust
+```gcl
 fn abs<D: Dim>(x: D) -> D = if x < 0 { -x } else { x };
 fn clamp<D: Dim>(value: D, low: D, high: D) -> D { ... }
 ```
 
 ## Space-Tagged Parameters
 
-```rust
+```gcl
 fn rotate_to_body(v: Vec3<Force> in Frame.ECI, q: Quaternion) -> Vec3<Force> in Frame.Body {
     q * v
 }

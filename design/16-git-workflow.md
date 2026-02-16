@@ -12,7 +12,7 @@
 
 ## Source of Truth
 
-```rust
+```gcl
 // mission_budget.graph
 param parking_alt = 200 km;
 param isp = 320 s;

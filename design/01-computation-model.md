@@ -18,7 +18,7 @@ The fundamental unit is a **cell graph**: a directed acyclic graph (DAG) of name
 | Computation | `node` | Derived value computed from other nodes. Can have multi-line body. |
 | Constant | `const` | Immutable value. Not user-adjustable. Inlined by the compiler. |
 
-```rust
+```gcl
 param mass   = 5000 kg;        // input
 const G0     = 9.80665 m/s^2;  // constant
 node  thrust = @mass * @G0;    // computed

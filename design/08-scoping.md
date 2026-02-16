@@ -19,7 +19,7 @@ name   -->  local scope (let bindings, function parameters)
 
 ## Example
 
-```rust
+```gcl
 node fuel_budget: FuelBudget = {
     let r1 = @R_earth + @parking_alt;      // two graph deps, one local
     let r2 = @R_earth + @target_alt;
@@ -61,7 +61,7 @@ Instantly readable: the engine dependency changed from `rl10` to `raptor`. `engi
 
 Inside `fn` bodies, `@` is a **compile error**. Functions are pure and take all inputs as parameters:
 
-```rust
+```gcl
 fn bad(r: Length) -> Velocity {
     sqrt(@GM_earth / r)
 //       ^^^^^^^^^ error[F001]: graph reference not allowed in function body

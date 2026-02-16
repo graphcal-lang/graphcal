@@ -104,7 +104,7 @@ inferred and rarely written explicitly.
 
 ## Milestone Test
 
-```rust
+```gcl
 fn orbital_velocity(gm: Length^3 / Time^2, r: Length) -> Velocity {
     sqrt(gm / r)
 }
@@ -129,7 +129,7 @@ node clamped_dv: Velocity = clamp(@transfer.total_dv, 0.0 m/s, 10.0 km/s);
 
 ### Error cases that must work
 
-```rust
+```gcl
 // error: @ in function body
 fn bad(r: Length) -> Velocity {
     sqrt(@GM_earth / r)

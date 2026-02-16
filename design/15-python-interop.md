@@ -35,7 +35,7 @@ results: pd.DataFrame = g.sweep({
 
 When a node requires Python libraries:
 
-```rust
+```gcl
 #[python]
 node trajectory: TrajectoryResult {
     from scipy.integrate import solve_ivp

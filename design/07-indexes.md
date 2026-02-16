@@ -12,7 +12,7 @@ Indexes are finite label sets used as table axes (dimensions in the xarray sense
 
 ## Syntax
 
-```rust
+```gcl
 index Region { LEO, GTO, Lunar, Mars }
 index Fuel { LH2, Methane, Hydrazine }
 index Quarter { Q1, Q2, Q3, Q4 }
@@ -23,7 +23,7 @@ index MissionPhase { PhaseA, PhaseB, PhaseC }
 
 Indexes are primarily used as table axes:
 
-```rust
+```gcl
 table mass_budget [region: Region, fuel: Fuel] {
     isp: SpecificImpulse,
     cost_per_kg: Money / Mass,
@@ -32,7 +32,7 @@ table mass_budget [region: Region, fuel: Fuel] {
 
 And for aggregation:
 
-```rust
+```gcl
 node cost_by_region [region] = mass_budget.cost_per_kg.sum(over: fuel);
 ```
 

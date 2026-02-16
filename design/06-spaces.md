@@ -23,7 +23,7 @@ Two usability features keep the system accessible: **default type parameters** l
 ### How Sguaba Works
 
 Every spatial type carries a frame as a phantom type parameter:
-```rust
+```gcl
 pub struct Vector<In, Time = Z0> {
     inner: Vector3,            // raw data
     system: PhantomData<In>,   // frame marker — zero cost at runtime
@@ -31,13 +31,13 @@ pub struct Vector<In, Time = Z0> {
 ```
 
 Frames are zero-sized marker structs with a convention (axis naming):
-```rust
+```gcl
 system! { pub struct PlaneNed using NED }
 // → struct PlaneNed; impl CoordinateSystem for PlaneNed { type Convention = NedLike; }
 ```
 
 Transforms are parameterized by source and destination frames:
-```rust
+```gcl
 pub struct Rotation<From, To> { inner: UnitQuaternion, ... }
 
 // Application: Vector<From> * Rotation<From, To> → Vector<To>

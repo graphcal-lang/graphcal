@@ -12,7 +12,7 @@ Tables are typed, named collections with column schemas -- the analog of Excel t
 
 ## Table Declaration
 
-```rust
+```gcl
 table maneuvers {
     name: Str,
     delta_v: Velocity,
@@ -22,7 +22,7 @@ table maneuvers {
 
 Tables can be populated as parameters:
 
-```rust
+```gcl
 param maneuvers: maneuvers = [
     ("Departure burn", 1.2 km/s, 300 s),
     ("Correction 1",  0.05 km/s, 60 s),
@@ -34,21 +34,21 @@ param maneuvers: maneuvers = [
 
 Like dragging a formula down a column in a spreadsheet:
 
-```rust
+```gcl
 node maneuvers.fuel_mass: Mass = row.delta_v / @v_exhaust * @dry_mass;
 node maneuvers.fuel_cost: Money = row.fuel_mass * @fuel_price_per_kg;
 ```
 
 ## Aggregations (Reduce)
 
-```rust
+```gcl
 node total_fuel: Mass = maneuvers.fuel_mass.sum();
 node max_delta_v: Velocity = maneuvers.delta_v.max();
 ```
 
 ## Running Totals (Scan)
 
-```rust
+```gcl
 node maneuvers.cumulative_dv: Velocity = scan(0.0 m/s, |acc, row| acc + row.delta_v);
 ```
 
@@ -56,7 +56,7 @@ node maneuvers.cumulative_dv: Velocity = scan(0.0 m/s, |acc, row| acc + row.delt
 
 ### Explicit Dimensions via Indexes
 
-```rust
+```gcl
 index Region { LEO, GTO, Lunar }
 index Fuel { LH2, Methane }
 
@@ -68,7 +68,7 @@ table mass_budget [region: Region, fuel: Fuel] {
 
 ### Aggregation Across Dimensions
 
-```rust
+```gcl
 // Sum across fuels -> 1D table indexed by maneuver
 node fuel_by_maneuver [maneuver]: Mass =
     mass_budget.fuel_mass.sum(over: fuel);

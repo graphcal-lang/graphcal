@@ -135,7 +135,7 @@ mission/
   propulsion/fuel_budget.graph
 ```
 
-```rust
+```gcl
 // project.graph
 project mission {
     version: "0.1.0",
@@ -143,7 +143,7 @@ project mission {
 }
 ```
 
-```rust
+```gcl
 // prelude.graph
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
@@ -152,7 +152,7 @@ const R_earth: Length = 6371 km;
 const GM_earth = 398600.4418 km^3/s^2;
 ```
 
-```rust
+```gcl
 // orbit/transfer.graph
 param parking_alt: Length = 200 km;
 param target_alt: Length = 35786 km;
@@ -164,7 +164,7 @@ node transfer: TransferResult = {
 };
 ```
 
-```rust
+```gcl
 // propulsion/fuel_budget.graph
 use orbit.transfer.{ transfer };
 
@@ -183,7 +183,7 @@ fuel_mass = 2847 kg
 
 ### Error cases that must work
 
-```rust
+```gcl
 // error: missing import
 node x = @transfer.total_dv;
 //  error[N002]: unknown graph reference `@transfer`

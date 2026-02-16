@@ -45,7 +45,7 @@ Cellgraph uses a Rust-inspired DSL as its surface syntax. The `.graph` file is t
 
 **Single-expression (trailing `;`):**
 
-```rust
+```gcl
 param alt = 400 km;
 const G0 = 9.80665 m/s^2;
 node speed = @distance / @time;
@@ -54,7 +54,7 @@ fn lerp<D: Dim>(a: D, b: D, t: f64) -> D = a + (b - a) * t;
 
 **Block form (braces, no trailing `;`):**
 
-```rust
+```gcl
 node transfer: TransferResult = {
     let r1 = @R_earth + @parking_alt;
     let r2 = @R_earth + @target_alt;
@@ -66,7 +66,7 @@ Note: The current design has block-form `node` with a trailing `;`, while block-
 
 ## Comments and Documentation
 
-```rust
+```gcl
 // Line comment
 /// Documentation comment (attached to the next declaration)
 

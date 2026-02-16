@@ -207,7 +207,7 @@ Everything not listed above. Specifically:
 
 ## Milestone Test
 
-```rust
+```gcl
 // rocket.gcl
 param dry_mass = 1200.0;
 param fuel_mass = 2800.0;
@@ -232,7 +232,7 @@ delta_v      = 3783.277
 
 ### Const cross-reference test
 
-```rust
+```gcl
 // constants.gcl
 const G0 = 9.80665;
 const TWO_G0 = 2.0 * G0;
@@ -267,7 +267,7 @@ $ graphcal eval rocket.gcl --format json
 
 ### Error cases that must work
 
-```rust
+```gcl
 // error[graphcal::N002]: unknown graph reference
 node x = @nonexistent + 1.0;
 

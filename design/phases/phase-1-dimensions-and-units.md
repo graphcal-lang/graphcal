@@ -201,7 +201,7 @@ E: Dimensionless
 
 ## Milestone Test
 
-```rust
+```gcl
 // orbital.gcl
 dimension Velocity = Length / Time;
 
@@ -226,7 +226,7 @@ speed_kmh      = 25527.0 km/hour
 
 ### Error cases that must work
 
-```rust
+```gcl
 // error: dimension mismatch in addition
 node bad: Length = @alt + @period;
 //  error: cannot add Length + Time

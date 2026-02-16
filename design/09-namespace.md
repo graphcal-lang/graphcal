@@ -37,7 +37,7 @@ propulsion/engines.graph   ->  module propulsion.engines
 
 ## Project Root
 
-```rust
+```gcl
 project mission_design {
     version: "0.1.0",
     prelude: "prelude.graph",
@@ -48,14 +48,14 @@ project mission_design {
 
 Explicit `use` statements are required for cross-file references:
 
-```rust
+```gcl
 use orbit.transfer.{ transfer };
 use constants.{ dry_mass_budget };
 ```
 
 Glob imports are allowed but discouraged:
 
-```rust
+```gcl
 use propulsion.engines.*;   // glob -- use sparingly
 ```
 
@@ -76,7 +76,7 @@ The prelude (`prelude.graph`) is auto-imported into every file. It contains proj
 
 Public-by-default. Use `private` to hide internal helpers:
 
-```rust
+```gcl
 // Public (default)
 param dry_mass = 1200 kg;
 node fuel_mass = @dry_mass * (exp(@total_dv / @v_exhaust) - 1);
