@@ -14,7 +14,7 @@
 
 Dimensions form an algebra over base physical quantities:
 
-```rust
+```gcl
 // Base dimensions (defined in prelude)
 dimension Length;
 dimension Time;
@@ -47,7 +47,7 @@ dimension SpecificImpulse = Time;   // conventional
 
 Full inference is supported -- most type annotations are optional:
 
-```rust
+```gcl
 param alt = 400 km;                             // inferred: Length
 param t = 90 min;                               // inferred: Time
 node speed = 2 * pi * (@R_earth + @alt) / @t;   // inferred: Velocity
@@ -57,7 +57,7 @@ node speed = 2 * pi * (@R_earth + @alt) / @t;   // inferred: Velocity
 
 Units are scaling factors within a dimension:
 
-```rust
+```gcl
 // Base units (defined in prelude)
 unit m: Length;
 unit s: Time;
@@ -76,7 +76,7 @@ unit kN: Force = 1000 N;
 
 Units can auto-create their own dimension for domain-specific counting:
 
-```rust
+```gcl
 unit launch;          // creates dimension Launch
 unit crew_member;     // creates dimension CrewMember
 ```
@@ -85,7 +85,7 @@ unit crew_member;     // creates dimension CrewMember
 
 Explicit conversion uses the `->` operator:
 
-```rust
+```gcl
 node fuel_mass_lb = @fuel_mass -> lb;
 node tof_hours = @transfer.tof -> hour;
 ```

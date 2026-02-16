@@ -18,7 +18,7 @@ The fundamental unit is a **cell graph**: a directed acyclic graph (DAG) of name
 | Computation | `node` | Derived value computed from other nodes. Can have multi-line body. |
 | Constant | `const` | Immutable value. Not user-adjustable. Inlined by the compiler. |
 
-```rust
+```gcl
 param mass   = 5000 kg;        // input
 const G0     = 9.80665 m/s^2;  // constant
 node  thrust = @mass * @G0;    // computed
@@ -38,7 +38,7 @@ The runtime uses **dirty tracking with early cutoff** (inspired by Salsa's red-g
 2. **On-demand verification:** When a node's value is demanded, the runtime checks whether its inputs actually changed. If all inputs have the same values as the last evaluation, the cached result is reused without re-execution.
 3. **Early cutoff (backdating):** If a node recomputes and produces the same value as before, its dependents are NOT marked dirty. This prevents unnecessary cascading recomputation through the graph. This is especially valuable for engineering calculations where many nodes are insensitive to small parameter perturbations (e.g., rounding, clamping, comparison nodes).
 
-```
+```gcl
 param tolerance = 0.01;
 param x = 3.14159;
 node rounded = round(@x / @tolerance) * @tolerance;  // changes less often than x

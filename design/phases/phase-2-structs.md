@@ -100,7 +100,7 @@ FieldAccess  = Expr "." IDENT
 
 ## Milestone Test
 
-```rust
+```gcl
 type TransferResult {
     dv1: Velocity,
     dv2: Velocity,
@@ -136,7 +136,7 @@ node tof_hours: Time = @transfer.tof -> hour;
 
 ### Error cases that must work
 
-```rust
+```gcl
 // error: unknown field
 node bad = @transfer.nonexistent;
 

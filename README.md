@@ -7,7 +7,7 @@
 
 Graphcal replaces the spreadsheets and simulation tools that engineers reluctantly depend on -- Excel mass budgets, ad-hoc Python scripts -- with a single typed, version-controlled, reactive computation graph.
 
-```
+```gcl
 // rocket.gcl
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
@@ -22,7 +22,7 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-```
+```sh
 $ graphcal eval rocket.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
@@ -62,7 +62,7 @@ Declare physical dimensions and annotate values with units.
 The compiler catches mismatched operations (e.g., `km + kg`) at compile time.
 A built-in prelude provides SI base dimensions, derived dimensions, and common units.
 
-```
+```gcl
 param parking_alt: Length = 200 km;
 node speed: Velocity = 3138.128 m/s;
 node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
@@ -78,7 +78,7 @@ graphcal eval rocket.gcl --set 'isp=450 s'
 **Structs and multi-line nodes** --
 Group related values into typed structs. Use block bodies with `let` bindings for complex computations.
 
-```
+```gcl
 type TransferResult {
     dv1: Velocity,
     dv2: Velocity,
@@ -98,7 +98,7 @@ node transfer: TransferResult = {
 **Pure functions with dimension generics** --
 Define reusable functions with compile-time dimension checking. Dimension generics (`<D: Dim>`) let you write functions that work across any physical quantity.
 
-```
+```gcl
 fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
 fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
 ```
@@ -106,7 +106,7 @@ fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
 **Indexed values and aggregation** --
 Define named index sets and operate over them with `for` comprehensions and aggregation functions (`sum`, `min`, `max`, `mean`, `count`, `scan`).
 
-```
+```gcl
 index Maneuver = { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
@@ -121,7 +121,7 @@ node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 **Multi-file projects** --
 Split calculations across files with `use` imports. All declaration kinds can be imported, and circular dependencies are detected at compile time.
 
-```
+```gcl
 use "./constants.gcl" { G0 };
 use "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
@@ -133,7 +133,7 @@ Rich error diagnostics with source spans and error codes (via [miette](https://g
 
 ### Hohmann transfer orbit
 
-```
+```gcl
 // hohmann.gcl
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
@@ -173,7 +173,7 @@ node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;
 ```
 
-```
+```sh
 $ graphcal eval hohmann.gcl
 R_EARTH           = 6371 km
 GM_EARTH          = 398600.4418 km^3/s^2
@@ -189,7 +189,7 @@ tof_hours         = 5.256557 hour
 
 ### Reusable functions with dimension generics
 
-```
+```gcl
 // functions.gcl
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
@@ -208,7 +208,7 @@ node v_parking: Velocity = orbital_velocity(GM_EARTH, R_EARTH + @parking_alt);
 node midpoint_alt: Length = lerp(@parking_alt, @target_alt, 0.5);
 ```
 
-```
+```sh
 $ graphcal eval functions.gcl
 R_EARTH      = 6371 km
 GM_EARTH     = 398600.4418 km^3/s^2
@@ -220,7 +220,7 @@ midpoint_alt = 17993000 m
 
 ### Indexed values with aggregation
 
-```
+```gcl
 // indexed.gcl
 dimension Velocity = Length / Time;
 
@@ -243,7 +243,7 @@ fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
 node total_check: Velocity = total(@delta_v);
 ```
 
-```
+```sh
 $ graphcal eval indexed.gcl
 delta_v[Departure]          = 2.46 km/s
 delta_v[Correction]         = 0.12 km/s
@@ -260,20 +260,20 @@ total_check                 = 4410 m/s
 
 ### Multi-file projects with imports
 
-```
+```gcl
 // constants.gcl
 dimension Acceleration = Length / Time^2;
 const G0: Acceleration = 9.80665 m/s^2;
 ```
 
-```
+```gcl
 // params.gcl
 param dry_mass: Mass = 1200 kg;
 param fuel_mass: Mass = 2800 kg;
 param isp: Time = 320 s;
 ```
 
-```
+```gcl
 // main.gcl
 use "./constants.gcl" { G0 };
 use "./params.gcl" { dry_mass, fuel_mass, isp };
@@ -285,7 +285,7 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-```
+```sh
 $ graphcal eval main.gcl
 G0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
@@ -298,7 +298,7 @@ delta_v    = 3778.220768 m/s
 
 Imported params can be overridden at the command line:
 
-```
+```sh
 $ graphcal eval main.gcl --set 'isp=450 s'
 G0         = 9.80665 m/s^2
 dry_mass   = 1200 kg

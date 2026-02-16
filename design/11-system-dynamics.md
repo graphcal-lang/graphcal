@@ -14,7 +14,7 @@ Rather than introducing first-class `stock` and `flow` keywords, system dynamics
 
 A "stock" is a `scan` (accumulation) over a time axis. A "flow" is an expression inside the scan body.
 
-```rust
+```gcl
 table sim [t: range(0.0, 200.0, step: 0.1) : unitless] {}
 
 type SIRState { S: f64, I: f64, R: f64 }
@@ -37,7 +37,7 @@ node sim.sir: SIRState = scan(
 
 Multiple stocks that reference each other must be bundled in a single struct and evolved together:
 
-```rust
+```gcl
 type SupplyState { on_hand: Mass, total_launched: Mass }
 
 node year.supply: SupplyState = scan(
@@ -57,7 +57,7 @@ node year.supply: SupplyState = scan(
 
 For simple cases, `scan` gives explicit Euler integration. For serious work, an `integrate` function wraps a proper ODE solver:
 
-```rust
+```gcl
 node sim.state: State = integrate(
     init,
     method: RK4,
@@ -72,7 +72,7 @@ node sim.state: State = integrate(
 
 Static parametric calculations and dynamic simulation coexist in one file:
 
-```rust
+```gcl
 // Static section
 param dry_mass = 1200 kg;
 node fuel_mass = @dry_mass * (exp(@total_dv / @v_exhaust) - 1);

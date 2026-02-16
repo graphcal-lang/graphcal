@@ -136,7 +136,7 @@ The current lexer regex `[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?` accept
 
 The primary use cases for strings in engineering calculations are categorical/choice data: mission phase names, fuel types, statuses, region labels. These are better modeled by **fieldless `type` declarations** (simple enums), which already fit within the planned Phase 10 (tagged unions) and are partially available today via `index`:
 
-```
+```gcl
 // Today (index — already works for table axes):
 index Phase = { Design, Build, Test, Launch }
 
@@ -423,7 +423,7 @@ Based on priority, difficulty, and dependencies:
 
 Currently, type annotations are dimension expressions (`Length`, `Mass * Length / Time^2`, `Dimensionless`). Adding non-dimension types requires extending `TypeExprKind`:
 
-```
+```gcl
 // Current
 enum TypeExprKind {
     Dimensionless,
@@ -449,7 +449,7 @@ Alternatively, `Bool`, `Int`, `Datetime` could be recognized as builtin type nam
 
 ### `DeclaredType` / `InferredType` expansion
 
-```
+```gcl
 // Proposed
 enum DeclaredType {
     Scalar(Dimension),              // dimensioned f64
@@ -464,7 +464,7 @@ enum DeclaredType {
 
 ### `RuntimeValue` expansion
 
-```
+```gcl
 // Proposed
 enum RuntimeValue {
     Scalar(f64),
@@ -482,7 +482,7 @@ enum RuntimeValue {
 
 Currently, struct fields are typed by dimension only (`StructField { name, dimension }`). With non-dimension types, this needs expansion:
 
-```
+```gcl
 // Proposed
 struct StructField {
     name: String,

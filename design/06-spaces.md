@@ -23,7 +23,8 @@ Two usability features keep the system accessible: **default type parameters** l
 ### How Sguaba Works
 
 Every spatial type carries a frame as a phantom type parameter:
-```rust
+
+```gcl
 pub struct Vector<In, Time = Z0> {
     inner: Vector3,            // raw data
     system: PhantomData<In>,   // frame marker — zero cost at runtime
@@ -31,13 +32,15 @@ pub struct Vector<In, Time = Z0> {
 ```
 
 Frames are zero-sized marker structs with a convention (axis naming):
-```rust
+
+```gcl
 system! { pub struct PlaneNed using NED }
 // → struct PlaneNed; impl CoordinateSystem for PlaneNed { type Convention = NedLike; }
 ```
 
 Transforms are parameterized by source and destination frames:
-```rust
+
+```gcl
 pub struct Rotation<From, To> { inner: UnitQuaternion, ... }
 
 // Application: Vector<From> * Rotation<From, To> → Vector<To>
@@ -47,6 +50,7 @@ pub struct Rotation<From, To> { inner: UnitQuaternion, ... }
 Constructing a transform is `unsafe` — not for memory safety, but because the programmer is asserting "these numbers really do represent the claimed frame relationship." This is Sguaba's trust boundary.
 
 Key Sguaba properties:
+
 - **No untagged spatial values.** Every `Vector` and `Coordinate` must have a frame. Scalars (`f64`, `Length`) are frameless because they are separate types.
 - **No implicit frame conversions.** All frame changes require explicit transforms or `unsafe` casts.
 - **Affine space distinction.** `Coordinate` (point) vs `Vector` (displacement) with different algebraic rules: `Point - Point = Vector`, `Point + Vector = Point`, `Point + Point` is undefined.
@@ -78,7 +82,7 @@ Five mechanisms work together — three for safety, two for usability:
 
 Types can have type parameters that appear in the type signature but not in the runtime data. These serve as compile-time markers:
 
-```
+```gcl
 // Frame markers — empty types, zero runtime cost
 type ECI {}
 type Body {}
@@ -101,7 +105,7 @@ The phantom type parameter `F` does not appear in the struct's fields — it exi
 
 Many users don't need frame safety — they're doing simple calculations where everything is in one implicit frame. Forcing them to write `Vec3<Length, ECI>` everywhere is unnecessary friction. **Default type parameters** let the type author specify a default for phantom parameters:
 
-```
+```gcl
 type Unframed {}
 
 type Vec3<D: Dim, F = Unframed> derive(Add, Sub, Neg) {
@@ -130,7 +134,7 @@ param pos_eci: Vec3<Length, ECI> = Vec3 { x: 6878 km, y: 0 km, z: 0 km };
 
 Operators are NOT available by default on user-defined types. Each derivable operator must be explicitly requested, following the Rust principle that even `Debug` is opt-in:
 
-```
+```gcl
 // No derive → no operators at all. This is a pure data container.
 type Timestamp<TZ> {
     epoch_seconds: Time,
@@ -162,7 +166,7 @@ type Vec3<D: Dim, F> derive(Add, Sub, Neg) {
 
 For operations where the operand types differ or the result type differs from the operands, users define custom operators:
 
-```
+```gcl
 // Scalar multiplication — different operand types, same result type
 fn operator*<D: Dim, F>(v: Vec3<D, F>, s: Dimensionless) -> Vec3<D, F> =
     Vec3 { x: v.x * s, y: v.y * s, z: v.z * s };
@@ -195,7 +199,7 @@ fn magnitude<D: Dim, F>(v: Vec3<D, F>) -> D =
 
 Sometimes you need to deliberately override the type system — you're writing a test, initializing a value from raw data, or you know two frames are aligned. The `as` cast provides a **per-value escape hatch** that changes phantom type parameters:
 
-```
+```gcl
 // Reframe a vector — the programmer asserts this is correct:
 node v_eci = @v_body as Vec3<Length, ECI>;
 
@@ -208,12 +212,13 @@ node v_plain = @v_eci as Vec3<Length, Unframed>;
 ```
 
 **Validity rule:** `expr as T` is valid if and only if:
+
 1. The source and target are instantiations of the **same generic type** (same type constructor).
 2. After substituting type parameters, **all fields have identical types**.
 
 This means only phantom parameters (which don't affect field types) can be changed via `as`. Parameters that affect field types are rejected:
 
-```
+```gcl
 // ✓ Valid: F is phantom (doesn't appear in fields), so changing it is safe.
 @v_body as Vec3<Length, ECI>
 // Source fields: x: Length, y: Length, z: Length
@@ -238,6 +243,7 @@ Sguaba uses Rust's `unsafe` blocks, where everything inside the block bypasses s
 - **Composable.** You can cast one operand and keep the other checked: `@v_eci + (@v_body as Vec3<Force, ECI>)` — the first operand is still type-checked.
 
 **Relationship to `Rotation`:** The `as` cast and `Rotation<A, B>` serve different purposes:
+
 - `Rotation<A, B>` is a **physically meaningful transform** — it rotates the vector's components.
 - `as` is a **type assertion** — it changes the type without changing the value. Use it when you know the frames are aligned (e.g., at epoch, Body ≈ ECI) or when you're constructing values from raw data.
 
@@ -247,7 +253,7 @@ Sguaba uses Rust's `unsafe` blocks, where everything inside the block bypasses s
 
 The primary use case. Mixing reference frames is always wrong and has caused real mission failures (Mars Climate Orbiter).
 
-```
+```gcl
 // Frame marker types
 type ECI {}
 type Body {}
@@ -297,7 +303,7 @@ node gravity_approx: Vec3<Force, Body> = @gravity_eci as Vec3<Force, Body>;
 
 Time zone bugs are universally understood. Mixing UTC with JST is always wrong.
 
-```
+```gcl
 type UTC {}
 type JST {}
 type EST {}
@@ -342,7 +348,7 @@ node t_jst_raw = @some_utc_timestamp as Timestamp<JST>;
 
 The generics approach naturally supports the affine space distinction that was awkward in the old tag system:
 
-```
+```gcl
 type Position<F> derive(Eq) {
     x: Length, y: Length, z: Length,
 }
@@ -367,7 +373,7 @@ This was a deferred open question under the old design. With user-defined operat
 
 ### Transform Composition
 
-```
+```gcl
 type Rotation<From, To> { /* quaternion fields */ }
 
 // Application: Rotation<A, B> * Displacement<A> → Displacement<B>
@@ -405,7 +411,7 @@ The old design used a built-in `tag` keyword with special rules. Here is why the
 
 The old tag system allowed `Length<Frame.ECI>` — a tagged bare scalar with no wrapper struct. The new approach requires a struct for any tagged value:
 
-```
+```gcl
 // Old: Length<Frame.ECI> — direct
 // New: needs a wrapper
 type FramedLength<F> derive(Add, Sub, Neg) { value: Length }
@@ -417,7 +423,7 @@ type FramedLength<F> derive(Add, Sub, Neg) { value: Length }
 
 Without a trait/kind system, phantom type parameters accept any type:
 
-```
+```gcl
 type Vec3<D: Dim, F> { x: D, y: D, z: D }
 
 // D is constrained (D: Dim), but F is unconstrained:
@@ -432,7 +438,7 @@ type Vec3<D: Dim, F> { x: D, y: D, z: D }
 
 To avoid defining separate types per dimension (`Vec3Position`, `Vec3Velocity`, `Vec3Force`...), the type system must support dimension arithmetic in generic return types:
 
-```
+```gcl
 // This requires evaluating D * Time at the type level:
 fn operator*<D: Dim, F>(v: Vec3<D, F>, t: Time) -> Vec3<D * Time, F> =
     Vec3 { x: v.x * t, y: v.y * t, z: v.z * t };
@@ -446,7 +452,7 @@ This is a non-trivial type system feature. Without it, users must define separat
 
 The old system required one `tag Frame { ECI, Body }` declaration. The new system requires: empty marker types, a generic struct, derive annotations, and user-defined cross-type operators. For coordinate frames:
 
-```
+```gcl
 // ~15 lines of setup (defined once, used everywhere):
 type ECI {}
 type Body {}
@@ -469,7 +475,7 @@ fn operator*<D: Dim, F>(v: Vec3<D, F>, t: Time) -> Vec3<D * Time, F> =
 
 This is the strongest objection given Graphcal's "explicitness over implicitness" philosophy. When you see `a + b`, you now need to know the types of `a` and `b` to know what `+` does:
 
-```
+```gcl
 v1 + v2          // Vec3 derive(Add): component-wise
 p + d            // Position + Displacement: user-defined, returns Position
 t1 - t2          // Timestamp - Timestamp: user-defined, returns Time
