@@ -1,67 +1,93 @@
 # Python Interop
 
-> PyO3 bindings for Python ecosystem access: parameter manipulation, sweeps, and Python-backed nodes.
+> PyO3 bindings for Python ecosystem access: parameter manipulation, sweeps, and visualization.
 
 ## Status
 
-**Decision level:** Conceptual. The API surface is sketched, but details around type mapping and error handling need specification.
+**Decision level:** Conceptual. Not yet implemented. The API surface is sketched below; details around type mapping and error handling need specification.
 
 ## Summary
 
-Cellgraph provides Python bindings via PyO3. Python can load graphs, read/write parameters (triggering reactive recomputation), and run parameter sweeps at Rust speed. Individual nodes can also be implemented in Python for complex logic requiring scipy, astropy, etc.
+Graphcal provides Python bindings via PyO3. Python can load `.gcl` graphs, read/write `param` values (triggering reactive recomputation), and run parameter sweeps at Rust speed. This enables integration with the scientific Python ecosystem (numpy, scipy, matplotlib, marimo, etc.) while keeping the core evaluation in Rust.
+
+## Current State
+
+Graphcal is implemented as a Rust workspace with four crates (`graphcal-cli`, `graphcal-eval`, `graphcal-syntax`, `graphcal-lsp`). Phases 0-5 are implemented:
+
+- Phase 0: Scalar graph (`param`/`node`/`const`, `@` sigil, `f64`)
+- Phase 1: Dimensions & units (`dimension`, `unit`, `->` conversion)
+- Phase 2: Structs & multi-line nodes (`type`, block bodies, `let` bindings)
+- Phase 3: Pure functions (`fn`, `<D: Dim>` generics)
+- Phase 4: Multi-file & namespaces (`use "./file.gcl" { name }`, `private`)
+- Phase 5: Indexed values (`index`, `T[I]`, `for` comprehensions, `sum`/`scan`)
+
+The CLI currently supports `graphcal eval <file>` with `--set 'name=expr'` for parameter overrides and `--format {text|json}` for output format. No Python bindings exist yet.
 
 ## Python API
 
 ```python
-import cellgraph
+import graphcal
 
-g = cellgraph.load("mission.graph")
+g = graphcal.load("rocket.gcl")
 
 # Read/write params (triggers reactive recomputation)
-g["mass_initial"] = 600.0
+g["dry_mass"] = 600.0  # in base SI units (kg)
 print(g["delta_v"])
 
-# Get typed output as Pydantic model
-budget = g.output("MissionBudget")
-
 # Bulk parameter sweep (computed in Rust, returned as DataFrame)
-results: pd.DataFrame = g.sweep({
-    "mass_initial": np.linspace(400, 800, 100),
+results = g.sweep({
+    "dry_mass": np.linspace(400, 800, 100),
     "isp": [300, 350, 400],
 })
 ```
 
-## Python-Backed Nodes
+### Sweep API
 
-When a node requires Python libraries:
+The sweep API is the primary motivation for Python interop. Unlike the `.gclv` value file format ([19](./19-value-files-and-sampling.md)), which only supports independent sampling via `range(...)`, the Python API allows arbitrary parameter generation — including correlated parameters, custom distributions, and design-of-experiments methods:
 
-```gcl
-#[python]
-node trajectory: TrajectoryResult {
-    from scipy.integrate import solve_ivp
-    # ... complex ODE integration
-    return TrajectoryResult(...)
-}
+```python
+import graphcal
+import numpy as np
+from scipy.stats import qmc
+
+g = graphcal.load("rocket.gcl")
+
+# Independent sweep (Cartesian product)
+results = g.sweep({
+    "dry_mass": np.linspace(800, 2000, 50),
+    "isp": [300, 350, 400],
+})
+
+# Sobol sequence for space-filling design
+sampler = qmc.Sobol(d=2, scramble=True)
+samples = sampler.random(n=1000)
+results = g.sweep({
+    "dry_mass": qmc.scale(samples[:, 0:1], 800, 2000).flatten(),
+    "isp": qmc.scale(samples[:, 1:2], 250, 450).flatten(),
+})
+
+# Correlated parameters (impossible with .gclv range())
+for mass, isp in correlated_samples:
+    g["dry_mass"] = mass
+    g["isp"] = isp
+    print(g["delta_v"])
 ```
-
-The Rust engine calls back into Python for these nodes while keeping pure-arithmetic nodes in Rust.
 
 ## Open Questions
 
-- **Type mapping:** How do Cellgraph types (dimensions, units, spaces) map to Python types? Are they Pydantic models? Plain dicts? Custom classes?
-- **Unit handling in Python:** When Python reads `g["altitude"]`, does it get a plain float (in base SI units), or a value-with-unit object?
-- **Error propagation:** If a `#[python]` node raises a Python exception, how does it propagate through the Cellgraph DAG?
+- **Type mapping:** How do graphcal types (dimensions, units, spaces, structs, tagged unions) map to Python types? Options include Pydantic models, plain dicts, custom classes, or dataclasses. Structs and tagged unions ([05](./05-algebraic-data-types.md)) need a clear Python representation.
+- **Unit handling in Python:** When Python reads `g["altitude"]`, does it get a plain float (in base SI units), or a value-with-unit object (e.g., via the `pint` library)?
+- **Sweep return type:** Does `g.sweep()` return a pandas DataFrame, a polars DataFrame, or something else? How are multi-dimensional sweep results shaped?
 - **Performance boundary:** Which operations happen in Rust vs Python? Is there a way to profile the Rust/Python boundary?
-- **Dependency management:** How are Python dependencies for `#[python]` nodes managed? Is there a `requirements.txt` per project?
-- **Async / parallel:** Can `#[python]` nodes run in parallel, or does the GIL serialize them?
-- **Notebook integration:** Can Cellgraph graphs be used inside marimo notebooks?
+- **Async / parallel:** Can multiple sweep evaluations run in parallel via Rayon, or does the GIL serialize them?
+- **Notebook integration:** Can graphcal graphs be used inside marimo notebooks with reactive updates?
 - **Graph modification from Python:** Can Python add/remove nodes, or only read/write parameter values?
-- **Sweep API details:** Does `g.sweep()` return a pandas DataFrame, a polars DataFrame, or something else? How are multi-dimensional sweep results shaped?
-- **Security:** `#[python]` nodes execute arbitrary Python code. How is this sandboxed (if at all)?
+- **Error propagation:** How do graphcal evaluation errors (dimension mismatches, missing params) surface in Python? As Python exceptions with diagnostic info?
+- **Loading `.gclv` files from Python:** Can the Python API load a `.gclv` file ([19](./19-value-files-and-sampling.md)) as a parameter set, or are `.gclv` files only for the CLI?
 
 ## Dependencies on Other Aspects
 
-- **Computation Model** ([01](./01-computation-model.md)): Python nodes are part of the DAG.
-- **Algebraic Data Types** ([05](./05-algebraic-data-types.md)): Return types from Python nodes.
+- **Computation Model** ([01](./01-computation-model.md)): Python reads/writes `param` values and reads `node` results.
+- **Algebraic Data Types** ([05](./05-algebraic-data-types.md)): Structs and tagged unions need Python representations.
 - **Dimensions** ([04](./04-dimensions-and-units.md)): How dimensions/units cross the Rust-Python boundary.
-- **System Dynamics** ([11](./11-system-dynamics.md)): `#[python]` for complex ODE solvers.
+- **Value Files** ([19](./19-value-files-and-sampling.md)): `.gclv` handles independent sampling; Python handles correlated and complex sampling.

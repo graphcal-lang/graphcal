@@ -6,9 +6,9 @@ use thiserror::Error;
 use crate::ast::{
     BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimExprItem, DimTerm,
     Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding,
-    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, LetBinding, MapEntry, MatchArm,
-    MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind,
-    UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
+    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind, LetBinding,
+    MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl,
+    TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -498,6 +498,51 @@ impl<'src> Parser<'src> {
             .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<IndexName>();
         self.expect(Token::Eq)?;
+
+        // Check whether this is a range index or a named index
+        let is_range = if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
+            self.lexer.slice_at(span) == "range"
+        } else {
+            false
+        };
+        if is_range {
+            // range(start, end, step: step)
+            self.lexer.next_token(); // consume "range"
+            self.expect(Token::LParen)?;
+            let start = self.parse_expr()?;
+            self.expect(Token::Comma)?;
+            let end = self.parse_expr()?;
+            self.expect(Token::Comma)?;
+            // Expect `step:` keyword argument
+            let is_step = if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
+                self.lexer.slice_at(span) == "step"
+            } else {
+                false
+            };
+            if is_step {
+                self.lexer.next_token(); // consume "step"
+            } else {
+                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+                return Err(self.unexpected_token("`step`", &tok.to_string(), span));
+            }
+            self.expect(Token::Colon)?;
+            let step = self.parse_expr()?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            self.expect(Token::Semicolon)?;
+            let span = start_span.merge(end_span);
+            return Ok(Declaration {
+                kind: DeclKind::Index(IndexDecl {
+                    name,
+                    kind: IndexDeclKind::Range {
+                        start: Box::new(start),
+                        end: Box::new(end),
+                        step: Box::new(step),
+                    },
+                }),
+                span,
+            });
+        }
+
         self.expect(Token::LBrace)?;
 
         let mut variants = Vec::new();
@@ -524,7 +569,10 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
-            kind: DeclKind::Index(IndexDecl { name, variants }),
+            kind: DeclKind::Index(IndexDecl {
+                name,
+                kind: IndexDeclKind::Named { variants },
+            }),
             span,
         })
     }
@@ -1441,6 +1489,9 @@ impl<'src> Parser<'src> {
                 } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
                     // Scan expression: scan(source, init, |acc, val| body)
                     self.parse_scan(&Ident { name, span })
+                } else if name == "unfold" && self.lexer.peek() == Some(&Token::LParen) {
+                    // Unfold expression: unfold(init, |prev_i, i| body)
+                    self.parse_unfold(&Ident { name, span })
                 } else if self.lexer.peek() == Some(&Token::LParen) {
                     // Function call: name(args...)
                     self.lexer.next_token(); // consume '('
@@ -2040,10 +2091,10 @@ impl<'src> Parser<'src> {
 
     // --- Scan expression ---
 
-    /// Parse a scan expression: `scan(source, init, |acc, val| body)`
+    /// Parse a scan expression: `scan(source, init, |acc, val| body)` → `ExprKind::Scan`
     fn parse_scan(&mut self, name_ident: &Ident) -> Result<Expr, ParseError> {
         self.expect(Token::LParen)?;
-        let source = self.parse_expr()?;
+        let first_expr = self.parse_expr()?;
         self.expect(Token::Comma)?;
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
@@ -2058,10 +2109,36 @@ impl<'src> Parser<'src> {
         let span = name_ident.span.merge(end_span);
         Ok(Expr {
             kind: ExprKind::Scan {
-                source: Box::new(source),
+                source: Box::new(first_expr),
                 init: Box::new(init),
                 acc_name,
                 val_name,
+                body: Box::new(body),
+            },
+            span,
+        })
+    }
+
+    // --- Unfold expression ---
+
+    /// Parse an unfold expression: `unfold(init, |prev_i, i| body)` → `ExprKind::Unfold`
+    fn parse_unfold(&mut self, name_ident: &Ident) -> Result<Expr, ParseError> {
+        self.expect(Token::LParen)?;
+        let init = self.parse_expr()?;
+        self.expect(Token::Comma)?;
+        self.expect(Token::Pipe)?;
+        let prev_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        self.expect(Token::Comma)?;
+        let curr_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        self.expect(Token::Pipe)?;
+        let body = self.parse_expr()?;
+        let (_, end_span) = self.expect(Token::RParen)?;
+        let span = name_ident.span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::Unfold {
+                init: Box::new(init),
+                prev_name,
+                curr_name,
                 body: Box::new(body),
             },
             span,
@@ -3514,10 +3591,15 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Index(idx) => {
                 assert_eq!(idx.name.value.as_str(), "Maneuver");
-                assert_eq!(idx.variants.len(), 3);
-                assert_eq!(idx.variants[0].value.as_str(), "Departure");
-                assert_eq!(idx.variants[1].value.as_str(), "Correction");
-                assert_eq!(idx.variants[2].value.as_str(), "Insertion");
+                match &idx.kind {
+                    IndexDeclKind::Named { variants } => {
+                        assert_eq!(variants.len(), 3);
+                        assert_eq!(variants[0].value.as_str(), "Departure");
+                        assert_eq!(variants[1].value.as_str(), "Correction");
+                        assert_eq!(variants[2].value.as_str(), "Insertion");
+                    }
+                    IndexDeclKind::Range { .. } => panic!("expected named index"),
+                }
             }
             _ => panic!("expected index declaration"),
         }
@@ -3530,7 +3612,26 @@ param alt: Length = 400.0 km;
         match &file.declarations[0].kind {
             DeclKind::Index(idx) => {
                 assert_eq!(idx.name.value.as_str(), "Phase");
-                assert_eq!(idx.variants.len(), 2);
+                match &idx.kind {
+                    IndexDeclKind::Named { variants } => {
+                        assert_eq!(variants.len(), 2);
+                    }
+                    IndexDeclKind::Range { .. } => panic!("expected named index"),
+                }
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_range_index_decl() {
+        let source = "index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.value.as_str(), "TimeStep");
+                assert!(matches!(idx.kind, IndexDeclKind::Range { .. }));
             }
             _ => panic!("expected index declaration"),
         }
@@ -3689,6 +3790,27 @@ param alt: Length = 400.0 km;
                     assert_eq!(val_name.name, "val");
                 }
                 other => panic!("expected Scan, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_unfold_expression() {
+        let source =
+            "node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Unfold {
+                    prev_name,
+                    curr_name,
+                    ..
+                } => {
+                    assert_eq!(prev_name.name, "prev_t");
+                    assert_eq!(curr_name.name, "t");
+                }
+                other => panic!("expected Unfold, got {other:?}"),
             },
             _ => panic!("expected node"),
         }

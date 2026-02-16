@@ -194,3 +194,17 @@
 (scan_expr "scan" @function.builtin)
 (scan_expr acc: (identifier) @variable.parameter)
 (scan_expr val: (identifier) @variable.parameter)
+
+; ---------------------------------------------------------------
+; Unfold expression
+; ---------------------------------------------------------------
+
+(unfold_expr "unfold" @function.builtin)
+(unfold_expr prev: (identifier) @variable.parameter)
+(unfold_expr curr: (identifier) @variable.parameter)
+
+; ---------------------------------------------------------------
+; Range index
+; ---------------------------------------------------------------
+
+(index_declaration "range" @function.builtin)

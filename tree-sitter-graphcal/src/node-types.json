@@ -110,6 +110,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -202,6 +206,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -285,6 +293,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -377,6 +389,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -484,6 +500,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -599,6 +619,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -698,6 +722,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -883,6 +911,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -1011,6 +1043,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -1114,6 +1150,10 @@
           "named": true
         },
         {
+          "type": "unfold_expr",
+          "named": true
+        },
+        {
           "type": "unit_literal",
           "named": true
         }
@@ -1202,6 +1242,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -1487,6 +1531,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -1599,6 +1647,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -1639,12 +1691,282 @@
     "type": "index_declaration",
     "named": true,
     "fields": {
+      "end": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "start": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      },
+      "step": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
             "named": true
           }
         ]
@@ -1808,6 +2130,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -1907,6 +2233,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -2017,6 +2347,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -2116,6 +2450,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -2267,6 +2605,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -2379,6 +2721,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -2468,6 +2814,10 @@
         },
         {
           "type": "unary_expr",
+          "named": true
+        },
+        {
+          "type": "unfold_expr",
           "named": true
         },
         {
@@ -2634,6 +2984,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -2720,6 +3074,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -2803,6 +3161,10 @@
           },
           {
             "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
             "named": true
           },
           {
@@ -3103,6 +3465,10 @@
             "named": true
           },
           {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
             "type": "unit_literal",
             "named": true
           }
@@ -3119,6 +3485,212 @@
           {
             "type": "-",
             "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "unfold_expr",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      },
+      "curr": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "init": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      },
+      "prev": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
           }
         ]
       }
@@ -3520,7 +4092,15 @@
     "named": false
   },
   {
+    "type": "range",
+    "named": false
+  },
+  {
     "type": "scan",
+    "named": false
+  },
+  {
+    "type": "step",
     "named": false
   },
   {
@@ -3533,6 +4113,10 @@
   },
   {
     "type": "type",
+    "named": false
+  },
+  {
+    "type": "unfold",
     "named": false
   },
   {

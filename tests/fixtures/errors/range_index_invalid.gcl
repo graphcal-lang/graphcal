@@ -1,0 +1,2 @@
+// Error: range index with start > end
+index TimeStep = range(100.0 s, 0.0 s, step: 0.1 s);

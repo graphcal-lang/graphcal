@@ -622,11 +622,18 @@ fn runtime_to_value(
                 Some(DeclaredType::Indexed { element, .. }) => Some(element.as_ref()),
                 _ => None,
             };
+            // For range indexes, replace synthetic #N keys with formatted display values.
+            let idx_def = registry.get_index(index_name.as_str());
             let converted_entries = entries
                 .iter()
-                .map(|(variant, entry_rv)| {
+                .enumerate()
+                .map(|(i, (variant, entry_rv))| {
+                    let display_key = match idx_def {
+                        Some(def) if def.is_range() => VariantName::new(format_range_step(def, i)),
+                        _ => variant.clone(),
+                    };
                     let val = runtime_to_value(entry_rv, element_declared, registry);
-                    (variant.clone(), val)
+                    (display_key, val)
                 })
                 .collect();
             Value::Indexed {
@@ -637,7 +644,136 @@ fn runtime_to_value(
         RuntimeValue::VariantLabel { .. } => {
             panic!("VariantLabel should not appear in final values")
         }
+        RuntimeValue::RangeLabel { .. } => {
+            panic!("RangeLabel should not appear in final values")
+        }
     }
+}
+
+/// Evaluate an `Unfold` expression: `unfold(init, |prev_i, i| body)`.
+///
+/// This builds up results incrementally over a range index, inserting partial
+/// results into `values` so that `@self_name[prev_i]` resolves correctly.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "evaluation context requires many parameters"
+)]
+#[expect(
+    clippy::needless_range_loop,
+    reason = "loop index i is used for step_value(i), step_index fields, and variant indexing"
+)]
+fn eval_unfold(
+    self_name: &str,
+    init: &graphcal_syntax::ast::Expr,
+    prev_name: &graphcal_syntax::ast::Ident,
+    curr_name: &graphcal_syntax::ast::Ident,
+    body: &graphcal_syntax::ast::Expr,
+    values: &mut HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    registry: &Registry,
+    declared_types: &HashMap<String, DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<RuntimeValue, GraphcalError> {
+    // Find the range index from the node's declared type
+    let declared = declared_types
+        .get(self_name)
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!("no declared type for node `{self_name}`"),
+            src: src.clone(),
+            span: (0, 0).into(),
+        })?;
+    let index_name = match declared {
+        DeclaredType::Indexed { index, .. } => index.clone(),
+        _ => {
+            return Err(GraphcalError::EvalError {
+                message: format!("node `{self_name}` must have an indexed type for time scan"),
+                src: src.clone(),
+                span: (0, 0).into(),
+            });
+        }
+    };
+    let idx_def =
+        registry
+            .get_index(index_name.as_str())
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!("unknown index `{index_name}`"),
+                src: src.clone(),
+                span: (0, 0).into(),
+            })?;
+
+    let step_count = idx_def.step_count();
+    let variants = idx_def.variants();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    // Evaluate init expression
+    let init_val = eval_expr(
+        init,
+        values,
+        &empty_locals,
+        builtin_consts,
+        builtin_fns,
+        registry,
+        src,
+    )?;
+
+    // Build results incrementally
+    let mut result_entries: IndexMap<VariantName, RuntimeValue> = IndexMap::new();
+
+    // Step 0: init value
+    result_entries.insert(variants[0].clone(), init_val);
+
+    // Steps 1..N: evaluate body with prev_t and t bindings
+    for i in 1..step_count {
+        // Insert partial result so @self[prev_t] can resolve
+        values.insert(
+            self_name.to_string(),
+            RuntimeValue::Indexed {
+                index_name: index_name.clone(),
+                entries: result_entries.clone(),
+            },
+        );
+
+        let prev_value = idx_def.step_value(i - 1);
+        let curr_value = idx_def.step_value(i);
+
+        let mut scan_locals = HashMap::new();
+        scan_locals.insert(
+            prev_name.name.clone(),
+            RuntimeValue::RangeLabel {
+                index_name: index_name.clone(),
+                step_index: i - 1,
+                value: prev_value,
+            },
+        );
+        scan_locals.insert(
+            curr_name.name.clone(),
+            RuntimeValue::RangeLabel {
+                index_name: index_name.clone(),
+                step_index: i,
+                value: curr_value,
+            },
+        );
+
+        let body_val = eval_expr(
+            body,
+            values,
+            &scan_locals,
+            builtin_consts,
+            builtin_fns,
+            registry,
+            src,
+        )?;
+        result_entries.insert(variants[i].clone(), body_val);
+    }
+
+    // Remove the partial value we inserted
+    values.remove(self_name);
+
+    Ok(RuntimeValue::Indexed {
+        index_name,
+        entries: result_entries,
+    })
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
@@ -690,15 +826,43 @@ fn evaluate_plan(
         }
 
         let expr = &plan.expressions[name];
-        match eval_expr(
-            expr,
-            &values,
-            &empty_locals,
-            &builtin_consts,
-            &builtin_fns,
-            &tir.registry,
-            src,
-        ) {
+
+        // Unfold requires special handling: it needs to build up results
+        // incrementally and insert partial results into `values` so that
+        // @self[prev_i] can resolve during body evaluation.
+        let result = if let ExprKind::Unfold {
+            init,
+            prev_name,
+            curr_name,
+            body,
+        } = &expr.kind
+        {
+            eval_unfold(
+                name,
+                init,
+                prev_name,
+                curr_name,
+                body,
+                &mut values,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                declared_types,
+                src,
+            )
+        } else {
+            eval_expr(
+                expr,
+                &values,
+                &empty_locals,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                src,
+            )
+        };
+
+        match result {
             Ok(val) => {
                 values.insert(name.clone(), val);
             }
@@ -827,7 +991,8 @@ fn attach_display_units(value: &mut Value, expr: &graphcal_syntax::ast::Expr, re
             }
         }
         // Scan: extract a single display unit from init, apply uniformly
-        (Value::Indexed { entries, .. }, ExprKind::Scan { init, .. }) => {
+        (Value::Indexed { entries, .. }, ExprKind::Scan { init, .. })
+        | (Value::Indexed { entries, .. }, ExprKind::Unfold { init, .. }) => {
             if let Some(du) = extract_flat_display_unit(init, registry) {
                 for entry_val in entries.values_mut() {
                     set_scalar_display_unit(entry_val, &du);
@@ -866,8 +1031,47 @@ fn extract_flat_display_unit(
             .first()
             .and_then(|e| extract_flat_display_unit(&e.value, registry)),
         ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, registry),
-        ExprKind::Scan { init, .. } => extract_flat_display_unit(init, registry),
+        ExprKind::Scan { init, .. } | ExprKind::Unfold { init, .. } => {
+            extract_flat_display_unit(init, registry)
+        }
         _ => None,
+    }
+}
+
+/// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
+fn format_range_step(idx_def: &crate::registry::IndexDef, step_index: usize) -> String {
+    let si_value = idx_def.step_value(step_index);
+    if let crate::registry::IndexKind::Range {
+        display_label,
+        display_scale,
+        ..
+    } = &idx_def.kind
+    {
+        let display_value = si_value / display_scale;
+        let formatted = format_step_number(display_value);
+        match display_label {
+            Some(label) => format!("{formatted} {label}"),
+            None => formatted,
+        }
+    } else {
+        format!("#{step_index}")
+    }
+}
+
+/// Format a numeric value for display in range index labels.
+fn format_step_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "value.abs() < 1e15 guarantees it fits in i64"
+        )]
+        let int_val = value as i64;
+        format!("{int_val}")
+    } else {
+        let s = format!("{value:.6}");
+        let s = s.trim_end_matches('0');
+        let s = s.trim_end_matches('.');
+        s.to_string()
     }
 }
 
@@ -880,7 +1084,7 @@ fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
 
 /// Format a `UnitExpr` as a human-readable label.
 /// E.g., `m`, `km/hour`, `kg * m / s^2`
-fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
+pub(crate) fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
     use graphcal_syntax::ast::MulDivOp;
 
     let mut numerator = Vec::new();

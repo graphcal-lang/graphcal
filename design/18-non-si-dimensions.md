@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Proposal. Needs design review.
+**Decision level:** Proposal. Needs design review. **Not yet implemented** — the dimension system currently uses a fixed `[Rational; 8]` exponent vector, and bodyless `dimension` declarations are parsed but skipped during IR lowering (`ir.rs:185`).
 
 ## Problem Statement
 
@@ -42,32 +42,39 @@ Many other commonly cited examples are "counts of discrete things" that need to 
 
 However, these are all **the same kind of thing** — a dimensionless count of discrete items. The safety requirement (`5 crew_member + 3 packet` must be a compile error) doesn't require separate *dimensions*; it requires separate *semantic tags*.
 
-This is exactly what Graphcal's **Tags** feature ([06](./06-spaces.md)) provides. Tags are orthogonal semantic labels (type parameters on dimensions) that prevent cross-context mixing:
+This is exactly what Graphcal's **Spaces** feature ([06](./06-spaces.md)) provides. Spaces use phantom type parameters on generic structs to prevent cross-context mixing. This is already implemented — empty marker types (`type Eci {}`, `type Body {}`) serve as phantom type parameters on generic structs (e.g., `Vec3<Length, Eci>`), with `as` cast for intentional context changes. For counting quantities, the same mechanism could be used:
 
 ```gcl
-// A single Count dimension + tags for type safety:
+// A single Count dimension + phantom type parameters for type safety:
 dimension Count;
 unit count: Count;
 
-tag Countable { Person, Pixel, Cycle, Packet, Vehicle }
+// Marker types for countable things
+type Person {}
+type Pixel {}
 
-param crew: Count<Countable.Person> = 7 count;
-param sensors: Count<Countable.Pixel> = 4096 count;
+// A generic wrapper that carries the phantom parameter
+type Counted<D: Dim, C: Type> {
+    value: D,
+}
 
-node bad = @crew + @sensors;
-//  error[T001]: tag conflict: Countable.Person ≠ Countable.Pixel
+param crew: Counted<Count, Person> = Counted<Count, Person> { value: 7 count };
+param sensors: Counted<Count, Pixel> = Counted<Count, Pixel> { value: 4096 count };
+
+// node bad = @crew + @sensors;
+//  error: type mismatch: Counted<Count, Person> ≠ Counted<Count, Pixel>
 ```
 
-**Why Tags are better than separate dimensions for counting:**
+**Why phantom type parameters are better than separate dimensions for counting:**
 
 1. **Conceptual clarity**: All these quantities really *are* counts. Making each one a separate base dimension pollutes the dimension algebra with artificial axes.
-2. **No spurious derived dimensions**: With separate dimensions, `Pixel / Person` would be a "meaningful" dimension — but it isn't. It's just a dimensionless ratio. With tags, `Count<Countable.Pixel> / Count<Countable.Person>` requires an explicit `as` cast, signaling the intentional cross-context operation.
-3. **Consistent with existing design**: Tags already exist for exactly this purpose (coordinate frames, spacecraft identity, budget categories, time zones — all same-dimension-different-context).
-4. **Scalability**: Adding 20 counting dimensions would create a 28-element exponent vector (wasteful). Tags add no overhead to the dimension system.
+2. **No spurious derived dimensions**: With separate dimensions, `Pixel / Person` would be a "meaningful" dimension — but it isn't. It's just a dimensionless ratio. With phantom parameters, mixing requires an explicit `as` cast, signaling the intentional cross-context operation.
+3. **Consistent with existing design**: Phantom type parameters already work this way for coordinate frames (e.g., `Vec3<Length, Eci>` vs `Vec3<Length, Body>`).
+4. **Scalability**: Adding 20 counting dimensions would create a 28-element exponent vector (wasteful). Phantom type parameters add no overhead to the dimension system.
 
 **When a true base dimension IS needed**: When the quantity participates in rich dimensional algebra. `Information / Time = Bandwidth` is meaningful. `Money / Mass = SpecificCost` is meaningful. These aren't just "counts of bits" or "counts of dollars" — they form families of derived dimensions with distinct physical interpretations.
 
-**Tag propagation**: The Count + Tags approach requires the tag `merge` function to propagate tags through arithmetic. For example, `Count<Countable.Person> * Mass / Count<Countable.Person>` yields `Mass<Countable.Person>`, with the tag carrying through multiplication. This is now formalized in [06-spaces.md](./06-spaces.md) — all arithmetic operations use uniform `merge`, which combines tag sets family-by-family (same variant → keep, conflict → error, one missing → sticky).
+**Phantom type propagation**: For the Count + phantom type approach to work seamlessly with arithmetic, the type system would need to propagate phantom parameters through operations. For example, if `Counted<Count, Person>` supports `derive(Add)`, then adding two `Counted<Count, Person>` values would preserve the `Person` parameter. Mixing `Counted<Count, Person>` with `Counted<Count, Pixel>` would be a type error, requiring an explicit `as` cast. The propagation semantics are described in [06-spaces.md](./06-spaces.md).
 
 ### Anti-Examples: Things That DON'T Need New Base Dimensions
 
@@ -275,14 +282,19 @@ param storage: Information = 500 GB;
 param price: DataCost = 0.023 USD / GB;
 node monthly_cost: Money = @storage * @price;
 
-// -- Counting quantities (use Count + Tags, not new dimensions) --
+// -- Counting quantities (use Count + phantom type parameters, not new dimensions) --
 dimension Count;
 unit count: Count;
 
-tag Countable { Person, Satellite, Cycle }
+type Person {}
+type Satellite {}
 
-param crew: Count<Countable.Person> = 7 count;
-param sats: Count<Countable.Satellite> = 24 count;
+type Counted<D: Dim, C: Type> {
+    value: D,
+}
+
+param crew: Counted<Count, Person> = Counted<Count, Person> { value: 7 count };
+param sats: Counted<Count, Satellite> = Counted<Count, Satellite> { value: 24 count };
 ```
 
 ### Currency: Single Dimension with Unit-Based Conversion
@@ -366,15 +378,15 @@ pub struct Dimension {
 
 ### Dimension Aliases (Torque vs Energy)
 
-This proposal doesn't solve the Torque/Energy problem (same algebraic dimension, different semantics). That's orthogonal — it could be solved with semantic tags on top of either the fixed or dynamic representation. See [04](./04-dimensions-and-units.md) open questions.
+This proposal doesn't solve the Torque/Energy problem (same algebraic dimension, different semantics). That's orthogonal — it could be solved with phantom type parameters on top of either the fixed or dynamic representation. See [04](./04-dimensions-and-units.md) open questions.
 
-### Counting Quantities and Tags
+### Counting Quantities and Phantom Type Parameters
 
-As discussed above, most "counting dimensions" are better modeled as a single `Count` dimension with tags from [06-spaces.md](./06-spaces.md). This keeps the dimension vector lean while providing the same type-safety guarantees through the orthogonal tag layer.
+As discussed above, most "counting dimensions" are better modeled as a single `Count` dimension with phantom type parameters via the Spaces feature ([06](./06-spaces.md)). This keeps the dimension vector lean while providing the same type-safety guarantees through the orthogonal type parameter layer.
 
 The test: *does this quantity form meaningful derived dimensions through algebra?*
 - **Yes** (Information, Money) → new base dimension.
-- **No** (crew members, packets, pixels) → `Count` + tag.
+- **No** (crew members, packets, pixels) → `Count` + phantom type parameter.
 
 ### Custom Counting Units (`unit launch;`)
 
@@ -383,9 +395,10 @@ The design doc mentions `unit launch;` auto-creating a dimension. With this prop
 ```gcl
 dimension Count;
 unit count: Count;
-tag Countable { Launch }
+type Launch {}
+type Counted<D: Dim, C: Type> { value: D }
 
-param launches: Count<Countable.Launch> = 5 count;
+param launches: Counted<Count, Launch> = Counted<Count, Launch> { value: 5 count };
 ```
 
 ### SI Prefix Mechanism
@@ -395,7 +408,7 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 ## Dependencies on Other Aspects
 
 - **Dimensions & Units** ([04](./04-dimensions-and-units.md)): This proposal directly extends it.
-- **Tags / Spaces** ([06](./06-spaces.md)): Counting quantities use tags rather than new base dimensions.
+- **Spaces** ([06](./06-spaces.md)): Counting quantities use phantom type parameters rather than new base dimensions.
 - **Syntax** ([02](./02-syntax-design.md)): No syntax changes needed.
 - **Namespace & Multi-File** ([09](./09-namespace.md)): Base dimensions defined in libraries need to be importable and get consistent IDs across compilation units.
 - **Phases**: This is primarily a Phase 1 (Dimensions & Units) concern, but could be deferred to Phase 4 (Multi-File) since that's when libraries defining new base dimensions become practical.
@@ -410,8 +423,8 @@ Orthogonal to this proposal. SI prefixes (`kilo`, `mega`, etc.) are about unit d
 
 4. **Display order**: When showing a dimension like `Information * Length / Time^2`, what order should base dimensions appear in? Registration order? Alphabetical? SI-first-then-custom?
 
-5. **Count + Tags interaction**: When Tags ([06](./06-spaces.md)) are implemented, should `Count` be a prelude-provided base dimension or something users always declare themselves? A prelude-provided `Count` dimension with a user-extensible `Countable` tag family seems most ergonomic.
+5. **Count + Spaces interaction**: Should `Count` be a prelude-provided base dimension or something users always declare themselves? A prelude-provided `Count` dimension seems most ergonomic, with users defining their own marker types (`type Person {}`, `type Satellite {}`) for phantom type parameters.
 
 6. **Dynamic unit definitions**: Can unit scale factors reference parameters (`unit EUR: Money = @exchange_rate USD;`)? This would elegantly handle variable exchange rates but blurs the compile-time/runtime boundary.
 
-7. **Borderline cases**: Some quantities sit between "true dimension" and "tagged count." For example, `Pixel / Length` = spatial resolution is a useful derived dimension, suggesting Pixel might deserve its own base dimension rather than being `Count<Countable.Pixel>`. The guideline ("does it form meaningful derived dimensions?") needs case-by-case judgment.
+7. **Borderline cases**: Some quantities sit between "true dimension" and "counted quantity." For example, `Pixel / Length` = spatial resolution is a useful derived dimension, suggesting Pixel might deserve its own base dimension rather than being a `Counted<Count, Pixel>`. The guideline ("does it form meaningful derived dimensions?") needs case-by-case judgment.

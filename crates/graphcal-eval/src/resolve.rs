@@ -243,7 +243,7 @@ pub fn resolve_with_imports(
                 params.push((pname, p.value.clone(), decl.span));
             }
             DeclKind::Node(n) => {
-                let (graph_refs, _const_refs) = extract_all_refs(
+                let (mut graph_refs, _const_refs) = extract_all_refs(
                     &n.value,
                     &all_runtime_names,
                     &all_const_names,
@@ -253,6 +253,12 @@ pub fn resolve_with_imports(
                     src,
                 )?;
                 let nname = n.name.value.to_string();
+                // Unfold self-references (@self[prev_i]) are not true
+                // cyclic dependencies — they access the previous step.
+                // Remove the self-edge so the DAG stays acyclic.
+                if matches!(n.value.kind, ExprKind::Unfold { .. }) {
+                    graph_refs.remove(&nname);
+                }
                 runtime_deps.insert(nname.clone(), graph_refs);
                 nodes.push((nname, n.value.clone(), decl.span));
             }
@@ -388,6 +394,10 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(init, src)?;
             check_no_graph_refs(body, src)
         }
+        ExprKind::Unfold { init, body, .. } => {
+            check_no_graph_refs(init, src)?;
+            check_no_graph_refs(body, src)
+        }
         ExprKind::Match { scrutinee, arms } => {
             check_no_graph_refs(scrutinee, src)?;
             for arm in arms {
@@ -486,6 +496,10 @@ fn check_no_graph_refs_in_fn_expr(
             source, init, body, ..
         } => {
             check_no_graph_refs_in_fn_expr(source, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(init, fn_name, src)?;
+            check_no_graph_refs_in_fn_expr(body, fn_name, src)
+        }
+        ExprKind::Unfold { init, body, .. } => {
             check_no_graph_refs_in_fn_expr(init, fn_name, src)?;
             check_no_graph_refs_in_fn_expr(body, fn_name, src)
         }
@@ -752,6 +766,26 @@ fn collect_const_refs(
                 src,
                 deps,
             )?;
+            collect_const_refs(
+                init,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )?;
+            collect_const_refs(
+                body,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                deps,
+            )
+        }
+        ExprKind::Unfold { init, body, .. } => {
             collect_const_refs(
                 init,
                 all_const_names,
@@ -1122,6 +1156,30 @@ fn collect_all_refs(
                 const_refs,
             )
         }
+        ExprKind::Unfold { init, body, .. } => {
+            collect_all_refs(
+                init,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )?;
+            collect_all_refs(
+                body,
+                all_runtime_names,
+                all_const_names,
+                builtin_consts,
+                builtin_fns,
+                user_fn_names,
+                src,
+                graph_refs,
+                const_refs,
+            )
+        }
         ExprKind::Match { scrutinee, arms } => {
             collect_all_refs(
                 scrutinee,
@@ -1220,6 +1278,10 @@ pub fn collect_graph_refs(
             source, init, body, ..
         } => {
             collect_graph_refs(source, all_runtime_names, refs);
+            collect_graph_refs(init, all_runtime_names, refs);
+            collect_graph_refs(body, all_runtime_names, refs);
+        }
+        ExprKind::Unfold { init, body, .. } => {
             collect_graph_refs(init, all_runtime_names, refs);
             collect_graph_refs(body, all_runtime_names, refs);
         }

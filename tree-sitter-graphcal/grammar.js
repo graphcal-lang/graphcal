@@ -146,17 +146,37 @@ module.exports = grammar({
     ),
 
     // index Maneuver = { Departure, Correction, Insertion }
+    // index TimeStep = range(0.0 s, 1.0 s, step: 0.1 s);
     index_declaration: $ => seq(
       "index",
       field("name", $.identifier),
       "=",
-      "{",
-      optional(seq(
-        $.variant,
-        repeat(seq(",", $.variant)),
-        optional(","),
-      )),
-      "}",
+      choice(
+        // Named variants: { Departure, Correction, Insertion }
+        seq(
+          "{",
+          optional(seq(
+            $.variant,
+            repeat(seq(",", $.variant)),
+            optional(","),
+          )),
+          "}",
+        ),
+        // Range index: range(start, end, step: step)
+        seq(
+          "range",
+          "(",
+          field("start", $._expr),
+          ",",
+          field("end", $._expr),
+          ",",
+          "step",
+          ":",
+          field("step", $._expr),
+          ")",
+          ";",
+        ),
+      ),
     ),
 
     variant: $ => $.identifier,
@@ -321,6 +341,7 @@ module.exports = grammar({
       $.match_expr,
       $.for_expr,
       $.scan_expr,
+      $.unfold_expr,
       $._postfix_expr,
     ),
 
@@ -454,7 +475,7 @@ module.exports = grammar({
       field("index", $.identifier),
     ),
 
-    // scan(source, init, |acc, val| body)
+    // scan(source, init, |acc, val| body) -- accumulator scan (prefix scan)
     scan_expr: $ => seq(
       "scan",
       "(",
@@ -466,6 +487,21 @@ module.exports = grammar({
       field("acc", $.identifier),
       ",",
       field("val", $.identifier),
+      "|",
+      field("body", $._expr),
+      ")",
+    ),
+
+    // unfold(init, |prev_i, i| body) -- unfold (anamorphism)
+    unfold_expr: $ => seq(
+      "unfold",
+      "(",
+      field("init", $._expr),
+      ",",
+      "|",
+      field("prev", $.identifier),
+      ",",
+      field("curr", $.identifier),
       "|",
       field("body", $._expr),
       ")",

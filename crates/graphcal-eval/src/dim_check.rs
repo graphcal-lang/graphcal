@@ -1531,8 +1531,9 @@ fn infer_type(
                 }
             }
             // Check totality: all variants present, no extras
+            let variants = idx_def.variants();
             let declared_variants: std::collections::HashSet<&str> =
-                idx_def.variants.iter().map(VariantName::as_str).collect();
+                variants.iter().map(VariantName::as_str).collect();
             let provided_variants: std::collections::HashSet<&str> =
                 entries.iter().map(|e| e.variant.value.as_str()).collect();
             let missing: Vec<VariantName> = declared_variants
@@ -1634,7 +1635,7 @@ fn infer_type(
                             .get_index(idx_name.as_str())
                             .expect("index validated");
                         if !idx_def
-                            .variants
+                            .variants()
                             .iter()
                             .any(|v| v.as_str() == variant.value.as_str())
                         {
@@ -1655,20 +1656,38 @@ fn infer_type(
                                 span: ident.span.into(),
                             }
                         })?;
-                        let InferredType::LoopVar(var_idx) = var_type else {
-                            return Err(GraphcalError::EvalError {
-                                message: format!("`{}` is not a loop variable", ident.name),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
-                        };
-                        if *var_idx != idx_name {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: idx_name,
-                                found: var_idx.clone(),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
+                        match var_type {
+                            InferredType::LoopVar(var_idx) => {
+                                if *var_idx != idx_name {
+                                    return Err(GraphcalError::IndexMismatch {
+                                        expected: idx_name,
+                                        found: var_idx.clone(),
+                                        src: src.clone(),
+                                        span: ident.span.into(),
+                                    });
+                                }
+                            }
+                            InferredType::Scalar(_) => {
+                                // Allow scalar locals to be used as index args
+                                // for range indexes (e.g. prev_i, i in Unfold)
+                                let idx_def = registry
+                                    .get_index(idx_name.as_str())
+                                    .expect("index validated");
+                                if !idx_def.is_range() {
+                                    return Err(GraphcalError::EvalError {
+                                        message: format!("`{}` is not a loop variable", ident.name),
+                                        src: src.clone(),
+                                        span: ident.span.into(),
+                                    });
+                                }
+                            }
+                            _ => {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!("`{}` is not a loop variable", ident.name),
+                                    src: src.clone(),
+                                    span: ident.span.into(),
+                                });
+                            }
                         }
                     }
                 }
@@ -1744,6 +1763,99 @@ fn infer_type(
             }
             // scan produces an indexed result with the same index
             Ok(InferredType::Indexed { element, index })
+        }
+
+        ExprKind::Unfold {
+            init,
+            prev_name,
+            curr_name,
+            body,
+        } => {
+            // Unfold: unfold(init, |prev_i, i| body)
+            // The node's declared type should be T[RangeIndex].
+            // init has type T, body must also return T.
+            // prev_name and curr_name are bound as loop variables.
+            let init_type = infer_type(
+                init,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
+
+            // Look up the declared type to find the range index and its dimension.
+            // The declared type for the node should be Something[RangeIndex].
+            // We need to find the range index to bind prev_name/curr_name with the right dimension.
+            // For now, bind them as Dimensionless scalars — they will be refined
+            // when the range index dimension is known from context.
+            let mut scan_locals = local_types.clone();
+            scan_locals.insert(
+                prev_name.name.clone(),
+                InferredType::Scalar(graphcal_syntax::dimension::Dimension::DIMENSIONLESS),
+            );
+            scan_locals.insert(
+                curr_name.name.clone(),
+                InferredType::Scalar(graphcal_syntax::dimension::Dimension::DIMENSIONLESS),
+            );
+
+            // Try to find the range index dimension from the declared types context.
+            // The dim_check caller binds self-name → declared type.
+            // We check if the declared type for this node is Indexed with a range index.
+            // Walk declared_types to find a matching range index.
+            for dt in declared_types.values() {
+                if let DeclaredType::Indexed { index, .. } = dt
+                    && let Some(idx_def) = registry.get_index(index.as_str())
+                    && idx_def.is_range()
+                {
+                    if let crate::registry::IndexKind::Range { dimension, .. } = &idx_def.kind {
+                        scan_locals
+                            .insert(prev_name.name.clone(), InferredType::Scalar(*dimension));
+                        scan_locals
+                            .insert(curr_name.name.clone(), InferredType::Scalar(*dimension));
+                    }
+                    break;
+                }
+            }
+
+            let body_type = infer_type(
+                body,
+                declared_types,
+                &scan_locals,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
+            if body_type != init_type {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format_inferred_type(&init_type),
+                    found: format_inferred_type(&body_type),
+                    src: src.clone(),
+                    span: body.span.into(),
+                    help: "time scan body must return the same type as the init value".to_string(),
+                });
+            }
+
+            // The result type is Indexed { element: init_type, index: <range_index> }
+            // We need to find the range index name from the declared type context.
+            // For now, return just the init_type and let the annotation check handle the wrapping.
+            // If we can find the index from declared types, use it.
+            for dt in declared_types.values() {
+                if let DeclaredType::Indexed { index, .. } = dt
+                    && let Some(idx_def) = registry.get_index(index.as_str())
+                    && idx_def.is_range()
+                {
+                    return Ok(InferredType::Indexed {
+                        element: Box::new(init_type),
+                        index: index.clone(),
+                    });
+                }
+            }
+
+            // Fallback: return init_type (will fail annotation check if declared as indexed)
+            Ok(init_type)
         }
 
         ExprKind::Match {

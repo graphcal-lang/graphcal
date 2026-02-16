@@ -10,11 +10,14 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, File, FnDecl, TypeExpr};
+use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
 
+use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
+use crate::eval::format_unit_expr;
+use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::prelude::load_prelude;
 use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve_with_imports};
@@ -209,9 +212,29 @@ pub fn register_file_declarations(
                 registry.register_unit(u.name.value.clone(), dim, scale);
             }
             DeclKind::Index(idx) => {
+                let kind = match &idx.kind {
+                    graphcal_syntax::ast::IndexDeclKind::Named { variants } => {
+                        registry::IndexKind::Named {
+                            variants: variants.iter().map(|v| v.value.clone()).collect(),
+                        }
+                    }
+                    graphcal_syntax::ast::IndexDeclKind::Range {
+                        start: start_expr,
+                        end: end_expr,
+                        step: step_expr,
+                    } => lower_range_index(
+                        &idx.name.value,
+                        start_expr,
+                        end_expr,
+                        step_expr,
+                        registry,
+                        src,
+                        decl.span,
+                    )?,
+                };
                 registry.register_index(registry::IndexDef {
                     name: idx.name.value.clone(),
-                    variants: idx.variants.iter().map(|v| v.value.clone()).collect(),
+                    kind,
                 });
             }
             DeclKind::Type(t) => {
@@ -249,6 +272,120 @@ pub fn register_file_declarations(
         }
     }
     Ok(())
+}
+
+/// Evaluate a range expression (e.g. `0.0 s`) to get its SI value and dimension.
+///
+/// Returns `(si_value, dimension)`.
+fn eval_range_expr(
+    expr: &Expr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(f64, graphcal_syntax::dimension::Dimension), GraphcalError> {
+    use graphcal_syntax::dimension::Dimension;
+
+    let builtin_consts = builtin_constants();
+    let builtin_fns = builtin_functions();
+    let empty_values: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    let val = eval_expr(
+        expr,
+        &empty_values,
+        &empty_locals,
+        &builtin_consts,
+        &builtin_fns,
+        registry,
+        src,
+    )?;
+    let si_value = match &val {
+        RuntimeValue::Scalar(v) => *v,
+        _ => {
+            return Err(GraphcalError::EvalError {
+                message: "range expression must evaluate to a scalar value".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            });
+        }
+    };
+
+    // Extract dimension from the expression's unit annotation
+    let dim = match &expr.kind {
+        ExprKind::UnitLiteral { unit, .. } => registry
+            .resolve_unit_expr(unit)
+            .map_or(Dimension::DIMENSIONLESS, |(dim, _)| dim),
+        _ => Dimension::DIMENSIONLESS,
+    };
+
+    Ok((si_value, dim))
+}
+
+/// Lower a range index declaration, evaluating start/end/step and validating dimensions.
+fn lower_range_index(
+    name: &graphcal_syntax::names::IndexName,
+    start_expr: &Expr,
+    end_expr: &Expr,
+    step_expr: &Expr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    decl_span: graphcal_syntax::span::Span,
+) -> Result<registry::IndexKind, GraphcalError> {
+    let (start_val, start_dim) = eval_range_expr(start_expr, registry, src)?;
+    let (end_val, end_dim) = eval_range_expr(end_expr, registry, src)?;
+    let (step_val, step_dim) = eval_range_expr(step_expr, registry, src)?;
+
+    // All three must have the same dimension
+    if start_dim != end_dim || start_dim != step_dim {
+        return Err(GraphcalError::RangeIndexDimensionMismatch {
+            name: name.clone(),
+            start_dim: format!("{start_dim:?}"),
+            end_dim: format!("{end_dim:?}"),
+            step_dim: format!("{step_dim:?}"),
+            src: src.clone(),
+            span: decl_span.into(),
+        });
+    }
+
+    // Validate: start <= end
+    if start_val > end_val {
+        return Err(GraphcalError::RangeIndexInvalid {
+            name: name.clone(),
+            message: format!("start ({start_val}) must be <= end ({end_val})"),
+            src: src.clone(),
+            span: decl_span.into(),
+        });
+    }
+
+    // Validate: step > 0
+    if step_val <= 0.0 {
+        return Err(GraphcalError::RangeIndexInvalid {
+            name: name.clone(),
+            message: format!("step ({step_val}) must be > 0"),
+            src: src.clone(),
+            span: decl_span.into(),
+        });
+    }
+
+    // Extract display unit from the start expression's unit annotation.
+    let (display_label, display_scale) = match &start_expr.kind {
+        ExprKind::UnitLiteral { unit, .. } => {
+            if let Some((_dim, scale)) = registry.resolve_unit_expr(unit) {
+                (Some(format_unit_expr(unit)), scale)
+            } else {
+                (None, 1.0)
+            }
+        }
+        _ => (None, 1.0),
+    };
+
+    Ok(registry::IndexKind::Range {
+        start: start_val,
+        end: end_val,
+        step: step_val,
+        dimension: start_dim,
+        display_label,
+        display_scale,
+    })
 }
 
 /// Register user-defined functions from a [`ResolvedFile`] into the registry.

@@ -419,6 +419,35 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error(
+        "range index `{name}`: start, end, and step must have the same dimension (found {start_dim}, {end_dim}, {step_dim})"
+    )]
+    #[diagnostic(
+        code(graphcal::I006),
+        help("all three values in range(start, end, step: step) must share the same dimension")
+    )]
+    RangeIndexDimensionMismatch {
+        name: IndexName,
+        start_dim: String,
+        end_dim: String,
+        step_dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("dimension mismatch")]
+        span: SourceSpan,
+    },
+
+    #[error("range index `{name}`: {message}")]
+    #[diagnostic(code(graphcal::I007))]
+    RangeIndexInvalid {
+        name: IndexName,
+        message: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("invalid range")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),
