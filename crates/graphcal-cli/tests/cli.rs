@@ -496,3 +496,218 @@ fn eval_import_name_not_found() {
         "expected error mentioning 'nonexistent': {stderr}"
     );
 }
+
+// --- --input JSON file tests ---
+
+#[test]
+fn eval_with_input_json() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--input",
+            &fixture("input_rocket.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // dry_mass should show 1500 (from JSON), not default 1200
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("dry_mass") && l.contains("1500")),
+        "expected dry_mass=1500 in output: {stdout}"
+    );
+    // isp should show 450 (from JSON), not default 320
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("isp") && l.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_set_precedence() {
+    // --set should override the same param from --input
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--input",
+            &fixture("input_rocket.json"),
+            "--set",
+            "isp=500.0 s",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // isp should show 500 (from --set), not 450 (from JSON)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("isp") && l.contains("500")),
+        "expected isp=500 in output: {stdout}"
+    );
+    // dry_mass should still come from JSON
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("dry_mass") && l.contains("1500")),
+        "expected dry_mass=1500 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_indexed() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("indexed.gcl"),
+            "--input",
+            &fixture("input_indexed.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // delta_v[Departure] should show 3000 (3.0 km/s in SI)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("Departure") && l.contains('3')),
+        "expected Departure delta_v ~3 km/s in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_tagged_union() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("tagged_union_param.gcl"),
+            "--input",
+            &fixture("input_tagged_union.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // maneuver should now be Impulsive variant (from JSON), not LowThrust (default)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("maneuver::Impulsive.delta_v")),
+        "expected maneuver::Impulsive.delta_v in output: {stdout}"
+    );
+    // fuel_proxy should be 0 N (Impulsive branch returns 0)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("fuel_proxy") && l.contains('0')),
+        "expected fuel_proxy=0 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_unknown_param() {
+    let dir = std::env::temp_dir().join("graphcal_test_input");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json_path = dir.join("bad_param.json");
+    std::fs::write(&json_path, r#"{"nonexistent": "100.0 kg"}"#).unwrap();
+
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--input",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    // Should fail because "nonexistent" is not a param in rocket.gcl
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("nonexistent"),
+        "expected error mentioning 'nonexistent': {stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn eval_input_json_invalid_json() {
+    let dir = std::env::temp_dir().join("graphcal_test_input_bad");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json_path = dir.join("bad.json");
+    std::fs::write(&json_path, "not valid json {{{").unwrap();
+
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--input",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("error"),
+        "expected JSON parse error: {stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn eval_input_json_with_hohmann() {
+    // Test scalar overrides on a file with structs and derived nodes
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("hohmann.gcl"),
+            "--input",
+            &fixture("input_struct.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // parking_alt should show 300 km (from JSON), not default 200
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("parking_alt") && l.contains("300")),
+        "expected parking_alt=300 in output: {stdout}"
+    );
+}
