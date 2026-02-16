@@ -4,7 +4,8 @@
 - Because we target engineering projects as one of the use cases, we prioritize safety over usability. We prefer explicitness over implicitness.
   - e.g., no implicit type/unit conversion, no implicit type inference, no implicit null propagation, etc.
   - Remember Mars Climate Orbiter failure due to unit mismatch.
-- This project is not yet published, so breaking changes are acceptable for simpler/clever design and implementation.
+- This project is not yet published, so breaking changes are acceptable for simpler/clever/clean design and implementation.
+  - DO NOT implement workarounds for backward compatibility. If a major design change, such as data model modification, is needed, just make the change and update the existing codebase accordingly.
 - The language design documents are in the `design/` directory. The `design/README.md` has links to all the design docs.
   - Some ideas on features are documented in `.design/IDEAS.md`.
   - The implementation phases are in `design/phases/` directory and summarized in `design/phases/README.md`.
