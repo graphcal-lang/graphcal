@@ -523,11 +523,39 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
     None
 }
 
-/// Convert a `RuntimeValue` to a `Value` using declared type info and display unit extraction.
+/// Resolve a struct field's declared type, handling generic type parameter substitution.
+///
+/// If the field's type annotation references a generic type parameter (e.g., `D` in
+/// `Vec3<D: Dim, F: Type>`), the substitution map provides the concrete type.
+/// Otherwise, falls back to direct registry resolution.
+fn resolve_field_declared_type(
+    field: &crate::registry::StructField,
+    generic_sub: &HashMap<&str, &DeclaredType>,
+    registry: &Registry,
+) -> Option<DeclaredType> {
+    // Check if the field type is a bare generic param reference (e.g., `D`)
+    if let graphcal_syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field.type_ann.kind
+        && dim_expr.terms.len() == 1
+        && dim_expr.terms[0].term.power.is_none()
+    {
+        let name = &dim_expr.terms[0].term.name.name;
+        if let Some(concrete) = generic_sub.get(name.as_str()) {
+            return Some((*concrete).clone());
+        }
+    }
+    // Non-generic: resolve directly from the registry
+    registry
+        .resolve_type_expr(&field.type_ann)
+        .map(DeclaredType::Scalar)
+}
+
+/// Convert a `RuntimeValue` to a `Value` using declared type info.
+///
+/// All scalar values start with `display_unit: None`. Call `attach_display_units()`
+/// afterwards to populate display units from the source expression.
 fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
-    display_unit: Option<DisplayUnit>,
     registry: &Registry,
 ) -> Value {
     match rv {
@@ -539,7 +567,7 @@ fn runtime_to_value(
             Value::Scalar {
                 si_value: *si_value,
                 dimension,
-                display_unit,
+                display_unit: None,
             }
         }
         RuntimeValue::Bool(b) => Value::Bool(*b),
@@ -551,6 +579,22 @@ fn runtime_to_value(
         } => {
             let type_def = registry.get_type(type_name.as_str());
             let variant_def = type_def.and_then(|td| td.get_variant(variant.as_str()));
+
+            // Build a substitution map from generic param names to concrete DeclaredTypes
+            // when we have concrete type args from the declared type.
+            let generic_sub: HashMap<&str, &DeclaredType> =
+                if let (Some(td), Some(DeclaredType::Struct(_, type_args))) =
+                    (type_def, declared_type)
+                {
+                    td.generic_params
+                        .iter()
+                        .zip(type_args.iter())
+                        .map(|(param, arg)| (param.name.as_str(), arg))
+                        .collect()
+                } else {
+                    HashMap::new()
+                };
+
             let converted_fields = fields
                 .iter()
                 .map(|(field_name, field_rv)| {
@@ -558,13 +602,9 @@ fn runtime_to_value(
                         vd.fields
                             .iter()
                             .find(|f| f.name == *field_name)
-                            .and_then(|f| {
-                                registry
-                                    .resolve_type_expr(&f.type_ann)
-                                    .map(DeclaredType::Scalar)
-                            })
+                            .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
                     });
-                    let val = runtime_to_value(field_rv, field_declared.as_ref(), None, registry);
+                    let val = runtime_to_value(field_rv, field_declared.as_ref(), registry);
                     (field_name.clone(), val)
                 })
                 .collect();
@@ -585,12 +625,7 @@ fn runtime_to_value(
             let converted_entries = entries
                 .iter()
                 .map(|(variant, entry_rv)| {
-                    let val = runtime_to_value(
-                        entry_rv,
-                        element_declared,
-                        display_unit.clone(),
-                        registry,
-                    );
+                    let val = runtime_to_value(entry_rv, element_declared, registry);
                     (variant.clone(), val)
                 })
                 .collect();
@@ -687,10 +722,11 @@ fn evaluate_plan(
         .collect();
 
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
-        let display_unit = expr_map
-            .get(name)
-            .and_then(|expr| extract_display_unit(expr, &tir.registry));
-        runtime_to_value(rv, declared_types.get(name), display_unit, &tir.registry)
+        let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
+        if let Some(expr) = expr_map.get(name) {
+            attach_display_units(&mut value, expr, &tir.registry);
+        }
+        value
     };
 
     let make_result = |name: &str| -> Result<Value, NodeError> {
@@ -744,39 +780,101 @@ fn evaluate_plan(
     }
 }
 
-/// Extract display unit from an expression.
+/// Walk a `Value` tree alongside its source `Expr`, attaching display units
+/// from unit literals and explicit `->` conversions to leaf `Scalar` nodes.
 ///
-/// - `ExprKind::Convert { target, .. }` -> use the target unit
-/// - `ExprKind::UnitLiteral { unit, .. }` -> use the literal's unit
-/// - Anything else -> `None` (display in SI)
-fn extract_display_unit(
+/// Display units are preserved from value literals (e.g., `6878.0 km`) and
+/// explicit conversions (e.g., `@x -> km`). All other expressions (references,
+/// arithmetic, field access, etc.) leave the display unit as `None`, so values
+/// display in SI base units.
+fn attach_display_units(value: &mut Value, expr: &graphcal_syntax::ast::Expr, registry: &Registry) {
+    match (&mut *value, &expr.kind) {
+        (Value::Scalar { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
+            *display_unit = resolve_unit_to_display(unit, registry);
+        }
+        (Value::Scalar { display_unit, .. }, ExprKind::Convert { target, .. }) => {
+            *display_unit = resolve_unit_to_display(target, registry);
+        }
+        // Struct construction: recurse into each field initializer
+        (Value::Struct { fields, .. }, ExprKind::StructConstruction { fields: inits, .. }) => {
+            for init in inits {
+                if let Some(field_val) = fields.get_mut(&init.name.value)
+                    && let Some(init_expr) = &init.value
+                {
+                    attach_display_units(field_val, init_expr, registry);
+                }
+            }
+        }
+        // Map literal: recurse into each entry
+        (
+            Value::Indexed { entries, .. },
+            ExprKind::MapLiteral {
+                entries: map_entries,
+            },
+        ) => {
+            for map_entry in map_entries {
+                if let Some(entry_val) = entries.get_mut(&map_entry.variant.value) {
+                    attach_display_units(entry_val, &map_entry.value, registry);
+                }
+            }
+        }
+        // For comprehension: extract a single display unit from body, apply uniformly
+        (Value::Indexed { entries, .. }, ExprKind::ForComp { body, .. }) => {
+            if let Some(du) = extract_flat_display_unit(body, registry) {
+                for entry_val in entries.values_mut() {
+                    set_scalar_display_unit(entry_val, &du);
+                }
+            }
+        }
+        // Scan: extract a single display unit from init, apply uniformly
+        (Value::Indexed { entries, .. }, ExprKind::Scan { init, .. }) => {
+            if let Some(du) = extract_flat_display_unit(init, registry) {
+                for entry_val in entries.values_mut() {
+                    set_scalar_display_unit(entry_val, &du);
+                }
+            }
+        }
+        // All other combinations: no display unit to attach
+        _ => {}
+    }
+}
+
+/// Resolve a `UnitExpr` to a `DisplayUnit`.
+fn resolve_unit_to_display(
+    unit: &graphcal_syntax::ast::UnitExpr,
+    registry: &Registry,
+) -> Option<DisplayUnit> {
+    let (_dim, scale) = registry.resolve_unit_expr(unit)?;
+    Some(DisplayUnit {
+        label: format_unit_expr(unit),
+        scale,
+    })
+}
+
+/// Extract a single display unit from a scalar-producing expression.
+///
+/// Used for indexed collections (for comprehensions, scan) where all entries
+/// share the same display unit.
+fn extract_flat_display_unit(
     expr: &graphcal_syntax::ast::Expr,
     registry: &Registry,
 ) -> Option<DisplayUnit> {
     match &expr.kind {
-        ExprKind::Convert { target, .. } => {
-            let (_dim, scale) = registry.resolve_unit_expr(target)?;
-            Some(DisplayUnit {
-                label: format_unit_expr(target),
-                scale,
-            })
-        }
-        ExprKind::UnitLiteral { unit, .. } => {
-            let (_dim, scale) = registry.resolve_unit_expr(unit)?;
-            Some(DisplayUnit {
-                label: format_unit_expr(unit),
-                scale,
-            })
-        }
-        // For map literals, extract display unit from the first entry
+        ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, registry),
+        ExprKind::Convert { target, .. } => resolve_unit_to_display(target, registry),
         ExprKind::MapLiteral { entries } => entries
             .first()
-            .and_then(|e| extract_display_unit(&e.value, registry)),
-        // For `for` comprehensions, extract display unit from the body
-        ExprKind::ForComp { body, .. } => extract_display_unit(body, registry),
-        // For scan, extract display unit from the init expression
-        ExprKind::Scan { init, .. } => extract_display_unit(init, registry),
+            .and_then(|e| extract_flat_display_unit(&e.value, registry)),
+        ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, registry),
+        ExprKind::Scan { init, .. } => extract_flat_display_unit(init, registry),
         _ => None,
+    }
+}
+
+/// Set display unit on a scalar value. No-op for non-scalar values.
+fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
+    if let Value::Scalar { display_unit, .. } = value {
+        *display_unit = Some(du.clone());
     }
 }
 
