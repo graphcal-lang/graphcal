@@ -87,7 +87,7 @@ impl Value {
     #[must_use]
     pub fn dimension(&self) -> Dimension {
         match self {
-            Self::Scalar { dimension, .. } => *dimension,
+            Self::Scalar { dimension, .. } => dimension.clone(),
             Self::Bool(_) => panic!("called dimension() on Bool"),
             Self::Int(_) => panic!("called dimension() on Int"),
             Self::Struct { type_name, .. } => {
@@ -126,15 +126,19 @@ impl Value {
     /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
     /// otherwise falls back to the SI unit string (e.g., "m/s", "kg").
     #[must_use]
-    pub fn display_label(&self) -> Option<String> {
+    pub fn display_label(
+        &self,
+        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    ) -> Option<String> {
         match self {
             Self::Scalar {
                 display_unit,
                 dimension,
                 ..
-            } => display_unit
-                .as_ref()
-                .map_or_else(|| dimension.si_unit_string(), |du| Some(du.label.clone())),
+            } => display_unit.as_ref().map_or_else(
+                || dimension.si_unit_string(symbols),
+                |du| Some(du.label.clone()),
+            ),
             Self::Bool(_) | Self::Int(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
         }
     }
@@ -178,6 +182,8 @@ pub struct EvalResult {
     pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
+    /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
+    pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
 }
 
 impl EvalResult {
@@ -561,8 +567,8 @@ fn runtime_to_value(
     match rv {
         RuntimeValue::Scalar(si_value) => {
             let dimension = match declared_type {
-                Some(DeclaredType::Scalar(d)) => *d,
-                _ => Dimension::DIMENSIONLESS,
+                Some(DeclaredType::Scalar(d)) => d.clone(),
+                _ => Dimension::dimensionless(),
             };
             Value::Scalar {
                 si_value: *si_value,
@@ -941,6 +947,7 @@ fn evaluate_plan(
         params,
         nodes,
         all,
+        base_dim_symbols: tir.registry.base_dim_symbols().clone(),
     }
 }
 
@@ -1348,7 +1355,10 @@ mod tests {
             .find(|(n, _)| n.as_str() == "speed_kmh")
             .unwrap();
         let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
-        assert_eq!(speed_kmh_val.display_label(), Some("km/hour".to_string()));
+        assert_eq!(
+            speed_kmh_val.display_label(&result.base_dim_symbols),
+            Some("km/hour".to_string())
+        );
         let display_kmh = speed_kmh_val.display_value();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
         assert!(
@@ -1384,7 +1394,10 @@ mod tests {
             .find(|(n, _)| n.as_str() == "tof_hours")
             .unwrap();
         let tof_val = tof_entry.1.as_ref().unwrap();
-        assert_eq!(tof_val.display_label(), Some("hour".to_string()));
+        assert_eq!(
+            tof_val.display_label(&result.base_dim_symbols),
+            Some("hour".to_string())
+        );
         let tof_display = tof_val.display_value();
         assert!(
             tof_display > 5.0 && tof_display < 6.0,

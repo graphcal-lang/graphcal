@@ -166,7 +166,7 @@ impl TIR {
         for name in crate::builtins::builtin_constants().keys() {
             declared_types.insert(
                 (*name).to_string(),
-                crate::dim_check::DeclaredType::Scalar(Dimension::DIMENSIONLESS),
+                crate::dim_check::DeclaredType::Scalar(Dimension::dimensionless()),
             );
         }
         for (name, resolved) in &self.resolved_decl_types {
@@ -284,10 +284,10 @@ pub fn resolved_to_declared_type(
     use crate::dim_check::DeclaredType;
 
     match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::DIMENSIONLESS)),
+        ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
-        ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(*dim)),
+        ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
         ResolvedTypeExpr::GenericStruct {
             name, type_args, ..
@@ -360,6 +360,7 @@ pub fn unify_resolved_type(
     actual: &crate::dim_check::InferredType,
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
     index_sub: &mut HashMap<GenericParamName, IndexName>,
+    registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
@@ -377,7 +378,7 @@ pub fn unify_resolved_type(
                 else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed type".to_string(),
-                        found: format_inferred(current),
+                        found: format_inferred(current, registry),
                         src: src.clone(),
                         span: span.into(),
                         help: "expected an indexed value".to_string(),
@@ -411,14 +412,14 @@ pub fn unify_resolved_type(
                 }
                 current = element;
             }
-            unify_resolved_type(base, current, dim_sub, index_sub, src, span)
+            unify_resolved_type(base, current, dim_sub, index_sub, registry, src, span)
         }
 
         ResolvedTypeExpr::Bool => {
             if *actual != InferredType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: format_inferred(actual),
+                    found: format_inferred(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Bool argument".to_string(),
@@ -431,7 +432,7 @@ pub fn unify_resolved_type(
             if *actual != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
-                    found: format_inferred(actual),
+                    found: format_inferred(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Int argument".to_string(),
@@ -441,11 +442,11 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Dimensionless => {
-            let actual_dim = expect_scalar_from_inferred(actual, src, span)?;
+            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if !actual_dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
-                    found: format!("{actual_dim}"),
+                    found: registry.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Dimensionless argument".to_string(),
@@ -455,11 +456,11 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Scalar(expected_dim) => {
-            let actual_dim = expect_scalar_from_inferred(actual, src, span)?;
+            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if *expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("{expected_dim}"),
-                    found: format!("{actual_dim}"),
+                    expected: registry.format_dimension(expected_dim),
+                    found: registry.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
@@ -475,7 +476,7 @@ pub fn unify_resolved_type(
             let InferredType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
-                    found: format_inferred(actual),
+                    found: format_inferred(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: format!("expected struct type `{name}`"),
@@ -484,7 +485,7 @@ pub fn unify_resolved_type(
             if *name != *actual_name {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
-                    found: format_inferred(actual),
+                    found: format_inferred(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: format!("expected struct type `{name}`"),
@@ -494,16 +495,18 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericDimParam(gp, _) => {
-            let actual_dim = expect_scalar_from_inferred(actual, src, span)?;
+            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if let Some(prev) = dim_sub.get(gp) {
                 if *prev != actual_dim {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format!("{prev}"),
-                        found: format!("{actual_dim}"),
+                        expected: registry.format_dimension(prev),
+                        found: registry.format_dimension(&actual_dim),
                         src: src.clone(),
                         span: span.into(),
                         help: format!(
-                            "generic `{gp}` was bound to {prev} but this argument requires {actual_dim}"
+                            "generic `{gp}` was bound to {} but this argument requires {}",
+                            registry.format_dimension(prev),
+                            registry.format_dimension(&actual_dim),
                         ),
                     });
                 }
@@ -514,7 +517,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
-            let actual_dim = expect_scalar_from_inferred(actual, src, span)?;
+            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
 
             // Single generic term with power: D^n means D = actual^(1/n)
             if terms.len() == 1
@@ -533,12 +536,14 @@ pub fn unify_resolved_type(
                 if let Some(prev) = dim_sub.get(gp) {
                     if *prev != bound_dim {
                         return Err(GraphcalError::DimensionMismatch {
-                            expected: format!("{prev}"),
-                            found: format!("{bound_dim}"),
+                            expected: registry.format_dimension(prev),
+                            found: registry.format_dimension(&bound_dim),
                             src: src.clone(),
                             span: span.into(),
                             help: format!(
-                                "generic `{gp}` was bound to {prev} but this argument requires {bound_dim}"
+                                "generic `{gp}` was bound to {} but this argument requires {}",
+                                registry.format_dimension(prev),
+                                registry.format_dimension(&bound_dim),
                             ),
                         });
                     }
@@ -549,7 +554,7 @@ pub fn unify_resolved_type(
             }
 
             // General case: compute expected dimension from already-bound generics + concrete terms
-            let mut expected_dim = Dimension::DIMENSIONLESS;
+            let mut expected_dim = Dimension::dimensionless();
             for term in terms {
                 let term_dim = match term {
                     ResolvedDimTerm::Concrete { dim, power, .. } => {
@@ -563,7 +568,7 @@ pub fn unify_resolved_type(
                         } else {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("generic `{gp}` (unresolved)"),
-                                found: format!("{actual_dim}"),
+                                found: registry.format_dimension(&actual_dim),
                                 src: src.clone(),
                                 span: span.into(),
                                 help: format!(
@@ -581,8 +586,8 @@ pub fn unify_resolved_type(
 
             if expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("{expected_dim}"),
-                    found: format!("{actual_dim}"),
+                    expected: registry.format_dimension(&expected_dim),
+                    found: registry.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
@@ -613,10 +618,10 @@ pub fn substitute_resolved_type(
     use crate::dim_check::InferredType;
 
     match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::DIMENSIONLESS)),
+        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
-        ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(*dim)),
+        ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone(), vec![])),
         ResolvedTypeExpr::GenericStruct {
             name, type_args, ..
@@ -636,11 +641,11 @@ pub fn substitute_resolved_type(
                     span: (*span).into(),
                 })
             },
-            |dim| Ok(InferredType::Scalar(*dim)),
+            |dim| Ok(InferredType::Scalar(dim.clone())),
         ),
 
         ResolvedTypeExpr::GenericDimExpr { terms, span: _ } => {
-            let mut result = Dimension::DIMENSIONLESS;
+            let mut result = Dimension::dimensionless();
             for term in terms {
                 let term_dim = match term {
                     ResolvedDimTerm::Concrete { dim, power, .. } => {
@@ -699,14 +704,15 @@ pub fn substitute_resolved_type(
 /// Extract scalar dimension from an `InferredType`.
 fn expect_scalar_from_inferred(
     inferred: &crate::dim_check::InferredType,
+    registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Dimension, GraphcalError> {
     match inferred {
-        crate::dim_check::InferredType::Scalar(d) => Ok(*d),
+        crate::dim_check::InferredType::Scalar(d) => Ok(d.clone()),
         other => Err(GraphcalError::DimensionMismatch {
             expected: "scalar dimension".to_string(),
-            found: format_inferred(other),
+            found: format_inferred(other, registry),
             src: src.clone(),
             span: span.into(),
             help: "expected a scalar value, not a struct or indexed type".to_string(),
@@ -715,22 +721,23 @@ fn expect_scalar_from_inferred(
 }
 
 /// Format an inferred type for diagnostics.
-fn format_inferred(it: &crate::dim_check::InferredType) -> String {
+fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> String {
     use crate::dim_check::InferredType;
     match it {
-        InferredType::Scalar(d) => format!("{d}"),
+        InferredType::Scalar(d) => registry.format_dimension(d),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
         InferredType::Struct(name, args) => {
             if args.is_empty() {
                 name.to_string()
             } else {
-                let args_str: Vec<String> = args.iter().map(format_inferred).collect();
+                let args_str: Vec<String> =
+                    args.iter().map(|a| format_inferred(a, registry)).collect();
                 format!("{name}<{}>", args_str.join(", "))
             }
         }
         InferredType::Indexed { element, index } => {
-            format!("{}[{index}]", format_inferred(element))
+            format!("{}[{index}]", format_inferred(element, registry))
         }
         InferredType::LoopVar(idx) => format!("<loop var: {idx}>"),
     }
@@ -829,7 +836,7 @@ pub fn resolve_type_expr(
                         });
                     } else if let Some(dim) = registry.get_dimension(name) {
                         terms.push(ResolvedDimTerm::Concrete {
-                            dim: *dim,
+                            dim: dim.clone(),
                             power,
                             op,
                         });
@@ -847,7 +854,7 @@ pub fn resolve_type_expr(
                 })
             } else {
                 // All terms are concrete dimensions — resolve to Scalar
-                let mut result = Dimension::DIMENSIONLESS;
+                let mut result = Dimension::dimensionless();
                 for item in &dim_expr.terms {
                     let name = &item.term.name.name;
                     let base = registry.get_dimension(name).ok_or_else(|| {
@@ -930,7 +937,7 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::prelude::load_prelude;
-    use graphcal_syntax::dimension::BaseDim;
+    use graphcal_syntax::dimension::BaseDimId;
     use graphcal_syntax::parser::Parser;
 
     fn make_registry() -> Registry {
@@ -1043,7 +1050,7 @@ mod tests {
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
         assert_eq!(
             resolved,
-            ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
         );
     }
 
@@ -1052,7 +1059,7 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Length / Time^2");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time).pow_int(2);
+        let expected = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1)).pow_int(2);
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 
@@ -1126,7 +1133,7 @@ mod tests {
             ResolvedTypeExpr::Indexed { base, indexes } => {
                 assert_eq!(
                     *base,
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
                 );
                 assert_eq!(indexes.len(), 1);
                 assert!(
@@ -1194,7 +1201,7 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Velocity");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDim::Length) / Dimension::base(BaseDim::Time);
+        let expected = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1));
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 
@@ -1282,7 +1289,7 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
@@ -1293,7 +1300,7 @@ mod tests {
         // x_pos should be scalar Length
         assert_eq!(
             tir.resolved_decl_types["x_pos"],
-            ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
         );
     }
 
@@ -1312,7 +1319,7 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
@@ -1331,7 +1338,7 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
@@ -1350,7 +1357,7 @@ mod tests {
     #[test]
     fn convert_dimensionless() {
         let dt = resolved_to_declared_type(&ResolvedTypeExpr::Dimensionless, &make_src()).unwrap();
-        assert_eq!(dt, DeclaredType::Scalar(Dimension::DIMENSIONLESS));
+        assert_eq!(dt, DeclaredType::Scalar(Dimension::dimensionless()));
     }
 
     #[test]
@@ -1367,8 +1374,9 @@ mod tests {
 
     #[test]
     fn convert_scalar() {
-        let dim = Dimension::base(BaseDim::Length);
-        let dt = resolved_to_declared_type(&ResolvedTypeExpr::Scalar(dim), &make_src()).unwrap();
+        let dim = Dimension::base(BaseDimId(0));
+        let dt =
+            resolved_to_declared_type(&ResolvedTypeExpr::Scalar(dim.clone()), &make_src()).unwrap();
         assert_eq!(dt, DeclaredType::Scalar(dim));
     }
 
@@ -1386,7 +1394,7 @@ mod tests {
     fn convert_indexed() {
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
-                base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(BaseDim::Length))),
+                base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))),
                 indexes: vec![ResolvedIndex::Concrete(
                     IndexName::new("M"),
                     Span::new(0, 0),
@@ -1398,7 +1406,7 @@ mod tests {
         assert_eq!(
             dt,
             DeclaredType::Indexed {
-                element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDim::Length))),
+                element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId(0)))),
                 index: IndexName::new("M"),
             }
         );

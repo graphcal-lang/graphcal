@@ -259,6 +259,31 @@ fn eval_set_invalid_param() {
 }
 
 #[test]
+fn eval_user_defined_dimensions() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("user_dimensions.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("storage"));
+    assert!(lines[0].contains("kB"));
+    assert!(lines[1].contains("rate"));
+    assert!(lines[1].contains("bit/s"));
+    assert!(lines[2].contains("transfer_time"));
+    assert!(lines[2].contains("40000"));
+    assert!(lines[2].contains(" s"));
+}
+
+#[test]
 fn eval_set_node_error() {
     let output = graphcal_bin()
         .args(["eval", &fixture("rocket.gcl"), "--set", "delta_v=100.0 m/s"])

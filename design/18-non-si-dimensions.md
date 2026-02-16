@@ -94,7 +94,7 @@ These are sometimes confused as needing new dimensions but can be expressed with
 
 `Dimension` in `dimension.rs` is:
 
-```gcl
+```rust
 pub struct Dimension {
     pub exponents: [Rational; 8],
 }

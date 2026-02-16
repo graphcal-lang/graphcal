@@ -1,0 +1,11 @@
+// User-defined base dimension
+dimension Information;
+unit bit: Information;
+unit byte: Information = 8.0 bit;
+unit kB: Information = 1000.0 byte;
+
+dimension Bandwidth = Information / Time;
+
+param storage: Information = 500.0 kB;
+param rate: Bandwidth = 100.0 bit / s;
+node transfer_time: Time = @storage / @rate;
