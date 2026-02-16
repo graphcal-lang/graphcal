@@ -128,11 +128,25 @@ pub struct FieldDecl {
     pub type_ann: TypeExpr,
 }
 
+///// The kind of an index declaration.
+#[derive(Debug, Clone)]
+pub enum IndexDeclKind {
+    /// Named variants: `{ Departure, Correction, Insertion }`
+    Named { variants: Vec<Spanned<VariantName>> },
+    /// Numeric range: `range(start, end, step: step)`
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        step: Box<Expr>,
+    },
+}
+
 /// Index declaration: `index Maneuver = { Departure, Correction, Insertion }`
+/// or `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl {
     pub name: Spanned<IndexName>,
-    pub variants: Vec<Spanned<VariantName>>,
+    pub kind: IndexDeclKind,
 }
 
 /// Function declaration: `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;`
@@ -424,6 +438,17 @@ pub enum ExprKind {
         init: Box<Expr>,
         acc_name: Ident,
         val_name: Ident,
+        body: Box<Expr>,
+    },
+    /// Unfold: `unfold(init, |prev_i, i| body)`
+    ///
+    /// Generates an indexed value from a seed by iterating over a range index.
+    /// The closure receives `(prev_i, i)` bindings for the previous and current
+    /// step indices, and the body can reference `@node_name[prev_i]`.
+    Unfold {
+        init: Box<Expr>,
+        prev_name: Ident,
+        curr_name: Ident,
         body: Box<Expr>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`

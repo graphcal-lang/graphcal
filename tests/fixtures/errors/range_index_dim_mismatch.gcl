@@ -1,0 +1,2 @@
+// Error: range index with mismatched dimensions
+index TimeStep = range(0.0 s, 100.0 kg, step: 0.1 s);

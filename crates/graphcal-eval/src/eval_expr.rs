@@ -33,6 +33,14 @@ pub enum RuntimeValue {
     VariantLabel {
         variant: VariantName,
     },
+    /// A range index label during `Unfold` iteration.
+    /// Carries the step index and SI value (for arithmetic like `t - prev_t`).
+    /// Also carries the index name for index access resolution.
+    RangeLabel {
+        index_name: IndexName,
+        step_index: usize,
+        value: f64,
+    },
 }
 
 impl RuntimeValue {
@@ -56,6 +64,7 @@ impl RuntimeValue {
             Self::VariantLabel { variant, .. } => {
                 panic!("expected scalar for {context}, got variant label `{variant}`")
             }
+            Self::RangeLabel { value, .. } => *value,
         }
     }
 
@@ -766,14 +775,19 @@ pub fn eval_expr(
                                 span: ident.span.into(),
                             }
                         })?;
-                        let RuntimeValue::VariantLabel { variant, .. } = var_val else {
-                            return Err(GraphcalError::EvalError {
-                                message: format!("`{}` is not a loop variable", ident.name),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
-                        };
-                        variant.clone()
+                        match var_val {
+                            RuntimeValue::VariantLabel { variant, .. } => variant.clone(),
+                            RuntimeValue::RangeLabel { step_index, .. } => {
+                                VariantName::new(format!("#{step_index}"))
+                            }
+                            _ => {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!("`{}` is not a loop variable", ident.name),
+                                    src: src.clone(),
+                                    span: ident.span.into(),
+                                });
+                            }
+                        }
                     }
                 };
                 current = entries.get(variant_name.as_str()).cloned().ok_or_else(|| {
@@ -845,6 +859,17 @@ pub fn eval_expr(
             Ok(RuntimeValue::Indexed {
                 index_name,
                 entries: result_entries,
+            })
+        }
+
+        ExprKind::Unfold { .. } => {
+            // Unfold is evaluated at a higher level (evaluate_plan in eval.rs)
+            // because it needs to insert partial results into the values map
+            // for self-referencing via @node_name[prev_i].
+            Err(GraphcalError::EvalError {
+                message: "Unfold must be evaluated by evaluate_plan, not eval_expr".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
             })
         }
 
@@ -943,8 +968,9 @@ fn eval_for_comp(
         .expect("index validated by dim_check");
     let remaining = &bindings[1..];
 
+    let variants = idx_def.variants();
     let mut entries = IndexMap::new();
-    for variant in &idx_def.variants {
+    for variant in &variants {
         let mut inner_locals = local_values.clone();
         inner_locals.insert(
             binding.var.name.clone(),

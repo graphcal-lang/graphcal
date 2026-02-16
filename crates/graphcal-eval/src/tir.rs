@@ -987,10 +987,12 @@ mod tests {
         let mut r = make_registry();
         r.register_index(crate::registry::IndexDef {
             name: IndexName::new("Maneuver"),
-            variants: vec![
-                graphcal_syntax::names::VariantName::new("Departure"),
-                graphcal_syntax::names::VariantName::new("Insertion"),
-            ],
+            kind: crate::registry::IndexKind::Named {
+                variants: vec![
+                    graphcal_syntax::names::VariantName::new("Departure"),
+                    graphcal_syntax::names::VariantName::new("Insertion"),
+                ],
+            },
         });
         r
     }

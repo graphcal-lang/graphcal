@@ -299,3 +299,19 @@ fn error_field_access_multi_variant() {
     let rendered = render_error(source, "field_access_multi_variant.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Range index error tests ---
+
+#[test]
+fn error_range_index_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/range_index_dim_mismatch.gcl");
+    let rendered = render_error(source, "range_index_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_range_index_invalid() {
+    let source = include_str!("../../../tests/fixtures/errors/range_index_invalid.gcl");
+    let rendered = render_error(source, "range_index_invalid.gcl");
+    insta::assert_snapshot!(rendered);
+}

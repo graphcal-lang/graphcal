@@ -161,6 +161,10 @@ fn collect_fn_calls_in_expr(
             collect_fn_calls_in_expr(init, user_fns, calls);
             collect_fn_calls_in_expr(body, user_fns, calls);
         }
+        ExprKind::Unfold { init, body, .. } => {
+            collect_fn_calls_in_expr(init, user_fns, calls);
+            collect_fn_calls_in_expr(body, user_fns, calls);
+        }
         ExprKind::Match { scrutinee, arms } => {
             collect_fn_calls_in_expr(scrutinee, user_fns, calls);
             for arm in arms {

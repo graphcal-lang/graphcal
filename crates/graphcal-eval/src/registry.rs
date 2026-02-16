@@ -121,11 +121,93 @@ pub struct FnDef {
     pub span: Span,
 }
 
+/// The kind of an index: either named variants or a numeric range.
+#[derive(Debug, Clone)]
+pub enum IndexKind {
+    /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
+    Named { variants: Vec<VariantName> },
+    /// A numeric range, e.g. `index T = range(0.0 s, 100.0 s, step: 0.1 s);`
+    Range {
+        start: f64,
+        end: f64,
+        step: f64,
+        dimension: Dimension,
+        /// Display unit label (e.g., `"s"`) for formatting step values.
+        display_label: Option<String>,
+        /// Scale factor from SI to display unit: `display_value = si_value / scale`.
+        display_scale: f64,
+    },
+}
+
 /// A declared index with its ordered variants.
 #[derive(Debug, Clone)]
 pub struct IndexDef {
     pub name: IndexName,
-    pub variants: Vec<VariantName>,
+    pub kind: IndexKind,
+}
+
+impl IndexDef {
+    /// Returns the ordered variant names for this index.
+    ///
+    /// For named indexes, returns the declared variants.
+    /// For range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
+    #[must_use]
+    pub fn variants(&self) -> Vec<VariantName> {
+        match &self.kind {
+            IndexKind::Named { variants } => variants.clone(),
+            IndexKind::Range { .. } => {
+                let count = self.step_count();
+                (0..count)
+                    .map(|i| VariantName::new(format!("#{i}")))
+                    .collect()
+            }
+        }
+    }
+
+    /// Returns the number of steps/variants in this index.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range is validated: start <= end, step > 0"
+    )]
+    pub fn step_count(&self) -> usize {
+        match &self.kind {
+            IndexKind::Named { variants } => variants.len(),
+            IndexKind::Range {
+                start, end, step, ..
+            } => (((end - start) / step).round() as usize) + 1,
+        }
+    }
+
+    /// Returns the f64 value at step `i` for a range index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this is a named index.
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "range step indices are small enough for exact f64 representation"
+    )]
+    pub fn step_value(&self, i: usize) -> f64 {
+        match &self.kind {
+            IndexKind::Named { .. } => panic!("step_value() called on named index"),
+            IndexKind::Range { start, step, .. } => start + (i as f64) * step,
+        }
+    }
+
+    /// Returns true if this is a range index.
+    #[must_use]
+    pub const fn is_range(&self) -> bool {
+        matches!(self.kind, IndexKind::Range { .. })
+    }
+
+    /// Returns true if this is a named index.
+    #[must_use]
+    pub const fn is_named(&self) -> bool {
+        matches!(self.kind, IndexKind::Named { .. })
+    }
 }
 
 /// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
@@ -491,15 +573,18 @@ mod tests {
         let mut r = make_registry();
         r.register_index(IndexDef {
             name: IndexName::new("Maneuver"),
-            variants: vec![
-                VariantName::new("Departure"),
-                VariantName::new("Correction"),
-                VariantName::new("Insertion"),
-            ],
+            kind: IndexKind::Named {
+                variants: vec![
+                    VariantName::new("Departure"),
+                    VariantName::new("Correction"),
+                    VariantName::new("Insertion"),
+                ],
+            },
         });
         let def = r.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
-        let variant_strs: Vec<&str> = def.variants.iter().map(VariantName::as_str).collect();
+        let variants = def.variants();
+        let variant_strs: Vec<&str> = variants.iter().map(VariantName::as_str).collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.get_index("NonExistent").is_none());
     }
