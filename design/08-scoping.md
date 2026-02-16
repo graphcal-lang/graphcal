@@ -12,7 +12,7 @@ In a multi-line node body, `@name` references the graph scope (params, nodes, co
 
 ## The Rule
 
-```
+```gcl
 @name  -->  graph scope (param, node, const, imported names)
 name   -->  local scope (let bindings, function parameters)
 ```

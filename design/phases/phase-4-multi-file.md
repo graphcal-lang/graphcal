@@ -175,7 +175,7 @@ node v_exhaust: Velocity = @isp * @G0;
 node fuel_mass: Mass = @dry_mass * (exp(@transfer.total_dv / @v_exhaust) - 1.0);
 ```
 
-```
+```sh
 $ cellgraph eval mission/
 ...
 fuel_mass = 2847 kg

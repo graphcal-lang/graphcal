@@ -219,7 +219,7 @@ node mass_ratio = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v = @v_exhaust * ln(@mass_ratio);
 ```
 
-```
+```sh
 $ graphcal eval rocket.gcl
 dry_mass     = 1200
 fuel_mass    = 2800
@@ -246,7 +246,7 @@ node area = PI * @radius ^ 2.0;
 
 ### JSON output test
 
-```
+```sh
 $ graphcal eval rocket.gcl --format json
 {
   "const": {

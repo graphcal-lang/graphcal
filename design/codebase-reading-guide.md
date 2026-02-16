@@ -537,7 +537,7 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 
 ### CLI Structure
 
-```
+```sh
 graphcal eval <FILE> [--format text|json] [--set 'name=expr'] ...
 ```
 
@@ -553,7 +553,7 @@ The CLI is deliberately thin:
 
 **Text output** (default): Aligned columns with unit display.
 
-```
+```sh
 dry_mass    = 1200 kg
 fuel_mass   = 2800 kg
 G0          = 9.80665 m/s^2

@@ -44,7 +44,7 @@ However, these are all **the same kind of thing** — a dimensionless count of d
 
 This is exactly what Graphcal's **Tags** feature ([06](./06-spaces.md)) provides. Tags are orthogonal semantic labels (type parameters on dimensions) that prevent cross-context mixing:
 
-```
+```gcl
 // A single Count dimension + tags for type safety:
 dimension Count;
 unit count: Count;
@@ -109,6 +109,7 @@ pub enum BaseDim {
 ```
 
 This means:
+
 - There is no slot for `Information`, `Money`, or any user-defined base dimension.
 - Bodyless `dimension Information;` declarations are parsed but silently skipped during IR lowering.
 - All dimension algebra (`Mul`, `Div`, `pow`) operates on exactly 8 elements.
@@ -245,7 +246,7 @@ The `si_unit_string()` method similarly needs registry access to map custom base
 
 No syntax changes needed. The existing bodyless `dimension` declaration is the mechanism:
 
-```
+```gcl
 // In user's .gcl file or a library:
 
 // -- True non-SI base dimensions --
@@ -288,7 +289,7 @@ param sats: Count<Countable.Satellite> = 24 count;
 
 Currencies should be a **single `Money` base dimension** with units providing conversion factors:
 
-```
+```gcl
 dimension Money;
 unit USD: Money;                   // base unit
 unit EUR: Money = 0.92 USD;       // 1 EUR = 0.92 USD
@@ -305,7 +306,7 @@ This means `1 EUR + 1 USD` is **well-typed** (both are `Money`) and the system h
 
 **The variable exchange rate concern**: Exchange rates change over time, unlike physical conversion factors. This is addressed by making the exchange rate a **parameter**:
 
-```
+```gcl
 param eur_to_usd: Dimensionless = 0.92;
 unit EUR: Money = @eur_to_usd USD;    // if dynamic unit defs are supported
 ```
@@ -379,7 +380,7 @@ The test: *does this quantity form meaningful derived dimensions through algebra
 
 The design doc mentions `unit launch;` auto-creating a dimension. With this proposal, the explicit form is preferred:
 
-```
+```gcl
 dimension Count;
 unit count: Count;
 tag Countable { Launch }

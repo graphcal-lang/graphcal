@@ -106,7 +106,7 @@ ConvertExpr  = Expr "->" UNIT_EXPR
 
 ### Base Dimensions (8)
 
-```
+```gcl
 dimension Length;
 dimension Time;
 dimension Mass;
@@ -119,7 +119,7 @@ dimension Angle;
 
 ### Derived Dimensions (initial set)
 
-```
+```gcl
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
 dimension Force = Mass * Acceleration;
@@ -133,7 +133,7 @@ dimension Volume = Length^3;
 
 ### Base Units (SI)
 
-```
+```gcl
 unit m: Length;
 unit s: Time;
 unit kg: Mass;
@@ -146,7 +146,7 @@ unit rad: Angle;
 
 ### Derived and Prefixed Units (initial set)
 
-```
+```gcl
 unit km: Length = 1000 m;
 unit cm: Length = 0.01 m;
 unit mm: Length = 0.001 m;
@@ -168,7 +168,7 @@ unit g: Mass = 0.001 kg;
 
 ### Built-in Constants
 
-```
+```gcl
 PI: Dimensionless
 E: Dimensionless
 ```
@@ -214,7 +214,7 @@ node speed: Velocity = @circumference / @period;
 node speed_kmh: Velocity = @speed -> km/hour;
 ```
 
-```
+```sh
 $ graphcal eval orbital.gcl
 alt            = 400 km
 period         = 90 min
