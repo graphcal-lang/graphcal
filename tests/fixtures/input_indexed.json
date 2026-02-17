@@ -1,0 +1,7 @@
+{
+  "delta_v": {
+    "Departure": "3.0 km/s",
+    "Correction": "0.2 km/s",
+    "Insertion": "2.0 km/s"
+  }
+}

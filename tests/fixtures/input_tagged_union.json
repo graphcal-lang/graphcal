@@ -1,0 +1,8 @@
+{
+  "maneuver": {
+    "variant": "Impulsive",
+    "fields": {
+      "delta_v": "500.0 m/s"
+    }
+  }
+}

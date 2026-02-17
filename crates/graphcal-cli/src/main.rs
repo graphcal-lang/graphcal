@@ -1,3 +1,5 @@
+mod json_input;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -25,6 +27,9 @@ enum Commands {
         /// Override a param value: --set 'name=expr'
         #[arg(long)]
         set: Vec<String>,
+        /// JSON input file for param values
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
@@ -61,7 +66,12 @@ fn main() {
                 .expect("failed to build tokio runtime")
                 .block_on(graphcal_lsp::run());
         }
-        Commands::Eval { file, format, set } => {
+        Commands::Eval {
+            file,
+            format,
+            set,
+            input,
+        } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
             for s in &set {
@@ -79,6 +89,40 @@ fn main() {
                         eprintln!("error: failed to parse --set value for `{name}`: {e}");
                         process::exit(1);
                     }
+                }
+            }
+
+            // Parse --input JSON file
+            if let Some(input_path) = &input {
+                let source = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+                    eprintln!("error: cannot read {}: {e}", file.display());
+                    process::exit(1);
+                });
+                let ast =
+                    graphcal_syntax::parser::Parser::with_name(&source, &file.to_string_lossy())
+                        .parse_file()
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: failed to parse {}: {e}", file.display());
+                            process::exit(1);
+                        });
+
+                let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
+                    eprintln!(
+                        "error: cannot read input file {}: {e}",
+                        input_path.display()
+                    );
+                    process::exit(1);
+                });
+
+                let json_overrides =
+                    json_input::json_to_overrides(&json_str, &ast).unwrap_or_else(|e| {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    });
+
+                // Merge: --set takes precedence over --input
+                for (name, expr) in json_overrides {
+                    overrides.entry(name).or_insert(expr);
                 }
             }
 
