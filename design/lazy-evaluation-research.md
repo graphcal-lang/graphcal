@@ -196,7 +196,8 @@ private lazy node _internal_result: Result = heavy_computation(@inputs);
 
 ### LSP Behavior
 
-- **Inlay hints for stale nodes:** show the last computed value in a muted/gray style with a "(stale)" suffix, e.g., `= 3935.2 m/s (stale)`.
+- **Inlay hints for stale nodes within a session:** if the node was previously evaluated in the current LSP session, show the last computed value in a muted/gray style with a "(stale)" suffix, e.g., `= 3935.2 m/s (stale)`.
+- **Inlay hints for stale nodes after LSP restart:** show `(not evaluated)` — no value is displayed. This avoids the need for disk-based value caching (see "Disk Cache Considerations" below).
 - **Code action:** "Evaluate stale nodes" on a lazy node to trigger recomputation of that node and its stale ancestors/descendants.
 - **Diagnostics:** No errors for stale nodes. Staleness is informational, not an error.
 
@@ -210,6 +211,28 @@ private lazy node _internal_result: Result = heavy_computation(@inputs);
 
 - `graphcal eval` evaluates everything, including lazy nodes. The `lazy` modifier is only a hint for interactive/watch contexts.
 - `graphcal eval --lazy` respects lazy markers and skips stale nodes (useful for CI where you want fast feedback on the eager subgraph).
+
+---
+
+## Disk Cache Considerations
+
+Showing the "last computed value" for stale nodes across LSP restarts requires persisting evaluation results to disk. The current LSP stores computed values only in memory (`eval_values: HashMap<String, String>` in `AnalysisResult`), which is lost when the process exits.
+
+**Three options:**
+
+| Option | Stale display after restart | Infrastructure needed |
+|--------|---------------------------|----------------------|
+| **A: Disk cache** | Grayed-out last value | Cache dir, serialization, invalidation, eviction, `.gitignore`, corruption handling |
+| **B: No disk cache** | "(not evaluated)" | None — works with existing in-memory cache |
+| **C: Hybrid (opt-in disk cache)** | Last value if cache present, else "(not evaluated)" | Cache as separate opt-in feature |
+
+**Recommendation: Start with Option B (no disk cache).** The in-memory cache already covers the most common workflow — editing a file and seeing stale indicators within a session. Disk persistence is an orthogonal enhancement that can be added later without changing `lazy` semantics. Building cache infrastructure now (serialization for all `Value` types, cache keying, versioning across schema changes, cross-branch correctness) would delay the feature for marginal UX gain.
+
+If disk caching is added later, key design questions:
+- **Cache location:** `.graphcal-cache/` in project root (`.gitignore`d) or XDG cache dir?
+- **Cache key:** node name + content hash of transitive inputs (like Bazel's SkyKey), or revision number?
+- **Cross-machine validity:** cached values are only valid for the same input state. Sharing caches across machines (like Bazel's remote cache) is a future concern.
+- **Schema versioning:** cache must be invalidated when `Value` representation changes between Graphcal versions.
 
 ---
 
@@ -238,7 +261,7 @@ The `lazy` modifier adds a new dimension to the evaluation strategy: **when** to
 | Jupyter | None (always manual) | No (!) | Shows last value, no indicator | Manual cell execution | N/A |
 | Bazel | Per-target | Yes (needs rebuild) | No value until built | `bazel build` | Yes |
 | Salsa | Per-query (demand-driven) | N/A (internal) | Cached until verified | Query demand | Yes |
-| **Graphcal (proposed)** | **Per-node** | **Yes (stale indicator)** | **Last value shown as stale** | **Explicit run command** | **Yes (existing design)** |
+| **Graphcal (proposed)** | **Per-node** | **Yes (stale indicator)** | **In-session: last value shown as stale. After restart: "(not evaluated)"** | **Explicit run command** | **Yes (existing design)** |
 
 ---
 
