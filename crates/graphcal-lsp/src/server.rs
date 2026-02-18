@@ -8,14 +8,15 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
-    InlayHintParams, Location, MessageType, OneOf, PrepareRenameResponse, ReferenceParams,
-    RenameOptions, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
-    SignatureHelpOptions, SignatureHelpParams, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions, WorkspaceEdit,
+    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
+    WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -603,6 +604,7 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -776,6 +778,17 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let result = crate::document_links::document_links(analysis, &uri);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let result = crate::formatting::format_document(&analysis.source);
         drop(docs);
         Ok(result)
     }
