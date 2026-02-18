@@ -9,8 +9,8 @@ use tower_lsp::lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, MessageType, OneOf, SaveOptions, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    InitializedParams, Location, MessageType, OneOf, ReferenceParams, SaveOptions,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     TextDocumentSyncSaveOptions, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -283,6 +283,7 @@ impl LanguageServer for Backend {
                 )),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
@@ -359,6 +360,21 @@ impl LanguageServer for Backend {
         };
         let offset = position_to_byte_offset(&analysis.source, position);
         let result = crate::hover::hover(analysis, offset);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_byte_offset(&analysis.source, position);
+        let result = crate::references::references(analysis, &uri, offset, include_declaration);
         drop(docs);
         Ok(result)
     }
