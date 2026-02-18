@@ -1,0 +1,141 @@
+---
+icon: material/code-parentheses
+---
+
+# Expressions
+
+This page covers all expression forms in Graphcal: operators, precedence, conditionals, blocks, and let bindings.
+
+## Operator Precedence
+
+From lowest to highest precedence:
+
+| Precedence | Operator | Description | Associativity |
+|-----------|----------|-------------|---------------|
+| 1 | `\|\|` | Logical OR | Left |
+| 2 | `&&` | Logical AND | Left |
+| 3 | `==` `!=` `<` `>` `<=` `>=` | Comparison | Left |
+| 4 | `+` `-` | Addition, subtraction | Left |
+| 5 | `*` `/` `%` | Multiplication, division, modulo | Left |
+| 6 | `-` `!` | Unary negation, logical NOT | Prefix |
+| 7 | `^` | Exponentiation | Right |
+| 8 | `->` | Unit conversion | Left |
+| 9 | `as` | Phantom type cast | Left |
+| 10 | `.` `[...]` | Field access, index access | Left |
+
+Parentheses `()` can be used to override precedence.
+
+## Arithmetic Operators
+
+| Operator | Float Behavior | Int Behavior | Dimension Rule |
+|----------|---------------|-------------|----------------|
+| `a + b` | Addition | Addition | Dimensions must match |
+| `a - b` | Subtraction | Subtraction | Dimensions must match |
+| `a * b` | Multiplication | Multiplication | Dimensions multiply |
+| `a / b` | Division | Integer division | Dimensions divide |
+| `a % b` | Remainder | Remainder | Dimensions must match |
+| `a ^ n` | Exponentiation | Not supported | Dimension raised to power |
+| `-a` | Negation | Negation | Dimension preserved |
+
+!!! note "Exponent restriction"
+    The exponent in `^` must be a **literal** number (integer or float). Variable exponents are not allowed because the resulting dimension would not be known at compile time.
+
+## Comparison Operators
+
+| Operator | Description | Operand Requirement |
+|----------|-------------|-------------------|
+| `==` | Equal | Same type and dimension |
+| `!=` | Not equal | Same type and dimension |
+| `<` | Less than | Same type and dimension |
+| `>` | Greater than | Same type and dimension |
+| `<=` | Less or equal | Same type and dimension |
+| `>=` | Greater or equal | Same type and dimension |
+
+All comparison operators return `Bool`.
+
+## Logical Operators
+
+| Operator | Description |
+|----------|-------------|
+| `a \|\| b` | Logical OR (short-circuit) |
+| `a && b` | Logical AND (short-circuit) |
+| `!a` | Logical NOT |
+
+Operands must be `Bool`.
+
+## Unit Conversion (`->`)
+
+Convert a value to a different unit of the same dimension:
+
+```
+node alt_m: Length = @altitude -> m;
+node time_h: Time = @duration -> hour;
+```
+
+## Phantom Type Cast (`as`)
+
+Cast between different phantom type instantiations:
+
+```
+node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+```
+
+## Field Access (`.`)
+
+Access a field of a struct-typed value:
+
+```
+node dv: Velocity = @transfer.total_dv;
+```
+
+## Index Access (`[...]`)
+
+Access an element of an indexed value:
+
+```
+node first: Velocity = @delta_v[Maneuver::Departure];
+```
+
+## If/Else Expressions
+
+Conditional expressions:
+
+```
+node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
+```
+
+Both branches must have the same type and dimension. The `else` branch is required.
+
+## Block Expressions
+
+A block `{ ... }` introduces a scope with `let` bindings:
+
+```
+node result: Velocity = {
+    let r = R_EARTH + @altitude;
+    sqrt(GM_EARTH / r)
+};
+```
+
+- `let` bindings are local to the block
+- The last expression (without trailing `;`) is the block's value
+- Blocks can be nested
+
+## Let Bindings
+
+```
+let name = expression;
+```
+
+- The dimension and type are inferred from the expression
+- `let` bindings are immutable
+- Duplicate `let` names in the same scope are a compile-time error
+
+## Numeric Literals
+
+| Form | Example | Type |
+|------|---------|------|
+| Integer | `42`, `1_000` | `Int` |
+| Float | `3.14`, `1.0e-3` | `Float` (Dimensionless) |
+| Float with unit | `200.0 km`, `9.8 m/s^2` | `Float` (with dimension) |
+| Boolean | `true`, `false` | `Bool` |

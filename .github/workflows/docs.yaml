@@ -1,0 +1,49 @@
+name: Documentation
+
+# Disabled for now (project is private).
+# To enable automatic deployment, change `on:` to:
+#   on:
+#     push:
+#       branches:
+#         - main
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+      - run: pip install zensical
+      - run: zensical build --clean
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: site
+
+  # Uncomment the deploy job when the project is public:
+  # deploy:
+  #   needs: build
+  #   environment:
+  #     name: github-pages
+  #     url: ${{ steps.deployment.outputs.page_url }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/configure-pages@v5
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: docs-site
+  #         path: site
+  #     - uses: actions/upload-pages-artifact@v4
+  #       with:
+  #         path: site
+  #     - uses: actions/deploy-pages@v4
+  #       id: deployment
