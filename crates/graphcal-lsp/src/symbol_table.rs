@@ -87,6 +87,14 @@ impl SymbolTable {
             .values()
             .find(|d| offset >= d.name_span.offset && offset < d.name_span.offset + d.name_span.len)
     }
+
+    /// Find all references that point to the given target name.
+    pub fn find_all_references(&self, target: &str) -> Vec<&ReferenceInfo> {
+        self.references
+            .iter()
+            .filter(|r| r.target == target)
+            .collect()
+    }
 }
 
 /// Scope stack for tracking local variable bindings.

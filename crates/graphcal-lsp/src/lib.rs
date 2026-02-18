@@ -5,6 +5,7 @@ mod diagnostics;
 mod document_symbols;
 mod goto_definition;
 mod hover;
+mod references;
 pub mod server;
 mod symbol_table;
 

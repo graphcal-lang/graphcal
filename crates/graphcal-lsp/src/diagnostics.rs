@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Range};
+use tower_lsp::lsp_types::{
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
+    Url,
+};
 
 use graphcal_eval::eval::{CompileError, compile_and_eval_named, compile_and_eval_project};
 
@@ -46,6 +49,10 @@ fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> Vec<D
 }
 
 /// Convert a `CompileError` to a list of LSP diagnostics using the miette `Diagnostic` trait.
+///
+/// When an error has multiple labeled spans (e.g., "duplicate definition here" +
+/// "first defined here"), the first label becomes the primary diagnostic and the
+/// remaining labels are attached as `DiagnosticRelatedInformation`.
 pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<Diagnostic> {
     let diag: &dyn miette::Diagnostic = match error {
         CompileError::Parse(e) => e,
@@ -59,24 +66,64 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
         .help()
         .map_or_else(String::new, |help| format!("\n\nhint: {help}"));
 
+    // Use a synthetic URI for related information locations.
+    // The source name from miette is embedded in the error, but we use a
+    // placeholder URI since all spans are within the same document.
+    let doc_uri = diag
+        .source_code()
+        .and_then(|sc| sc.read_span(&(0, 0).into(), 0, 0).ok())
+        .and_then(|data| {
+            let name = data.name()?;
+            Url::parse(name)
+                .ok()
+                .or_else(|| Url::from_file_path(name).ok())
+        })
+        .unwrap_or_else(|| Url::parse("file:///unknown").expect("static URL"));
+
     let mut diagnostics = Vec::new();
 
     if let Some(labels) = diag.labels() {
-        for label in labels {
-            let start = byte_offset_to_position(source, label.offset());
-            let end = byte_offset_to_position(source, label.offset() + label.len());
+        let labels: Vec<_> = labels.collect();
 
-            let label_msg = label.label().map_or_else(
+        if let Some(primary) = labels.first() {
+            let primary_start = byte_offset_to_position(source, primary.offset());
+            let primary_end = byte_offset_to_position(source, primary.offset() + primary.len());
+
+            let primary_msg = primary.label().map_or_else(
                 || format!("{message}{help_suffix}"),
                 |l| format!("{message}: {l}{help_suffix}"),
             );
 
+            // Remaining labels become related information.
+            let related: Vec<DiagnosticRelatedInformation> = labels[1..]
+                .iter()
+                .map(|label| {
+                    let start = byte_offset_to_position(source, label.offset());
+                    let end = byte_offset_to_position(source, label.offset() + label.len());
+                    DiagnosticRelatedInformation {
+                        location: Location {
+                            uri: doc_uri.clone(),
+                            range: Range { start, end },
+                        },
+                        message: label.label().unwrap_or("related location").to_string(),
+                    }
+                })
+                .collect();
+
             diagnostics.push(Diagnostic {
-                range: Range { start, end },
+                range: Range {
+                    start: primary_start,
+                    end: primary_end,
+                },
                 severity: Some(DiagnosticSeverity::ERROR),
                 code: code.clone(),
                 source: Some("graphcal".to_string()),
-                message: label_msg,
+                message: primary_msg,
+                related_information: if related.is_empty() {
+                    None
+                } else {
+                    Some(related)
+                },
                 ..Default::default()
             });
         }
