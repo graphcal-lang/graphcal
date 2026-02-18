@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 graphcal-eval = { workspace = true }
+graphcal-fmt = { workspace = true }
 graphcal-syntax = { workspace = true }
 miette = { workspace = true }
 tokio = { workspace = true }
