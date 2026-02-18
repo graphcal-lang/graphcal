@@ -1,37 +1,16 @@
 //! Diagnostic production from compile errors and evaluation results.
 
-use std::collections::HashMap;
-
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
     Url,
 };
 
-use graphcal_eval::eval::{CompileError, compile_and_eval_named, compile_and_eval_project};
+use graphcal_eval::eval::CompileError;
 
 use crate::convert::byte_offset_to_position;
 
-/// Run project evaluation for a file on disk.
-///
-/// When the file is on disk, `compile_and_eval_project` is used so that `use` imports
-/// are resolved correctly.
-pub fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
-    match compile_and_eval_project(path, &HashMap::new()) {
-        Ok(result) => eval_result_to_diagnostics(&result),
-        Err(e) => compile_error_to_diagnostics(&e, source),
-    }
-}
-
-/// Run `compile_and_eval_named` and convert any errors to LSP diagnostics.
-pub fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
-    match compile_and_eval_named(source, name) {
-        Ok(result) => eval_result_to_diagnostics(&result),
-        Err(e) => compile_error_to_diagnostics(&e, source),
-    }
-}
-
 /// Convert per-node runtime errors in an `EvalResult` to LSP diagnostics.
-fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> Vec<Diagnostic> {
+pub fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (name, r, _) in &result.all {
         if let Err(err) = r {
@@ -148,7 +127,25 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
 mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
 
+    use std::collections::HashMap;
+
+    use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
+
     use super::*;
+
+    fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
+        match compile_and_eval_named(source, name) {
+            Ok(result) => eval_result_to_diagnostics(&result),
+            Err(e) => compile_error_to_diagnostics(&e, source),
+        }
+    }
+
+    fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
+        match compile_and_eval_project(path, &HashMap::new()) {
+            Ok(result) => eval_result_to_diagnostics(&result),
+            Err(e) => compile_error_to_diagnostics(&e, source),
+        }
+    }
 
     #[test]
     fn valid_source_produces_no_diagnostics() {
