@@ -9,17 +9,20 @@ use tower_lsp::lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MessageType, OneOf, ReferenceParams, SaveOptions,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Url,
+    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf, ReferenceParams,
+    SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use graphcal_eval::eval::{compile_to_tir, compile_to_tir_project};
+use graphcal_eval::eval::{
+    EvalResult, Value, compile_and_eval_named, compile_and_eval_project, compile_to_tir,
+    compile_to_tir_project,
+};
 use graphcal_syntax::ast::DeclKind;
 
 use crate::convert::position_to_byte_offset;
-use crate::diagnostics::compile_error_to_diagnostics;
+use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
@@ -42,6 +45,9 @@ pub struct AnalysisResult {
     pub imported_definitions: HashMap<String, ImportedDefinition>,
     /// Diagnostics to publish.
     pub diagnostics: Vec<Diagnostic>,
+    /// Computed values from evaluation, keyed by declaration name.
+    /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
+    pub eval_values: HashMap<String, String>,
 }
 
 /// The LSP server backend.
@@ -59,6 +65,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field("imported_defs", &self.imported_definitions.len())
             .field("diagnostics_count", &self.diagnostics.len())
+            .field("eval_values_count", &self.eval_values.len())
             .finish()
     }
 }
@@ -82,6 +89,11 @@ impl Backend {
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
+
+        // Ask the client to re-fetch inlay hints now that analysis is complete.
+        // Inlay hints are pull-based (client requests them), so without this
+        // refresh notification the client may show stale or missing hints.
+        let _ = self.client.inlay_hint_refresh().await;
     }
 }
 
@@ -95,50 +107,78 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
         |path| compile_to_tir_project(&path).map(|(tir, project)| (tir, Some(project))),
     );
 
-    match tir_result {
-        Ok((tir, project)) => {
-            // Full pipeline succeeded. Build symbol table from the AST embedded in the TIR,
-            // then enrich with type info.
-            // We need to re-parse to get the AST since TIR doesn't store it directly.
-            // However, we know parsing succeeded (since TIR was produced).
-            let ast = graphcal_syntax::parser::Parser::with_name(text, name)
-                .parse_file()
-                .expect("parse should succeed since TIR was produced");
+    // Always parse the in-memory text first for the symbol table.
+    // This may differ from the on-disk version when the user has unsaved edits.
+    let parse_result = graphcal_syntax::parser::Parser::with_name(text, name).parse_file();
+
+    match (tir_result, parse_result) {
+        (Ok((tir, project)), Ok(ast)) => {
+            // Both TIR and in-memory parse succeeded.
             let mut symbol_table = symbol_table::build_from_ast(&ast);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
-            // Resolve imported definitions from the project.
             let imported_definitions = project.map_or_else(HashMap::new, |project| {
                 collect_imported_definitions(uri, &ast, &project, Some(&tir))
             });
 
-            // No compile errors, but check for eval warnings by running the full pipeline.
-            let diagnostics = uri.to_file_path().map_or_else(
-                |()| crate::diagnostics::produce_diagnostics(text, name),
-                |path| crate::diagnostics::produce_diagnostics_for_file(&path, text),
-            );
+            // Run full evaluation for diagnostics and computed values.
+            let (diagnostics, eval_values) = run_eval(uri, text, name);
 
             AnalysisResult {
                 source: text.to_string(),
                 symbol_table,
                 imported_definitions,
                 diagnostics,
+                eval_values,
             }
         }
-        Err(e) => {
-            // Compilation failed. Try to parse for a partial symbol table.
-            let (symbol_table, imported_definitions) =
-                graphcal_syntax::parser::Parser::with_name(text, name)
-                    .parse_file()
-                    .map_or_else(
-                        |_| (SymbolTable::default(), HashMap::new()),
-                        |ast| {
-                            let st = symbol_table::build_from_ast(&ast);
-                            let imports = collect_imported_definitions_from_ast(uri, &ast);
-                            (st, imports)
-                        },
-                    );
+        (Ok((tir, project)), Err(_)) => {
+            // TIR succeeded (from disk) but in-memory text has parse errors.
+            // This happens when the user has unsaved edits that break parsing.
+            // Produce diagnostics from the in-memory text (not disk) so the
+            // user sees the parse error.
+            let diagnostics = match compile_and_eval_named(text, name) {
+                Ok(result) => eval_result_to_diagnostics(&result),
+                Err(e) => compile_error_to_diagnostics(&e, text),
+            };
 
+            // Use the on-disk AST for a partial symbol table and eval values.
+            let (symbol_table, imported_definitions, eval_values) = uri
+                .to_file_path()
+                .ok()
+                .and_then(|path| std::fs::read_to_string(&path).ok())
+                .and_then(|disk_text| {
+                    graphcal_syntax::parser::Parser::with_name(&disk_text, name)
+                        .parse_file()
+                        .ok()
+                        .map(|ast| (disk_text, ast))
+                })
+                .map_or_else(
+                    || (SymbolTable::default(), HashMap::new(), HashMap::new()),
+                    |(_, disk_ast)| {
+                        let mut st = symbol_table::build_from_ast(&disk_ast);
+                        symbol_table::enrich_from_tir(&mut st, &tir);
+                        let imports = project.map_or_else(HashMap::new, |p| {
+                            collect_imported_definitions(uri, &disk_ast, &p, Some(&tir))
+                        });
+                        // Keep eval values from the last valid (disk) version.
+                        let (_, vals) = run_eval(uri, text, name);
+                        (st, imports, vals)
+                    },
+                );
+
+            AnalysisResult {
+                source: text.to_string(),
+                symbol_table,
+                imported_definitions,
+                diagnostics,
+                eval_values,
+            }
+        }
+        (Err(e), Ok(ast)) => {
+            // TIR failed but in-memory parse succeeded — use AST for symbol table.
+            let symbol_table = symbol_table::build_from_ast(&ast);
+            let imported_definitions = collect_imported_definitions_from_ast(uri, &ast);
             let diagnostics = compile_error_to_diagnostics(&e, text);
 
             AnalysisResult {
@@ -146,8 +186,97 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 symbol_table,
                 imported_definitions,
                 diagnostics,
+                eval_values: HashMap::new(),
             }
         }
+        (Err(e), Err(_)) => {
+            // Both failed — minimal result with diagnostics.
+            let diagnostics = compile_error_to_diagnostics(&e, text);
+
+            AnalysisResult {
+                source: text.to_string(),
+                symbol_table: SymbolTable::default(),
+                imported_definitions: HashMap::new(),
+                diagnostics,
+                eval_values: HashMap::new(),
+            }
+        }
+    }
+}
+
+/// Run evaluation and extract both diagnostics and formatted values.
+fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<String, String>) {
+    let eval_result = uri.to_file_path().map_or_else(
+        |()| compile_and_eval_named(text, name),
+        |path| compile_and_eval_project(&path, &HashMap::new()),
+    );
+
+    match eval_result {
+        Ok(result) => {
+            let diagnostics = eval_result_to_diagnostics(&result);
+            let values = format_eval_values(&result);
+            (diagnostics, values)
+        }
+        Err(e) => {
+            let diagnostics = compile_error_to_diagnostics(&e, text);
+            (diagnostics, HashMap::new())
+        }
+    }
+}
+
+/// Format all successfully evaluated values into display strings.
+fn format_eval_values(result: &EvalResult) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (name, value_result, _decl_type) in &result.all {
+        if let Ok(value) = value_result {
+            map.insert(
+                name.as_str().to_string(),
+                format_value_inline(value, &result.base_dim_symbols),
+            );
+        }
+    }
+    map
+}
+
+/// Format a single `Value` as a compact inline string for inlay hints.
+///
+/// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
+/// - Bool: `"true"` / `"false"`
+/// - Int: `"42"`
+/// - Struct/Indexed: type name only
+fn format_value_inline(
+    value: &Value,
+    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+) -> String {
+    match value {
+        Value::Scalar { .. } => {
+            let formatted = format_number(value.display_value());
+            value.display_label(symbols).map_or_else(
+                || formatted.clone(),
+                |label| format!("{formatted} [{label}]"),
+            )
+        }
+        Value::Bool(b) => format!("{b}"),
+        Value::Int(i) => format!("{i}"),
+        Value::Struct { type_name, .. } => type_name.to_string(),
+        Value::Indexed { index_name, .. } => format!("[{index_name}]"),
+    }
+}
+
+/// Format a number for display: integers without decimal point, floats with
+/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "guarded by abs() < 1e15 check"
+)]
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        let s = format!("{value:.6}");
+        let s = s.trim_end_matches('0');
+        let s = s.trim_end_matches('.');
+        s.to_string()
     }
 }
 
@@ -285,6 +414,7 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -375,6 +505,17 @@ impl LanguageServer for Backend {
         };
         let offset = position_to_byte_offset(&analysis.source, position);
         let result = crate::references::references(analysis, &uri, offset, include_declaration);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let result = crate::inlay_hints::inlay_hints(analysis, params.range);
         drop(docs);
         Ok(result)
     }
