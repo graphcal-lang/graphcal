@@ -31,6 +31,14 @@ enum Commands {
         #[arg(long)]
         input: Option<PathBuf>,
     },
+    /// Format .gcl files
+    Format {
+        /// Files or directories to format (default: current directory)
+        paths: Vec<PathBuf>,
+        /// Check formatting without modifying files (exit 1 if unformatted)
+        #[arg(long)]
+        check: bool,
+    },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
 }
@@ -59,6 +67,9 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
+        Commands::Format { paths, check } => {
+            run_format(&paths, check);
+        }
         Commands::Lsp => {
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -143,6 +154,85 @@ fn main() {
             }
         }
     }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
+fn run_format(paths: &[PathBuf], check: bool) {
+    let targets = if paths.is_empty() {
+        collect_gcl_files(&PathBuf::from("."))
+    } else {
+        let mut files = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                files.extend(collect_gcl_files(path));
+            } else {
+                files.push(path.clone());
+            }
+        }
+        files
+    };
+
+    if targets.is_empty() {
+        eprintln!("No .gcl files found");
+        process::exit(1);
+    }
+
+    let mut unformatted_count = 0;
+    for file in &targets {
+        let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            eprintln!("error: cannot read {}: {e}", file.display());
+            process::exit(1);
+        });
+
+        let Some(formatted) = graphcal_fmt::format_source(&source) else {
+            eprintln!("warning: {} has parse errors, skipping", file.display());
+            continue;
+        };
+
+        if source == formatted {
+            continue;
+        }
+
+        if check {
+            println!("Would reformat: {}", file.display());
+            unformatted_count += 1;
+        } else {
+            std::fs::write(file, &formatted).unwrap_or_else(|e| {
+                eprintln!("error: cannot write {}: {e}", file.display());
+                process::exit(1);
+            });
+            println!("Formatted: {}", file.display());
+        }
+    }
+
+    if check && unformatted_count > 0 {
+        eprintln!("{unformatted_count} file(s) would be reformatted");
+        process::exit(1);
+    }
+}
+
+/// Recursively collect all `.gcl` files under a directory.
+fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(collect_gcl_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "gcl") {
+            files.push(path);
+        } else {
+            // Skip non-.gcl files
+        }
+    }
+    files.sort();
+    files
 }
 
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]

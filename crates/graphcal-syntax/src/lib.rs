@@ -5,6 +5,7 @@
 )]
 
 pub mod ast;
+pub mod comments;
 pub mod dimension;
 pub mod lexer;
 pub mod names;

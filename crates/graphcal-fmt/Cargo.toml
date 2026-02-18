@@ -1,5 +1,5 @@
 [package]
-name = "graphcal"
+name = "graphcal-fmt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,17 +11,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-clap = { workspace = true }
-graphcal-eval = { workspace = true }
-graphcal-fmt = { workspace = true }
-graphcal-lsp = { workspace = true }
 graphcal-syntax = { workspace = true }
-miette = { workspace = true, features = ["fancy"] }
-serde_json = { workspace = true }
-tokio = { workspace = true }
+pretty = { workspace = true }
 
 [dev-dependencies]
-serde_json.workspace = true
+insta.workspace = true
 
 [lints]
 workspace = true
