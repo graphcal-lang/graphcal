@@ -16,6 +16,7 @@
     { "include": "#use-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
+    { "include": "#as-keyword" },
     { "include": "#control-keywords" },
     { "include": "#scan-keyword" },
     { "include": "#generic-params" },
@@ -118,6 +119,11 @@
     "use-declaration": {
       "match": "\\b(use)\\b",
       "name": "keyword.declaration.use.graphcal"
+    },
+
+    "as-keyword": {
+      "match": "\\b(as)\\b",
+      "name": "keyword.operator.as.graphcal"
     },
 
     "let-binding": {

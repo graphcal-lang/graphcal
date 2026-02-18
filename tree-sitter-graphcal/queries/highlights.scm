@@ -21,6 +21,7 @@
   "fn"
   "index"
   "use"
+  "as"
   "let"
   "if"
   "else"
@@ -98,8 +99,10 @@
 ; fn orbital_velocity
 (fn_declaration name: (identifier) @function)
 
-; use "./path.gcl" { name1, name2 }
+; use "./path.gcl" { name1, name2 as alias2 }
 (use_declaration path: (string_literal) @string)
+(use_item name: (identifier) @variable)
+(use_item alias: (identifier) @variable)
 
 ; ---------------------------------------------------------------
 ; Types in annotations
