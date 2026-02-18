@@ -13,44 +13,65 @@ pub fn goto_definition(
     offset: usize,
 ) -> Option<GotoDefinitionResponse> {
     // First check if cursor is on a reference.
-    if let Some(reference) = analysis.symbol_table.find_reference_at(offset)
-        && let Some(definition) = analysis.symbol_table.definitions.get(&reference.target)
-    {
-        // Builtins have no source location.
-        if matches!(
-            definition.category,
-            SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-        ) {
-            return None;
+    if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
+        // Try local definitions first.
+        if let Some(definition) = analysis.symbol_table.definitions.get(&reference.target) {
+            return resolve_local_definition(definition, uri, &analysis.source);
         }
-        // Skip synthetic definitions (zero-length span).
-        if definition.name_span.len == 0 {
-            return None;
+        // Try imported definitions (cross-file).
+        if let Some(imported) = analysis.imported_definitions.get(&reference.target) {
+            return resolve_imported_definition(imported);
         }
-        let range = span_to_range(&analysis.source, definition.name_span);
-        return Some(GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range,
-        }));
     }
 
     // Then check if cursor is on a definition name itself.
     if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        if matches!(
-            definition.category,
-            SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-        ) {
-            return None;
-        }
-        if definition.name_span.len == 0 {
-            return None;
-        }
-        let range = span_to_range(&analysis.source, definition.name_span);
-        return Some(GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range,
-        }));
+        return resolve_local_definition(definition, uri, &analysis.source);
     }
 
     None
+}
+
+/// Resolve a definition within the current file.
+fn resolve_local_definition(
+    definition: &crate::symbol_table::DefinitionInfo,
+    uri: &Url,
+    source: &str,
+) -> Option<GotoDefinitionResponse> {
+    // Builtins have no source location.
+    if matches!(
+        definition.category,
+        SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
+    ) {
+        return None;
+    }
+    // Skip synthetic definitions (zero-length span).
+    if definition.name_span.len == 0 {
+        return None;
+    }
+    let range = span_to_range(source, definition.name_span);
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: uri.clone(),
+        range,
+    }))
+}
+
+/// Resolve a definition in an imported file.
+fn resolve_imported_definition(
+    imported: &crate::server::ImportedDefinition,
+) -> Option<GotoDefinitionResponse> {
+    if matches!(
+        imported.definition.category,
+        SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
+    ) {
+        return None;
+    }
+    if imported.definition.name_span.len == 0 {
+        return None;
+    }
+    let range = span_to_range(&imported.source, imported.definition.name_span);
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: imported.uri.clone(),
+        range,
+    }))
 }

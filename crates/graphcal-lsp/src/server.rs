@@ -16,10 +16,21 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use graphcal_eval::eval::{compile_to_tir, compile_to_tir_project};
+use graphcal_syntax::ast::DeclKind;
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::compile_error_to_diagnostics;
-use crate::symbol_table::{self, SymbolTable};
+use crate::symbol_table::{self, DefinitionInfo, SymbolTable};
+
+/// A definition from an imported file, for cross-file go-to-definition and hover.
+pub struct ImportedDefinition {
+    /// URI of the file containing the definition.
+    pub uri: Url,
+    /// Source text of the imported file (needed for span-to-range conversion).
+    pub source: String,
+    /// The definition info (name, category, spans, type description).
+    pub definition: DefinitionInfo,
+}
 
 /// Cached analysis result for a document.
 pub struct AnalysisResult {
@@ -27,6 +38,8 @@ pub struct AnalysisResult {
     pub source: String,
     /// The symbol table (built from AST, enriched from TIR if available).
     pub symbol_table: SymbolTable,
+    /// Definitions from imported files, keyed by symbol name.
+    pub imported_definitions: HashMap<String, ImportedDefinition>,
     /// Diagnostics to publish.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -44,6 +57,7 @@ impl std::fmt::Debug for AnalysisResult {
         f.debug_struct("AnalysisResult")
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
+            .field("imported_defs", &self.imported_definitions.len())
             .field("diagnostics_count", &self.diagnostics.len())
             .finish()
     }
@@ -82,7 +96,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
     );
 
     match tir_result {
-        Ok((tir, _project)) => {
+        Ok((tir, project)) => {
             // Full pipeline succeeded. Build symbol table from the AST embedded in the TIR,
             // then enrich with type info.
             // We need to re-parse to get the AST since TIR doesn't store it directly.
@@ -93,6 +107,11 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let mut symbol_table = symbol_table::build_from_ast(&ast);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
+            // Resolve imported definitions from the project.
+            let imported_definitions = project.map_or_else(HashMap::new, |project| {
+                collect_imported_definitions(uri, &ast, &project, Some(&tir))
+            });
+
             // No compile errors, but check for eval warnings by running the full pipeline.
             let diagnostics = uri.to_file_path().map_or_else(
                 |()| crate::diagnostics::produce_diagnostics(text, name),
@@ -102,25 +121,149 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             AnalysisResult {
                 source: text.to_string(),
                 symbol_table,
+                imported_definitions,
                 diagnostics,
             }
         }
         Err(e) => {
             // Compilation failed. Try to parse for a partial symbol table.
-            let symbol_table = graphcal_syntax::parser::Parser::with_name(text, name)
-                .parse_file()
-                .map(|ast| symbol_table::build_from_ast(&ast))
-                .unwrap_or_default();
+            let (symbol_table, imported_definitions) =
+                graphcal_syntax::parser::Parser::with_name(text, name)
+                    .parse_file()
+                    .map_or_else(
+                        |_| (SymbolTable::default(), HashMap::new()),
+                        |ast| {
+                            let st = symbol_table::build_from_ast(&ast);
+                            let imports = collect_imported_definitions_from_ast(uri, &ast);
+                            (st, imports)
+                        },
+                    );
 
             let diagnostics = compile_error_to_diagnostics(&e, text);
 
             AnalysisResult {
                 source: text.to_string(),
                 symbol_table,
+                imported_definitions,
                 diagnostics,
             }
         }
     }
+}
+
+/// Collect imported definitions from a loaded project.
+///
+/// For each `use` declaration in the root file, resolves the import path,
+/// looks up the imported file in the project, and builds a symbol table
+/// from the imported file's AST to extract the definition info.
+fn collect_imported_definitions(
+    root_uri: &Url,
+    root_ast: &graphcal_syntax::ast::File,
+    project: &graphcal_eval::loader::LoadedProject,
+    tir: Option<&graphcal_eval::tir::TIR>,
+) -> HashMap<String, ImportedDefinition> {
+    let mut result = HashMap::new();
+
+    let Ok(root_path) = root_uri.to_file_path() else {
+        return result;
+    };
+    let root_dir = root_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    for decl in &root_ast.declarations {
+        if let DeclKind::Use(use_decl) = &decl.kind {
+            let import_path = root_dir.join(&use_decl.path);
+            let Ok(canonical) = import_path.canonicalize() else {
+                continue;
+            };
+            let Some(loaded_file) = project.files.get(&canonical) else {
+                continue;
+            };
+
+            let mut imported_table = symbol_table::build_from_ast(&loaded_file.ast);
+            if let Some(tir) = tir {
+                symbol_table::enrich_from_tir(&mut imported_table, tir);
+            }
+
+            let imported_uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
+                Url::parse(&format!("file://{}", loaded_file.path.display()))
+                    .unwrap_or_else(|_| root_uri.clone())
+            });
+            let source = loaded_file.source.to_string();
+
+            for imported_name in &use_decl.names {
+                if let Some(def) = imported_table.definitions.remove(&imported_name.name) {
+                    result.insert(
+                        imported_name.name.clone(),
+                        ImportedDefinition {
+                            uri: imported_uri.clone(),
+                            source: source.clone(),
+                            definition: def,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Fallback: collect imported definitions by reading and parsing imported files directly.
+/// Used when `compile_to_tir_project` fails but the root file parses successfully.
+fn collect_imported_definitions_from_ast(
+    root_uri: &Url,
+    root_ast: &graphcal_syntax::ast::File,
+) -> HashMap<String, ImportedDefinition> {
+    let mut result = HashMap::new();
+
+    let Ok(root_path) = root_uri.to_file_path() else {
+        return result;
+    };
+    let root_dir = root_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    for decl in &root_ast.declarations {
+        if let DeclKind::Use(use_decl) = &decl.kind {
+            let import_path = root_dir.join(&use_decl.path);
+            let Ok(canonical) = import_path.canonicalize() else {
+                continue;
+            };
+            let Ok(source) = std::fs::read_to_string(&canonical) else {
+                continue;
+            };
+            let file_name = canonical.display().to_string();
+            let Ok(ast) =
+                graphcal_syntax::parser::Parser::with_name(&source, &file_name).parse_file()
+            else {
+                continue;
+            };
+
+            let mut imported_table = symbol_table::build_from_ast(&ast);
+
+            let imported_uri = Url::from_file_path(&canonical).unwrap_or_else(|()| {
+                Url::parse(&format!("file://{}", canonical.display()))
+                    .unwrap_or_else(|_| root_uri.clone())
+            });
+
+            for imported_name in &use_decl.names {
+                if let Some(def) = imported_table.definitions.remove(&imported_name.name) {
+                    result.insert(
+                        imported_name.name.clone(),
+                        ImportedDefinition {
+                            uri: imported_uri.clone(),
+                            source: source.clone(),
+                            definition: def,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    result
 }
 
 #[tower_lsp::async_trait]
