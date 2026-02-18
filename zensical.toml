@@ -1,0 +1,65 @@
+[project]
+site_name = "Graphcal Documentation"
+site_description = "Documentation for Graphcal, a type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations."
+site_author = "Shunichiro Nomura"
+# site_url = "https://shunichironomura.github.io/graphcal/"
+repo_name = "shunichironomura/graphcal"
+repo_url = "https://github.com/shunichironomura/graphcal"
+nav = [
+  { "Home" = "index.md" },
+  { "Installation" = "installation.md" },
+  { "Tutorial" = [
+    { "Overview" = "tutorial/index.md" },
+    { "Step 1: Hello, Graphcal" = "tutorial/step1-hello-graphcal.md" },
+    { "Step 2: Dimensions & Units" = "tutorial/step2-dimensions-and-units.md" },
+    { "Step 3: Structs & Blocks" = "tutorial/step3-structs-and-blocks.md" },
+    { "Step 4: Functions" = "tutorial/step4-functions.md" },
+    { "Step 5: Multi-File Projects" = "tutorial/step5-multi-file-projects.md" },
+    { "Step 6: Indexed Values" = "tutorial/step6-indexed-values.md" },
+  ] },
+  { "Language Reference" = [
+    { "Overview" = "language/index.md" },
+    { "Computation Model" = "language/computation-model.md" },
+    { "Type System" = "language/type-system.md" },
+    { "Dimensions & Units" = "language/dimensions-and-units.md" },
+    { "Algebraic Data Types" = "language/algebraic-data-types.md" },
+    { "Indexes" = "language/indexes.md" },
+    { "Functions" = "language/functions.md" },
+    { "Expressions" = "language/expressions.md" },
+    { "Multi-File Projects" = "language/multi-file.md" },
+    { "Built-in Reference" = "language/built-ins.md" },
+  ] },
+  { "CLI Reference" = "cli-reference.md" },
+  { "Editor Setup" = "editor-setup.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "announce.dismiss",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
