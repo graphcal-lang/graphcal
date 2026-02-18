@@ -1,8 +1,8 @@
 {
   "name": "graphcal",
   "displayName": "Graphcal",
-  "description": "Syntax highlighting for Graphcal (.gcl) files",
-  "version": "0.0.1",
+  "description": "Graphcal language support: syntax highlighting and Language Server Protocol (LSP) integration",
+  "version": "0.0.2",
   "publisher": "graphcal",
   "license": "MIT",
   "engines": {
@@ -11,6 +11,10 @@
   "categories": [
     "Programming Languages"
   ],
+  "activationEvents": [
+    "onLanguage:graphcal"
+  ],
+  "main": "./out/extension.js",
   "contributes": {
     "languages": [
       {
@@ -31,6 +35,41 @@
         "scopeName": "source.graphcal",
         "path": "./syntaxes/graphcal.tmLanguage.json"
       }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Graphcal",
+      "properties": {
+        "graphcal.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the Graphcal Language Server for diagnostics."
+        },
+        "graphcal.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the graphcal executable. If empty, the extension will look for 'graphcal' on PATH."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "graphcal.restartServer",
+        "title": "Graphcal: Restart Language Server"
+      }
     ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^3.0.0"
   }
 }
