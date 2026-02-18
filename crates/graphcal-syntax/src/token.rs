@@ -663,6 +663,24 @@ mod tests {
     }
 
     #[test]
+    fn lex_use_statement_with_alias() {
+        let tokens = lex_tokens(r#"use "./f.gcl" { x as y };"#);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Use,
+                Token::StringLiteral,
+                Token::LBrace,
+                Token::Ident, // x
+                Token::As,
+                Token::Ident, // y
+                Token::RBrace,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
     fn lex_identifier_starting_with_use() {
         // "useful" should be Ident, not Use + "full"
         let mut lexer = Token::lexer("useful");

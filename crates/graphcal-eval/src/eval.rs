@@ -349,28 +349,29 @@ pub fn compile_and_eval_project(
 
             let imported_file = &project.files[&import_canonical];
 
-            for requested_name in &use_decl.names {
-                let found = find_declaration_in_file(&imported_file.ast, &requested_name.name);
+            for use_item in &use_decl.names {
+                let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
+                let local_name = use_item.local_name().to_string();
 
                 match found {
-                    Some(ImportedDecl::Const(name, type_ann, expr, span)) => {
-                        imported.consts.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Const(type_ann, expr, span)) => {
+                        imported.consts.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Param(name, type_ann, expr, span)) => {
-                        imported.params.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Param(type_ann, expr, span)) => {
+                        imported.params.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Node(name, type_ann, expr, span)) => {
-                        imported.nodes.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Node(type_ann, expr, span)) => {
+                        imported.nodes.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Fn(name, fn_decl, span)) => {
-                        imported.functions.push((name, fn_decl, span));
+                    Some(ImportedDecl::Fn(fn_decl, span)) => {
+                        imported.functions.push((local_name, fn_decl, span));
                     }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                            name: requested_name.name.clone(),
+                            name: use_item.name.name.clone(),
                             file_path: use_decl.path.clone(),
                             src: root_src.clone(),
-                            span: requested_name.span.into(),
+                            span: use_item.name.span.into(),
                         }));
                     }
                 }
@@ -513,28 +514,29 @@ pub fn compile_to_tir_project(
 
             let imported_file = &project.files[&import_canonical];
 
-            for requested_name in &use_decl.names {
-                let found = find_declaration_in_file(&imported_file.ast, &requested_name.name);
+            for use_item in &use_decl.names {
+                let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
+                let local_name = use_item.local_name().to_string();
 
                 match found {
-                    Some(ImportedDecl::Const(name, type_ann, expr, span)) => {
-                        imported.consts.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Const(type_ann, expr, span)) => {
+                        imported.consts.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Param(name, type_ann, expr, span)) => {
-                        imported.params.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Param(type_ann, expr, span)) => {
+                        imported.params.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Node(name, type_ann, expr, span)) => {
-                        imported.nodes.push((name, type_ann, expr, span));
+                    Some(ImportedDecl::Node(type_ann, expr, span)) => {
+                        imported.nodes.push((local_name, type_ann, expr, span));
                     }
-                    Some(ImportedDecl::Fn(name, fn_decl, span)) => {
-                        imported.functions.push((name, fn_decl, span));
+                    Some(ImportedDecl::Fn(fn_decl, span)) => {
+                        imported.functions.push((local_name, fn_decl, span));
                     }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                            name: requested_name.name.clone(),
+                            name: use_item.name.name.clone(),
                             file_path: use_decl.path.clone(),
                             src: root_src.clone(),
-                            span: requested_name.span.into(),
+                            span: use_item.name.span.into(),
                         }));
                     }
                 }
@@ -561,28 +563,21 @@ pub fn compile_to_tir_project(
 /// A declaration found in a file, classified by kind.
 enum ImportedDecl {
     Const(
-        String,
         graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
     Param(
-        String,
         graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
     Node(
-        String,
         graphcal_syntax::ast::TypeExpr,
         graphcal_syntax::ast::Expr,
         graphcal_syntax::span::Span,
     ),
-    Fn(
-        String,
-        graphcal_syntax::ast::FnDecl,
-        graphcal_syntax::span::Span,
-    ),
+    Fn(graphcal_syntax::ast::FnDecl, graphcal_syntax::span::Span),
 }
 
 /// Find a declaration by name in a file's AST.
@@ -591,7 +586,6 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
         match &decl.kind {
             DeclKind::Const(c) if c.name.value.as_str() == name => {
                 return Some(ImportedDecl::Const(
-                    c.name.value.to_string(),
                     c.type_ann.clone(),
                     c.value.clone(),
                     decl.span,
@@ -599,7 +593,6 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             }
             DeclKind::Param(p) if p.name.value.as_str() == name => {
                 return Some(ImportedDecl::Param(
-                    p.name.value.to_string(),
                     p.type_ann.clone(),
                     p.value.clone(),
                     decl.span,
@@ -607,18 +600,13 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             }
             DeclKind::Node(n) if n.name.value.as_str() == name => {
                 return Some(ImportedDecl::Node(
-                    n.name.value.to_string(),
                     n.type_ann.clone(),
                     n.value.clone(),
                     decl.span,
                 ));
             }
             DeclKind::Fn(f) if f.name.value.as_str() == name => {
-                return Some(ImportedDecl::Fn(
-                    f.name.value.to_string(),
-                    f.clone(),
-                    decl.span,
-                ));
+                return Some(ImportedDecl::Fn(f.clone(), decl.span));
             }
             _ => {}
         }
@@ -1884,6 +1872,27 @@ mod tests {
         assert!(
             (delta_v - expected_delta_v).abs() < 0.001,
             "delta_v = {delta_v}, expected = {expected_delta_v}"
+        );
+    }
+
+    #[test]
+    fn project_import_alias() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/alias/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let y = find_value(&result, "y");
+        assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
+    }
+
+    #[test]
+    fn project_import_alias_conflict_resolution() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/alias_conflict/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let sum = find_value(&result, "sum");
+        assert!(
+            (sum - 3.0).abs() < f64::EPSILON,
+            "sum = {sum}, expected 3.0"
         );
     }
 

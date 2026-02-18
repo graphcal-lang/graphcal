@@ -452,21 +452,50 @@ impl<'src> Parser<'src> {
                 break;
             }
             // Accept any identifier (imports can be any casing)
-            match self.lexer.next_token() {
-                Some((Token::Ident, span)) => {
-                    let name_str = self.lexer.slice_at(span).to_string();
-                    names.push(Ident {
-                        name: name_str,
-                        span,
-                    });
-                }
+            let (name_str, name_span) = match self.lexer.next_token() {
+                Some((Token::Ident, span)) => (self.lexer.slice_at(span).to_string(), span),
                 Some((tok, span)) => {
                     return Err(self.unexpected_token("an identifier", &tok.to_string(), span));
                 }
                 None => {
                     return Err(self.unexpected_eof("an identifier or `}`"));
                 }
-            }
+            };
+
+            // Check for optional `as` alias
+            let alias = if self.lexer.peek() == Some(&Token::As) {
+                self.lexer.next_token(); // consume `as`
+                match self.lexer.next_token() {
+                    Some((Token::Ident, alias_span)) => {
+                        let alias_str = self.lexer.slice_at(alias_span).to_string();
+                        Some(Ident {
+                            name: alias_str,
+                            span: alias_span,
+                        })
+                    }
+                    Some((tok, span)) => {
+                        return Err(self.unexpected_token(
+                            "an identifier after `as`",
+                            &tok.to_string(),
+                            span,
+                        ));
+                    }
+                    None => {
+                        return Err(self.unexpected_eof("an identifier after `as`"));
+                    }
+                }
+            } else {
+                None
+            };
+
+            names.push(crate::ast::UseItem {
+                name: Ident {
+                    name: name_str,
+                    span: name_span,
+                },
+                alias,
+            });
+
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {
@@ -3870,6 +3899,63 @@ param alt: Length = 400.0 km;
     #[test]
     fn single_expr_trailing_tokens_error() {
         let result = Parser::new("450.0 s; extra").parse_single_expr();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_use_no_alias() {
+        let file = Parser::new(r#"use "./helper.gcl" { x, Y };"#)
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        let DeclKind::Use(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./helper.gcl");
+        assert_eq!(u.names.len(), 2);
+        assert_eq!(u.names[0].name.name, "x");
+        assert!(u.names[0].alias.is_none());
+        assert_eq!(u.names[0].local_name(), "x");
+        assert_eq!(u.names[1].name.name, "Y");
+        assert!(u.names[1].alias.is_none());
+        assert_eq!(u.names[1].local_name(), "Y");
+    }
+
+    #[test]
+    fn parse_use_with_alias() {
+        let file = Parser::new(r#"use "./helper.gcl" { x as y };"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Use(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.names.len(), 1);
+        assert_eq!(u.names[0].name.name, "x");
+        assert_eq!(u.names[0].alias.as_ref().unwrap().name, "y");
+        assert_eq!(u.names[0].local_name(), "y");
+    }
+
+    #[test]
+    fn parse_use_mixed_alias() {
+        let file = Parser::new(r#"use "./f.gcl" { x, Y as Z, w };"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Use(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.names.len(), 3);
+        assert_eq!(u.names[0].name.name, "x");
+        assert!(u.names[0].alias.is_none());
+        assert_eq!(u.names[1].name.name, "Y");
+        assert_eq!(u.names[1].alias.as_ref().unwrap().name, "Z");
+        assert_eq!(u.names[1].local_name(), "Z");
+        assert_eq!(u.names[2].name.name, "w");
+        assert!(u.names[2].alias.is_none());
+    }
+
+    #[test]
+    fn parse_use_alias_missing_name_error() {
+        let result = Parser::new(r#"use "./f.gcl" { x as };"#).parse_file();
         assert!(result.is_err());
     }
 }

@@ -398,11 +398,18 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
             DeclKind::Use(u) => {
                 // Each imported name is a reference; target resolution for cross-file
                 // go-to-definition is handled separately.
-                for imported_name in &u.names {
+                for use_item in &u.names {
                     table.references.push(ReferenceInfo {
-                        span: imported_name.span,
-                        target: imported_name.name.clone(),
+                        span: use_item.name.span,
+                        target: use_item.name.name.clone(),
                     });
+                    // If aliased, the alias also resolves to the same target.
+                    if let Some(alias) = &use_item.alias {
+                        table.references.push(ReferenceInfo {
+                            span: alias.span,
+                            target: use_item.name.name.clone(),
+                        });
+                    }
                 }
             }
         }

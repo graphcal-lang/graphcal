@@ -30,15 +30,42 @@ pub enum DeclKind {
     Use(UseDecl),
 }
 
-/// Import declaration: `use "./path/to/file.gcl" { name1, name2 };`
+/// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`
 #[derive(Debug, Clone)]
 pub struct UseDecl {
     /// The file path (quotes stripped, relative to the importing file).
     pub path: String,
     /// The path literal's span (for diagnostics).
     pub path_span: Span,
-    /// The names to import.
-    pub names: Vec<Ident>,
+    /// The items to import (each optionally aliased with `as`).
+    pub names: Vec<UseItem>,
+}
+
+/// A single item in a `use` declaration, optionally aliased.
+///
+/// Example: `name1 as local_name` → `UseItem { name: "name1", alias: Some("local_name") }`
+/// Example: `name1` → `UseItem { name: "name1", alias: None }`
+#[derive(Debug, Clone)]
+pub struct UseItem {
+    /// The original name from the imported file.
+    pub name: Ident,
+    /// Optional local alias (introduced by `as`).
+    pub alias: Option<Ident>,
+}
+
+impl UseItem {
+    /// The name that this import introduces into the local scope.
+    /// Returns the alias if present, otherwise the original name.
+    #[must_use]
+    pub fn local_name(&self) -> &str {
+        self.alias.as_ref().map_or(&self.name.name, |a| &a.name)
+    }
+
+    /// The span of the local name (alias span if aliased, otherwise original name span).
+    #[must_use]
+    pub fn local_span(&self) -> Span {
+        self.alias.as_ref().map_or(self.name.span, |a| a.span)
+    }
 }
 
 #[derive(Debug, Clone)]
