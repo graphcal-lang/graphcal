@@ -6,15 +6,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
     InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf, ReferenceParams,
-    SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
+    SaveOptions, ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use graphcal_eval::builtins::{DimSignature, builtin_functions};
 use graphcal_eval::eval::{
     EvalResult, Value, compile_and_eval_named, compile_and_eval_project, compile_to_tir,
     compile_to_tir_project,
@@ -23,7 +26,7 @@ use graphcal_syntax::ast::DeclKind;
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolTable};
+use crate::symbol_table::{self, DefinitionInfo, SymbolTable, format_resolved_type};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub struct ImportedDefinition {
@@ -33,6 +36,14 @@ pub struct ImportedDefinition {
     pub source: String,
     /// The definition info (name, category, spans, type description).
     pub definition: DefinitionInfo,
+}
+
+/// Structured function signature for Signature Help.
+pub struct FnSignatureInfo {
+    /// Full signature label, e.g. `"fn sqrt(x: D^2) -> D"`.
+    pub label: String,
+    /// Individual parameter labels, e.g. `["x: D^2"]`.
+    pub parameters: Vec<String>,
 }
 
 /// Cached analysis result for a document.
@@ -48,6 +59,8 @@ pub struct AnalysisResult {
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub eval_values: HashMap<String, String>,
+    /// Structured function signatures, keyed by function name.
+    pub fn_signatures: HashMap<String, FnSignatureInfo>,
 }
 
 /// The LSP server backend.
@@ -66,6 +79,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("imported_defs", &self.imported_definitions.len())
             .field("diagnostics_count", &self.diagnostics.len())
             .field("eval_values_count", &self.eval_values.len())
+            .field("fn_signatures_count", &self.fn_signatures.len())
             .finish()
     }
 }
@@ -121,6 +135,8 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 collect_imported_definitions(uri, &ast, &project, Some(&tir))
             });
 
+            let fn_signatures = build_fn_signatures(Some(&tir));
+
             // Run full evaluation for diagnostics and computed values.
             let (diagnostics, eval_values) = run_eval(uri, text, name);
 
@@ -130,6 +146,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions,
                 diagnostics,
                 eval_values,
+                fn_signatures,
             }
         }
         (Ok((tir, project)), Err(_)) => {
@@ -141,6 +158,8 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 Ok(result) => eval_result_to_diagnostics(&result),
                 Err(e) => compile_error_to_diagnostics(&e, text),
             };
+
+            let fn_signatures = build_fn_signatures(Some(&tir));
 
             // Use the on-disk AST for a partial symbol table and eval values.
             let (symbol_table, imported_definitions, eval_values) = uri
@@ -173,6 +192,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions,
                 diagnostics,
                 eval_values,
+                fn_signatures,
             }
         }
         (Err(e), Ok(ast)) => {
@@ -187,6 +207,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions,
                 diagnostics,
                 eval_values: HashMap::new(),
+                fn_signatures: build_fn_signatures(None),
             }
         }
         (Err(e), Err(_)) => {
@@ -199,6 +220,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions: HashMap::new(),
                 diagnostics,
                 eval_values: HashMap::new(),
+                fn_signatures: build_fn_signatures(None),
             }
         }
     }
@@ -221,6 +243,108 @@ fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<Stri
             let diagnostics = compile_error_to_diagnostics(&e, text);
             (diagnostics, HashMap::new())
         }
+    }
+}
+
+/// Build structured function signatures for Signature Help.
+///
+/// Combines builtin function signatures (always available) with user-defined
+/// function signatures from the TIR (when available).
+fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String, FnSignatureInfo> {
+    let mut sigs = HashMap::new();
+
+    // Builtin functions — always available.
+    for (name, f) in &builtin_functions() {
+        let (params, ret) = builtin_signature_parts(f.arity, f.dim_sig);
+        let params_str = params.join(", ");
+        let label = format!("fn {name}({params_str}) -> {ret}");
+        sigs.insert(
+            (*name).to_string(),
+            FnSignatureInfo {
+                label,
+                parameters: params,
+            },
+        );
+    }
+
+    // User-defined functions — from TIR resolved signatures.
+    if let Some(tir) = tir {
+        let registry = &tir.registry;
+        for (fn_name, sig) in &tir.resolved_fn_sigs {
+            let param_strs: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}: {}",
+                        p.name,
+                        format_resolved_type(&p.resolved_type, registry)
+                    )
+                })
+                .collect();
+
+            let generics =
+                if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
+                    String::new()
+                } else {
+                    let all: Vec<String> = sig
+                        .generic_dim_params
+                        .iter()
+                        .map(|p| format!("{p}: Dim"))
+                        .chain(
+                            sig.generic_index_params
+                                .iter()
+                                .map(|p| format!("{p}: Index")),
+                        )
+                        .collect();
+                    format!("<{}>", all.join(", "))
+                };
+
+            let ret = format_resolved_type(&sig.return_type, registry);
+            let label = format!("fn {fn_name}{generics}({}) -> {ret}", param_strs.join(", "));
+            sigs.insert(
+                fn_name.as_str().to_string(),
+                FnSignatureInfo {
+                    label,
+                    parameters: param_strs,
+                },
+            );
+        }
+    }
+
+    sigs
+}
+
+/// Generate human-readable parameter and return type strings for a builtin function.
+fn builtin_signature_parts(arity: usize, dim_sig: DimSignature) -> (Vec<String>, String) {
+    match dim_sig {
+        DimSignature::AllDimensionless => {
+            let params: Vec<String> = if arity == 1 {
+                vec!["x: Dimensionless".to_string()]
+            } else {
+                vec![
+                    "a: Dimensionless".to_string(),
+                    "b: Dimensionless".to_string(),
+                ]
+            };
+            (params, "Dimensionless".to_string())
+        }
+        DimSignature::AngleToDimensionless => {
+            (vec!["x: Angle".to_string()], "Dimensionless".to_string())
+        }
+        DimSignature::DimensionlessToAngle => {
+            (vec!["x: Dimensionless".to_string()], "Angle".to_string())
+        }
+        DimSignature::Sqrt => (vec!["x: D^2".to_string()], "D".to_string()),
+        DimSignature::Passthrough => (vec!["x: D".to_string()], "D".to_string()),
+        DimSignature::SameDimension => (
+            vec!["a: D".to_string(), "b: D".to_string()],
+            "D".to_string(),
+        ),
+        DimSignature::SameDimensionToAngle => (
+            vec!["y: D".to_string(), "x: D".to_string()],
+            "Angle".to_string(),
+        ),
     }
 }
 
@@ -415,6 +539,18 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec!["@".to_string(), ":".to_string()]),
+                    resolve_provider: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                    all_commit_characters: None,
+                    completion_item: None,
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -518,6 +654,34 @@ impl LanguageServer for Backend {
         let result = crate::inlay_hints::inlay_hints(analysis, params.range);
         drop(docs);
         Ok(result)
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_byte_offset(&analysis.source, position);
+        let result = crate::signature_help::signature_help(analysis, offset);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_byte_offset(&analysis.source, position);
+        let result = crate::completion::completion(analysis, offset);
+        drop(docs);
+        Ok(result.map(CompletionResponse::Array))
     }
 }
 

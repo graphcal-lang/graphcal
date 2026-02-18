@@ -58,6 +58,7 @@ impl<'src> Lexer<'src> {
 
     /// Get the byte offset of the current position in the source.
     /// Useful for generating error spans when the lexer has no more tokens.
+    #[must_use]
     pub const fn current_offset(&self) -> usize {
         if let Some(ref peeked) = self.peeked
             && let Some((_, span)) = peeked
