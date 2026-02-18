@@ -8,12 +8,14 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf, ReferenceParams,
-    SaveOptions, ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    DocumentLink, DocumentLinkOptions, DocumentLinkParams, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+    InlayHintParams, Location, MessageType, OneOf, PrepareRenameResponse, ReferenceParams,
+    RenameOptions, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, TextDocumentPositionParams,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions,
+    TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -36,6 +38,14 @@ pub struct ImportedDefinition {
     pub source: String,
     /// The definition info (name, category, spans, type description).
     pub definition: DefinitionInfo,
+}
+
+/// Info about a `use` declaration for Document Links.
+pub struct UseDeclInfo {
+    /// The raw path string (e.g., `"./constants.gcl"`).
+    pub path: String,
+    /// Span of the path literal in the source.
+    pub path_span: graphcal_syntax::span::Span,
 }
 
 /// Structured function signature for Signature Help.
@@ -61,6 +71,8 @@ pub struct AnalysisResult {
     pub eval_values: HashMap<String, String>,
     /// Structured function signatures, keyed by function name.
     pub fn_signatures: HashMap<String, FnSignatureInfo>,
+    /// Use declarations in this file (for Document Links).
+    pub use_decls: Vec<UseDeclInfo>,
 }
 
 /// The LSP server backend.
@@ -80,6 +92,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("diagnostics_count", &self.diagnostics.len())
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
+            .field("use_decls_count", &self.use_decls.len())
             .finish()
     }
 }
@@ -136,6 +149,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             });
 
             let fn_signatures = build_fn_signatures(Some(&tir));
+            let use_decls = collect_use_decl_info(&ast);
 
             // Run full evaluation for diagnostics and computed values.
             let (diagnostics, eval_values) = run_eval(uri, text, name);
@@ -147,6 +161,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values,
                 fn_signatures,
+                use_decls,
             }
         }
         (Ok((tir, project)), Err(_)) => {
@@ -162,7 +177,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let fn_signatures = build_fn_signatures(Some(&tir));
 
             // Use the on-disk AST for a partial symbol table and eval values.
-            let (symbol_table, imported_definitions, eval_values) = uri
+            let (symbol_table, imported_definitions, eval_values, use_decls) = uri
                 .to_file_path()
                 .ok()
                 .and_then(|path| std::fs::read_to_string(&path).ok())
@@ -173,7 +188,14 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                         .map(|ast| (disk_text, ast))
                 })
                 .map_or_else(
-                    || (SymbolTable::default(), HashMap::new(), HashMap::new()),
+                    || {
+                        (
+                            SymbolTable::default(),
+                            HashMap::new(),
+                            HashMap::new(),
+                            Vec::new(),
+                        )
+                    },
                     |(_, disk_ast)| {
                         let mut st = symbol_table::build_from_ast(&disk_ast);
                         symbol_table::enrich_from_tir(&mut st, &tir);
@@ -182,7 +204,8 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                         });
                         // Keep eval values from the last valid (disk) version.
                         let (_, vals) = run_eval(uri, text, name);
-                        (st, imports, vals)
+                        let udecls = collect_use_decl_info(&disk_ast);
+                        (st, imports, vals, udecls)
                     },
                 );
 
@@ -193,6 +216,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values,
                 fn_signatures,
+                use_decls,
             }
         }
         (Err(e), Ok(ast)) => {
@@ -200,6 +224,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let symbol_table = symbol_table::build_from_ast(&ast);
             let imported_definitions = collect_imported_definitions_from_ast(uri, &ast);
             let diagnostics = compile_error_to_diagnostics(&e, text);
+            let use_decls = collect_use_decl_info(&ast);
 
             AnalysisResult {
                 source: text.to_string(),
@@ -208,6 +233,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(None),
+                use_decls,
             }
         }
         (Err(e), Err(_)) => {
@@ -221,6 +247,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(None),
+                use_decls: Vec::new(),
             }
         }
     }
@@ -244,6 +271,23 @@ fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<Stri
             (diagnostics, HashMap::new())
         }
     }
+}
+
+/// Extract use-declaration info from an AST for Document Links.
+fn collect_use_decl_info(ast: &graphcal_syntax::ast::File) -> Vec<UseDeclInfo> {
+    ast.declarations
+        .iter()
+        .filter_map(|decl| {
+            if let DeclKind::Use(u) = &decl.kind {
+                Some(UseDeclInfo {
+                    path: u.path.clone(),
+                    path_span: u.path_span,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Build structured function signatures for Signature Help.
@@ -551,6 +595,14 @@ impl LanguageServer for Backend {
                     all_commit_characters: None,
                     completion_item: None,
                 }),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
+                document_link_provider: Some(DocumentLinkOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -682,6 +734,50 @@ impl LanguageServer for Backend {
         let result = crate::completion::completion(analysis, offset);
         drop(docs);
         Ok(result.map(CompletionResponse::Array))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_byte_offset(&analysis.source, position);
+        let result = crate::rename::rename(analysis, &uri, offset, &new_name);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = params.text_document.uri;
+        let position = params.position;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_byte_offset(&analysis.source, position);
+        let result = crate::rename::prepare_rename(analysis, offset);
+        drop(docs);
+        Ok(result)
+    }
+
+    async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+        let uri = params.text_document.uri;
+
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let result = crate::document_links::document_links(analysis, &uri);
+        drop(docs);
+        Ok(result)
     }
 }
 
