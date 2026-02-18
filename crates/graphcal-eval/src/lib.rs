@@ -8,7 +8,7 @@
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
 
-pub(crate) mod builtins;
+pub mod builtins;
 pub(crate) mod dim_check;
 pub mod error;
 pub mod eval;
@@ -18,6 +18,6 @@ pub(crate) mod fn_check;
 pub mod ir;
 pub mod loader;
 pub(crate) mod prelude;
-pub(crate) mod registry;
+pub mod registry;
 pub(crate) mod resolve;
 pub mod tir;
