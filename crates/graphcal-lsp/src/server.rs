@@ -489,10 +489,10 @@ fn collect_imported_definitions(
             });
             let source = loaded_file.source.to_string();
 
-            for imported_name in &use_decl.names {
-                if let Some(def) = imported_table.definitions.remove(&imported_name.name) {
+            for use_item in &use_decl.names {
+                if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
                     result.insert(
-                        imported_name.name.clone(),
+                        use_item.name.name.clone(),
                         ImportedDefinition {
                             uri: imported_uri.clone(),
                             source: source.clone(),
@@ -545,10 +545,10 @@ fn collect_imported_definitions_from_ast(
                     .unwrap_or_else(|_| root_uri.clone())
             });
 
-            for imported_name in &use_decl.names {
-                if let Some(def) = imported_table.definitions.remove(&imported_name.name) {
+            for use_item in &use_decl.names {
+                if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
                     result.insert(
-                        imported_name.name.clone(),
+                        use_item.name.name.clone(),
                         ImportedDefinition {
                             uri: imported_uri.clone(),
                             source: source.clone(),
