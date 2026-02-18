@@ -6,7 +6,7 @@
 
 pub mod ast;
 pub mod dimension;
-pub(crate) mod lexer;
+pub mod lexer;
 pub mod names;
 pub mod parser;
 pub mod span;

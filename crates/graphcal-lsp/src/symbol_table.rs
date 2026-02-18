@@ -901,7 +901,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
 }
 
 /// Format a `ResolvedTypeExpr` as a human-readable string.
-fn format_resolved_type(resolved: &ResolvedTypeExpr, registry: &Registry) -> String {
+pub fn format_resolved_type(resolved: &ResolvedTypeExpr, registry: &Registry) -> String {
     match resolved {
         ResolvedTypeExpr::Dimensionless => "Dimensionless".to_string(),
         ResolvedTypeExpr::Bool => "Bool".to_string(),
@@ -954,7 +954,7 @@ fn format_resolved_type(resolved: &ResolvedTypeExpr, registry: &Registry) -> Str
     }
 }
 
-fn format_dim_term_str(name: &str, power: i32, op: graphcal_syntax::ast::MulDivOp) -> String {
+pub fn format_dim_term_str(name: &str, power: i32, op: graphcal_syntax::ast::MulDivOp) -> String {
     let prefix = match op {
         graphcal_syntax::ast::MulDivOp::Mul => "",
         graphcal_syntax::ast::MulDivOp::Div => "/ ",
