@@ -461,6 +461,103 @@ pub fn compile_and_eval_project(
     Ok(result)
 }
 
+/// Compile source to TIR without evaluating.
+///
+/// Runs the pipeline up through type resolution, function recursion check, and
+/// dimension check, but does not build an execution plan or evaluate. This is
+/// useful for tooling (e.g., LSP) that needs type information without execution.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if parsing, lowering, or checking fails.
+pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, CompileError> {
+    let src = NamedSource::new(name, Arc::new(source.to_string()));
+    let file = graphcal_syntax::parser::Parser::with_name(source, name).parse_file()?;
+    let ir = crate::ir::lower(&file, &src)?;
+    let tir = crate::tir::type_resolve(ir, &src)?;
+    crate::fn_check::check_no_recursion_tir(&tir, &src)?;
+    crate::dim_check::check_dimensions_tir(&tir, &src)?;
+    Ok(tir)
+}
+
+/// Compile a multi-file project to TIR without evaluating.
+///
+/// Loads all files referenced by `use` declarations starting from `root_path`,
+/// resolves imports, and runs the pipeline up through dimension checking.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if loading, parsing, resolution, or checking fails.
+pub fn compile_to_tir_project(
+    root_path: &Path,
+) -> Result<(crate::tir::TIR, crate::loader::LoadedProject), CompileError> {
+    let project = crate::loader::load_project(root_path)?;
+
+    let root_file = &project.files[&project.root];
+    let root_src = &root_file.named_source;
+
+    let mut imported = ImportedNames::default();
+    for decl in &root_file.ast.declarations {
+        if let DeclKind::Use(use_decl) = &decl.kind {
+            let import_path = root_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&use_decl.path);
+            let import_canonical = import_path.canonicalize().map_err(|_| {
+                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                    path: use_decl.path.clone(),
+                    src: root_src.clone(),
+                    span: use_decl.path_span.into(),
+                })
+            })?;
+
+            let imported_file = &project.files[&import_canonical];
+
+            for requested_name in &use_decl.names {
+                let found = find_declaration_in_file(&imported_file.ast, &requested_name.name);
+
+                match found {
+                    Some(ImportedDecl::Const(name, type_ann, expr, span)) => {
+                        imported.consts.push((name, type_ann, expr, span));
+                    }
+                    Some(ImportedDecl::Param(name, type_ann, expr, span)) => {
+                        imported.params.push((name, type_ann, expr, span));
+                    }
+                    Some(ImportedDecl::Node(name, type_ann, expr, span)) => {
+                        imported.nodes.push((name, type_ann, expr, span));
+                    }
+                    Some(ImportedDecl::Fn(name, fn_decl, span)) => {
+                        imported.functions.push((name, fn_decl, span));
+                    }
+                    None => {
+                        return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                            name: requested_name.name.clone(),
+                            file_path: use_decl.path.clone(),
+                            src: root_src.clone(),
+                            span: requested_name.span.into(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ir = crate::ir::lower_with_imports(&root_file.ast, root_src, &imported)?;
+
+    for file_path in &project.load_order {
+        if *file_path == project.root {
+            continue;
+        }
+        let loaded = &project.files[file_path];
+        crate::ir::register_file_declarations(&loaded.ast, &mut ir.registry, &loaded.named_source)?;
+    }
+
+    let tir = crate::tir::type_resolve(ir, root_src)?;
+    crate::fn_check::check_no_recursion_tir(&tir, root_src)?;
+    crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+    Ok((tir, project))
+}
+
 /// A declaration found in a file, classified by kind.
 enum ImportedDecl {
     Const(

@@ -636,13 +636,26 @@ delta_v    = 5313.122956 m/s
 
 ### VS Code
 
-A TextMate grammar extension is included in `editors/vscode/`. To enable syntax highlighting for `.gcl` files before the extension is published to the marketplace, create a symlink:
+The VS Code extension in `editors/vscode/` provides syntax highlighting and a built-in LSP client. To install it locally before the extension is published to the marketplace:
 
-```sh
-ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/graphcal-0.0.1
-```
+1. Build the extension:
 
-Then restart VS Code (or run "Developer: Reload Window" from the command palette).
+   ```sh
+   cd editors/vscode && npm install && npm run compile && cd ../..
+   ```
+
+2. Create a symlink:
+
+   ```sh
+   ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/graphcal-0.0.2
+   ```
+
+3. Restart VS Code (or run "Developer: Reload Window" from the command palette).
+
+The extension automatically starts the language server when a `.gcl` file is opened. Configure via settings:
+
+- `graphcal.lsp.enabled` -- Enable/disable the language server (default: `true`)
+- `graphcal.lsp.path` -- Path to the `graphcal` binary (default: looks for `graphcal` on `PATH`)
 
 ### Zed
 
@@ -667,28 +680,23 @@ A tree-sitter grammar with highlight queries is available in `tree-sitter-graphc
 
 ### LSP (Language Server)
 
-The `graphcal lsp` subcommand starts a minimal LSP server that provides real-time diagnostics (parse errors, type/dimension mismatches, unknown references, etc.) in any editor that supports the Language Server Protocol.
+The `graphcal lsp` subcommand starts an LSP server that communicates over stdin/stdout. It supports any editor with Language Server Protocol support.
 
-Build:
+**Capabilities:**
+
+- **Diagnostics** -- Real-time parse errors, type/dimension mismatches, unknown references, etc.
+- **Document Symbols** -- Outline view of all declarations (params, nodes, constants, functions, dimensions, units, indexes, types)
+- **Go to Definition** -- Navigate from references (`@param`, function calls, type names, unit names, etc.) to their declaration
+- **Hover** -- Show resolved type information (e.g., `param v_exhaust: Length / Time`)
+
+Build and run:
 
 ```sh
 cargo build --release -p graphcal
-```
-
-Start the server (communicates over stdin/stdout):
-
-```sh
 graphcal lsp
 ```
 
-**VS Code** -- Use a generic LSP client extension such as [vscode-lsp-sample](https://github.com/AverageMarcus/vscode-lsp-sample) or add the following to your `settings.json` if you have a generic LSP client installed:
-
-```jsonc
-{
-  "lsp-client.serverCommand": ["<path-to>/graphcal", "lsp"],
-  "lsp-client.languageId": "graphcal"
-}
-```
+**VS Code** -- The VS Code extension (`editors/vscode/`) includes a built-in LSP client. See the [VS Code section](#vs-code) for installation.
 
 **Zed** -- The Zed extension (`editors/zed/`) includes LSP support. After installing it as a dev extension, the server launches automatically if `graphcal` is on your `PATH`. To use a local build instead, add a `.zed/settings.json` to your project (already included in this repo):
 
@@ -716,8 +724,6 @@ vim.lsp.start({
 })
 ```
 
-> **Note:** The LSP currently provides diagnostics only. Hover, completions, go-to-definition, and other features are planned for future releases.
-
 ## Vision
 
 Graphcal is designed to eventually support:
@@ -736,7 +742,7 @@ graphcal/
     graphcal-syntax/   # lexer (logos) + recursive descent parser + AST
     graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
     graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
-    graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics
+    graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, go-to-def, hover
   design/            # language design documents
   tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```

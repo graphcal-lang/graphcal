@@ -450,6 +450,7 @@ name = "graphcal-lsp"
 version = "0.1.0"
 dependencies = [
  "graphcal-eval",
+ "graphcal-syntax",
  "miette",
  "tokio",
  "tower-lsp",

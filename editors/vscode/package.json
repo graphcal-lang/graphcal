@@ -43,7 +43,7 @@
         "graphcal.lsp.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable the Graphcal Language Server for diagnostics."
+          "description": "Enable the Graphcal Language Server for diagnostics, document symbols, go to definition, and hover."
         },
         "graphcal.lsp.path": {
           "type": "string",
