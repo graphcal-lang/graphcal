@@ -20,11 +20,13 @@ clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
 graphcal-eval = { path = "crates/graphcal-eval", version = "0.1.0" }
+graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.1.0" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.1.0" }
 graphcal-syntax = { path = "crates/graphcal-syntax", version = "0.1.0" }
 logos = "0.16.1"
 miette = "7.6.0"
 petgraph = "0.8.3"
+pretty = "0.12.5"
 proptest = "1.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
