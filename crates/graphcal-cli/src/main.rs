@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process;
 
-use graphcal_eval::eval::{EvalResult, compile_and_eval_project};
+use graphcal_eval::eval::{EvalResult, compile_and_eval_project, compile_to_tir_project};
 use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
@@ -39,6 +39,11 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Check .gcl files for errors without evaluation
+    Check {
+        /// Files or directories to check (default: current directory)
+        paths: Vec<PathBuf>,
+    },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
 }
@@ -67,6 +72,9 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
+        Commands::Check { paths } => {
+            run_check(&paths);
+        }
         Commands::Format { paths, check } => {
             run_format(&paths, check);
         }
@@ -153,6 +161,50 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
+fn run_check(paths: &[PathBuf]) {
+    let targets = if paths.is_empty() {
+        collect_gcl_files(&PathBuf::from("."))
+    } else {
+        let mut files = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                files.extend(collect_gcl_files(path));
+            } else {
+                files.push(path.clone());
+            }
+        }
+        files
+    };
+
+    if targets.is_empty() {
+        eprintln!("No .gcl files found");
+        process::exit(1);
+    }
+
+    let mut error_count = 0;
+    for file in &targets {
+        match compile_to_tir_project(file) {
+            Ok(_) => {
+                println!("ok: {}", file.display());
+            }
+            Err(e) => {
+                eprintln!("{:?}", miette::Report::new(e));
+                error_count += 1;
+            }
+        }
+    }
+
+    if error_count > 0 {
+        eprintln!("{error_count} file(s) had errors");
+        process::exit(1);
     }
 }
 
