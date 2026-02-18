@@ -90,13 +90,10 @@ fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
 }
 
 // ============================================================================
-// BUG 1: to_int() on extreme float values
+// to_int() range checking (#85, fixed)
 //
-// `to_int(x)` uses `f as i64` which saturates for values outside i64 range.
-// For engineering users, this is dangerous: `to_int(1e20)` silently produces
-// i64::MAX (9223372036854775807) instead of an error. This could cause
-// catastrophically wrong results in calculations involving integer indices,
-// counts, or conversion factors.
+// `to_int(x)` now rejects values outside i64 range with a clear error,
+// instead of silently saturating via `f as i64`.
 // ============================================================================
 
 #[test]
@@ -110,72 +107,46 @@ fn to_int_of_large_positive_float_should_error_or_be_exact() {
 }
 
 #[test]
-#[ignore = "to_int silently saturates for out-of-range floats (#85)"]
 fn to_int_of_too_large_positive_float_should_error() {
-    // 1e20 exceeds i64::MAX (~9.2e18). This should produce an error,
-    // not silently saturate to i64::MAX.
+    // 1e20 exceeds i64::MAX (~9.2e18). This should produce an error.
     let source = "node x: Int = to_int(1e20);";
     let result = compile_and_eval(source).unwrap();
-    // BUG: Currently this silently produces i64::MAX instead of an error
     assert!(
         has_node_error(&result, "x"),
-        "to_int(1e20) should produce an error because 1e20 > i64::MAX, \
-         but it silently produced {}",
-        find_int_value(&result, "x")
+        "to_int(1e20) should produce an error because 1e20 > i64::MAX"
     );
 }
 
 #[test]
-#[ignore = "to_int silently saturates for out-of-range floats (#85)"]
 fn to_int_of_too_large_negative_float_should_error() {
     // -1e20 is below i64::MIN (~-9.2e18). This should produce an error.
     let source = "node x: Int = to_int(-1e20);";
     let result = compile_and_eval(source).unwrap();
-    // BUG: Currently this silently produces i64::MIN instead of an error
     assert!(
         has_node_error(&result, "x"),
-        "to_int(-1e20) should produce an error because -1e20 < i64::MIN, \
-         but it silently produced {}",
-        find_int_value(&result, "x")
+        "to_int(-1e20) should produce an error because -1e20 < i64::MIN"
     );
 }
 
 #[test]
-#[ignore = "to_int silently saturates for out-of-range floats (#85)"]
-fn to_int_of_infinity_should_error() {
-    // exp(1000.0) overflows to infinity, and to_int(infinity) should error
-    // But since exp(1000) itself errors, let's test with a direct large value
-    // Actually, we can't write infinity as a literal. Test with a computation
-    // that would give infinity if not caught.
-    // This test validates the interaction: if somehow a non-finite value
-    // reached to_int, it should be caught. We test via the compilation pipeline.
-    let source = "node x: Int = to_int(9.3e18);"; // just above i64::MAX
+fn to_int_of_value_just_above_max_should_error() {
+    // 9.3e18 > i64::MAX (~9.2e18), should produce an error.
+    let source = "node x: Int = to_int(9.3e18);";
     let result = compile_and_eval(source).unwrap();
-    // BUG: 9.3e18 > i64::MAX, should produce error
     assert!(
         has_node_error(&result, "x"),
-        "to_int(9.3e18) should error because it exceeds i64 range, \
-         but it produced {}",
-        find_int_value(&result, "x")
+        "to_int(9.3e18) should error because it exceeds i64 range"
     );
 }
 
 #[test]
-#[ignore = "to_int silently saturates for out-of-range floats (#85)"]
-fn to_int_of_nan_should_error() {
-    // 0.0 / 0.0 would be caught as division by zero, but let's try sqrt(-1)
-    // sqrt(-1) produces NaN which is caught by check_finite...
-    // but what about to_int(NaN)? It can't happen normally because upstream
-    // catches NaN, but let's verify the to_int path at least with borderline values.
-    // Instead, test NaN-producing via: (-1.0) ^ 0.5 -> caught as NaN
-    // So we focus on the f64->i64 range issue instead.
-    let source = "node x: Int = to_int(-9.3e18);"; // just below i64::MIN
+fn to_int_of_value_just_below_min_should_error() {
+    // -9.3e18 < i64::MIN (~-9.2e18), should produce an error.
+    let source = "node x: Int = to_int(-9.3e18);";
     let result = compile_and_eval(source).unwrap();
     assert!(
         has_node_error(&result, "x"),
-        "to_int(-9.3e18) should error because it exceeds i64 range, \
-         but it produced {}",
-        find_int_value(&result, "x")
+        "to_int(-9.3e18) should error because it exceeds i64 range"
     );
 }
 
@@ -755,7 +726,6 @@ proptest! {
 
 /// `to_int` should error for values outside i64 range (proptest version)
 #[test]
-#[ignore = "to_int silently saturates for out-of-range floats (#85)"]
 fn to_int_rejects_out_of_range() {
     use proptest::test_runner::{Config, TestRunner};
 
