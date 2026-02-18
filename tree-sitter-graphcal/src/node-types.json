@@ -3831,10 +3831,36 @@
       "required": false,
       "types": [
         {
-          "type": "identifier",
+          "type": "use_item",
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "use_item",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {

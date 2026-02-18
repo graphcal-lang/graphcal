@@ -238,18 +238,24 @@ module.exports = grammar({
       field("type", $.type_expr),
     ),
 
-    // use "./path.gcl" { name1, name2 };
+    // use "./path.gcl" { name1, name2 as alias2 };
     use_declaration: $ => seq(
       "use",
       field("path", $.string_literal),
       "{",
       optional(seq(
-        $.identifier,
-        repeat(seq(",", $.identifier)),
+        $.use_item,
+        repeat(seq(",", $.use_item)),
         optional(","),
       )),
       "}",
       ";",
+    ),
+
+    // Import item with optional alias: name or name as alias
+    use_item: $ => seq(
+      field("name", $.identifier),
+      optional(seq("as", field("alias", $.identifier))),
     ),
 
     // ---------------------------------------------------------------
