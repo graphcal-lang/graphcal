@@ -25,7 +25,7 @@ Level 2: ValueType   = Primitive
                      | Struct(name, fields: [ValueType])
                      | TaggedUnion(name, variants: [Variant(fields: [ValueType])])
 Level 3: DeclType    = ValueType
-                     | Indexed(ValueType, Index)    -- written T[I]
+                     | Indexed(ValueType, [Index])   -- written T[I] or T[I, J, ...]
 ```
 
 ### Level 1: Primitive
@@ -91,13 +91,13 @@ param delta_v: Velocity[Maneuver] = { ... };            // Indexed ValueType
 node matrix: Dimensionless[Row, Col] = for r, c { ... } // Multi-indexed ValueType
 ```
 
-`T[I]` is a type constructor that lifts a ValueType into a total map from index labels to values. Multi-indexing `T[I, J]` is sugar for `(T[J])[I]`.
+`T[I]` is a type constructor that lifts a ValueType into a total map from index labels to values. Multi-indexing `T[I, J]` is a total map from the product `I × J` to values — a flat product-key map, not nested maps. Each DAG node is identified by a flat tuple of labels `(i, j)`, matching the flat binding structure of `for i: I, j: J { ... }`.
 
 ## DAG Correspondence
 
 The type stratification has a direct correspondence with the computation model:
 
-> **A node in the evaluation DAG has type `ValueType`. A declaration of type `ValueType[Index]` expands to one DAG node per index label.**
+> **A node in the evaluation DAG has type `ValueType`. A declaration of type `ValueType[Index]` expands to one DAG node per index label. A declaration of type `ValueType[I, J]` expands to one DAG node per label tuple `(i, j)`.**
 
 | Declaration type | DAG nodes |
 | --- | --- |
@@ -220,7 +220,7 @@ node fuel: Mass[Maneuver] = for m: Maneuver {
 }
 ```
 
-**Multi-axis `for`** (sugar for nested `for`):
+**Multi-axis `for`** (flat — one value per label tuple):
 
 ```gcl
 node matrix: Dimensionless[Row, Col] = for r: Row, c: Col {
@@ -228,21 +228,47 @@ node matrix: Dimensionless[Row, Col] = for r: Row, c: Col {
 }
 ```
 
-### Consumption
-
-**Indexing** — extracts a single element or reduces one axis:
+**Multi-axis map literal** (total — all label tuples must be present):
 
 ```gcl
-@delta_v[Maneuver::Departure]       // Velocity[Maneuver] → Velocity
-@matrix[Row::R1]                    // Dimensionless[Row, Col] → Dimensionless[Col]
-@matrix[Row::R1, Col::C2]           // Dimensionless[Row, Col] → Dimensionless
+param delta_v_budget: Velocity[Phase, Maneuver] = {
+    (Phase::Launch, Maneuver::Departure): 2.46 km/s,
+    (Phase::Launch, Maneuver::Correction): 0.0 m/s,
+    (Phase::Launch, Maneuver::Insertion): 0.0 m/s,
+    (Phase::Cruise, Maneuver::Departure): 0.0 m/s,
+    (Phase::Cruise, Maneuver::Correction): 0.05 km/s,
+    (Phase::Cruise, Maneuver::Insertion): 0.0 m/s,
+    (Phase::Arrival, Maneuver::Departure): 0.0 m/s,
+    (Phase::Arrival, Maneuver::Correction): 0.0 m/s,
+    (Phase::Arrival, Maneuver::Insertion): 1.48 km/s,
+}
 ```
+
+Note: single-axis map literals use bare keys (`Maneuver::Departure: ...`), multi-axis map literals use tuple keys (`(Phase::Launch, Maneuver::Departure): ...`). This mirrors the flat `for` binding structure.
+
+### Consumption
+
+**Indexing** — extracts a single element by providing all index labels:
+
+```gcl
+@delta_v[Maneuver::Departure]                // Velocity[Maneuver] → Velocity
+@matrix[Row::R1, Col::C2]                    // Dimensionless[Row, Col] → Dimensionless
+```
+
+No partial indexing — all axes must be specified. To extract a "slice" along one axis, use explicit `for`:
+
+```gcl
+// Extract one row from a multi-indexed value
+node row1: Dimensionless[Col] = for c: Col { @matrix[Row::R1, c] }
+```
+
+This is consistent with the "explicit `for`" philosophy: slicing is a computation over an axis, so it uses `for`.
 
 **Aggregation** — collapses one or more axes:
 
 ```gcl
-sum(for m: Maneuver { @fuel[m] })   // Mass[Maneuver] → Mass
-max(for m: Maneuver { @delta_v[m] })// Velocity[Maneuver] → Velocity
+sum(for m: Maneuver { @fuel[m] })    // Mass[Maneuver] → Mass
+max(for m: Maneuver { @delta_v[m] }) // Velocity[Maneuver] → Velocity
 ```
 
 **Scan** — ordered accumulation:
@@ -350,7 +376,7 @@ This document unifies concepts spread across multiple existing docs:
 - **Option type:** Where does `Option<T>` fit? It is a built-in tagged union (ValueType). `Option<Velocity>` is a ValueType. `Option<Velocity>[Maneuver]` is a DeclType. An indexed value with Option elements can have per-label missing values.
 - **Exhaustiveness in `match`:** Should `match m { ... }` require exhaustive cases? (Recommendation: yes, consistent with tagged union matching. Since named indexes ARE tagged unions, the same exhaustiveness rules apply.)
 - **Cross-index label equality:** Can you compare labels from different indexes? `m == p` where `m: Maneuver` and `p: Phase`? (Recommendation: no, type error. They are different tagged union types.)
-- **Nested indexed types:** Is `T[I][J]` always equivalent to `T[I, J]`? What about `(T[I])[J]`? (Current design: yes, `T[I, J]` = `(T[J])[I]`, outermost index first.)
+- **Axis order significance:** `T[I, J]` is a flat product-key map, but axis order determines `for` binding order, `scan` direction, and display order. `T[I, J]` and `T[J, I]` are different types. Is there a transpose operation? (Recommendation: not needed initially — use `for` to construct the transposed value explicitly.)
 - **`type` vs `index` for fieldless tagged unions:** Should a regular `type Foo { A, B }` (with no fields on any variant) be automatically usable as an index? Or must it be declared with `index`? (Recommendation: require `index`. The keyword communicates intent and prevents accidental use of marker types as collection axes.)
 - **Can `index` types also carry fields?** If `index` is "tagged union + axis marker," could an index variant carry data in the future? This would unify `index` and `type` further. (Recommendation: no, keep indexes fieldless. If you need data-carrying variants as an axis, compose: use an `index` for the axis and a separate `type` for the per-variant data.)
 - **Range index as a separate concept?** Named indexes are tagged unions. Range indexes are not — they're scalar sequences. Should they share the `index` keyword? (Current answer: yes, for user simplicity. But the implementation can treat them differently.)
