@@ -17,6 +17,9 @@ Each aspect of the language design is documented in a separate file for independ
 
          13-live-view  14-spreadsheet  15-python  16-git  17-errors
          (rendering)   (import/export) (PyO3)   (scenarios) (diagnostics)
+
+         20-extern-lib-interface
+         (extern fn, complements 15; depends on 01, 04, 05, 06, 07, 12)
 ```
 
 ## Index
@@ -58,6 +61,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [16](./16-git-workflow.md) | Git Workflow & Scenarios | Mostly settled | `.graph` as source of truth, `.scenario` overlays |
 | [17](./17-error-messages.md) | Error Messages & Diagnostics | Design settled | Error codes, format, miette-based diagnostic system |
 | [18](./18-non-si-dimensions.md) | Non-SI Base Dimensions | Proposal | User-defined base dimensions (Information, Currency, etc.) |
+| [20](./20-external-library-interface.md) | External Library Interface | Exploration | `extern fn` for calling Python from Graphcal, typed boundary design |
 
 ## How to Use These Files
 
