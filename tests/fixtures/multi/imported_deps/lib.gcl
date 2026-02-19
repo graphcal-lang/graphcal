@@ -1,0 +1,3 @@
+// Library file: param x and node y that depends on @x.
+param x: Dimensionless = 10.0;
+node y: Dimensionless = @x * 2.0;

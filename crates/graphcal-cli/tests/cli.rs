@@ -917,3 +917,54 @@ fn eval_assertions_compile_error_exit_code() {
         "expected exit code 2 for compile error"
     );
 }
+
+#[test]
+fn eval_imported_node_with_deps() {
+    // Bug 2: imported nodes whose expressions contain @-references must
+    // have their dependencies tracked so the evaluation DAG is correct.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/imported_deps/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|l| l.contains('x') && l.contains("10")),
+        "expected x = 10 in output: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains('y') && l.contains("20")),
+        "expected y = 20 in output: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains('z') && l.contains("21")),
+        "expected z = 21 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_explicit_index_import() {
+    // Bug 3: `use "./lib.gcl" { Color }` should import the Color index explicitly.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/explicit_index/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("favorite") && l.contains("Red") && l.contains('1')),
+        "expected favorite[Red] = 1 in output: {stdout}"
+    );
+}

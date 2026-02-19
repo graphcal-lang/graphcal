@@ -1618,6 +1618,9 @@ impl<'src> Parser<'src> {
                         args.push(self.parse_expr()?);
                         while self.lexer.peek() == Some(&Token::Comma) {
                             self.lexer.next_token();
+                            if self.lexer.peek() == Some(&Token::RParen) {
+                                break; // trailing comma
+                            }
                             args.push(self.parse_expr()?);
                         }
                     }

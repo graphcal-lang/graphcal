@@ -746,3 +746,102 @@ fn to_int_rejects_out_of_range() {
         )
         .unwrap();
 }
+
+// ============================================================================
+// BUG 5 (reported): Trailing commas in function call arguments
+//
+// Trailing commas ARE allowed in index map literals and struct literals,
+// but were rejected in function call arguments. This is now fixed.
+// ============================================================================
+
+#[test]
+fn fn_call_trailing_comma() {
+    let source = r#"
+fn add(a: Dimensionless, b: Dimensionless) -> Dimensionless = a + b;
+node result: Dimensionless = add(1.0, 2.0,);
+"#;
+    let result = compile_and_eval(source).unwrap();
+    let val = find_value(&result, "result");
+    assert!(
+        (val - 3.0).abs() < f64::EPSILON,
+        "add(1.0, 2.0,) should be 3.0 but got {val}"
+    );
+}
+
+#[test]
+fn fn_call_single_arg_trailing_comma() {
+    let source = r#"
+fn identity(x: Dimensionless) -> Dimensionless = x;
+node result: Dimensionless = identity(42.0,);
+"#;
+    let result = compile_and_eval(source).unwrap();
+    let val = find_value(&result, "result");
+    assert!(
+        (val - 42.0).abs() < f64::EPSILON,
+        "identity(42.0,) should be 42.0 but got {val}"
+    );
+}
+
+// ============================================================================
+// BUG 9 (reported): Multi-dimensional indexed assertions
+//
+// `assert` only accepted `Bool` or `Bool[SingleIndex]`. Now it accepts
+// arbitrarily nested `Bool[I1][I2]...`.
+// ============================================================================
+
+#[test]
+fn assert_multi_dimensional_indexed() {
+    let source = r#"
+index Row = { RowA, RowB }
+index Col = { ColA, ColB }
+
+param val: Dimensionless[Row, Col] = {
+    Row::RowA: { Col::ColA: 5.0, Col::ColB: 3.0 },
+    Row::RowB: { Col::ColA: 7.0, Col::ColB: 1.0 },
+};
+
+assert all_positive = for r: Row, c: Col {
+    @val[r, c] > 0.0
+};
+"#;
+    let result = compile_and_eval(source).unwrap();
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, r, _)| matches!(r, graphcal_eval::eval::AssertResult::Pass)),
+        "all values are positive, assertion should pass"
+    );
+}
+
+#[test]
+fn assert_three_dimensional_indexed() {
+    let source = r#"
+index Layer = { Layer1, Layer2 }
+index Band = { Band1, Band2 }
+index Channel = { Ch1, Ch2 }
+
+param val: Dimensionless[Layer, Band, Channel] = {
+    Layer::Layer1: {
+        Band::Band1: { Channel::Ch1: 1.0, Channel::Ch2: 2.0 },
+        Band::Band2: { Channel::Ch1: 3.0, Channel::Ch2: 4.0 },
+    },
+    Layer::Layer2: {
+        Band::Band1: { Channel::Ch1: 5.0, Channel::Ch2: 6.0 },
+        Band::Band2: { Channel::Ch1: 7.0, Channel::Ch2: 8.0 },
+    },
+};
+
+assert all_positive = for l: Layer, b: Band, c: Channel {
+    @val[l, b, c] > 0.0
+};
+"#;
+    let result = compile_and_eval(source).unwrap();
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, r, _)| matches!(r, graphcal_eval::eval::AssertResult::Pass)),
+        "all values are positive, 3D assertion should pass"
+    );
+}

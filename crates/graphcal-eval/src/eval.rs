@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource};
@@ -365,6 +366,9 @@ pub fn compile_and_eval_project(
 
     // Collect imported names from imported files based on `use` statements.
     let mut imported = ImportedNames::default();
+    // Track which type-system declarations (dims/units/indexes/types) are explicitly
+    // imported from each file, so we only register those (not everything in the file).
+    let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for decl in &root_file.ast.declarations {
         if let DeclKind::Use(use_decl) = &decl.kind {
             let import_path = root_path
@@ -401,6 +405,12 @@ pub fn compile_and_eval_project(
                     Some(ImportedDecl::Assert(expr, span)) => {
                         imported.asserts.push((local_name, expr, span));
                     }
+                    Some(ImportedDecl::TypeSystem) => {
+                        imported_type_system_names
+                            .entry(import_canonical.clone())
+                            .or_default()
+                            .insert(use_item.name.name.clone());
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -417,13 +427,20 @@ pub fn compile_and_eval_project(
     // Lower root AST → IR (includes root file declarations + functions in registry)
     let mut ir = crate::ir::lower_with_imports(&root_file.ast, root_src, &imported)?;
 
-    // Register imported file declarations (dims/units/indexes/structs) into IR's registry
+    // Register only explicitly imported type-system declarations from imported files.
     for file_path in &project.load_order {
         if *file_path == project.root {
             continue;
         }
-        let loaded = &project.files[file_path];
-        crate::ir::register_file_declarations(&loaded.ast, &mut ir.registry, &loaded.named_source)?;
+        if let Some(names) = imported_type_system_names.get(file_path) {
+            let loaded = &project.files[file_path];
+            crate::ir::register_selected_declarations(
+                &loaded.ast,
+                &mut ir.registry,
+                &loaded.named_source,
+                names,
+            )?;
+        }
     }
 
     // Validate and apply overrides to IR
@@ -539,6 +556,7 @@ pub fn compile_to_tir_project(
     let root_src = &root_file.named_source;
 
     let mut imported = ImportedNames::default();
+    let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for decl in &root_file.ast.declarations {
         if let DeclKind::Use(use_decl) = &decl.kind {
             let import_path = root_path
@@ -575,6 +593,12 @@ pub fn compile_to_tir_project(
                     Some(ImportedDecl::Assert(expr, span)) => {
                         imported.asserts.push((local_name, expr, span));
                     }
+                    Some(ImportedDecl::TypeSystem) => {
+                        imported_type_system_names
+                            .entry(import_canonical.clone())
+                            .or_default()
+                            .insert(use_item.name.name.clone());
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -594,8 +618,15 @@ pub fn compile_to_tir_project(
         if *file_path == project.root {
             continue;
         }
-        let loaded = &project.files[file_path];
-        crate::ir::register_file_declarations(&loaded.ast, &mut ir.registry, &loaded.named_source)?;
+        if let Some(names) = imported_type_system_names.get(file_path) {
+            let loaded = &project.files[file_path];
+            crate::ir::register_selected_declarations(
+                &loaded.ast,
+                &mut ir.registry,
+                &loaded.named_source,
+                names,
+            )?;
+        }
     }
 
     let tir = crate::tir::type_resolve(ir, root_src)?;
@@ -626,6 +657,9 @@ enum ImportedDecl {
         graphcal_syntax::ast::AssertBody,
         graphcal_syntax::span::Span,
     ),
+    /// A type-system declaration (dimension, unit, index, or struct type).
+    /// These are registered into the `Registry`, not into `ImportedNames`.
+    TypeSystem,
 }
 
 /// Find a declaration by name in a file's AST.
@@ -658,6 +692,18 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             }
             DeclKind::Assert(a) if a.name.value.as_str() == name => {
                 return Some(ImportedDecl::Assert(a.body.clone(), decl.span));
+            }
+            DeclKind::Dimension(d) if d.name.value.as_str() == name => {
+                return Some(ImportedDecl::TypeSystem);
+            }
+            DeclKind::Unit(u) if u.name.value.as_str() == name => {
+                return Some(ImportedDecl::TypeSystem);
+            }
+            DeclKind::Index(idx) if idx.name.value.as_str() == name => {
+                return Some(ImportedDecl::TypeSystem);
+            }
+            DeclKind::Type(t) if t.name.value.as_str() == name => {
+                return Some(ImportedDecl::TypeSystem);
             }
             _ => {}
         }
@@ -1110,6 +1156,50 @@ fn evaluate_plan(
     }
 }
 
+/// Recursively check an indexed assertion value (possibly multi-dimensional).
+///
+/// For single-index: `Bool[Mode]` — entries are `Bool` values.
+/// For multi-index: `Bool[Col][Row]` — entries are nested `Indexed` values.
+fn check_indexed_assert(
+    index_name: &IndexName,
+    entries: &IndexMap<VariantName, RuntimeValue>,
+) -> AssertResult {
+    let mut failing_labels = Vec::new();
+    for (variant, value) in entries {
+        match value {
+            RuntimeValue::Bool(true) => {}
+            RuntimeValue::Bool(false) => {
+                failing_labels.push(format!("{index_name}::{variant}"));
+            }
+            RuntimeValue::Indexed {
+                index_name: inner_index,
+                entries: inner_entries,
+            } => {
+                // Recurse into nested dimension
+                match check_indexed_assert(inner_index, inner_entries) {
+                    AssertResult::Pass => {}
+                    AssertResult::Fail { message } => {
+                        failing_labels.push(format!("{index_name}::{variant} > {message}"));
+                    }
+                    err @ AssertResult::Error { .. } => return err,
+                }
+            }
+            other => {
+                return AssertResult::Error {
+                    message: format!("expected Bool for {index_name}::{variant}, got {other:?}"),
+                };
+            }
+        }
+    }
+    if failing_labels.is_empty() {
+        AssertResult::Pass
+    } else {
+        AssertResult::Fail {
+            message: format!("failed at {}", failing_labels.join(", ")),
+        }
+    }
+}
+
 /// Evaluate a single assert body and return an `AssertResult`.
 #[expect(
     clippy::too_many_lines,
@@ -1142,35 +1232,7 @@ fn evaluate_assert_body(
                 Ok(RuntimeValue::Indexed {
                     index_name,
                     entries,
-                }) => {
-                    let mut failing_variants = Vec::new();
-                    for (variant, value) in &entries {
-                        match value {
-                            RuntimeValue::Bool(true) => {}
-                            RuntimeValue::Bool(false) => {
-                                failing_variants.push(variant.to_string());
-                            }
-                            other => {
-                                return AssertResult::Error {
-                                    message: format!(
-                                        "expected Bool for {index_name}::{variant}, got {other:?}"
-                                    ),
-                                };
-                            }
-                        }
-                    }
-                    if failing_variants.is_empty() {
-                        AssertResult::Pass
-                    } else {
-                        AssertResult::Fail {
-                            message: format!(
-                                "failed at {}: {}",
-                                index_name,
-                                failing_variants.join(", ")
-                            ),
-                        }
-                    }
-                }
+                }) => check_indexed_assert(&index_name, &entries),
                 Ok(other) => AssertResult::Error {
                     message: format!("expected Bool, got {other:?}"),
                 },
