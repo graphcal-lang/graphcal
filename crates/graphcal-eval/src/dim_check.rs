@@ -117,7 +117,12 @@ pub fn check_dimensions_tir(
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
-                if inferred != InferredType::Bool {
+                let is_bool = inferred == InferredType::Bool
+                    || matches!(
+                        &inferred,
+                        InferredType::Indexed { element, .. } if **element == InferredType::Bool
+                    );
+                if !is_bool {
                     return Err(GraphcalError::AssertBodyNotBool {
                         found: format_inferred_type(&inferred, &tir.registry),
                         src: src.clone(),

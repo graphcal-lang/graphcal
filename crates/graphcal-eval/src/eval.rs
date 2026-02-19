@@ -1139,6 +1139,38 @@ fn evaluate_assert_body(
                 Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
                     message: "assertion evaluated to false".to_string(),
                 },
+                Ok(RuntimeValue::Indexed {
+                    index_name,
+                    entries,
+                }) => {
+                    let mut failing_variants = Vec::new();
+                    for (variant, value) in &entries {
+                        match value {
+                            RuntimeValue::Bool(true) => {}
+                            RuntimeValue::Bool(false) => {
+                                failing_variants.push(variant.to_string());
+                            }
+                            other => {
+                                return AssertResult::Error {
+                                    message: format!(
+                                        "expected Bool for {index_name}::{variant}, got {other:?}"
+                                    ),
+                                };
+                            }
+                        }
+                    }
+                    if failing_variants.is_empty() {
+                        AssertResult::Pass
+                    } else {
+                        AssertResult::Fail {
+                            message: format!(
+                                "failed at {}: {}",
+                                index_name,
+                                failing_variants.join(", ")
+                            ),
+                        }
+                    }
+                }
                 Ok(other) => AssertResult::Error {
                     message: format!("expected Bool, got {other:?}"),
                 },
