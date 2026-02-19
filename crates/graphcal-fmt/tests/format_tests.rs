@@ -188,3 +188,33 @@ fn format_no_unnecessary_parens() {
         "Unnecessary parens added: {formatted}"
     );
 }
+
+#[test]
+fn format_attribute_no_args() {
+    let source = "#[lazy]\nnode x: Dimensionless = 1.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("#[lazy]\nnode x"),
+        "Attribute not preserved: {formatted}"
+    );
+}
+
+#[test]
+fn format_attribute_with_args() {
+    let source = "#[assumes(pressure_safe, temp_bounded)]\nnode x: Dimensionless = 1.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("#[assumes(pressure_safe, temp_bounded)]"),
+        "Attribute args not preserved: {formatted}"
+    );
+}
+
+#[test]
+fn format_multiple_attributes() {
+    let source = "#[lazy]\n#[assumes(x)]\nnode y: Dimensionless = 1.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("#[lazy]\n#[assumes(x)]\nnode y"),
+        "Multiple attributes not preserved: {formatted}"
+    );
+}

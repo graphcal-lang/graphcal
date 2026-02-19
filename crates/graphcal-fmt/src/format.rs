@@ -1,6 +1,6 @@
 use graphcal_syntax::ast::{
-    BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimTerm, Expr, ExprKind,
-    FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
+    Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimTerm, Expr,
+    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
     GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind, LetBinding, MapEntry, MatchArm,
     MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind,
     UnaryOp, UnitDecl, UnitDef, UnitExpr, UseDecl, VariantDecl,
@@ -135,7 +135,7 @@ fn is_nil(doc: &RcDoc<'static>) -> bool {
 // ---------------------------------------------------------------------------
 
 fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static> {
-    match &decl.kind {
+    let body = match &decl.kind {
         DeclKind::Param(d) => format_param_decl(fmt, d),
         DeclKind::Node(d) => format_node_decl(fmt, d),
         DeclKind::Const(d) => format_const_decl(fmt, d),
@@ -145,7 +145,35 @@ fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static> {
         DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Use(d) => format_use_decl(fmt, d),
+    };
+
+    if decl.attributes.is_empty() {
+        body
+    } else {
+        let mut parts: Vec<RcDoc<'static>> = Vec::new();
+        for attr in &decl.attributes {
+            parts.push(format_attribute(attr));
+            parts.push(RcDoc::hardline());
+        }
+        parts.push(body);
+        RcDoc::concat(parts)
     }
+}
+
+fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
+    let mut doc = RcDoc::text("#[").append(RcDoc::text(attr.name.name.clone()));
+    if !attr.args.is_empty() {
+        let args = attr
+            .args
+            .iter()
+            .map(|a| RcDoc::text(a.name.clone()))
+            .collect::<Vec<_>>();
+        doc = doc
+            .append(RcDoc::text("("))
+            .append(RcDoc::intersperse(args, RcDoc::text(", ")))
+            .append(RcDoc::text(")"));
+    }
+    doc.append(RcDoc::text("]"))
 }
 
 /// `param name: Type = expr;`

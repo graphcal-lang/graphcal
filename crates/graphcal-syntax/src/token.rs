@@ -86,6 +86,10 @@ pub enum Token {
     #[token("=>")]
     FatArrow,
 
+    // Attribute prefix
+    #[token("#")]
+    Hash,
+
     // Delimiters
     #[token("(")]
     LParen,
@@ -164,6 +168,7 @@ impl std::fmt::Display for Token {
             Self::ColonColon => write!(f, "::"),
             Self::Pipe => write!(f, "|"),
             Self::FatArrow => write!(f, "=>"),
+            Self::Hash => write!(f, "#"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
@@ -335,6 +340,34 @@ mod tests {
     fn lex_logical_operators() {
         let tokens = lex_tokens("&& || !");
         assert_eq!(tokens, vec![Token::AmpAmp, Token::PipePipe, Token::Bang,]);
+    }
+
+    #[test]
+    fn lex_attribute() {
+        let tokens = lex_tokens("#[lazy]");
+        assert_eq!(
+            tokens,
+            vec![Token::Hash, Token::LBracket, Token::Ident, Token::RBracket,]
+        );
+    }
+
+    #[test]
+    fn lex_attribute_with_args() {
+        let tokens = lex_tokens("#[assumes(x, y)]");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Hash,
+                Token::LBracket,
+                Token::Ident,
+                Token::LParen,
+                Token::Ident,
+                Token::Comma,
+                Token::Ident,
+                Token::RParen,
+                Token::RBracket,
+            ]
+        );
     }
 
     #[test]

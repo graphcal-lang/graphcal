@@ -10,9 +10,18 @@ pub struct File {
     pub declarations: Vec<Declaration>,
 }
 
+/// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: Ident,
+    pub args: Vec<Ident>,
+    pub span: Span,
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone)]
 pub struct Declaration {
+    pub attributes: Vec<Attribute>,
     pub kind: DeclKind,
     pub span: Span,
 }
@@ -593,6 +602,7 @@ mod tests {
     fn construct_ast_by_hand() {
         let file = File {
             declarations: vec![Declaration {
+                attributes: vec![],
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {
