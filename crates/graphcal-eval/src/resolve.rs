@@ -22,7 +22,7 @@ pub struct ImportedNames {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     pub functions: Vec<(String, FnDecl, Span)>,
-    pub asserts: Vec<(String, Expr, Span)>,
+    pub asserts: Vec<(String, AssertBody, Span)>,
 }
 
 /// The kind of a declaration (used for source-order tracking).
@@ -43,8 +43,8 @@ pub struct ResolvedFile {
     pub params: Vec<(String, Expr, Span)>,
     /// Node declarations in source order: (name, expr, span).
     pub nodes: Vec<(String, Expr, Span)>,
-    /// Assert declarations in source order: (name, expr, span).
-    pub asserts: Vec<(String, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of `CONST_REF` references (const deps).
@@ -227,21 +227,32 @@ pub fn resolve_with_imports(
             | DeclKind::Index(_)
             | DeclKind::Use(_) => {}
             DeclKind::Assert(a) => {
-                let AssertBody::Expr(body_expr) = &a.body;
-                // Validate references in assert body (asserts CAN use @)
-                let (_graph_refs, _const_refs) = extract_all_refs(
-                    body_expr,
-                    &all_runtime_names,
-                    &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
-                    &user_fn_names,
-                    src,
-                )?;
-                // Check that assert body doesn't reference other assert names via @
-                check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                // Collect all expressions from the assert body for validation
+                let body_exprs: Vec<&Expr> = match &a.body {
+                    AssertBody::Expr(expr) => vec![expr],
+                    AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => vec![actual, expected, tolerance],
+                };
+                for body_expr in &body_exprs {
+                    // Validate references in assert body (asserts CAN use @)
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        body_expr,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    // Check that assert body doesn't reference other assert names via @
+                    check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                }
                 let aname = a.name.value.to_string();
-                asserts.push((aname, body_expr.clone(), decl.span));
+                asserts.push((aname, a.body.clone(), decl.span));
             }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
@@ -323,7 +334,7 @@ pub fn resolve_with_imports(
     all_nodes.extend(nodes);
     let mut all_functions = imported.functions.clone();
     all_functions.extend(functions);
-    let mut all_asserts: Vec<(String, Expr, Span)> = imported.asserts.clone();
+    let mut all_asserts: Vec<(String, AssertBody, Span)> = imported.asserts.clone();
     all_asserts.extend(asserts);
 
     // Prepend imported source_order entries

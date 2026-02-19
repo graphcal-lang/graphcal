@@ -620,7 +620,10 @@ enum ImportedDecl {
         graphcal_syntax::span::Span,
     ),
     Fn(graphcal_syntax::ast::FnDecl, graphcal_syntax::span::Span),
-    Assert(graphcal_syntax::ast::Expr, graphcal_syntax::span::Span),
+    Assert(
+        graphcal_syntax::ast::AssertBody,
+        graphcal_syntax::span::Span,
+    ),
 }
 
 /// Find a declaration by name in a file's AST.
@@ -652,10 +655,7 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
                 return Some(ImportedDecl::Fn(f.clone(), decl.span));
             }
             DeclKind::Assert(a) if a.name.value.as_str() == name => {
-                let body_expr = match &a.body {
-                    graphcal_syntax::ast::AssertBody::Expr(expr) => expr.clone(),
-                };
-                return Some(ImportedDecl::Assert(body_expr, decl.span));
+                return Some(ImportedDecl::Assert(a.body.clone(), decl.span));
             }
             _ => {}
         }
@@ -1081,11 +1081,11 @@ fn evaluate_plan(
 
     // Evaluate assertions in source order
     let assertions: Vec<(DeclName, AssertResult)> = plan
-        .assert_expressions
+        .assert_bodies
         .iter()
-        .map(|(name, body_expr)| {
-            let result = eval_expr(
-                body_expr,
+        .map(|(name, body)| {
+            let assert_result = evaluate_assert_body(
+                body,
                 &values,
                 &empty_locals,
                 &builtin_consts,
@@ -1093,18 +1093,6 @@ fn evaluate_plan(
                 &tir.registry,
                 src,
             );
-            let assert_result = match result {
-                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
-                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
-                    message: "assertion evaluated to false".to_string(),
-                },
-                Ok(other) => AssertResult::Error {
-                    message: format!("expected Bool, got {other:?}"),
-                },
-                Err(e) => AssertResult::Error {
-                    message: format!("{e}"),
-                },
-            };
             (DeclName::new(name), assert_result)
         })
         .collect();
@@ -1116,6 +1104,143 @@ fn evaluate_plan(
         all,
         assertions,
         base_dim_symbols: tir.registry.base_dim_symbols().clone(),
+    }
+}
+
+/// Evaluate a single assert body and return an `AssertResult`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "tolerance evaluation has multiple eval_expr calls and error handling"
+)]
+fn evaluate_assert_body(
+    body: &graphcal_syntax::ast::AssertBody,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> AssertResult {
+    match body {
+        graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
+            match eval_expr(
+                body_expr,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
+                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
+                    message: "assertion evaluated to false".to_string(),
+                },
+                Ok(other) => AssertResult::Error {
+                    message: format!("expected Bool, got {other:?}"),
+                },
+                Err(e) => AssertResult::Error {
+                    message: format!("{e}"),
+                },
+            }
+        }
+        graphcal_syntax::ast::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative,
+        } => {
+            let actual_val = match eval_expr(
+                actual,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar actual, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+            let expected_val = match eval_expr(
+                expected,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar expected, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+            let tolerance_val = match eval_expr(
+                tolerance,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "tolerance values are small integers"
+                )]
+                Ok(RuntimeValue::Int(i)) => i as f64,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar tolerance, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+
+            let delta = (actual_val - expected_val).abs();
+            let limit = if *is_relative {
+                expected_val.abs() * tolerance_val / 100.0
+            } else {
+                tolerance_val
+            };
+
+            if delta <= limit {
+                AssertResult::Pass
+            } else {
+                let tol_display = if *is_relative {
+                    format!("{tolerance_val}%")
+                } else {
+                    format!("{tolerance_val}")
+                };
+                AssertResult::Fail {
+                    message: format!(
+                        "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
+                    ),
+                }
+            }
+        }
     }
 }
 

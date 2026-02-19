@@ -55,6 +55,17 @@ pub struct AssertDecl {
 pub enum AssertBody {
     /// Plain boolean expression: `assert name = expr;`
     Expr(Expr),
+    /// Tolerance: `assert name = actual ~= expected +/- tolerance;`
+    Tolerance {
+        /// The actual value expression (left of `~=`).
+        actual: Box<Expr>,
+        /// The expected value expression (right of `~=`).
+        expected: Box<Expr>,
+        /// The tolerance expression (right of `+/-`).
+        tolerance: Box<Expr>,
+        /// Whether the tolerance is relative (`%`).
+        is_relative: bool,
+    },
 }
 
 /// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`

@@ -469,10 +469,28 @@ fn format_use_decl(_fmt: &Formatter<'_>, d: &UseDecl) -> RcDoc<'static> {
 
 /// `assert name = expr;`
 fn format_assert_decl(fmt: &mut Formatter<'_>, d: &AssertDecl) -> RcDoc<'static> {
-    let AssertBody::Expr(body_expr) = &d.body;
-    RcDoc::text(format!("assert {} = ", d.name.value))
-        .append(format_expr(fmt, body_expr))
-        .append(RcDoc::text(";"))
+    match &d.body {
+        AssertBody::Expr(body_expr) => RcDoc::text(format!("assert {} = ", d.name.value))
+            .append(format_expr(fmt, body_expr))
+            .append(RcDoc::text(";")),
+        AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative,
+        } => {
+            let mut doc = RcDoc::text(format!("assert {} = ", d.name.value))
+                .append(format_expr(fmt, actual))
+                .append(RcDoc::text(" ~= "))
+                .append(format_expr(fmt, expected))
+                .append(RcDoc::text(" +/- "))
+                .append(format_expr(fmt, tolerance));
+            if *is_relative {
+                doc = doc.append(RcDoc::text("%"));
+            }
+            doc.append(RcDoc::text(";"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

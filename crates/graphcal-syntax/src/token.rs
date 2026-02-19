@@ -87,6 +87,10 @@ pub enum Token {
     Pipe,
     #[token("=>")]
     FatArrow,
+    #[token("~=")]
+    TildeEq,
+    #[token("+/-")]
+    PlusMinus,
 
     // Attribute prefix
     #[token("#")]
@@ -171,6 +175,8 @@ impl std::fmt::Display for Token {
             Self::ColonColon => write!(f, "::"),
             Self::Pipe => write!(f, "|"),
             Self::FatArrow => write!(f, "=>"),
+            Self::TildeEq => write!(f, "~="),
+            Self::PlusMinus => write!(f, "+/-"),
             Self::Hash => write!(f, "#"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),

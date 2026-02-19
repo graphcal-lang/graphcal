@@ -268,15 +268,36 @@ impl<'src> Parser<'src> {
             .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
             .into_spanned::<DeclName>();
         self.expect(Token::Eq)?;
-        let body_expr = self.parse_expr()?;
+        let first_expr = self.parse_expr()?;
+
+        let body = if self.lexer.peek() == Some(&Token::TildeEq) {
+            // Tolerance syntax: actual ~= expected +/- tolerance [%]
+            self.lexer.next_token(); // consume ~=
+            let expected = self.parse_expr()?;
+            self.expect(Token::PlusMinus)?;
+            // Parse tolerance as a unary expr (not full expr) so `%` isn't consumed as modulo
+            let tolerance = self.parse_unary()?;
+            let is_relative = if self.lexer.peek() == Some(&Token::Percent) {
+                self.lexer.next_token(); // consume %
+                true
+            } else {
+                false
+            };
+            AssertBody::Tolerance {
+                actual: Box::new(first_expr),
+                expected: Box::new(expected),
+                tolerance: Box::new(tolerance),
+                is_relative,
+            }
+        } else {
+            AssertBody::Expr(first_expr)
+        };
+
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            kind: DeclKind::Assert(AssertDecl {
-                name,
-                body: AssertBody::Expr(body_expr),
-            }),
+            kind: DeclKind::Assert(AssertDecl { name, body }),
             span,
         })
     }

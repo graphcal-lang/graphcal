@@ -63,6 +63,10 @@ pub enum InferredType {
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "dimension checking for all declaration kinds including assert tolerance"
+)]
 pub fn check_dimensions_tir(
     tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
@@ -100,25 +104,108 @@ pub fn check_dimensions_tir(
         }
     }
 
-    // Validate that assert bodies infer to Bool
-    for (name, body_expr, span) in &tir.asserts {
-        let inferred = infer_type(
-            body_expr,
-            &declared_types,
-            &empty_locals,
-            &tir.registry,
-            &builtin_fns,
-            &tir.resolved_fn_sigs,
-            src,
-        )?;
-        if inferred != InferredType::Bool {
-            return Err(GraphcalError::AssertBodyNotBool {
-                found: format_inferred_type(&inferred, &tir.registry),
-                src: src.clone(),
-                span: (*span).into(),
-            });
+    // Validate assert bodies
+    for (_name, body, span) in &tir.asserts {
+        match body {
+            graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
+                let inferred = infer_type(
+                    body_expr,
+                    &declared_types,
+                    &empty_locals,
+                    &tir.registry,
+                    &builtin_fns,
+                    &tir.resolved_fn_sigs,
+                    src,
+                )?;
+                if inferred != InferredType::Bool {
+                    return Err(GraphcalError::AssertBodyNotBool {
+                        found: format_inferred_type(&inferred, &tir.registry),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
+            }
+            graphcal_syntax::ast::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+                is_relative,
+            } => {
+                let actual_type = infer_type(
+                    actual,
+                    &declared_types,
+                    &empty_locals,
+                    &tir.registry,
+                    &builtin_fns,
+                    &tir.resolved_fn_sigs,
+                    src,
+                )?;
+                let expected_type = infer_type(
+                    expected,
+                    &declared_types,
+                    &empty_locals,
+                    &tir.registry,
+                    &builtin_fns,
+                    &tir.resolved_fn_sigs,
+                    src,
+                )?;
+                let tolerance_type = infer_type(
+                    tolerance,
+                    &declared_types,
+                    &empty_locals,
+                    &tir.registry,
+                    &builtin_fns,
+                    &tir.resolved_fn_sigs,
+                    src,
+                )?;
+
+                // actual and expected must have the same dimension
+                let actual_dim = expect_scalar(&actual_type, &tir.registry, src, actual.span)?;
+                let expected_dim =
+                    expect_scalar(&expected_type, &tir.registry, src, expected.span)?;
+                if actual_dim != expected_dim {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: tir.registry.format_dimension(&actual_dim),
+                        found: tir.registry.format_dimension(&expected_dim),
+                        src: src.clone(),
+                        span: expected.span.into(),
+                        help: "actual and expected in tolerance assertion must have the same dimension".to_string(),
+                    });
+                }
+
+                // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
+                let tolerance_ok = if *is_relative {
+                    // Relative tolerance: accept Int or Dimensionless scalar
+                    matches!(tolerance_type, InferredType::Int)
+                        || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
+                } else {
+                    let tolerance_dim =
+                        expect_scalar(&tolerance_type, &tir.registry, src, tolerance.span)?;
+                    tolerance_dim == actual_dim
+                };
+                if !tolerance_ok {
+                    let (expected_str, help_str) = if *is_relative {
+                        (
+                            "Dimensionless".to_string(),
+                            "relative tolerance (%) must be dimensionless".to_string(),
+                        )
+                    } else {
+                        (
+                            tir.registry.format_dimension(&actual_dim),
+                            "absolute tolerance must have the same dimension as actual/expected"
+                                .to_string(),
+                        )
+                    };
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: expected_str,
+                        found: format_inferred_type(&tolerance_type, &tir.registry),
+                        src: src.clone(),
+                        span: tolerance.span.into(),
+                        help: help_str,
+                    });
+                }
+            }
         }
-        let _ = name; // used for future error context
     }
 
     Ok(())

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
 use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
@@ -44,8 +44,8 @@ pub struct IR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Assert declarations in source order: (name, expr, span).
-    pub asserts: Vec<(String, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of const-references (const deps).

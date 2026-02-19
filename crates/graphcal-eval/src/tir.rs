@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{Expr, FnDecl, MulDivOp, TypeExpr, TypeExprKind};
+use graphcal_syntax::ast::{AssertBody, Expr, FnDecl, MulDivOp, TypeExpr, TypeExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
 use graphcal_syntax::span::Span;
@@ -134,8 +134,8 @@ pub struct TIR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Assert declarations in source order: (name, expr, span).
-    pub asserts: Vec<(String, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
     /// For each const, the set of const-references (const deps).
