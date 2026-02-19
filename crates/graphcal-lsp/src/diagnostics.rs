@@ -9,9 +9,14 @@ use graphcal_eval::eval::CompileError;
 
 use crate::convert::byte_offset_to_position;
 
-/// Convert per-node runtime errors in an `EvalResult` to LSP diagnostics.
-pub fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> Vec<Diagnostic> {
+/// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
+pub fn eval_result_to_diagnostics(
+    result: &graphcal_eval::eval::EvalResult,
+    source: &str,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+
+    // Node/param evaluation errors
     for (name, r, _) in &result.all {
         if let Err(err) = r {
             diagnostics.push(Diagnostic {
@@ -24,6 +29,40 @@ pub fn eval_result_to_diagnostics(result: &graphcal_eval::eval::EvalResult) -> V
             });
         }
     }
+
+    // Assertion failures
+    for (name, assert_result, span) in &result.assertions {
+        use graphcal_eval::eval::AssertResult;
+
+        let (message, severity) = match assert_result {
+            AssertResult::Pass => continue,
+            AssertResult::Fail { message } => {
+                let mut msg = format!("assertion `{}` failed: {message}", name.as_str());
+                if let Some(affected) = result.assumes_map.get(name.as_str()) {
+                    use std::fmt::Write;
+                    let _ = write!(msg, " (affected: {})", affected.join(", "));
+                }
+                (msg, DiagnosticSeverity::WARNING)
+            }
+            AssertResult::Error { message } => (
+                format!("assertion `{}` error: {message}", name.as_str()),
+                DiagnosticSeverity::WARNING,
+            ),
+        };
+
+        let start = byte_offset_to_position(source, span.offset);
+        let end = byte_offset_to_position(source, span.offset + span.len);
+
+        diagnostics.push(Diagnostic {
+            range: Range { start, end },
+            severity: Some(severity),
+            code: Some(NumberOrString::String("graphcal::A001".to_string())),
+            source: Some("graphcal".to_string()),
+            message,
+            ..Default::default()
+        });
+    }
+
     diagnostics
 }
 
@@ -135,14 +174,14 @@ mod tests {
 
     fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
         match compile_and_eval_named(source, name) {
-            Ok(result) => eval_result_to_diagnostics(&result),
+            Ok(result) => eval_result_to_diagnostics(&result, source),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
         match compile_and_eval_project(path, &HashMap::new()) {
-            Ok(result) => eval_result_to_diagnostics(&result),
+            Ok(result) => eval_result_to_diagnostics(&result, source),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }
     }
@@ -172,6 +211,59 @@ mod tests {
         assert!(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
             "expected N002 error code, got {code:?}"
+        );
+    }
+
+    #[test]
+    fn passing_assertion_produces_no_diagnostic() {
+        let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
+        let diags = produce_diagnostics(source, "test.gcl");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn failing_assertion_produces_warning() {
+        let source = "param x: Dimensionless = 10.0;\nparam y: Dimensionless = 20.0;\nassert x_greater = @x > @y;";
+        let diags = produce_diagnostics(source, "test.gcl");
+        let assert_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                d.code.as_ref().is_some_and(
+                    |c| matches!(c, NumberOrString::String(s) if s == "graphcal::A001"),
+                )
+            })
+            .collect();
+        assert_eq!(assert_diags.len(), 1);
+        assert_eq!(assert_diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert!(assert_diags[0].message.contains("x_greater"));
+        assert!(assert_diags[0].message.contains("failed"));
+        // Verify span is non-default (points to the assert declaration)
+        assert_ne!(assert_diags[0].range, Range::default());
+    }
+
+    #[test]
+    fn failing_assertion_with_assumes_mentions_affected() {
+        let source = concat!(
+            "param pressure: Dimensionless = 200.0;\n",
+            "param max_pressure: Dimensionless = 150.0;\n",
+            "assert pressure_safe = @pressure < @max_pressure;\n",
+            "#[assumes(pressure_safe)]\n",
+            "node margin: Dimensionless = @max_pressure - @pressure;\n",
+        );
+        let diags = produce_diagnostics(source, "test.gcl");
+        let assert_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                d.code.as_ref().is_some_and(
+                    |c| matches!(c, NumberOrString::String(s) if s == "graphcal::A001"),
+                )
+            })
+            .collect();
+        assert_eq!(assert_diags.len(), 1);
+        assert!(
+            assert_diags[0].message.contains("margin"),
+            "expected diagnostic to mention affected node 'margin', got: {}",
+            assert_diags[0].message
         );
     }
 

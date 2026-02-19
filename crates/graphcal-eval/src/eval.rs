@@ -16,6 +16,7 @@ use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{DeclName, FieldName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
+use graphcal_syntax::span::Span;
 
 use std::path::Path;
 
@@ -199,8 +200,8 @@ pub struct EvalResult {
     pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
-    /// Assertion results in source order.
-    pub assertions: Vec<(DeclName, AssertResult)>,
+    /// Assertion results in source order: (name, result, span).
+    pub assertions: Vec<(DeclName, AssertResult, Span)>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
@@ -213,10 +214,9 @@ impl EvalResult {
     pub fn has_errors(&self) -> bool {
         self.params.iter().any(|(_, r)| r.is_err())
             || self.nodes.iter().any(|(_, r)| r.is_err())
-            || self
-                .assertions
-                .iter()
-                .any(|(_, r)| matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. }))
+            || self.assertions.iter().any(|(_, r, _)| {
+                matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
+            })
     }
 }
 
@@ -1082,10 +1082,10 @@ fn evaluate_plan(
         .collect();
 
     // Evaluate assertions in source order
-    let assertions: Vec<(DeclName, AssertResult)> = plan
+    let assertions: Vec<(DeclName, AssertResult, Span)> = plan
         .assert_bodies
         .iter()
-        .map(|(name, body)| {
+        .map(|(name, body, span)| {
             let assert_result = evaluate_assert_body(
                 body,
                 &values,
@@ -1095,7 +1095,7 @@ fn evaluate_plan(
                 &tir.registry,
                 src,
             );
-            (DeclName::new(name), assert_result)
+            (DeclName::new(name), assert_result, *span)
         })
         .collect();
 

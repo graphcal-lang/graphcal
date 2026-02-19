@@ -162,7 +162,7 @@ fn main() {
                     let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                         || result.nodes.iter().any(|(_, r)| r.is_err());
                     let has_assert_failures = !no_assert
-                        && result.assertions.iter().any(|(_, r)| {
+                        && result.assertions.iter().any(|(_, r, _)| {
                             matches!(
                                 r,
                                 graphcal_eval::eval::AssertResult::Fail { .. }
@@ -418,10 +418,10 @@ fn print_text(result: &EvalResult, no_assert: bool) {
         let max_assert_len = result
             .assertions
             .iter()
-            .map(|(n, _)| n.as_str().len())
+            .map(|(n, _, _)| n.as_str().len())
             .max()
             .unwrap_or(0);
-        for (name, assert_result) in &result.assertions {
+        for (name, assert_result, _) in &result.assertions {
             let n = name.as_str();
             let w = max_assert_len;
             match assert_result {
@@ -584,7 +584,7 @@ fn print_json(result: &EvalResult, no_assert: bool) {
         let assertions: BTreeMap<&str, serde_json::Value> = result
             .assertions
             .iter()
-            .map(|(n, r)| {
+            .map(|(n, r, _)| {
                 let val = match r {
                     AssertResult::Pass => serde_json::json!({"status": "pass"}),
                     AssertResult::Fail { message } => {
