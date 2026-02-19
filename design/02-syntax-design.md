@@ -81,7 +81,7 @@ fn orbital_velocity(gm: Length^3 / Time^2, r: Length) -> Velocity {
 - **Semicolon rules:** Block-form `node` currently requires trailing `;` but `fn` and `type` do not. Should this be unified?
 - **String syntax:** Single-quoted vs double-quoted? Interpolation support?
 - **Pattern matching:** Should `match` expressions be supported for tagged unions?
-- **Attributes:** The `#[output]`, `#[python]` attribute syntax is defined but the full attribute system is not specified.
+- **Attributes:** The `#[...]` attribute system is designed in [19-assertions-and-testing.md](./19-assertions-and-testing.md). Initial attributes: `#[assumes(...)]` for engineering assumptions, `#[lazy]` for deferred evaluation.
 - **Numeric literals:** Separator support (e.g., `200_000 m`)? Scientific notation (e.g., `3.98e5 km^3/s^2`)?
 - **Operator precedence:** Should `^` bind tighter than unary `-`? Should unit attachment (`400 km`) have specific precedence?
 

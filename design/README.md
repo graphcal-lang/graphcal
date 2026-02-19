@@ -58,6 +58,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [16](./16-git-workflow.md) | Git Workflow & Scenarios | Mostly settled | `.graph` as source of truth, `.scenario` overlays |
 | [17](./17-error-messages.md) | Error Messages & Diagnostics | Design settled | Error codes, format, miette-based diagnostic system |
 | [18](./18-non-si-dimensions.md) | Non-SI Base Dimensions | Proposal | User-defined base dimensions (Information, Currency, etc.) |
+| [19](./19-assertions-and-testing.md) | Assertions & Testing | Design in progress | `assert` declarations, `#[...]` attributes, `#[assumes]`, tolerance syntax |
 
 ## How to Use These Files
 

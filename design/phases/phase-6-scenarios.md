@@ -51,17 +51,12 @@ language works with scalars, dimensions, structs, functions, and tables.
 
 ### Assertions (Regression Testing)
 
-- [ ] **Assertion syntax:**
-      ```yaml
-      assertions:
-        fuel_mass: 2847.3 kg +/- 0.1 kg
-        transfer.total_dv: 3935 m/s +/- 1 m/s
-      ```
-      Tolerance syntax: `+/- value`, `+/- percentage%`?
-- [ ] **Assertion on table values:** Can assertions reference table cells?
-      E.g., `maneuvers[0].fuel: 1523.7 kg +/- 1 kg`?
-- [ ] **Assertion failure output:** What does a failed assertion look like?
-      Expected vs actual, with tolerance shown.
+**Moved to in-language `assert` declarations.** See [19-assertions-and-testing.md](../19-assertions-and-testing.md).
+
+Assertions were originally designed as part of `.scenario` YAML files, but have been
+redesigned as a first-class `assert` declaration kind in the `.gcl` language. This
+ensures assertions get type checking, dimension checking, formatter, and LSP support.
+Scenario files remain purely for parameter overrides.
 
 ### CLI Commands
 
@@ -96,9 +91,10 @@ base: <path>                    # optional, defaults to project root
 extends: <scenario-path>        # optional, single inheritance
 overrides:
   <param_name>: <value>         # value uses .graph literal syntax
-assertions:
-  <node_name>: <value> +/- <tolerance>
 ```
+
+Note: Assertions have moved to in-language `assert` declarations.
+See [19-assertions-and-testing.md](../19-assertions-and-testing.md).
 
 New CLI commands:
 
@@ -118,8 +114,7 @@ cellgraph fmt <path>                       # format .graph files (if formatter e
 | **Scenario parser** | Parse `.scenario` YAML files |
 | **Override applicator** | Apply param overrides to the graph before evaluation |
 | **Override validator** | Check that overridden names exist and are `param`s |
-| **Assertion checker** | Compare evaluated values against expected values with tolerance |
-| **`cellgraph check`** | Unified command: parse + type-check + evaluate + assert |
+| **`cellgraph check`** | Unified command: parse + type-check + evaluate |
 | **`--set` flag** | Parse CLI param overrides |
 | **Output formatter** | JSON and CSV output options |
 | **Exit codes** | 0 = success, 1 = assertion failure, 2 = compile error |
