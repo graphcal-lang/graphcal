@@ -1,8 +1,8 @@
 mod json_input;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::process;
 
 use graphcal_eval::eval::{EvalResult, compile_and_eval_project, compile_to_tir_project};
@@ -19,6 +19,20 @@ struct Cli {
 enum Commands {
     /// Evaluate a .gcl file
     Eval {
+        /// Path to the .gcl file
+        file: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        format: OutputFormat,
+        /// Override a param value: --set 'name=expr'
+        #[arg(long)]
+        set: Vec<String>,
+        /// JSON input file for param values
+        #[arg(long)]
+        input: Option<PathBuf>,
+    },
+    /// Watch a .gcl file for changes and re-evaluate automatically
+    Watch {
         /// Path to the .gcl file
         file: PathBuf,
         /// Output format
@@ -91,60 +105,7 @@ fn main() {
             set,
             input,
         } => {
-            // Parse --set overrides
-            let mut overrides = std::collections::HashMap::new();
-            for s in &set {
-                let Some((name, value_str)) = s.split_once('=') else {
-                    eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
-                    process::exit(1);
-                };
-                let name = name.trim();
-                let value_str = value_str.trim();
-                match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
-                    Ok(expr) => {
-                        overrides.insert(DeclName::new(name), expr);
-                    }
-                    Err(e) => {
-                        eprintln!("error: failed to parse --set value for `{name}`: {e}");
-                        process::exit(1);
-                    }
-                }
-            }
-
-            // Parse --input JSON file
-            if let Some(input_path) = &input {
-                let source = std::fs::read_to_string(&file).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read {}: {e}", file.display());
-                    process::exit(1);
-                });
-                let ast =
-                    graphcal_syntax::parser::Parser::with_name(&source, &file.to_string_lossy())
-                        .parse_file()
-                        .unwrap_or_else(|e| {
-                            eprintln!("error: failed to parse {}: {e}", file.display());
-                            process::exit(1);
-                        });
-
-                let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
-                    eprintln!(
-                        "error: cannot read input file {}: {e}",
-                        input_path.display()
-                    );
-                    process::exit(1);
-                });
-
-                let json_overrides =
-                    json_input::json_to_overrides(&json_str, &ast).unwrap_or_else(|e| {
-                        eprintln!("error: {e}");
-                        process::exit(1);
-                    });
-
-                // Merge: --set takes precedence over --input
-                for (name, expr) in json_overrides {
-                    overrides.entry(name).or_insert(expr);
-                }
-            }
-
+            let overrides = parse_overrides(&file, &set, input.as_deref());
             match compile_and_eval_project(&file, &overrides) {
                 Ok(result) => {
                     match format {
@@ -161,7 +122,207 @@ fn main() {
                 }
             }
         }
+        Commands::Watch {
+            file,
+            format,
+            set,
+            input,
+        } => {
+            let overrides = parse_overrides(&file, &set, input.as_deref());
+            run_watch(&file, &format, &overrides);
+        }
     }
+}
+
+/// Parse `--set` and `--input` overrides into a unified override map.
+///
+/// `--set` overrides take precedence over `--input` JSON overrides.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn parse_overrides(
+    file: &Path,
+    set: &[String],
+    input: Option<&Path>,
+) -> HashMap<DeclName, graphcal_syntax::ast::Expr> {
+    let mut overrides = HashMap::new();
+
+    // Parse --set overrides
+    for s in set {
+        let Some((name, value_str)) = s.split_once('=') else {
+            eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
+            process::exit(1);
+        };
+        let name = name.trim();
+        let value_str = value_str.trim();
+        match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
+            Ok(expr) => {
+                overrides.insert(DeclName::new(name), expr);
+            }
+            Err(e) => {
+                eprintln!("error: failed to parse --set value for `{name}`: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    // Parse --input JSON file
+    if let Some(input_path) = input {
+        let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            eprintln!("error: cannot read {}: {e}", file.display());
+            process::exit(1);
+        });
+        let ast = graphcal_syntax::parser::Parser::with_name(&source, &file.to_string_lossy())
+            .parse_file()
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to parse {}: {e}", file.display());
+                process::exit(1);
+            });
+
+        let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
+            eprintln!(
+                "error: cannot read input file {}: {e}",
+                input_path.display()
+            );
+            process::exit(1);
+        });
+
+        let json_overrides =
+            json_input::json_to_overrides(&json_str, &ast).unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                process::exit(1);
+            });
+
+        // Merge: --set takes precedence over --input
+        for (name, expr) in json_overrides {
+            overrides.entry(name).or_insert(expr);
+        }
+    }
+
+    overrides
+}
+
+/// Evaluate a file and print results. Returns `true` if evaluation succeeded
+/// without errors.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn evaluate_and_print(
+    file: &Path,
+    format: &OutputFormat,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> bool {
+    match compile_and_eval_project(file, overrides) {
+        Ok(result) => {
+            match format {
+                OutputFormat::Text => print_text(&result),
+                OutputFormat::Json => print_json(&result),
+            }
+            !result.has_errors()
+        }
+        Err(e) => {
+            eprintln!("{:?}", miette::Report::new(e));
+            false
+        }
+    }
+}
+
+/// Watch a .gcl file and its project for changes, re-evaluating on each change.
+///
+/// Watches the directory containing the root file recursively for `.gcl` file
+/// modifications. On each detected change, clears the terminal and re-evaluates.
+///
+/// This function runs indefinitely until interrupted (Ctrl+C) or the watcher
+/// encounters a fatal error.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn run_watch(
+    file: &Path,
+    format: &OutputFormat,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) {
+    use notify::{EventKind, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let watch_dir = file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+
+    // Set up file watcher with a channel for events.
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to create file watcher: {e}");
+        process::exit(1);
+    });
+
+    watcher
+        .watch(&watch_dir, RecursiveMode::Recursive)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "error: failed to watch directory {}: {e}",
+                watch_dir.display()
+            );
+            process::exit(1);
+        });
+
+    // Initial evaluation
+    clear_screen();
+    evaluate_and_print(file, format, overrides);
+    eprintln!("\nWatching for changes... (press Ctrl+C to stop)");
+
+    loop {
+        let event = match rx.recv() {
+            Ok(Ok(event)) => event,
+            Ok(Err(e)) => {
+                eprintln!("watch error: {e}");
+                continue;
+            }
+            // Channel closed — watcher was dropped.
+            Err(_) => break,
+        };
+
+        // Only react to file modifications and creations of .gcl files.
+        if !matches!(
+            event.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        ) {
+            continue;
+        }
+        let is_gcl = event
+            .paths
+            .iter()
+            .any(|p| p.extension().is_some_and(|ext| ext == "gcl"));
+        if !is_gcl {
+            continue;
+        }
+
+        // Debounce: drain additional events within 100ms to coalesce rapid saves.
+        while rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+
+        // Re-evaluate
+        clear_screen();
+        evaluate_and_print(file, format, overrides);
+        eprintln!("\nWatching for changes... (press Ctrl+C to stop)");
+    }
+}
+
+/// Clear the terminal screen using ANSI escape codes.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, screen clearing goes to stderr"
+)]
+fn clear_screen() {
+    // ESC[2J clears the screen, ESC[H moves cursor to top-left.
+    eprint!("\x1b[2J\x1b[H");
 }
 
 #[expect(

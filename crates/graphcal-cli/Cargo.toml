@@ -17,6 +17,7 @@ graphcal-fmt = { workspace = true }
 graphcal-lsp = { workspace = true }
 graphcal-syntax = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
+notify = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 

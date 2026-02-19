@@ -25,6 +25,7 @@ graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.1.0" }
 graphcal-syntax = { path = "crates/graphcal-syntax", version = "0.1.0" }
 logos = "0.16.1"
 miette = "7.6.0"
+notify = "7"
 petgraph = "0.8.3"
 pretty = "0.12.5"
 proptest = "1.10.0"

@@ -135,6 +135,22 @@ fn load_file_dfs(
     Ok(())
 }
 
+/// Discover all file paths in a project without full compilation.
+///
+/// Loads and parses the project starting from `root_path` to resolve `use`
+/// declarations, then returns the canonical paths of all files in the project
+/// in topological (dependency) order. This is useful for file watchers (CLI
+/// `watch` command, LSP) to know which files to monitor for changes.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if the root file cannot be read or parsed,
+/// or if circular imports are detected.
+pub fn project_file_paths(root_path: &Path) -> Result<Vec<PathBuf>, CompileError> {
+    let project = load_project(root_path)?;
+    Ok(project.load_order)
+}
+
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 fn io_not_found(path: &Path) -> CompileError {
     CompileError::Eval(GraphcalError::FileNotFound {
@@ -241,5 +257,30 @@ mod tests {
         // d should appear first in load order
         let d_canonical = dir.path().join("d.gcl").canonicalize().unwrap();
         assert_eq!(project.load_order[0], d_canonical);
+    }
+
+    #[test]
+    fn project_file_paths_standalone() {
+        let dir = setup_temp_dir(&[("standalone.gcl", "param x: Dimensionless = 1.0;")]);
+        let paths = project_file_paths(&dir.path().join("standalone.gcl")).unwrap();
+        assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
+    fn project_file_paths_multi_file() {
+        let dir = setup_temp_dir(&[
+            ("helper.gcl", "param y: Dimensionless = 2.0;"),
+            (
+                "main.gcl",
+                "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+            ),
+        ]);
+        let paths = project_file_paths(&dir.path().join("main.gcl")).unwrap();
+        assert_eq!(paths.len(), 2);
+        // Helper should come before main (topological order)
+        let helper_canonical = dir.path().join("helper.gcl").canonicalize().unwrap();
+        let main_canonical = dir.path().join("main.gcl").canonicalize().unwrap();
+        assert_eq!(paths[0], helper_canonical);
+        assert_eq!(paths[1], main_canonical);
     }
 }

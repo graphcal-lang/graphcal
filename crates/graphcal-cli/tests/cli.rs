@@ -711,3 +711,129 @@ fn eval_input_json_with_hohmann() {
         "expected parking_alt=300 in output: {stdout}"
     );
 }
+
+// --- Watch command tests ---
+
+#[test]
+fn watch_produces_initial_output() {
+    use std::time::Duration;
+
+    // Start the watch command
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .args(["watch", &fixture("rocket.gcl")])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to start graphcal watch");
+
+    // Give it time to evaluate and print initial output
+    std::thread::sleep(Duration::from_secs(1));
+
+    // Kill the process
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    // Should have produced the evaluation output on stdout
+    assert!(
+        stdout.contains("dry_mass") && stdout.contains("delta_v"),
+        "expected rocket output on stdout: {stdout}"
+    );
+    // Should show the watching message on stderr
+    assert!(
+        stderr.contains("Watching for changes"),
+        "expected watching message on stderr: {stderr}"
+    );
+}
+
+#[test]
+fn watch_nonexistent_file_shows_error() {
+    use std::time::Duration;
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .args(["watch", "/tmp/nonexistent_graphcal_file.gcl"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to start graphcal watch");
+
+    std::thread::sleep(Duration::from_secs(1));
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // Should show an error about the file not being found
+    assert!(
+        stderr.contains("error") || stderr.contains("not found") || stderr.contains("No such"),
+        "expected error for nonexistent file: {stderr}"
+    );
+}
+
+#[test]
+fn watch_with_set_flag() {
+    use std::time::Duration;
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .args(["watch", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to start graphcal watch");
+
+    std::thread::sleep(Duration::from_secs(1));
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // isp should show 450, not default 320
+    assert!(
+        stdout.lines().any(|l| l.contains("isp") && l.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+}
+
+#[test]
+fn watch_reacts_to_file_change() {
+    use std::time::Duration;
+
+    // Create a temporary .gcl file
+    let dir = std::env::temp_dir().join("graphcal_watch_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.gcl");
+    std::fs::write(&file, "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;")
+        .unwrap();
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .args(["watch", file.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to start graphcal watch");
+
+    // Wait for initial evaluation
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Modify the file — change the param value
+    std::fs::write(
+        &file,
+        "param x: Dimensionless = 42.0;\nnode y: Dimensionless = @x + 1.0;",
+    )
+    .unwrap();
+
+    // Wait for the watcher to detect the change and re-evaluate
+    std::thread::sleep(Duration::from_secs(1));
+
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // After the file change, the output should contain the new value (43.0 for y)
+    assert!(
+        stdout.contains("43"),
+        "expected y=43 after file change: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
