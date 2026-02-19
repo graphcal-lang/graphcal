@@ -144,12 +144,12 @@ graphcal format --check
 
 ---
 
-## `graphcal check`
+## `graphcal typecheck`
 
-Check `.gcl` files for errors without evaluation. Performs parsing and type/dimension checking.
+Check `.gcl` files for type/dimension errors without evaluation. Performs parsing and type/dimension checking.
 
 ```bash
-graphcal check [PATHS]...
+graphcal typecheck [PATHS]...
 ```
 
 **Arguments:**
@@ -162,13 +162,13 @@ graphcal check [PATHS]...
 
 ```bash
 # Check all .gcl files in the current directory
-graphcal check
+graphcal typecheck
 
 # Check a specific file
-graphcal check rocket.gcl
+graphcal typecheck rocket.gcl
 
 # Check a directory
-graphcal check my_project/
+graphcal typecheck my_project/
 ```
 
 **Exit codes:**

@@ -42,8 +42,8 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
-    /// Check .gcl files for errors without evaluation
-    Check {
+    /// Check .gcl files for type/dimension errors without evaluation
+    Typecheck {
         /// Files or directories to check (default: current directory)
         paths: Vec<PathBuf>,
     },
@@ -79,7 +79,7 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Check { paths } => {
+        Commands::Typecheck { paths } => {
             run_check(&paths);
         }
         Commands::Format { paths, check } => {
