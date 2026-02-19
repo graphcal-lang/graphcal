@@ -583,6 +583,7 @@ fn format_unit_expr_inline(unit_expr: &UnitExpr) -> RcDoc<'static> {
 // Expressions
 // ---------------------------------------------------------------------------
 
+#[expect(clippy::too_many_lines, reason = "match on ExprKind variants")]
 fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     match &expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => {
@@ -684,6 +685,9 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_unfold(fmt, init, prev_name, curr_name, body),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
+        ExprKind::VariantLiteral { index, variant } => {
+            RcDoc::text(format!("{}::{}", index.value, variant.value))
+        }
     }
 }
 
@@ -957,7 +961,10 @@ fn format_match(fmt: &mut Formatter<'_>, scrutinee: &Expr, arms: &[MatchArm]) ->
 }
 
 fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
-    let name = RcDoc::text(p.variant_name.value.as_str().to_string());
+    let name = p.qualified_index.as_ref().map_or_else(
+        || RcDoc::text(p.variant_name.value.as_str().to_string()),
+        |index| RcDoc::text(format!("{}::{}", index.value, p.variant_name.value)),
+    );
     if p.bindings.is_empty() {
         return name;
     }

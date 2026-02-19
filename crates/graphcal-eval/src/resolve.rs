@@ -505,7 +505,8 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => Ok(()),
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_no_graph_refs(lhs, src)?;
             check_no_graph_refs(rhs, src)
@@ -610,7 +611,8 @@ fn check_no_graph_refs_in_fn_expr(
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => Ok(()),
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_no_graph_refs_in_fn_expr(lhs, fn_name, src)?;
             check_no_graph_refs_in_fn_expr(rhs, fn_name, src)
@@ -703,7 +705,8 @@ fn check_no_assert_graph_refs(
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => Ok(()),
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_no_assert_graph_refs(lhs, assert_names, src)?;
             check_no_assert_graph_refs(rhs, assert_names, src)
@@ -812,7 +815,8 @@ fn collect_const_refs(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => Ok(()),
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::GraphRef(_) => unreachable!("should be caught by check_no_graph_refs"),
         ExprKind::ConstRef(ident) => {
             if builtin_consts.contains_key(ident.value.as_str()) {
@@ -1140,7 +1144,8 @@ fn collect_all_refs(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => Ok(()),
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::GraphRef(ident) => {
             if all_runtime_names.contains(ident.value.as_str()) {
                 graph_refs.insert(ident.value.to_string());
@@ -1555,7 +1560,8 @@ pub fn collect_graph_refs(
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::ConstRef(_)
-        | ExprKind::LocalRef(_) => {}
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
     }
 }
 

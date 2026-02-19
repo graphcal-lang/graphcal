@@ -29,7 +29,6 @@ module.exports = grammar({
     // `identifier {` could be a struct_construction or a bare identifier
     // followed by a brace body (e.g., in `if condition { ... }`).
     [$._primary_expr, $.struct_construction],
-
   ],
 
   rules: {
@@ -492,17 +491,26 @@ module.exports = grammar({
       field("body", $._expr),
     ),
 
-    match_pattern: $ => seq(
-      field("variant", $.identifier),
-      optional(seq(
-        "{",
+    match_pattern: $ => choice(
+      // Qualified variant pattern for index match: Maneuver::Departure
+      seq(
+        field("index", $.identifier),
+        "::",
+        field("variant", $.identifier),
+      ),
+      // Bare variant pattern for tagged union match: Variant { bindings }
+      seq(
+        field("variant", $.identifier),
         optional(seq(
-          $.pattern_binding,
-          repeat(seq(",", $.pattern_binding)),
-          optional(","),
+          "{",
+          optional(seq(
+            $.pattern_binding,
+            repeat(seq(",", $.pattern_binding)),
+            optional(","),
+          )),
+          "}",
         )),
-        "}",
-      )),
+      ),
     ),
 
     pattern_binding: $ => choice(
@@ -617,6 +625,7 @@ module.exports = grammar({
       $.map_literal,
       $.block_expr,
       $.parenthesized_expr,
+      $.qualified_variant,
       $.identifier,
     ),
 

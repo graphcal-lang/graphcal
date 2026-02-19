@@ -352,3 +352,19 @@ fn error_unknown_attribute() {
     let rendered = render_error(source, "unknown_attribute.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Index variant match error tests ---
+
+#[test]
+fn error_non_exhaustive_index_match() {
+    let source = include_str!("../../../tests/fixtures/errors/non_exhaustive_index_match.gcl");
+    let rendered = render_error(source, "non_exhaustive_index_match.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_match_with_bindings() {
+    let source = include_str!("../../../tests/fixtures/errors/index_match_with_bindings.gcl");
+    let rendered = render_error(source, "index_match_with_bindings.gcl");
+    insta::assert_snapshot!(rendered);
+}

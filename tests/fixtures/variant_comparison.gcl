@@ -1,0 +1,28 @@
+// variant_comparison.gcl -- Comparing loop variables to index variant literals
+dimension Velocity = Length / Time;
+
+index Maneuver = { Departure, Correction, Insertion }
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    Maneuver::Correction: 0.12 km/s,
+    Maneuver::Insertion: 1.83 km/s,
+};
+
+// Pattern 1: if + equality comparison (variant on RHS)
+node selective: Velocity[Maneuver] = for m: Maneuver {
+    if m == Maneuver::Departure { @delta_v[m] * 2.0 }
+    else { @delta_v[m] }
+};
+
+// Pattern 2: if + equality comparison (variant on LHS)
+node selective2: Velocity[Maneuver] = for m: Maneuver {
+    if Maneuver::Insertion == m { @delta_v[m] * 3.0 }
+    else { @delta_v[m] }
+};
+
+// Pattern 3: if + inequality comparison
+node not_correction: Velocity[Maneuver] = for m: Maneuver {
+    if m != Maneuver::Correction { @delta_v[m] }
+    else { 0.0 m/s }
+};

@@ -1594,6 +1594,20 @@ impl<'src> Parser<'src> {
                 } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
                     // Struct/variant construction with fields: TypeName { field1: expr, field2 }
                     self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
+                } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
+                    // Qualified variant literal: Maneuver::Departure
+                    self.lexer.next_token(); // consume '::'
+                    let variant = self
+                        .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                        .into_spanned::<VariantName>();
+                    let full_span = span.merge(variant.span);
+                    Ok(Expr {
+                        kind: ExprKind::VariantLiteral {
+                            index: Spanned::new(IndexName::new(name), span),
+                            variant,
+                        },
+                        span: full_span,
+                    })
                 } else if is_pascal_case(&name) {
                     // Bare variant construction (no fields): `Nominal`
                     Ok(Expr {
@@ -1659,11 +1673,41 @@ impl<'src> Parser<'src> {
                         // Consume the ident to peek at what's next
                         let (_, saved_span) = self.lexer.next_token().expect("peek confirmed");
                         if self.lexer.peek() == Some(&Token::ColonColon) {
-                            // Map literal: { Ident :: Variant : expr, ... }
-                            self.parse_map_literal_after_first_ident(
-                                start_span,
-                                Spanned::new(IndexName::new(saved_text), saved_span),
-                            )
+                            // Could be map literal or VariantLiteral in block.
+                            // Consume `::` and variant, then check next token.
+                            self.lexer.next_token(); // consume '::'
+                            let variant_ident =
+                                self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+                            if self.lexer.peek() == Some(&Token::Colon) {
+                                // Map literal: { Index::Variant: expr, ... }
+                                self.parse_map_literal_after_first_entry(
+                                    start_span,
+                                    Spanned::new(IndexName::new(saved_text), saved_span),
+                                    variant_ident.into_spanned::<VariantName>(),
+                                )
+                            } else {
+                                // Block containing a VariantLiteral expression
+                                let variant_span = variant_ident.span;
+                                let variant = variant_ident.into_spanned::<VariantName>();
+                                let full_span = saved_span.merge(variant_span);
+                                let first_expr = Expr {
+                                    kind: ExprKind::VariantLiteral {
+                                        index: Spanned::new(IndexName::new(saved_text), saved_span),
+                                        variant,
+                                    },
+                                    span: full_span,
+                                };
+                                let expr = self.continue_parsing_expr(first_expr)?;
+                                let (_, end_span) = self.expect(Token::RBrace)?;
+                                let span = start_span.merge(end_span);
+                                Ok(Expr {
+                                    kind: ExprKind::Block {
+                                        stmts: vec![],
+                                        expr: Box::new(expr),
+                                    },
+                                    span,
+                                })
+                            }
                         } else {
                             // Not a map literal — reparse as block with already-consumed tokens
                             // The consumed ident is the start of an expression in the block
@@ -1767,11 +1811,34 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a match pattern: `VariantName { field1, field2: binding }` or bare `VariantName`
+    /// Parse a match pattern:
+    /// - Tagged union: `VariantName { field1, field2: binding }` or bare `VariantName`
+    /// - Index variant: `Index::Variant` (qualified form)
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
-        let variant_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
-        let variant_name = Spanned::new(VariantName::new(&variant_ident.name), variant_ident.span);
-        let start_span = variant_ident.span;
+        let first_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let start_span = first_ident.span;
+
+        if self.lexer.peek() == Some(&Token::ColonColon) {
+            // Qualified index variant pattern: Index::Variant
+            self.lexer.next_token(); // consume '::'
+            let variant_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let end_span = variant_ident.span;
+            return Ok(MatchPattern {
+                qualified_index: Some(Spanned::new(
+                    IndexName::new(&first_ident.name),
+                    first_ident.span,
+                )),
+                variant_name: Spanned::new(
+                    VariantName::new(&variant_ident.name),
+                    variant_ident.span,
+                ),
+                bindings: vec![],
+                span: start_span.merge(end_span),
+            });
+        }
+
+        // Tagged union pattern: bare VariantName or VariantName { fields }
+        let variant_name = Spanned::new(VariantName::new(&first_ident.name), first_ident.span);
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LBrace) {
             self.lexer.next_token(); // consume '{'
@@ -1795,6 +1862,7 @@ impl<'src> Parser<'src> {
         };
 
         Ok(MatchPattern {
+            qualified_index: None,
             variant_name,
             bindings,
             span: start_span.merge(end_span),
@@ -2020,23 +2088,19 @@ impl<'src> Parser<'src> {
 
     // --- Map literal ---
 
-    /// Parse a map literal after `{` and the first `Index` ident have been consumed.
-    /// The `::` is the next token to consume.
-    fn parse_map_literal_after_first_ident(
+    /// Parse a map literal after `{`, `Index`, `::`, and `Variant` have already been consumed.
+    /// The `:` (colon before value) is the next token to consume.
+    fn parse_map_literal_after_first_entry(
         &mut self,
         brace_span: Span,
         first_index: Spanned<IndexName>,
+        first_variant: Spanned<VariantName>,
     ) -> Result<Expr, ParseError> {
-        // Consume `::` (we already peeked and confirmed it)
-        self.expect(Token::ColonColon)?;
-        let variant = self
-            .parse_ident_with_casing("PascalCase", is_pascal_case)?
-            .into_spanned::<VariantName>();
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
             index: first_index,
-            variant,
+            variant: first_variant,
             value,
         }];
         // Parse remaining entries
@@ -2176,9 +2240,30 @@ impl<'src> Parser<'src> {
                 _ => break,
             }
         }
-        // For simplicity, don't handle binary operators here.
-        // This path is only hit for `{ PascalCase ... }` blocks which are rare
-        // and typically just `{ StructName { ... } }`.
+        // Handle binary operators (comparison, arithmetic, logical).
+        // Check for comparison operators (==, !=, <, >, <=, >=).
+        let op = match self.lexer.peek() {
+            Some(Token::EqEq) => Some(BinOp::Eq),
+            Some(Token::BangEq) => Some(BinOp::Ne),
+            Some(Token::Lt) => Some(BinOp::Lt),
+            Some(Token::Gt) => Some(BinOp::Gt),
+            Some(Token::LtEq) => Some(BinOp::Le),
+            Some(Token::GtEq) => Some(BinOp::Ge),
+            _ => None,
+        };
+        if let Some(op) = op {
+            self.lexer.next_token();
+            let rhs = self.parse_expr()?;
+            let span = expr.span.merge(rhs.span);
+            expr = Expr {
+                kind: ExprKind::BinOp {
+                    op,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                span,
+            };
+        }
         Ok(expr)
     }
 

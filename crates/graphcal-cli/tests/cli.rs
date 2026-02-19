@@ -968,3 +968,105 @@ fn eval_explicit_index_import() {
         "expected favorite[Red] = 1 in output: {stdout}"
     );
 }
+
+// --- Variant comparison tests ---
+
+#[test]
+fn eval_variant_comparison() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("variant_comparison.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // selective[Departure] = 2*2460 = 4920 m/s (doubled)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("selective[Departure]") && l.contains("4920")),
+        "expected selective[Departure] = 4920 in output: {stdout}"
+    );
+    // selective[Correction] = 120 m/s (unchanged)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("selective[Correction]") && l.contains("120")),
+        "expected selective[Correction] = 120 in output: {stdout}"
+    );
+
+    // selective2[Insertion] = 3*1830 = 5490 m/s (tripled, variant on LHS)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("selective2[Insertion]") && l.contains("5490")),
+        "expected selective2[Insertion] = 5490 in output: {stdout}"
+    );
+
+    // not_correction[Correction] = 0 m/s (zeroed via !=)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("not_correction[Correction]") && l.contains("0 m/s")),
+        "expected not_correction[Correction] = 0 in output: {stdout}"
+    );
+}
+
+// --- Variant match tests ---
+
+#[test]
+fn eval_variant_match() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("variant_match.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // scale_factor[Departure] = 2
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("scale_factor[Departure]") && l.contains('2')),
+        "expected scale_factor[Departure] = 2 in output: {stdout}"
+    );
+    // scaled_dv[Departure] = 2460 * 2 = 4920
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("scaled_dv[Departure]") && l.contains("4920")),
+        "expected scaled_dv[Departure] = 4920 in output: {stdout}"
+    );
+    // scaled_dv[Correction] = 120 * 0.5 = 60
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("scaled_dv[Correction]") && l.contains("60")),
+        "expected scaled_dv[Correction] = 60 in output: {stdout}"
+    );
+
+    // Multi-binding match: adjusted_cost[Departure][Burn] = 2460 * 1.1 = 2706
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("adjusted_cost[Departure][Burn]") && l.contains("2706")),
+        "expected adjusted_cost[Departure][Burn] = 2706 in output: {stdout}"
+    );
+    // adjusted_cost[Departure][Coast] = 0
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("adjusted_cost[Departure][Coast]") && l.contains("0 m/s")),
+        "expected adjusted_cost[Departure][Coast] = 0 in output: {stdout}"
+    );
+}
