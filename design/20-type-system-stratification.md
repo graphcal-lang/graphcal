@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Proposal. Supersedes the ad-hoc layering in docs 03-07 with a single coherent model.
+**Decision level:** Accepted. Supersedes the ad-hoc layering in docs 03-07 with a single coherent model. All open questions resolved.
 
 ## Motivation
 
@@ -379,10 +379,7 @@ This document unifies concepts spread across multiple existing docs:
 - **Axis order significance:** `T[I, J]` and `T[J, I]` are different types. Axis order determines `for` binding order, `scan` direction, and display order. No transpose operation — use explicit `for` to construct the transposed value.
 - **`type` vs `index` for fieldless tagged unions:** Require explicit `index` declaration. A regular `type Foo { A, B }` is NOT usable as a collection axis. The `index` keyword communicates intent and prevents accidental use of marker types as axes.
 - **Can `index` types also carry fields?** No. Indexes are fieldless. If you need data-carrying variants as an axis, compose: use an `index` for the axis and a separate `type` for the per-variant data. Too complex for too little value.
-
-## Open Questions
-
-- **Named index vs range index naming:** Named indexes are tagged unions. Range indexes are scalar sequences — a fundamentally different concept. Sharing the `index` keyword is acceptable for user simplicity, but if a better name emerges for one or both, we could differentiate them. The implementation treats them differently regardless.
+- **Named index vs range index keyword:** Both use `index`. The declaration syntax already disambiguates (`{ A, B, C }` vs `range(...)`), and both serve the same role as collection axes with an identical consumption interface (`for`, indexing, aggregation, `scan`).
 
 ## Dependencies
 
