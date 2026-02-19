@@ -854,13 +854,23 @@ fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDoc<'s
     let entry_docs: Vec<RcDoc<'static>> = entries
         .iter()
         .map(|e| {
-            RcDoc::text(format!(
-                "{}::{}",
-                e.index.value.as_str(),
-                e.variant.value.as_str()
-            ))
-            .append(RcDoc::text(": "))
-            .append(format_expr(fmt, &e.value))
+            let key_doc = if e.keys.len() == 1 {
+                RcDoc::text(format!(
+                    "{}::{}",
+                    e.keys[0].index.value.as_str(),
+                    e.keys[0].variant.value.as_str()
+                ))
+            } else {
+                let key_parts: Vec<String> = e
+                    .keys
+                    .iter()
+                    .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
+                    .collect();
+                RcDoc::text(format!("({})", key_parts.join(", ")))
+            };
+            key_doc
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &e.value))
         })
         .collect();
 

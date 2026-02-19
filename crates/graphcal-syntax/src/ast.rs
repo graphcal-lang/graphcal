@@ -539,11 +539,20 @@ pub struct LetBinding {
     pub span: Span,
 }
 
-/// An entry in a map literal: `Maneuver::Departure: 2.46 km/s`
+/// A single key in a map literal entry: `Index::Variant`
 #[derive(Debug, Clone)]
-pub struct MapEntry {
+pub struct MapEntryKey {
     pub index: Spanned<IndexName>,
     pub variant: Spanned<VariantName>,
+}
+
+/// An entry in a map literal.
+///
+/// Single-axis: `Maneuver::Departure: 2.46 km/s` (keys has 1 element)
+/// Multi-axis:  `(Phase::Launch, Maneuver::Departure): 2.46 km/s` (keys has 2+ elements)
+#[derive(Debug, Clone)]
+pub struct MapEntry {
+    pub keys: Vec<MapEntryKey>,
     pub value: Expr,
 }
 

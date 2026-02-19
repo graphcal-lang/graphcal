@@ -368,3 +368,10 @@ fn error_index_match_with_bindings() {
     let rendered = render_error(source, "index_match_with_bindings.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_nested_indexed_map() {
+    let source = include_str!("../../../tests/fixtures/errors/nested_indexed_map.gcl");
+    let rendered = render_error(source, "nested_indexed_map.gcl");
+    insta::assert_snapshot!(rendered);
+}

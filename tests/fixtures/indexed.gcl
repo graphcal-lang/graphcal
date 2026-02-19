@@ -1,10 +1,29 @@
 // indexed.gcl -- Phase 5 milestone: indexed values
-
 dimension Velocity = Length / Time;
 dimension Mass = Mass;
 
 index Maneuver = { Departure, Correction, Insertion }
 
+index Phase = { Launch, Cruise, Arrival }
+
+param spacecraft_mass: Mass[Phase, Maneuver] = for p: Phase, m: Maneuver { if p == Phase::Launch && m == Maneuver::Departure { 5000.0 kg } else { if p == Phase::Cruise && m == Maneuver::Correction { 4500.0 kg } else { if p == Phase::Arrival && m == Maneuver::Insertion { 4000.0 kg } else { 0.0 kg } } } };
+
+// default for non-applicable combinations
+param spacecraft_mass2: Mass[Phase, Maneuver] = {
+    (Phase::Launch, Maneuver::Departure): 5000.0 kg,
+    (Phase::Launch, Maneuver::Correction): 0.0 kg,
+    (Phase::Launch, Maneuver::Insertion): 0.0 kg,
+    (Phase::Cruise, Maneuver::Departure): 0.0 kg,
+    (Phase::Cruise, Maneuver::Correction): 4500.0 kg,
+    (Phase::Cruise, Maneuver::Insertion): 0.0 kg,
+    (Phase::Arrival, Maneuver::Departure): 0.0 kg,
+    (Phase::Arrival, Maneuver::Correction): 0.0 kg,
+    (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
+};
+
+
+
+// default for non-applicable combinations
 // Indexed param: delta-v per maneuver
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -13,9 +32,7 @@ param delta_v: Velocity[Maneuver] = {
 };
 
 // for comprehension: double each delta-v
-node double_dv: Velocity[Maneuver] = for m: Maneuver {
-    @delta_v[m] * 2.0
-};
+node double_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * 2.0 };
 
 // Aggregation: total delta-v
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });

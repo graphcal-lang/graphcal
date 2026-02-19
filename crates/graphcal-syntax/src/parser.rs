@@ -7,9 +7,9 @@ use crate::ast::{
     AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
     DimExpr, DimExprItem, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl,
     FnParam, ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl,
-    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
-    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
-    UnitExprItem, VariantDecl,
+    IndexDeclKind, LetBinding, MapEntry, MapEntryKey, MatchArm, MatchPattern, MulDivOp, NodeDecl,
+    ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef,
+    UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -1721,6 +1721,9 @@ impl<'src> Parser<'src> {
                         // lowercase ident or other — block expression
                         self.parse_block_after_open_brace(start_span)
                     }
+                } else if self.lexer.peek() == Some(&Token::LParen) {
+                    // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
+                    self.parse_tuple_key_map_literal(start_span)
                 } else {
                     // Not an ident after { — could be `{ let ...` or `{ expr }`
                     self.parse_block_after_open_brace(start_span)
@@ -1775,6 +1778,48 @@ impl<'src> Parser<'src> {
     /// `match expr { Variant1 { field } => body, Variant2 => body }`
     fn parse_match_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Match)?;
+        // Support tuple scrutinee syntax: `match (a, b) { ... }`
+        // by desugaring to nested `if` expressions.
+        if self.lexer.peek() == Some(&Token::LParen) {
+            self.lexer.next_token(); // consume '('
+            let first = self.parse_expr()?;
+            if self.lexer.peek() == Some(&Token::Comma) {
+                let mut tuple_scrutinee = vec![first];
+                while self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                    tuple_scrutinee.push(self.parse_expr()?);
+                }
+                self.expect(Token::RParen)?;
+                self.expect(Token::LBrace)?;
+                let tuple_match = self.parse_tuple_match_arms(&tuple_scrutinee, start_span)?;
+                let (_, end_span) = self.expect(Token::RBrace)?;
+                let span = start_span.merge(end_span);
+                return Ok(Expr {
+                    kind: tuple_match.kind,
+                    span,
+                });
+            }
+            self.expect(Token::RParen)?;
+            self.expect(Token::LBrace)?;
+            let scrutinee = Box::new(first);
+            let mut arms = Vec::new();
+            loop {
+                if self.lexer.peek() == Some(&Token::RBrace) {
+                    break;
+                }
+                arms.push(self.parse_match_arm()?);
+                // Optional comma between arms
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                }
+            }
+            let (_, end_span) = self.expect(Token::RBrace)?;
+            let span = start_span.merge(end_span);
+            return Ok(Expr {
+                kind: ExprKind::Match { scrutinee, arms },
+                span,
+            });
+        }
         let scrutinee = Box::new(self.parse_expr()?);
         self.expect(Token::LBrace)?;
 
@@ -1795,6 +1840,107 @@ impl<'src> Parser<'src> {
         Ok(Expr {
             kind: ExprKind::Match { scrutinee, arms },
             span,
+        })
+    }
+
+    /// Parse tuple-match arms and lower them to nested `if` expressions.
+    ///
+    /// Supported form:
+    /// `match (a, b) { (X, Y) => expr, _ => fallback }`
+    fn parse_tuple_match_arms(
+        &mut self,
+        tuple_scrutinee: &[Expr],
+        start_span: Span,
+    ) -> Result<Expr, ParseError> {
+        let arity = tuple_scrutinee.len();
+        let mut cases: Vec<(Vec<Expr>, Expr)> = Vec::new();
+        let mut fallback: Option<Expr> = None;
+
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+
+            if self.lexer.peek() == Some(&Token::Underscore) {
+                self.lexer.next_token(); // consume '_'
+                self.expect(Token::FatArrow)?;
+                fallback = Some(self.parse_expr()?);
+            } else {
+                self.expect(Token::LParen)?;
+                let mut pattern_elems = Vec::new();
+                loop {
+                    pattern_elems.push(self.parse_expr()?);
+                    if self.lexer.peek() == Some(&Token::Comma) {
+                        self.lexer.next_token();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Token::RParen)?;
+                if pattern_elems.len() != arity {
+                    return Err(self.unexpected_token(
+                        &format!("tuple pattern of arity {arity}"),
+                        &format!("tuple pattern of arity {}", pattern_elems.len()),
+                        start_span,
+                    ));
+                }
+                self.expect(Token::FatArrow)?;
+                let body = self.parse_expr()?;
+                cases.push((pattern_elems, body));
+            }
+
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            }
+        }
+
+        // Build nested if-chain in reverse order.
+        let mut else_expr = if let Some(fallback_expr) = fallback {
+            fallback_expr
+        } else if let Some((_, last_body)) = cases.pop() {
+            last_body
+        } else {
+            return Err(self.unexpected_eof("at least one tuple match arm"));
+        };
+
+        for (pattern, body) in cases.into_iter().rev() {
+            let mut cond: Option<Expr> = None;
+            for (scrutinee_elem, pat_elem) in tuple_scrutinee.iter().zip(pattern.iter()) {
+                let eq = Expr {
+                    kind: ExprKind::BinOp {
+                        op: BinOp::Eq,
+                        lhs: Box::new(scrutinee_elem.clone()),
+                        rhs: Box::new(pat_elem.clone()),
+                    },
+                    span: scrutinee_elem.span.merge(pat_elem.span),
+                };
+                cond = Some(if let Some(prev) = cond {
+                    Expr {
+                        kind: ExprKind::BinOp {
+                            op: BinOp::And,
+                            lhs: Box::new(prev.clone()),
+                            rhs: Box::new(eq.clone()),
+                        },
+                        span: prev.span.merge(eq.span),
+                    }
+                } else {
+                    eq
+                });
+            }
+            let condition = cond.expect("tuple arity checked to be >= 1");
+            else_expr = Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(condition.clone()),
+                    then_branch: Box::new(body.clone()),
+                    else_branch: Box::new(else_expr.clone()),
+                },
+                span: condition.span.merge(else_expr.span),
+            };
+        }
+
+        Ok(Expr {
+            kind: else_expr.kind,
+            span: start_span.merge(else_expr.span),
         })
     }
 
@@ -2074,6 +2220,21 @@ impl<'src> Parser<'src> {
             }
         }
         self.expect(Token::LBrace)?;
+        // Optional tuple-key sugar:
+        // `for p: Phase, m: Maneuver { (p, m) => expr }`
+        if self.lexer.peek() == Some(&Token::LParen) {
+            self.lexer.next_token(); // consume '('
+            loop {
+                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RParen)?;
+            self.expect(Token::FatArrow)?;
+        }
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
@@ -2099,8 +2260,10 @@ impl<'src> Parser<'src> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
-            index: first_index,
-            variant: first_variant,
+            keys: vec![MapEntryKey {
+                index: first_index,
+                variant: first_variant,
+            }],
             value,
         }];
         // Parse remaining entries
@@ -2119,10 +2282,53 @@ impl<'src> Parser<'src> {
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                index,
-                variant,
+                keys: vec![MapEntryKey { index, variant }],
                 value,
             });
+        }
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = brace_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::MapLiteral { entries },
+            span,
+        })
+    }
+
+    /// Parse a tuple-key map literal after `{` has been consumed.
+    ///
+    /// `{ (Index1::Variant1, Index2::Variant2): expr, ... }`
+    fn parse_tuple_key_map_literal(&mut self, brace_span: Span) -> Result<Expr, ParseError> {
+        let mut entries = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            self.expect(Token::LParen)?;
+            let mut keys = Vec::new();
+            loop {
+                let index = self
+                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                    .into_spanned::<IndexName>();
+                self.expect(Token::ColonColon)?;
+                let variant = self
+                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                    .into_spanned::<VariantName>();
+                keys.push(MapEntryKey { index, variant });
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RParen)?;
+            self.expect(Token::Colon)?;
+            let value = self.parse_expr()?;
+            entries.push(MapEntry { keys, value });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
         }
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = brace_span.merge(end_span);
@@ -3973,10 +4179,10 @@ param alt: Length = 400.0 km;
             DeclKind::Param(p) => match &p.value.kind {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
-                    assert_eq!(entries[0].index.value.as_str(), "Maneuver");
-                    assert_eq!(entries[0].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[1].index.value.as_str(), "Maneuver");
-                    assert_eq!(entries[1].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
                 }
                 other => panic!("expected MapLiteral, got {other:?}"),
             },

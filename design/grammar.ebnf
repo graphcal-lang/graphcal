@@ -1,0 +1,720 @@
+(* ================================================================== *)
+(* Graphcal Formal Grammar                                            *)
+(* ISO/IEC 14977 Extended Backus-Naur Form (EBNF)                     *)
+(*                                                                    *)
+(* Notation:                                                          *)
+(*   =     definition                                                 *)
+(*   ,     concatenation                                              *)
+(*   |     alternation                                                *)
+(*   [ ]   optional (0 or 1)                                          *)
+(*   { }   repetition (0 or more)                                     *)
+(*   ( )   grouping                                                   *)
+(*   ;     rule terminator                                            *)
+(*   "x"   terminal symbol                                            *)
+(*   (* *) comment                                                    *)
+(*                                                                    *)
+(* Conventions:                                                       *)
+(*   - Lexical rules use UPPER_SNAKE_CASE names.                      *)
+(*   - Syntactic rules use lower_snake_case names.                    *)
+(*   - Casing constraints on identifiers are noted in comments.       *)
+(* ================================================================== *)
+(* ================================================================== *)
+(* 1. Lexical Grammar                                                 *)
+(* ================================================================== *)
+(* --- Whitespace and comments --- *)
+(* Whitespace (space, tab, carriage return, newline) is ignored
+   between tokens. Line comments start with "//" and extend to the
+   end of the line. There are no block comments. *)
+(* --- Keywords --- *)
+KEYWORD
+   = "param"
+   | "node"
+   | "const"
+   | "if"
+   | "else"
+   | "true"
+   | "false"
+   | "dimension"
+   | "unit"
+   | "type"
+   | "let"
+   | "fn"
+   | "index"
+   | "for"
+   | "use"
+   | "match"
+   | "as"
+   | "assert";
+
+(* The following identifiers are contextual keywords — they are parsed
+   as keywords only in specific syntactic positions and are otherwise
+   valid identifiers: "scan", "unfold", "derive", "range", "step". *)
+(* --- Identifiers --- *)
+LETTER
+   = "a"
+   | "b"
+   | "c"
+   | "d"
+   | "e"
+   | "f"
+   | "g"
+   | "h"
+   | "i"
+   | "j"
+   | "k"
+   | "l"
+   | "m"
+   | "n"
+   | "o"
+   | "p"
+   | "q"
+   | "r"
+   | "s"
+   | "t"
+   | "u"
+   | "v"
+   | "w"
+   | "x"
+   | "y"
+   | "z"
+   | "A"
+   | "B"
+   | "C"
+   | "D"
+   | "E"
+   | "F"
+   | "G"
+   | "H"
+   | "I"
+   | "J"
+   | "K"
+   | "L"
+   | "M"
+   | "N"
+   | "O"
+   | "P"
+   | "Q"
+   | "R"
+   | "S"
+   | "T"
+   | "U"
+   | "V"
+   | "W"
+   | "X"
+   | "Y"
+   | "Z";
+
+UPPER_LETTER
+   = "A"
+   | "B"
+   | "C"
+   | "D"
+   | "E"
+   | "F"
+   | "G"
+   | "H"
+   | "I"
+   | "J"
+   | "K"
+   | "L"
+   | "M"
+   | "N"
+   | "O"
+   | "P"
+   | "Q"
+   | "R"
+   | "S"
+   | "T"
+   | "U"
+   | "V"
+   | "W"
+   | "X"
+   | "Y"
+   | "Z";
+
+LOWER_LETTER
+   = "a"
+   | "b"
+   | "c"
+   | "d"
+   | "e"
+   | "f"
+   | "g"
+   | "h"
+   | "i"
+   | "j"
+   | "k"
+   | "l"
+   | "m"
+   | "n"
+   | "o"
+   | "p"
+   | "q"
+   | "r"
+   | "s"
+   | "t"
+   | "u"
+   | "v"
+   | "w"
+   | "x"
+   | "y"
+   | "z";
+
+DIGIT
+   = "0"
+   | "1"
+   | "2"
+   | "3"
+   | "4"
+   | "5"
+   | "6"
+   | "7"
+   | "8"
+   | "9";
+
+IDENT
+   = LETTER, { LETTER
+   | DIGIT
+   | "_" };
+
+(* Casing conventions enforced by the parser:
+   - lower_snake_case: starts with a lowercase letter, contains only
+     lowercase letters, digits, and underscores.
+     Used for: param, node, fn names, field names, local variables.
+   - UPPER_SNAKE_CASE: starts with an uppercase letter, contains only
+     uppercase letters, digits, and underscores.
+     Used for: const names, built-in constants (PI, E).
+   - PascalCase: starts with an uppercase letter, contains at least
+     one lowercase letter.
+     Used for: type, index, variant names.
+   - Uppercase-starting: starts with an uppercase letter (either
+     PascalCase or UPPER_SNAKE_CASE).
+     Used for: indexed type parameters. *)
+lower_snake_case_ident
+   = LOWER_LETTER, { LOWER_LETTER
+   | DIGIT
+   | "_" };
+
+upper_snake_case_ident
+   = UPPER_LETTER, { UPPER_LETTER
+   | DIGIT
+   | "_" };
+
+(* PascalCase is not expressible purely in EBNF; the semantic
+   constraint is: starts with an uppercase letter and contains at
+   least one lowercase letter. *)
+pascal_case_ident
+   = IDENT;
+
+(* with PascalCase constraint *)
+uppercase_starting_ident
+   = IDENT;
+
+(* starts with uppercase letter *)
+(* --- Numeric literals --- *)
+DIGIT_SEQ
+   = DIGIT, { DIGIT
+   | "_" };
+
+NUMBER
+   = DIGIT_SEQ, [ ".", DIGIT_SEQ ], [ ( "e"
+   | "E" ), [ "+"
+   | "-" ], DIGIT_SEQ ];
+
+(* An integer literal is a NUMBER with no decimal point and no
+   exponent. Integer literals cannot be followed by a unit expression;
+   use a float literal instead (e.g., "42.0 km" not "42 km"). *)
+(* --- String literals --- *)
+STRING_LITERAL
+   = '"', { ? any character except '"' ? }, '"';
+
+(* --- Operators and punctuation --- *)
+(* Listed here for reference; each is used as a terminal in the
+   syntactic grammar below. *)
+(* Arithmetic:  "+"  "-"  "*"  "/"  "^"  "%"              *)
+(* Comparison:  "==" "!=" "<"  ">"  "<=" ">="             *)
+(* Logical:     "&&" "||" "!"                               *)
+(* Assignment:  "="                                         *)
+(* Conversion:  "->"                                        *)
+(* Cast:        "as"                                        *)
+(* Path:        "::"                                        *)
+(* Match:       "=>"                                        *)
+(* Tolerance:   "~=" "+/-"                                  *)
+(* Closure:     "|"                                         *)
+(* Attribute:   "#"                                         *)
+(* Delimiters:  "("  ")"  "{"  "}"  "["  "]"              *)
+(* Separators:  ";"  ","  ":"  "."                         *)
+(* Reference:   "@"                                         *)
+(* Wildcard:    "_"                                         *)
+(* ================================================================== *)
+(* 2. Source File                                                     *)
+(* ================================================================== *)
+source_file
+   = { declaration };
+
+(* ================================================================== *)
+(* 3. Declarations                                                    *)
+(* ================================================================== *)
+declaration
+   = { attribute }, declaration_kind;
+
+attribute
+   = "#", "[", IDENT, [ "(", IDENT, { ",", IDENT }, [ "," ], ")" ], "]";
+
+declaration_kind
+   = param_decl
+   | node_decl
+   | const_decl
+   | dimension_decl
+   | unit_decl
+   | type_decl
+   | fn_decl
+   | index_decl
+   | use_decl
+   | assert_decl;
+
+(* --- param, node, const --- *)
+(* All three require an explicit type annotation. *)
+param_decl
+   = "param", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
+
+node_decl
+   = "node", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
+
+const_decl
+   = "const", upper_snake_case_ident, ":", type_expr, "=", expr, ";";
+
+(* --- dimension --- *)
+dimension_decl
+   = "dimension", IDENT, [ "=", dim_expr ], ";";
+
+(* --- unit --- *)
+unit_decl
+   = "unit", IDENT, ":", dim_expr, [ "=", unit_def ], ";";
+
+unit_def
+   = unit_scale, unit_expr;
+
+unit_scale
+   = NUMBER
+   | "(", expr, ")";
+
+(* The parenthesized form is evaluated at compile time. Only constant
+   expressions are allowed: numbers, PI, E, and arithmetic operators. *)
+(* --- type --- *)
+type_decl
+   = "type", pascal_case_ident, [ generic_params ], [ derive_clause ], "{", [ type_body ], "}";
+
+type_body
+   = field_list (* struct sugar *)
+   | variant_list;
+
+(* tagged union *)
+(* Disambiguation: if the first token inside braces is a
+   lower_snake_case identifier, it is struct sugar (field list).
+   If it is a PascalCase identifier, it is a variant list. *)
+field_list
+   = field_decl, { ",", field_decl }, [ "," ];
+
+field_decl
+   = lower_snake_case_ident, ":", type_expr;
+
+(* Semantic constraint: struct field types must be ValueTypes
+   (type_expr_base), not indexed DeclTypes. You cannot put
+   Velocity[Maneuver] inside a struct field. To index structured
+   data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
+
+variant_list
+   = variant_decl, { variant_decl };
+
+variant_decl
+   = pascal_case_ident, [ "{", [ field_list ], "}" ];
+
+generic_params
+   = "<", generic_param, { ",", generic_param }, [ "," ], ">";
+
+generic_param
+   = IDENT, ":", generic_constraint, [ "=", type_expr ];
+
+generic_constraint
+   = "Dim"
+   | "Index"
+   | "Type";
+
+(* "Dim", "Index", and "Type" are contextual keywords here. *)
+derive_clause
+   = "derive", "(", derive_op, { ",", derive_op }, [ "," ], ")";
+
+derive_op
+   = "Add"
+   | "Sub"
+   | "Neg";
+
+(* --- fn --- *)
+(* Functions are declarations, not values — there is no function type
+   in the type system. No higher-order functions. scan's |acc, val|
+   body and for's bindings are special syntax, not function values.
+   Functions can accept and return DeclTypes (ValueTypes or indexed
+   types). Named index labels are passable as arguments because they
+   are ValueTypes. *)
+fn_decl
+   = "fn", lower_snake_case_ident, [ generic_params ], "(", [ fn_param_list ], ")", "->", type_expr, fn_body;
+
+fn_param_list
+   = fn_param, { ",", fn_param }, [ "," ];
+
+fn_param
+   = lower_snake_case_ident, ":", type_expr;
+
+fn_body
+   = "=", expr, ";" (* short form *)
+   | "{", { let_binding }, expr, "}";
+
+(* block form *)
+(* --- index --- *)
+(* An index declares a finite, ordered set of labels usable as
+   collection axes in T[I]. A named index is a fieldless tagged union
+   additionally registered as a collection axis — its labels are
+   ValueTypes that can be passed to functions, stored in variables,
+   and pattern-matched. A range index generates scalar labels from a
+   range; its loop variable acts as a Scalar(Dim). Both flavors share
+   the same type constructor T[I] and consumption interface (for,
+   indexing, aggregation, scan). *)
+index_decl
+   = "index", pascal_case_ident, "=", index_kind;
+
+index_kind
+   = named_index
+   | range_index;
+
+named_index
+   = "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}";
+
+range_index
+   = "range", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";";
+
+(* "range" and "step" are contextual keywords here.
+   Note: named index has no trailing semicolon; range index does. *)
+(* --- use --- *)
+use_decl
+   = "use", STRING_LITERAL, "{", use_item, { ",", use_item }, [ "," ], "}", ";";
+
+use_item
+   = IDENT, [ "as", IDENT ];
+
+(* --- assert --- *)
+assert_decl
+   = "assert", lower_snake_case_ident, "=", assert_body, ";";
+
+assert_body
+   = expr (* exact assertion *)
+   | expr, "~=", expr, "+/-", unary_expr, [ "%" ];
+
+(* tolerance assertion *)
+(* ================================================================== *)
+(* 4. Type Expressions                                                *)
+(* ================================================================== *)
+(* The type system has three levels (see design/20-type-system-
+   stratification.md):
+   Level 1 — Primitive:  Scalar(Dim) | Int | Bool
+   Level 2 — ValueType:  Primitive | Struct | TaggedUnion
+   Level 3 — DeclType:   ValueType | Indexed(ValueType, [Index])
+
+   type_expr corresponds to DeclType: a value_type optionally indexed.
+   type_expr_base corresponds to ValueType (without indexing).
+   Struct fields must be ValueTypes (type_expr_base), not DeclTypes.
+   param, node, const, and fn parameter/return annotations use DeclType
+   (type_expr). *)
+type_expr
+   = type_expr_base, [ "[", uppercase_starting_ident, { ",", uppercase_starting_ident }, "]" ];
+
+(* The bracketed suffix lifts a ValueType into an indexed DeclType.
+   T[I] is a total map from index labels to values of type T.
+   T[I, J] is a flat product-key map (not nested). Axis order is
+   significant: T[I, J] and T[J, I] are different types. *)
+type_expr_base
+   = "Dimensionless"
+   | "Bool"
+   | "Int"
+   | type_application
+   | dim_expr;
+
+type_application
+   = pascal_case_ident, "<", type_expr, { ",", type_expr }, [ "," ], ">";
+
+(* ================================================================== *)
+(* 5. Dimension and Unit Expressions                                  *)
+(* ================================================================== *)
+(* --- Dimension expressions --- *)
+(* Used in type annotations and dimension declarations. *)
+dim_expr
+   = dim_term, { ( "*"
+   | "/" ), dim_term };
+
+dim_term
+   = IDENT, [ "^", signed_integer ];
+
+signed_integer
+   = [ "-" ], NUMBER;
+
+(* Must be an integer (no decimal point or exponent). *)
+(* --- Unit expressions --- *)
+(* Used in unit declarations, unit literals, and conversion targets. *)
+unit_expr
+   = unit_term, { ( "*"
+   | "/" ), unit_term };
+
+unit_term
+   = IDENT, [ "^", signed_integer ];
+
+(* ================================================================== *)
+(* 6. Expressions                                                     *)
+(* ================================================================== *)
+(* Expression precedence, from lowest to highest:
+   0. Conversion  ->  / Cast  as    (mutually exclusive)
+   1. Conditional  if/else
+   2. Logical OR   ||                (left-associative)
+   3. Logical AND  &&                (left-associative)
+   4. Comparison   == != < > <= >=   (non-chaining)
+   5. Additive     + -               (left-associative)
+   6. Multiplicative  * / %          (left-associative)
+   7. Unary        - !               (right-associative, prefix)
+   8. Power        ^                 (right-associative)
+   9. Postfix      . []              (left-associative)
+*)
+expr
+   = convert_expr;
+
+convert_expr
+   = conditional_expr, [ "->", unit_expr ]
+   | conditional_expr, [ "as", type_expr ];
+
+conditional_expr
+   = "if", expr, "{", expr, "}", "else", "{", expr, "}"
+   | or_expr;
+
+or_expr
+   = and_expr, { "||", and_expr };
+
+and_expr
+   = comparison_expr, { "&&", comparison_expr };
+
+comparison_expr
+   = additive_expr, [ comparison_op, additive_expr ];
+
+comparison_op
+   = "=="
+   | "!="
+   | "<"
+   | ">"
+   | "<="
+   | ">=";
+
+additive_expr
+   = multiplicative_expr, { ( "+"
+   | "-" ), multiplicative_expr };
+
+multiplicative_expr
+   = unary_expr, { ( "*"
+   | "/"
+   | "%" ), unary_expr };
+
+unary_expr
+   = ( "-"
+   | "!" ), unary_expr
+   | power_expr;
+
+power_expr
+   = postfix_expr, [ "^", unary_expr ];
+
+(* Right-associative: the exponent parses at the unary level. *)
+postfix_expr
+   = atom, { postfix_op };
+
+postfix_op
+   = ".", IDENT (* field access *)
+   | "[", index_arg, { ",", index_arg }, [ "," ], "]";
+
+(* index access *)
+index_arg
+   = pascal_case_ident, "::", pascal_case_ident (* qualified: Index::Variant *)
+   | lower_snake_case_ident;
+
+(* loop variable *)
+(* ================================================================== *)
+(* 7. Atoms                                                           *)
+(* ================================================================== *)
+atom
+   = float_literal
+   | integer_literal
+   | bool_literal
+   | graph_ref
+   | const_ref
+   | local_ref
+   | fn_call
+   | variant_literal
+   | struct_construction
+   | map_literal
+   | block_expr
+   | paren_expr
+   | match_expr
+   | for_expr
+   | scan_expr
+   | unfold_expr;
+
+(* --- Literals --- *)
+float_literal
+   = NUMBER, [ unit_expr ];
+
+(* NUMBER must contain a decimal point or exponent (i.e., be a float).
+   An optional unit expression may follow immediately. *)
+integer_literal
+   = NUMBER;
+
+(* NUMBER must NOT contain a decimal point or exponent.
+   Integer literals cannot be followed by a unit expression. *)
+bool_literal
+   = "true"
+   | "false";
+
+(* --- References --- *)
+graph_ref
+   = "@", lower_snake_case_ident;
+
+const_ref
+   = upper_snake_case_ident;
+
+(* Includes built-in constants PI and E. *)
+local_ref
+   = lower_snake_case_ident;
+
+(* Reference to a let binding or function parameter. *)
+(* --- Function call --- *)
+fn_call
+   = lower_snake_case_ident, "(", [ expr, { ",", expr }, [ "," ] ], ")";
+
+(* --- Variant literal --- *)
+variant_literal
+   = pascal_case_ident, "::", pascal_case_ident;
+
+(* Qualified index variant reference, e.g., Maneuver::Departure. *)
+(* --- Struct construction --- *)
+struct_construction
+   = pascal_case_ident, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ], "{", [ field_init, { ",", field_init }, [ "," ] ], "}";
+
+(* A bare PascalCase identifier without braces is also a valid struct
+   construction (a unit variant with no fields). *)
+field_init
+   = lower_snake_case_ident, [ ":", expr ];
+
+(* When the colon and expression are omitted, the field name is used
+   as a shorthand reference to a variable of the same name. *)
+(* --- Map literal --- *)
+(* Single-axis map literals use bare variant keys:
+     { Index::Variant1: expr1, Index::Variant2: expr2, ... }
+   Multi-axis map literals use tuple keys:
+     { (I1::V1, I2::V2): expr1, (I1::V1, I2::V3): expr2, ... }
+   All labels of the index (or all label tuples) must be present
+   (totality requirement). *)
+map_literal
+   = "{", map_entry, { ",", map_entry }, [ "," ], "}";
+
+map_entry
+   = single_key_entry
+   | tuple_key_entry;
+
+single_key_entry
+   = pascal_case_ident, "::", pascal_case_ident, ":", expr;
+
+tuple_key_entry
+   = "(", pascal_case_ident, "::", pascal_case_ident, { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
+
+(* --- Block expression --- *)
+block_expr
+   = "{", { let_binding }, expr, "}";
+
+let_binding
+   = "let", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
+
+(* --- Parenthesized expression --- *)
+paren_expr
+   = "(", expr, ")";
+
+(* --- Match expression --- *)
+match_expr
+   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}"
+   | "match", "(", expr, ",", expr, { ",", expr }, ")", "{", [ tuple_match_arm, { ",", tuple_match_arm }, [ "," ] ], "}";
+
+match_arm
+   = match_pattern, "=>", expr;
+
+tuple_match_arm
+   = tuple_match_pattern, "=>", expr;
+
+(* ================================================================== *)
+(* 8. Patterns                                                        *)
+(* ================================================================== *)
+match_pattern
+   = pascal_case_ident, "::", pascal_case_ident (* qualified: Index::Variant *)
+   | pascal_case_ident, [ "{", pattern_binding, { ",", pattern_binding }, [ "," ], "}" ];
+
+tuple_match_pattern
+   = "_"
+   | "(", expr, ",", expr, { ",", expr }, ")";
+
+pattern_binding
+   = IDENT, [ ":", ( "_"
+   | IDENT ) ];
+
+(* Without the colon, the field name is used as the binding name
+   (shorthand). With ": _", the field is matched but not bound.
+   With ": name", the field is bound to a different name. *)
+(* ================================================================== *)
+(* 9. For, Scan, and Unfold Expressions                               *)
+(* ================================================================== *)
+for_expr
+   = "for", for_binding, { ",", for_binding }, "{", [ "(", lower_snake_case_ident, { ",", lower_snake_case_ident }, ")", "=>" ], expr, "}";
+
+for_binding
+   = lower_snake_case_ident, ":", pascal_case_ident;
+
+scan_expr
+   = "scan", "(", expr, ",", expr, ",", "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|", expr, ")";
+
+(* scan(source, init, |acc, val| body)
+   Folds over an indexed value, accumulating a result. *)
+unfold_expr
+   = "unfold", "(", expr, ",", "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|", expr, ")";
+
+(* unfold(init, |prev, curr| body)
+   Generates an indexed value from an initial value. *)
+
+(* ================================================================== *)
+
+(* 10. Precedence and Associativity Summary                           *)
+
+(* ================================================================== *)
+
+(* Precedence  Operator(s)                Associativity               *)
+
+(* ---------  --------------------------  -----------                 *)
+
+(* 0 (lowest) ->  as                      n/a (mutually exclusive)    *)
+
+(* 1          if/else                     right                       *)
+
+(* 2          ||                          left                        *)
+
+(* 3          &&                          left                        *)
+
+(* 4          == != < > <= >=             non-chaining                *)
+
+(* 5          + -                         left                        *)
+
+(* 6          * / %                       left                        *)
+
+(* 7          - ! (unary, prefix)         right                       *)
+
+(* 8          ^                           right                       *)
+
+(* 9 (highest) . [] (postfix)            left                        *)

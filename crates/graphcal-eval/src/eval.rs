@@ -829,9 +829,6 @@ fn runtime_to_value(
                 entries: converted_entries,
             }
         }
-        RuntimeValue::VariantLabel { .. } => {
-            panic!("VariantLabel should not appear in final values")
-        }
         RuntimeValue::RangeLabel { .. } => {
             panic!("RangeLabel should not appear in final values")
         }
@@ -1374,7 +1371,7 @@ fn attach_display_units(value: &mut Value, expr: &graphcal_syntax::ast::Expr, re
             },
         ) => {
             for map_entry in map_entries {
-                if let Some(entry_val) = entries.get_mut(&map_entry.variant.value) {
+                if let Some(entry_val) = entries.get_mut(&map_entry.keys[0].variant.value) {
                     attach_display_units(entry_val, &map_entry.value, registry);
                 }
             }

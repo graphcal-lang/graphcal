@@ -475,11 +475,19 @@ module.exports = grammar({
     // match @maneuver { Impulsive { delta_v } => ..., Coasting => ... }
     match_expr: $ => seq(
       "match",
-      field("scrutinee", $._expr),
+      field("scrutinee", choice(
+        $._expr,
+        seq(
+          "(",
+          field("tuple_scrutinee", $._expr),
+          repeat1(seq(",", field("tuple_scrutinee", $._expr))),
+          ")",
+        ),
+      )),
       "{",
       optional(seq(
-        $.match_arm,
-        repeat(seq(",", $.match_arm)),
+        choice($.match_arm, $.tuple_match_arm),
+        repeat(seq(",", choice($.match_arm, $.tuple_match_arm))),
         optional(","),
       )),
       "}",
@@ -487,6 +495,12 @@ module.exports = grammar({
 
     match_arm: $ => seq(
       field("pattern", $.match_pattern),
+      "=>",
+      field("body", $._expr),
+    ),
+
+    tuple_match_arm: $ => seq(
+      field("pattern", $.tuple_match_pattern),
       "=>",
       field("body", $._expr),
     ),
@@ -513,6 +527,16 @@ module.exports = grammar({
       ),
     ),
 
+    tuple_match_pattern: $ => choice(
+      "_",
+      seq(
+        "(",
+        field("value", $._expr),
+        repeat1(seq(",", field("value", $._expr))),
+        ")",
+      ),
+    ),
+
     pattern_binding: $ => choice(
       // field_name: _  (wildcard)
       seq(field("name", $.identifier), ":", $.wildcard),
@@ -529,7 +553,16 @@ module.exports = grammar({
       "for",
       $.for_binding,
       repeat(seq(",", $.for_binding)),
-      field("body", $.brace_body),
+      "{",
+      optional(seq(
+        "(",
+        field("key_var", $.identifier),
+        repeat1(seq(",", field("key_var", $.identifier))),
+        ")",
+        "=>",
+      )),
+      field("body", $._expr),
+      "}",
     ),
 
     for_binding: $ => seq(
@@ -673,11 +706,12 @@ module.exports = grammar({
     ),
 
     // { Maneuver::Departure: 2.46 km/s, ... }
+    // { (Maneuver::Departure, Phase::Burn): 2.46 km/s, ... }
     map_literal: $ => seq(
       "{",
       optional(seq(
-        $.map_entry,
-        repeat(seq(",", $.map_entry)),
+        choice($.map_entry, $.tuple_map_entry),
+        repeat(seq(",", choice($.map_entry, $.tuple_map_entry))),
         optional(","),
       )),
       "}",
@@ -685,6 +719,16 @@ module.exports = grammar({
 
     map_entry: $ => seq(
       field("key", $.qualified_variant),
+      ":",
+      field("value", $._expr),
+    ),
+
+    tuple_map_entry: $ => seq(
+      "(",
+      field("key", $.qualified_variant),
+      repeat1(seq(",", field("key", $.qualified_variant))),
+      optional(","),
+      ")",
       ":",
       field("value", $._expr),
     ),

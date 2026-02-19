@@ -40,9 +40,6 @@ pub enum InferredType {
         element: Box<Self>,
         index: IndexName,
     },
-    /// A loop variable bound by `for m: Maneuver`.
-    /// Used only in `local_types` — not a "real" value type.
-    LoopVar(IndexName),
 }
 
 /// Check dimensions for all declarations in a file.
@@ -334,7 +331,6 @@ fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred_type(element, registry))
         }
-        InferredType::LoopVar(idx) => format!("<loop var: {idx}>"),
     }
 }
 
@@ -581,6 +577,24 @@ fn expect_scalar(
     }
 }
 
+/// Build the Cartesian product of variant name slices across multiple axes.
+fn cartesian_product<'a>(
+    axes: &'a [Vec<VariantName>],
+    current: &mut Vec<&'a str>,
+    result: &mut std::collections::HashSet<Vec<&'a str>>,
+) {
+    if current.len() == axes.len() {
+        result.insert(current.clone());
+        return;
+    }
+    let axis_idx = current.len();
+    for variant in &axes[axis_idx] {
+        current.push(variant.as_str());
+        cartesian_product(axes, current, result);
+        current.pop();
+    }
+}
+
 /// Infer the type (dimension or struct) of an expression.
 #[expect(
     clippy::too_many_lines,
@@ -622,7 +636,10 @@ fn infer_type(
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::LoopVar(index.value.clone()))
+            Ok(InferredType::Struct(
+                StructTypeName::new(index.value.as_str()),
+                vec![],
+            ))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
@@ -721,49 +738,16 @@ fn infer_type(
                     }
                     Ok(InferredType::Bool)
                 }
-                // Equality: both operands must be same type (Bool, Int, LoopVar, or same-dimension Scalar)
+                // Equality: operands must have the same ValueType.
                 BinOp::Eq | BinOp::Ne => {
-                    // LoopVar equality: both must refer to the same index
-                    if let (InferredType::LoopVar(l_idx), InferredType::LoopVar(r_idx)) =
-                        (&lhs_type, &rhs_type)
-                    {
-                        if l_idx != r_idx {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: l_idx.clone(),
-                                found: r_idx.clone(),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            });
-                        }
-                        return Ok(InferredType::Bool);
-                    }
-                    if lhs_type == InferredType::Bool
-                        || rhs_type == InferredType::Bool
-                        || lhs_type == InferredType::Int
-                        || rhs_type == InferredType::Int
-                    {
-                        if lhs_type != rhs_type {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format_inferred_type(&lhs_type, registry),
-                                found: format_inferred_type(&rhs_type, registry),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                                help: "equality operands must have the same type".to_string(),
-                            });
-                        }
-                    } else {
-                        let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-                        let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-                        if lhs_dim != rhs_dim {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: registry.format_dimension(&lhs_dim),
-                                found: registry.format_dimension(&rhs_dim),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                                help: "comparison operands must have the same dimension"
-                                    .to_string(),
-                            });
-                        }
+                    if lhs_type != rhs_type {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format_inferred_type(&lhs_type, registry),
+                            found: format_inferred_type(&rhs_type, registry),
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                            help: "equality operands must have the same type".to_string(),
+                        });
                     }
                     Ok(InferredType::Bool)
                 }
@@ -1674,7 +1658,19 @@ fn infer_type(
                 }
                 inner_locals.insert(
                     binding.var.name.clone(),
-                    InferredType::LoopVar(binding.index.value.clone()),
+                    match &registry
+                        .get_index(idx_name)
+                        .expect("index existence checked above")
+                        .kind
+                    {
+                        crate::registry::IndexKind::Named { .. } => InferredType::Struct(
+                            StructTypeName::new(binding.index.value.as_str()),
+                            vec![],
+                        ),
+                        crate::registry::IndexKind::Range { dimension, .. } => {
+                            InferredType::Scalar(dimension.clone())
+                        }
+                    },
                 );
             }
             let body_type = infer_type(
@@ -1705,53 +1701,166 @@ fn infer_type(
                     span: expr.span.into(),
                 });
             }
-            // All entries must have the same index name
-            let idx_name = &entries[0].index.value;
-            // Validate index exists
-            let idx_def = registry.get_index(idx_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownIndex {
-                    name: entries[0].index.value.clone(),
-                    src: src.clone(),
-                    span: entries[0].index.span.into(),
-                }
-            })?;
-            // Validate all entries use the same index
-            for entry in entries {
-                if entry.index.value != *idx_name {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: entries[0].index.value.clone(),
-                        found: entry.index.value.clone(),
-                        src: src.clone(),
-                        span: entry.index.span.into(),
-                    });
-                }
-            }
-            // Check totality: all variants present, no extras
-            let variants = idx_def.variants();
-            let declared_variants: std::collections::HashSet<&str> =
-                variants.iter().map(VariantName::as_str).collect();
-            let provided_variants: std::collections::HashSet<&str> =
-                entries.iter().map(|e| e.variant.value.as_str()).collect();
-            let missing: Vec<VariantName> = declared_variants
-                .difference(&provided_variants)
-                .map(|s| VariantName::new(*s))
-                .collect();
-            let extra: Vec<VariantName> = provided_variants
-                .difference(&declared_variants)
-                .map(|s| VariantName::new(*s))
-                .collect();
-            if !missing.is_empty() {
-                return Err(GraphcalError::MissingVariants {
-                    index_name: entries[0].index.value.clone(),
-                    missing,
+            let arity = entries[0].keys.len();
+            if arity == 0 {
+                return Err(GraphcalError::EvalError {
+                    message: "map literal entry has no keys".to_string(),
                     src: src.clone(),
                     span: expr.span.into(),
                 });
             }
+            // Validate all entries have the same arity
+            for entry in &entries[1..] {
+                if entry.keys.len() != arity {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "map literal entries have inconsistent key arity: expected {arity}, found {}",
+                            entry.keys.len()
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+            }
+            // Validate index names: all entries must use the same indexes in the same order
+            let index_names: Vec<&IndexName> =
+                entries[0].keys.iter().map(|k| &k.index.value).collect();
+            for entry in &entries[1..] {
+                for (i, key) in entry.keys.iter().enumerate() {
+                    if key.index.value != *index_names[i] {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index_names[i].clone(),
+                            found: key.index.value.clone(),
+                            src: src.clone(),
+                            span: key.index.span.into(),
+                        });
+                    }
+                }
+            }
+            // Validate each index exists and collect their variant lists
+            let mut axes_variants: Vec<Vec<VariantName>> = Vec::new();
+            for key in &entries[0].keys {
+                let idx_def = registry
+                    .get_index(key.index.value.as_str())
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
+                        name: key.index.value.clone(),
+                        src: src.clone(),
+                        span: key.index.span.into(),
+                    })?;
+                axes_variants.push(idx_def.variants());
+            }
+            // Check totality over the Cartesian product
+            let mut expected_tuples: std::collections::HashSet<Vec<&str>> =
+                std::collections::HashSet::new();
+            cartesian_product(&axes_variants, &mut Vec::new(), &mut expected_tuples);
+            let mut provided_tuples: std::collections::HashSet<Vec<&str>> =
+                std::collections::HashSet::new();
+            for entry in entries {
+                let tuple: Vec<&str> = entry
+                    .keys
+                    .iter()
+                    .map(|k| k.variant.value.as_str())
+                    .collect();
+                if !provided_tuples.insert(tuple.clone()) {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "duplicate map literal entry for key tuple ({})",
+                            entry
+                                .keys
+                                .iter()
+                                .map(|k| format!("{}::{}", k.index.value, k.variant.value))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                // For multi-axis, validate each variant exists in its respective index.
+                // For single-axis, skip this check — extra/missing set difference
+                // handles it with more specific error types (ExtraVariants/MissingVariants).
+                if arity > 1 {
+                    for (i, key) in entry.keys.iter().enumerate() {
+                        if !axes_variants[i]
+                            .iter()
+                            .any(|v| v.as_str() == key.variant.value.as_str())
+                        {
+                            return Err(GraphcalError::UnknownVariant {
+                                index_name: key.index.value.clone(),
+                                variant_name: key.variant.value.clone(),
+                                src: src.clone(),
+                                span: key.variant.span.into(),
+                            });
+                        }
+                    }
+                }
+            }
+            // Check for extra variants (provided but not in expected set)
+            let extra: Vec<Vec<&str>> = provided_tuples
+                .difference(&expected_tuples)
+                .cloned()
+                .collect();
             if !extra.is_empty() {
-                return Err(GraphcalError::ExtraVariants {
-                    index_name: entries[0].index.value.clone(),
-                    extra,
+                if arity == 1 {
+                    let extra_variants: Vec<VariantName> =
+                        extra.iter().map(|t| VariantName::new(t[0])).collect();
+                    return Err(GraphcalError::ExtraVariants {
+                        index_name: index_names[0].clone(),
+                        extra: extra_variants,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                let extra_strs: Vec<String> = extra
+                    .iter()
+                    .map(|t| {
+                        t.iter()
+                            .enumerate()
+                            .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .collect();
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "extra entries in map literal: ({})",
+                        extra_strs.join("), (")
+                    ),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            // Check for missing tuples
+            let missing: Vec<Vec<&str>> = expected_tuples
+                .difference(&provided_tuples)
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                if arity == 1 {
+                    let missing_variants: Vec<VariantName> =
+                        missing.iter().map(|t| VariantName::new(t[0])).collect();
+                    return Err(GraphcalError::MissingVariants {
+                        index_name: index_names[0].clone(),
+                        missing: missing_variants,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                let missing_strs: Vec<String> = missing
+                    .iter()
+                    .map(|t| {
+                        t.iter()
+                            .enumerate()
+                            .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .collect();
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "non-exhaustive map literal: missing entries for ({})",
+                        missing_strs.join("), (")
+                    ),
                     src: src.clone(),
                     span: expr.span.into(),
                 });
@@ -1766,6 +1875,14 @@ fn infer_type(
                 resolved_fn_sigs,
                 src,
             )?;
+            // Reject nested Indexed as element type (ValueType constraint)
+            if matches!(first_type, InferredType::Indexed { .. }) {
+                return Err(GraphcalError::EvalError {
+                    message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
+                    src: src.clone(),
+                    span: entries[0].value.span.into(),
+                });
+            }
             for entry in &entries[1..] {
                 let entry_type = infer_type(
                     &entry.value,
@@ -1785,10 +1902,15 @@ fn infer_type(
                     });
                 }
             }
-            Ok(InferredType::Indexed {
-                element: Box::new(first_type),
-                index: entries[0].index.value.clone(),
-            })
+            // Wrap in nested Indexed layers (reverse order, matching `for` comprehension)
+            let mut result = first_type;
+            for idx_name in index_names.iter().rev() {
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: (*idx_name).clone(),
+                };
+            }
+            Ok(result)
         }
 
         ExprKind::IndexAccess { expr: inner, args } => {
@@ -1853,11 +1975,11 @@ fn infer_type(
                             }
                         })?;
                         match var_type {
-                            InferredType::LoopVar(var_idx) => {
-                                if *var_idx != idx_name {
+                            InferredType::Struct(type_name, args) => {
+                                if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
                                     return Err(GraphcalError::IndexMismatch {
                                         expected: idx_name,
-                                        found: var_idx.clone(),
+                                        found: IndexName::new(type_name.as_str()),
                                         src: src.clone(),
                                         span: ident.span.into(),
                                     });
@@ -2061,7 +2183,7 @@ fn infer_type(
         ExprKind::Match {
             scrutinee, arms, ..
         } => {
-            // Infer scrutinee type — must be a struct (tagged union) or LoopVar (index)
+            // Infer scrutinee type — must be a struct/tagged union value.
             let scrutinee_type = infer_type(
                 scrutinee,
                 declared_types,
@@ -2073,111 +2195,7 @@ fn infer_type(
             )?;
 
             Ok(match &scrutinee_type {
-                InferredType::LoopVar(index_name) => {
-                    // Index variant match
-                    let idx_def = registry.get_index(index_name.as_str()).ok_or_else(|| {
-                        GraphcalError::UnknownIndex {
-                            name: index_name.clone(),
-                            src: src.clone(),
-                            span: scrutinee.span.into(),
-                        }
-                    })?;
-
-                    let mut covered: std::collections::HashSet<String> =
-                        std::collections::HashSet::new();
-                    let mut arm_types: Vec<InferredType> = Vec::new();
-
-                    for arm in arms {
-                        let variant_name_str = arm.pattern.variant_name.value.as_str();
-
-                        // Require qualified pattern for index match
-                        let pat_index = arm.pattern.qualified_index.as_ref().ok_or_else(|| {
-                            GraphcalError::EvalError {
-                                message: format!(
-                                    "index match requires qualified pattern `{index_name}::{variant_name_str}`"
-                                ),
-                                src: src.clone(),
-                                span: arm.pattern.span.into(),
-                            }
-                        })?;
-
-                        // Validate pattern index matches scrutinee index
-                        if pat_index.value.as_str() != index_name.as_str() {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: index_name.clone(),
-                                found: pat_index.value.clone(),
-                                src: src.clone(),
-                                span: pat_index.span.into(),
-                            });
-                        }
-
-                        // Validate variant exists in this index
-                        if !idx_def
-                            .variants()
-                            .iter()
-                            .any(|v| v.as_str() == variant_name_str)
-                        {
-                            return Err(GraphcalError::UnknownVariant {
-                                index_name: index_name.clone(),
-                                variant_name: arm.pattern.variant_name.value.clone(),
-                                src: src.clone(),
-                                span: arm.pattern.variant_name.span.into(),
-                            });
-                        }
-
-                        // No field bindings allowed for index variants
-                        if !arm.pattern.bindings.is_empty() {
-                            return Err(GraphcalError::EvalError {
-                                message: "index variant patterns cannot have field bindings"
-                                    .to_string(),
-                                src: src.clone(),
-                                span: arm.pattern.span.into(),
-                            });
-                        }
-
-                        // Check for duplicate arms
-                        if !covered.insert(variant_name_str.to_string()) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "duplicate match arm for variant `{variant_name_str}`"
-                                ),
-                                src: src.clone(),
-                                span: arm.pattern.span.into(),
-                            });
-                        }
-
-                        // Infer arm body type (no new locals for index match)
-                        let arm_type = infer_type(
-                            &arm.body,
-                            declared_types,
-                            local_types,
-                            registry,
-                            builtin_fns,
-                            resolved_fn_sigs,
-                            src,
-                        )?;
-                        arm_types.push(arm_type);
-                    }
-
-                    // Exhaustiveness: all index variants must be covered
-                    for variant in idx_def.variants() {
-                        if !covered.contains(variant.as_str()) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "non-exhaustive match: variant `{index_name}::{variant}` not covered"
-                                ),
-                                src: src.clone(),
-                                span: expr.span.into(),
-                            });
-                        }
-                    }
-
-                    // All arm types must match
-                    check_arm_types_match(&arm_types, arms, registry, src, expr)?
-                }
-
                 InferredType::Struct(type_name, scrutinee_type_args) => {
-                    // Tagged union match (existing logic)
                     let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
                         GraphcalError::UnknownStructType {
                             name: type_name.clone(),
@@ -2192,6 +2210,16 @@ fn infer_type(
 
                     for arm in arms {
                         let variant_name_str = arm.pattern.variant_name.value.as_str();
+                        if let Some(qualified) = &arm.pattern.qualified_index
+                            && qualified.value.as_str() != type_name.as_str()
+                        {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: IndexName::new(type_name.as_str()),
+                                found: qualified.value.clone(),
+                                src: src.clone(),
+                                span: qualified.span.into(),
+                            });
+                        }
 
                         // Check variant belongs to this type
                         let variant = type_def.get_variant(variant_name_str).ok_or_else(|| {
@@ -2260,10 +2288,15 @@ fn infer_type(
                     // Check exhaustiveness: all variants must be covered
                     for variant in &type_def.variants {
                         if !covered.contains(variant.name.as_str()) {
+                            let variant_display =
+                                if registry.get_index(type_name.as_str()).is_some() {
+                                    format!("{}::{}", type_name.as_str(), variant.name.as_str())
+                                } else {
+                                    variant.name.as_str().to_string()
+                                };
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "non-exhaustive match: variant `{}` not covered",
-                                    variant.name.as_str()
+                                    "non-exhaustive match: variant `{variant_display}` not covered",
                                 ),
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -2278,7 +2311,7 @@ fn infer_type(
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "cannot match on type `{}`; expected a tagged union or index loop variable",
+                            "cannot match on type `{}`; expected a tagged union value",
                             format_inferred_type(&scrutinee_type, registry)
                         ),
                         src: src.clone(),

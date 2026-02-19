@@ -401,7 +401,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                                 name_span: variant.span,
                                 decl_span: variant.span,
                                 type_description: None,
-                                detail: Some(format!("variant of index {name}")),
+                                detail: Some(format!("label/value variant of index {name}")),
                             },
                         );
                     }
@@ -587,15 +587,17 @@ fn collect_expr_refs(
         }
         ExprKind::MapLiteral { entries } => {
             for entry in entries {
-                table.references.push(ReferenceInfo {
-                    span: entry.index.span,
-                    target: entry.index.value.to_string(),
-                });
-                let variant_key = format!("{}::{}", entry.index.value, entry.variant.value);
-                table.references.push(ReferenceInfo {
-                    span: entry.variant.span,
-                    target: variant_key,
-                });
+                for key in &entry.keys {
+                    table.references.push(ReferenceInfo {
+                        span: key.index.span,
+                        target: key.index.value.to_string(),
+                    });
+                    let variant_key = format!("{}::{}", key.index.value, key.variant.value);
+                    table.references.push(ReferenceInfo {
+                        span: key.variant.span,
+                        target: variant_key,
+                    });
+                }
                 collect_expr_refs(&entry.value, table, scopes);
             }
         }
