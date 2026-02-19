@@ -23,6 +23,7 @@
 - [ ] Provide parameter values via input files, command-line arguments, or environment variables.
 - [ ] Apache Arrow Flight server.
 - [ ] Write a validation for parameter values (e.g., non-negative mass).
+  - Related: `assert` declarations can express these validations. See [19-assertions-and-testing.md](./19-assertions-and-testing.md).
 - [ ] Durability classification for external data sources (material properties, physical constants) to optimize incremental recomputation.
 - [ ] Constraint-based memoization (comemo-style) for rich data types like tables and datasets -- track which parts of the input were actually accessed.
 - [ ] Parallel evaluation of independent DAG branches via Rayon fork-join.
