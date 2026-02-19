@@ -468,6 +468,7 @@ dependencies = [
  "graphcal-eval",
  "graphcal-fmt",
  "graphcal-syntax",
+ "indexmap",
  "miette",
  "tokio",
  "tower-lsp",
