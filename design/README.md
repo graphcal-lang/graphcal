@@ -30,15 +30,16 @@ Each aspect of the language design is documented in a separate file for independ
 | [08](./08-scoping.md) | Scoping (`@` Sigil) | Settled | `@name` = graph scope, bare `name` = local scope |
 | [09](./09-namespace.md) | Namespace & Multi-File | Mostly settled | Modules, imports, visibility, prelude |
 
-### Type System (6 Orthogonal Layers)
+### Type System
 
 | # | Aspect | Status | Description |
 | --- | --- | --- | --- |
-| [03](./03-primitives.md) | Primitives (Layer 1) | Mostly settled | `f64`, `i64`, `bool`, `Str`, `Datetime`, `Option<T>` |
-| [04](./04-dimensions-and-units.md) | Dimensions & Units (Layers 2-3) | Mostly settled | Dimensions as types, units as values (Numbat-inspired) |
-| [05](./05-algebraic-data-types.md) | Algebraic Data Types (Layer 4) | Mostly settled | Unified `type` for structs and tagged unions (Gleam-style) |
-| [06](./06-spaces.md) | Spaces (Layer 5) | Mostly settled | Semantic context tags preventing cross-space mixing (Sguaba-inspired) |
-| [07](./07-indexes.md) | Indexes (Layer 6) | Mostly settled | Finite label sets as table axes |
+| [20](./20-type-system-stratification.md) | **Type System Stratification** | Proposal | Three-level model: Primitive → ValueType → DeclType. Unifies docs 03-07. |
+| [03](./03-primitives.md) | Primitives (Level 1) | Mostly settled | `f64`, `i64`, `bool`, `Str`, `Datetime`, `Option<T>` |
+| [04](./04-dimensions-and-units.md) | Dimensions & Units | Mostly settled | Dimensions as types, units as values (Numbat-inspired) |
+| [05](./05-algebraic-data-types.md) | Algebraic Data Types (Level 2) | Mostly settled | Unified `type` for structs and tagged unions (Gleam-style) |
+| [06](./06-spaces.md) | Spaces | Mostly settled | Semantic context tags preventing cross-space mixing (Sguaba-inspired) |
+| [07](./07-indexes.md) | Indexes | Mostly settled | Finite label sets as table axes |
 
 ### Data & Simulation
 
