@@ -49,10 +49,29 @@ module.exports = grammar({
       $.fn_declaration,
       $.index_declaration,
       $.use_declaration,
+      $.assert_declaration,
+    ),
+
+    // #[name] or #[name(arg1, arg2)]
+    attribute: $ => seq(
+      "#",
+      "[",
+      field("name", $.identifier),
+      optional(seq(
+        "(",
+        optional(seq(
+          $.identifier,
+          repeat(seq(",", $.identifier)),
+          optional(","),
+        )),
+        ")",
+      )),
+      "]",
     ),
 
     // param dry_mass: Mass = 1200 kg;
     param_declaration: $ => seq(
+      repeat($.attribute),
       "param",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
@@ -63,6 +82,7 @@ module.exports = grammar({
 
     // node v_exhaust: Velocity = @isp * G0;
     node_declaration: $ => seq(
+      repeat($.attribute),
       "node",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
@@ -73,6 +93,7 @@ module.exports = grammar({
 
     // const G0: Acceleration = 9.80665 m/s^2;
     const_declaration: $ => seq(
+      repeat($.attribute),
       "const",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
@@ -256,6 +277,34 @@ module.exports = grammar({
     use_item: $ => seq(
       field("name", $.identifier),
       optional(seq("as", field("alias", $.identifier))),
+    ),
+
+    // assert velocity_in_range = @velocity < @max_velocity;
+    // assert mass_approx = @mass ~= 100.0 kg +/- 1.0 kg;
+    // assert approx_pct = @x ~= 50.0 +/- 5 %;
+    assert_declaration: $ => seq(
+      repeat($.attribute),
+      "assert",
+      field("name", $.identifier),
+      "=",
+      field("body", $.assert_body),
+      ";",
+    ),
+
+    assert_body: $ => choice(
+      $.tolerance_assert,
+      $._expr,
+    ),
+
+    // actual ~= expected +/- tolerance
+    // actual ~= expected +/- tolerance %
+    tolerance_assert: $ => seq(
+      field("actual", $._expr),
+      "~=",
+      field("expected", $._expr),
+      "+/-",
+      field("tolerance", $._expr),
+      optional("%"),
     ),
 
     // ---------------------------------------------------------------

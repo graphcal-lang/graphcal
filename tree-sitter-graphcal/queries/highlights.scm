@@ -27,6 +27,7 @@
   "else"
   "match"
   "for"
+  "assert"
 ] @keyword
 
 ; ---------------------------------------------------------------
@@ -61,6 +62,8 @@
   "->"
   "::"
   "=>"
+  "~="
+  "+/-"
 ] @operator
 
 ; ---------------------------------------------------------------
@@ -205,6 +208,27 @@
 (unfold_expr "unfold" @function.builtin)
 (unfold_expr prev: (identifier) @variable.parameter)
 (unfold_expr curr: (identifier) @variable.parameter)
+
+; ---------------------------------------------------------------
+; Attributes
+; ---------------------------------------------------------------
+
+; #[assumes(x, y)]
+(attribute "#" @punctuation.special)
+(attribute "[" @punctuation.special)
+(attribute "]" @punctuation.special)
+(attribute name: (identifier) @attribute)
+
+; ---------------------------------------------------------------
+; Assert declarations
+; ---------------------------------------------------------------
+
+(assert_declaration name: (identifier) @variable)
+
+; Tolerance assert operators
+(tolerance_assert "~=" @operator)
+(tolerance_assert "+/-" @operator)
+(tolerance_assert "%" @operator)
 
 ; ---------------------------------------------------------------
 ; Range index
