@@ -214,19 +214,45 @@ private lazy node _internal_result: Result = heavy_computation(@inputs);
 
 ---
 
-## Disk Cache Considerations
+## Caching Considerations
 
-Showing the "last computed value" for stale nodes across LSP restarts requires persisting evaluation results to disk. The current LSP stores computed values only in memory (`eval_values: HashMap<String, String>` in `AnalysisResult`), which is lost when the process exits.
+### Current LSP architecture problem
 
-**Three options:**
+The current LSP has no incremental computation. `analyze_and_publish` (`server.rs:108`) calls `run_analysis`, which does a **full reparse + recompile + re-evaluate** on every `did_open`, `did_change`, and `did_save`. The resulting `AnalysisResult` (including `eval_values`) **replaces the previous one entirely** (`server.rs:116`). There is no carry-forward of previous values.
 
-| Option | Stale display after restart | Infrastructure needed |
-|--------|---------------------------|----------------------|
-| **A: Disk cache** | Grayed-out last value | Cache dir, serialization, invalidation, eviction, `.gitignore`, corruption handling |
-| **B: No disk cache** | "(not evaluated)" | None — works with existing in-memory cache |
-| **C: Hybrid (opt-in disk cache)** | Last value if cache present, else "(not evaluated)" | Cache as separate opt-in feature |
+This means even within a single LSP session, introducing `lazy` faces a problem: if a lazy node is skipped during `run_analysis`, its `eval_values` entry is simply absent — the previous value was already overwritten when the new `AnalysisResult` was inserted.
 
-**Recommendation: Start with Option B (no disk cache).** The in-memory cache already covers the most common workflow — editing a file and seeing stale indicators within a session. Disk persistence is an orthogonal enhancement that can be added later without changing `lazy` semantics. Building cache infrastructure now (serialization for all `Value` types, cache keying, versioning across schema changes, cross-branch correctness) would delay the feature for marginal UX gain.
+### Prerequisite: incremental analysis in the LSP
+
+Before `lazy` can show stale values, `analyze_and_publish` needs to be refactored to:
+
+1. **Carry forward `eval_values` for lazy nodes.** When building a new `AnalysisResult`, if a node is `lazy` and its inputs have changed (i.e., it's stale), copy the previous `eval_values` entry and mark it as stale rather than re-evaluating.
+2. **Selective re-evaluation.** Only re-evaluate non-lazy nodes (and lazy nodes whose inputs haven't changed, via early cutoff). This is a step toward the Salsa-inspired incremental model described in `design/01-computation-model.md`, but scoped to just the lazy/eager distinction.
+
+Concretely, this means `run_analysis` can no longer be a pure function of `(uri, text)` — it needs access to the previous `AnalysisResult` (or at least its `eval_values`) to carry forward stale values.
+
+**Minimal refactor:**
+```rust
+fn run_analysis(uri: &Url, text: &str, prev: Option<&AnalysisResult>) -> AnalysisResult {
+    // ... parse, compile, build symbol table ...
+    // For each node:
+    //   if lazy && inputs changed → carry prev.eval_values[name], mark stale
+    //   if lazy && inputs unchanged → reuse prev value (early cutoff)
+    //   if eager → evaluate as before
+}
+```
+
+This is a lighter lift than full Salsa-style incremental computation but still a meaningful change to the LSP architecture.
+
+### Disk cache (separate, later concern)
+
+Showing stale values across LSP restarts additionally requires persisting `eval_values` to disk. This is orthogonal to the `lazy` feature itself and can be layered on later.
+
+| Concern | Stale display | Infrastructure needed |
+|---------|---------------|----------------------|
+| **Within session (prerequisite)** | Grayed-out last value | Refactor `run_analysis` to accept previous result |
+| **Across restarts (future)** | Grayed-out last value | Disk cache: serialization, cache dir, invalidation, versioning |
+| **No cache at all** | "(not evaluated)" | None, but poor UX for the primary use case |
 
 If disk caching is added later, key design questions:
 - **Cache location:** `.graphcal-cache/` in project root (`.gitignore`d) or XDG cache dir?
