@@ -7,9 +7,9 @@ use crate::ast::{
     AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
     DimExpr, DimExprItem, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl,
     FnParam, ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl,
-    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
-    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
-    UnitExprItem, VariantDecl,
+    IndexDeclKind, LetBinding, MapEntry, MapEntryKey, MatchArm, MatchPattern, MulDivOp, NodeDecl,
+    ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef,
+    UnitExpr, UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -1721,6 +1721,9 @@ impl<'src> Parser<'src> {
                         // lowercase ident or other — block expression
                         self.parse_block_after_open_brace(start_span)
                     }
+                } else if self.lexer.peek() == Some(&Token::LParen) {
+                    // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
+                    self.parse_tuple_key_map_literal(start_span)
                 } else {
                     // Not an ident after { — could be `{ let ...` or `{ expr }`
                     self.parse_block_after_open_brace(start_span)
@@ -2257,8 +2260,10 @@ impl<'src> Parser<'src> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
-            index: first_index,
-            variant: first_variant,
+            keys: vec![MapEntryKey {
+                index: first_index,
+                variant: first_variant,
+            }],
             value,
         }];
         // Parse remaining entries
@@ -2277,10 +2282,53 @@ impl<'src> Parser<'src> {
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                index,
-                variant,
+                keys: vec![MapEntryKey { index, variant }],
                 value,
             });
+        }
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = brace_span.merge(end_span);
+        Ok(Expr {
+            kind: ExprKind::MapLiteral { entries },
+            span,
+        })
+    }
+
+    /// Parse a tuple-key map literal after `{` has been consumed.
+    ///
+    /// `{ (Index1::Variant1, Index2::Variant2): expr, ... }`
+    fn parse_tuple_key_map_literal(&mut self, brace_span: Span) -> Result<Expr, ParseError> {
+        let mut entries = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            self.expect(Token::LParen)?;
+            let mut keys = Vec::new();
+            loop {
+                let index = self
+                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                    .into_spanned::<IndexName>();
+                self.expect(Token::ColonColon)?;
+                let variant = self
+                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                    .into_spanned::<VariantName>();
+                keys.push(MapEntryKey { index, variant });
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RParen)?;
+            self.expect(Token::Colon)?;
+            let value = self.parse_expr()?;
+            entries.push(MapEntry { keys, value });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
         }
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = brace_span.merge(end_span);
@@ -4131,10 +4179,10 @@ param alt: Length = 400.0 km;
             DeclKind::Param(p) => match &p.value.kind {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
-                    assert_eq!(entries[0].index.value.as_str(), "Maneuver");
-                    assert_eq!(entries[0].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[1].index.value.as_str(), "Maneuver");
-                    assert_eq!(entries[1].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
                 }
                 other => panic!("expected MapLiteral, got {other:?}"),
             },

@@ -27,18 +27,12 @@ node scaled_dv: Velocity[Maneuver] = for m: Maneuver {
 index Phase = { Coast, Burn }
 
 param base_cost: Velocity[Maneuver, Phase] = {
-    Maneuver::Departure: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 2.46 km/s,
-    },
-    Maneuver::Correction: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 0.12 km/s,
-    },
-    Maneuver::Insertion: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 1.83 km/s,
-    },
+    (Maneuver::Departure, Phase::Coast): 0.0 m/s,
+    (Maneuver::Departure, Phase::Burn): 2.46 km/s,
+    (Maneuver::Correction, Phase::Coast): 0.0 m/s,
+    (Maneuver::Correction, Phase::Burn): 0.12 km/s,
+    (Maneuver::Insertion, Phase::Coast): 0.0 m/s,
+    (Maneuver::Insertion, Phase::Burn): 1.83 km/s,
 };
 
 node adjusted_cost: Velocity[Maneuver, Phase] = for m: Maneuver, p: Phase {

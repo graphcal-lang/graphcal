@@ -4,7 +4,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{BinOp, Expr, ExprKind, FnBody, UnaryOp};
+use graphcal_syntax::ast::{BinOp, Expr, ExprKind, FnBody, MapEntry, UnaryOp};
 use graphcal_syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::span::Span;
 
@@ -738,26 +738,15 @@ pub fn eval_expr(
             })
         }
 
-        ExprKind::MapLiteral { entries } => {
-            let idx_name = entries[0].index.value.clone();
-            let mut result = IndexMap::new();
-            for entry in entries {
-                let val = eval_expr(
-                    &entry.value,
-                    values,
-                    local_values,
-                    builtin_consts,
-                    builtin_fns,
-                    registry,
-                    src,
-                )?;
-                result.insert(entry.variant.value.clone(), val);
-            }
-            Ok(RuntimeValue::Indexed {
-                index_name: idx_name,
-                entries: result,
-            })
-        }
+        ExprKind::MapLiteral { entries } => eval_map_literal(
+            entries,
+            values,
+            local_values,
+            builtin_consts,
+            builtin_fns,
+            registry,
+            src,
+        ),
 
         ExprKind::ForComp { bindings, body } => {
             // Evaluate body for each combination of index variants
@@ -974,6 +963,79 @@ pub fn eval_expr(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
+/// Evaluate a map literal, handling both single-axis and multi-axis (tuple-key) entries.
+///
+/// For single-axis (`keys.len() == 1`), builds a flat `Indexed`.
+/// For multi-axis, groups entries by the first key's variant and recursively
+/// builds nested `Indexed` values from the remaining keys.
+fn eval_map_literal(
+    entries: &[MapEntry],
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<RuntimeValue, GraphcalError> {
+    let arity = entries[0].keys.len();
+    let idx_name = entries[0].keys[0].index.value.clone();
+
+    if arity == 1 {
+        // Single-axis: flat Indexed
+        let mut result = IndexMap::new();
+        for entry in entries {
+            let val = eval_expr(
+                &entry.value,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )?;
+            result.insert(entry.keys[0].variant.value.clone(), val);
+        }
+        return Ok(RuntimeValue::Indexed {
+            index_name: idx_name,
+            entries: result,
+        });
+    }
+
+    // Multi-axis: group by first key, recurse on remaining keys
+    let idx_def = registry
+        .get_index(idx_name.as_str())
+        .expect("index validated by dim_check");
+    let variants = idx_def.variants();
+
+    let mut outer = IndexMap::new();
+    for variant in &variants {
+        // Collect entries whose first key matches this variant, stripping the first key
+        let sub_entries: Vec<MapEntry> = entries
+            .iter()
+            .filter(|e| e.keys[0].variant.value.as_str() == variant.as_str())
+            .map(|e| MapEntry {
+                keys: e.keys[1..].to_vec(),
+                value: e.value.clone(),
+            })
+            .collect();
+
+        let inner = eval_map_literal(
+            &sub_entries,
+            values,
+            local_values,
+            builtin_consts,
+            builtin_fns,
+            registry,
+            src,
+        )?;
+        outer.insert(variant.clone(), inner);
+    }
+    Ok(RuntimeValue::Indexed {
+        index_name: idx_name,
+        entries: outer,
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "passes through evaluation context to recursive calls"

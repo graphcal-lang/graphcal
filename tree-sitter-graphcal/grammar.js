@@ -706,11 +706,12 @@ module.exports = grammar({
     ),
 
     // { Maneuver::Departure: 2.46 km/s, ... }
+    // { (Maneuver::Departure, Phase::Burn): 2.46 km/s, ... }
     map_literal: $ => seq(
       "{",
       optional(seq(
-        $.map_entry,
-        repeat(seq(",", $.map_entry)),
+        choice($.map_entry, $.tuple_map_entry),
+        repeat(seq(",", choice($.map_entry, $.tuple_map_entry))),
         optional(","),
       )),
       "}",
@@ -718,6 +719,16 @@ module.exports = grammar({
 
     map_entry: $ => seq(
       field("key", $.qualified_variant),
+      ":",
+      field("value", $._expr),
+    ),
+
+    tuple_map_entry: $ => seq(
+      "(",
+      field("key", $.qualified_variant),
+      repeat1(seq(",", field("key", $.qualified_variant))),
+      optional(","),
+      ")",
       ":",
       field("value", $._expr),
     ),

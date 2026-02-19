@@ -1,0 +1,18 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 376
+expression: rendered
+---
+map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals
+    Diagnostic severity: error
+Begin snippet for nested_indexed_map.gcl starting at line 11, column 1
+
+snippet line 11: param bad_nested: Velocity[Maneuver, Phase] = {
+snippet line 12:     Maneuver::Departure: {
+    label starting at line 12, column 26: error here
+snippet line 13:         Phase::Coast: 0.0 m/s,
+snippet line 14:         Phase::Burn: 2.46 km/s,
+snippet line 15:     },
+    label ending at line 15, column 5: error here
+snippet line 16:     Maneuver::Correction: {
+diagnostic code: graphcal::E001

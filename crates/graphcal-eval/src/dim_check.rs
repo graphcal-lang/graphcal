@@ -577,6 +577,24 @@ fn expect_scalar(
     }
 }
 
+/// Build the Cartesian product of variant name slices across multiple axes.
+fn cartesian_product<'a>(
+    axes: &'a [Vec<VariantName>],
+    current: &mut Vec<&'a str>,
+    result: &mut std::collections::HashSet<Vec<&'a str>>,
+) {
+    if current.len() == axes.len() {
+        result.insert(current.clone());
+        return;
+    }
+    let axis_idx = current.len();
+    for variant in &axes[axis_idx] {
+        current.push(variant.as_str());
+        cartesian_product(axes, current, result);
+        current.pop();
+    }
+}
+
 /// Infer the type (dimension or struct) of an expression.
 #[expect(
     clippy::too_many_lines,
@@ -1683,53 +1701,166 @@ fn infer_type(
                     span: expr.span.into(),
                 });
             }
-            // All entries must have the same index name
-            let idx_name = &entries[0].index.value;
-            // Validate index exists
-            let idx_def = registry.get_index(idx_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownIndex {
-                    name: entries[0].index.value.clone(),
-                    src: src.clone(),
-                    span: entries[0].index.span.into(),
-                }
-            })?;
-            // Validate all entries use the same index
-            for entry in entries {
-                if entry.index.value != *idx_name {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: entries[0].index.value.clone(),
-                        found: entry.index.value.clone(),
-                        src: src.clone(),
-                        span: entry.index.span.into(),
-                    });
-                }
-            }
-            // Check totality: all variants present, no extras
-            let variants = idx_def.variants();
-            let declared_variants: std::collections::HashSet<&str> =
-                variants.iter().map(VariantName::as_str).collect();
-            let provided_variants: std::collections::HashSet<&str> =
-                entries.iter().map(|e| e.variant.value.as_str()).collect();
-            let missing: Vec<VariantName> = declared_variants
-                .difference(&provided_variants)
-                .map(|s| VariantName::new(*s))
-                .collect();
-            let extra: Vec<VariantName> = provided_variants
-                .difference(&declared_variants)
-                .map(|s| VariantName::new(*s))
-                .collect();
-            if !missing.is_empty() {
-                return Err(GraphcalError::MissingVariants {
-                    index_name: entries[0].index.value.clone(),
-                    missing,
+            let arity = entries[0].keys.len();
+            if arity == 0 {
+                return Err(GraphcalError::EvalError {
+                    message: "map literal entry has no keys".to_string(),
                     src: src.clone(),
                     span: expr.span.into(),
                 });
             }
+            // Validate all entries have the same arity
+            for entry in &entries[1..] {
+                if entry.keys.len() != arity {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "map literal entries have inconsistent key arity: expected {arity}, found {}",
+                            entry.keys.len()
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+            }
+            // Validate index names: all entries must use the same indexes in the same order
+            let index_names: Vec<&IndexName> =
+                entries[0].keys.iter().map(|k| &k.index.value).collect();
+            for entry in &entries[1..] {
+                for (i, key) in entry.keys.iter().enumerate() {
+                    if key.index.value != *index_names[i] {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index_names[i].clone(),
+                            found: key.index.value.clone(),
+                            src: src.clone(),
+                            span: key.index.span.into(),
+                        });
+                    }
+                }
+            }
+            // Validate each index exists and collect their variant lists
+            let mut axes_variants: Vec<Vec<VariantName>> = Vec::new();
+            for key in &entries[0].keys {
+                let idx_def = registry
+                    .get_index(key.index.value.as_str())
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
+                        name: key.index.value.clone(),
+                        src: src.clone(),
+                        span: key.index.span.into(),
+                    })?;
+                axes_variants.push(idx_def.variants());
+            }
+            // Check totality over the Cartesian product
+            let mut expected_tuples: std::collections::HashSet<Vec<&str>> =
+                std::collections::HashSet::new();
+            cartesian_product(&axes_variants, &mut Vec::new(), &mut expected_tuples);
+            let mut provided_tuples: std::collections::HashSet<Vec<&str>> =
+                std::collections::HashSet::new();
+            for entry in entries {
+                let tuple: Vec<&str> = entry
+                    .keys
+                    .iter()
+                    .map(|k| k.variant.value.as_str())
+                    .collect();
+                if !provided_tuples.insert(tuple.clone()) {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "duplicate map literal entry for key tuple ({})",
+                            entry
+                                .keys
+                                .iter()
+                                .map(|k| format!("{}::{}", k.index.value, k.variant.value))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                // For multi-axis, validate each variant exists in its respective index.
+                // For single-axis, skip this check — extra/missing set difference
+                // handles it with more specific error types (ExtraVariants/MissingVariants).
+                if arity > 1 {
+                    for (i, key) in entry.keys.iter().enumerate() {
+                        if !axes_variants[i]
+                            .iter()
+                            .any(|v| v.as_str() == key.variant.value.as_str())
+                        {
+                            return Err(GraphcalError::UnknownVariant {
+                                index_name: key.index.value.clone(),
+                                variant_name: key.variant.value.clone(),
+                                src: src.clone(),
+                                span: key.variant.span.into(),
+                            });
+                        }
+                    }
+                }
+            }
+            // Check for extra variants (provided but not in expected set)
+            let extra: Vec<Vec<&str>> = provided_tuples
+                .difference(&expected_tuples)
+                .cloned()
+                .collect();
             if !extra.is_empty() {
-                return Err(GraphcalError::ExtraVariants {
-                    index_name: entries[0].index.value.clone(),
-                    extra,
+                if arity == 1 {
+                    let extra_variants: Vec<VariantName> =
+                        extra.iter().map(|t| VariantName::new(t[0])).collect();
+                    return Err(GraphcalError::ExtraVariants {
+                        index_name: index_names[0].clone(),
+                        extra: extra_variants,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                let extra_strs: Vec<String> = extra
+                    .iter()
+                    .map(|t| {
+                        t.iter()
+                            .enumerate()
+                            .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .collect();
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "extra entries in map literal: ({})",
+                        extra_strs.join("), (")
+                    ),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            // Check for missing tuples
+            let missing: Vec<Vec<&str>> = expected_tuples
+                .difference(&provided_tuples)
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                if arity == 1 {
+                    let missing_variants: Vec<VariantName> =
+                        missing.iter().map(|t| VariantName::new(t[0])).collect();
+                    return Err(GraphcalError::MissingVariants {
+                        index_name: index_names[0].clone(),
+                        missing: missing_variants,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
+                let missing_strs: Vec<String> = missing
+                    .iter()
+                    .map(|t| {
+                        t.iter()
+                            .enumerate()
+                            .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .collect();
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "non-exhaustive map literal: missing entries for ({})",
+                        missing_strs.join("), (")
+                    ),
                     src: src.clone(),
                     span: expr.span.into(),
                 });
@@ -1744,6 +1875,14 @@ fn infer_type(
                 resolved_fn_sigs,
                 src,
             )?;
+            // Reject nested Indexed as element type (ValueType constraint)
+            if matches!(first_type, InferredType::Indexed { .. }) {
+                return Err(GraphcalError::EvalError {
+                    message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
+                    src: src.clone(),
+                    span: entries[0].value.span.into(),
+                });
+            }
             for entry in &entries[1..] {
                 let entry_type = infer_type(
                     &entry.value,
@@ -1763,10 +1902,15 @@ fn infer_type(
                     });
                 }
             }
-            Ok(InferredType::Indexed {
-                element: Box::new(first_type),
-                index: entries[0].index.value.clone(),
-            })
+            // Wrap in nested Indexed layers (reverse order, matching `for` comprehension)
+            let mut result = first_type;
+            for idx_name in index_names.iter().rev() {
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: (*idx_name).clone(),
+                };
+            }
+            Ok(result)
         }
 
         ExprKind::IndexAccess { expr: inner, args } => {

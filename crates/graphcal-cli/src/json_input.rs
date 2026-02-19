@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use graphcal_syntax::ast::{
-    self, DeclKind, Expr, ExprKind, FieldInit, IndexDeclKind, MapEntry, TypeExprKind,
+    self, DeclKind, Expr, ExprKind, FieldInit, IndexDeclKind, MapEntry, MapEntryKey, TypeExprKind,
 };
 use graphcal_syntax::names::{
     DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName,
@@ -343,8 +343,10 @@ fn convert_indexed(
                 &format!("{param_name}[{variant}]"),
             )?;
             Ok(MapEntry {
-                index: Spanned::new(IndexName::new(&index_name), SYNTH_SPAN),
-                variant: Spanned::new(VariantName::new(variant), SYNTH_SPAN),
+                keys: vec![MapEntryKey {
+                    index: Spanned::new(IndexName::new(&index_name), SYNTH_SPAN),
+                    variant: Spanned::new(VariantName::new(variant), SYNTH_SPAN),
+                }],
                 value: value_expr,
             })
         })
@@ -595,7 +597,7 @@ mod tests {
         match &expr.kind {
             ExprKind::MapLiteral { entries } => {
                 assert_eq!(entries.len(), 3);
-                assert_eq!(entries[0].index.value.as_str(), "Maneuver");
+                assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }

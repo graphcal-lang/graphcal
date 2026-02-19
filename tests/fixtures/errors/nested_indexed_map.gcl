@@ -1,0 +1,24 @@
+// nested_indexed_map.gcl -- nested map literals produce Indexed element type,
+// which violates type stratification (element must be a ValueType).
+dimension Velocity = Length / Time;
+
+index Maneuver = { Departure, Correction, Insertion }
+index Phase = { Coast, Burn }
+
+// This should be rejected: inner map literal produces an Indexed type,
+// but element of Indexed must be a ValueType.
+// Use tuple keys instead: { (Maneuver::Departure, Phase::Coast): 0.0 m/s, ... }
+param bad_nested: Velocity[Maneuver, Phase] = {
+    Maneuver::Departure: {
+        Phase::Coast: 0.0 m/s,
+        Phase::Burn: 2.46 km/s,
+    },
+    Maneuver::Correction: {
+        Phase::Coast: 0.0 m/s,
+        Phase::Burn: 0.12 km/s,
+    },
+    Maneuver::Insertion: {
+        Phase::Coast: 0.0 m/s,
+        Phase::Burn: 1.83 km/s,
+    },
+};
