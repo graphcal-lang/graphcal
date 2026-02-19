@@ -89,6 +89,14 @@ The language has a layered type system:
 
     [:octicons-arrow-right-24: Multi-file](multi-file.md)
 
+- :material-check-decagram:{ .lg .middle } **Assertions & Attributes**
+
+    ---
+
+    `assert` declarations, tolerance checks, `#[assumes(...)]`.
+
+    [:octicons-arrow-right-24: Assertions](assertions.md)
+
 - :material-package-variant:{ .lg .middle } **Built-in Reference**
 
     ---
