@@ -27,6 +27,8 @@ pub struct ExecPlan {
     pub topo_order: Vec<String>,
     /// Runtime expressions keyed by declaration name (params + nodes).
     pub expressions: HashMap<String, Expr>,
+    /// Assert expressions in source order: (name, `body_expr`).
+    pub assert_expressions: Vec<(String, Expr)>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -43,10 +45,17 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     let const_values = eval_consts_from_tir(tir, src)?;
     let (topo_order, expressions) = build_runtime_dag(tir, src)?;
 
+    let assert_expressions: Vec<(String, Expr)> = tir
+        .asserts
+        .iter()
+        .map(|(name, expr, _span)| (name.clone(), expr.clone()))
+        .collect();
+
     Ok(ExecPlan {
         const_values,
         topo_order,
         expressions,
+        assert_expressions,
     })
 }
 

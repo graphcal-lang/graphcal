@@ -171,6 +171,23 @@ impl std::fmt::Display for NodeError {
     }
 }
 
+/// The result of evaluating an assertion.
+#[derive(Debug, Clone)]
+pub enum AssertResult {
+    /// The assertion passed (body evaluated to `true`).
+    Pass,
+    /// The assertion failed (body evaluated to `false`).
+    Fail {
+        /// Human-readable failure message.
+        message: String,
+    },
+    /// The assertion could not be evaluated (e.g., a dependency failed).
+    Error {
+        /// Human-readable error message.
+        message: String,
+    },
+}
+
 /// The result of evaluating a `.gcl` file.
 #[derive(Debug)]
 pub struct EvalResult {
@@ -182,15 +199,22 @@ pub struct EvalResult {
     pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
+    /// Assertion results in source order.
+    pub assertions: Vec<(DeclName, AssertResult)>,
     /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
     pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
 }
 
 impl EvalResult {
-    /// Returns `true` if all params and nodes evaluated successfully.
+    /// Returns `true` if any param/node evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.params.iter().any(|(_, r)| r.is_err()) || self.nodes.iter().any(|(_, r)| r.is_err())
+        self.params.iter().any(|(_, r)| r.is_err())
+            || self.nodes.iter().any(|(_, r)| r.is_err())
+            || self
+                .assertions
+                .iter()
+                .any(|(_, r)| matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. }))
     }
 }
 
@@ -1055,11 +1079,42 @@ fn evaluate_plan(
         })
         .collect();
 
+    // Evaluate assertions in source order
+    let assertions: Vec<(DeclName, AssertResult)> = plan
+        .assert_expressions
+        .iter()
+        .map(|(name, body_expr)| {
+            let result = eval_expr(
+                body_expr,
+                &values,
+                &empty_locals,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                src,
+            );
+            let assert_result = match result {
+                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
+                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
+                    message: "assertion evaluated to false".to_string(),
+                },
+                Ok(other) => AssertResult::Error {
+                    message: format!("expected Bool, got {other:?}"),
+                },
+                Err(e) => AssertResult::Error {
+                    message: format!("{e}"),
+                },
+            };
+            (DeclName::new(name), assert_result)
+        })
+        .collect();
+
     EvalResult {
         consts,
         params,
         nodes,
         all,
+        assertions,
         base_dim_symbols: tir.registry.base_dim_symbols().clone(),
     }
 }

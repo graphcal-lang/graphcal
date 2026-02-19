@@ -30,6 +30,9 @@ enum Commands {
         /// JSON input file for param values
         #[arg(long)]
         input: Option<PathBuf>,
+        /// Skip assertion checking
+        #[arg(long)]
+        no_assert: bool,
     },
     /// Format .gcl files
     Format {
@@ -57,6 +60,10 @@ enum OutputFormat {
 #[expect(
     clippy::print_stderr,
     reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI main with subcommand dispatch and override parsing"
 )]
 fn main() {
     // Install miette's fancy graphical error handler
@@ -90,6 +97,7 @@ fn main() {
             format,
             set,
             input,
+            no_assert,
         } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
@@ -148,16 +156,26 @@ fn main() {
             match compile_and_eval_project(&file, &overrides) {
                 Ok(result) => {
                     match format {
-                        OutputFormat::Text => print_text(&result),
-                        OutputFormat::Json => print_json(&result),
+                        OutputFormat::Text => print_text(&result, no_assert),
+                        OutputFormat::Json => print_json(&result, no_assert),
                     }
-                    if result.has_errors() {
+                    let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
+                        || result.nodes.iter().any(|(_, r)| r.is_err());
+                    let has_assert_failures = !no_assert
+                        && result.assertions.iter().any(|(_, r)| {
+                            matches!(
+                                r,
+                                graphcal_eval::eval::AssertResult::Fail { .. }
+                                    | graphcal_eval::eval::AssertResult::Error { .. }
+                            )
+                        });
+                    if has_eval_errors || has_assert_failures {
                         process::exit(1);
                     }
                 }
                 Err(e) => {
                     eprintln!("{:?}", miette::Report::new(e));
-                    process::exit(1);
+                    process::exit(2);
                 }
             }
         }
@@ -289,7 +307,11 @@ fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
 
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
-fn print_text(result: &EvalResult) {
+#[expect(
+    clippy::too_many_lines,
+    reason = "text output formatting with assertion display"
+)]
+fn print_text(result: &EvalResult, no_assert: bool) {
     use graphcal_eval::eval::{NodeError, Value};
 
     enum DisplayEntry<'a> {
@@ -386,6 +408,35 @@ fn print_text(result: &EvalResult) {
             },
         }
     }
+
+    // Print assertion results (unless --no-assert)
+    if !no_assert && !result.assertions.is_empty() {
+        use graphcal_eval::eval::AssertResult;
+
+        println!();
+        println!("Assertions:");
+        let max_assert_len = result
+            .assertions
+            .iter()
+            .map(|(n, _)| n.as_str().len())
+            .max()
+            .unwrap_or(0);
+        for (name, assert_result) in &result.assertions {
+            let n = name.as_str();
+            let w = max_assert_len;
+            match assert_result {
+                AssertResult::Pass => {
+                    println!("  {n:w$}  PASS");
+                }
+                AssertResult::Fail { message } => {
+                    eprintln!("  {n:w$}  FAIL  ({message})");
+                }
+                AssertResult::Error { message } => {
+                    eprintln!("  {n:w$}  ERROR ({message})");
+                }
+            }
+        }
+    }
 }
 
 #[expect(
@@ -397,7 +448,7 @@ fn print_text(result: &EvalResult) {
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
 )]
-fn print_json(result: &EvalResult) {
+fn print_json(result: &EvalResult, no_assert: bool) {
     use graphcal_eval::eval::{NodeError, Value};
 
     fn value_to_json(
@@ -519,6 +570,31 @@ fn print_json(result: &EvalResult) {
     output.insert("const".to_string(), serde_json::to_value(consts).unwrap());
     output.insert("param".to_string(), serde_json::to_value(params).unwrap());
     output.insert("node".to_string(), serde_json::to_value(nodes).unwrap());
+
+    if !no_assert && !result.assertions.is_empty() {
+        use graphcal_eval::eval::AssertResult;
+
+        let assertions: BTreeMap<&str, serde_json::Value> = result
+            .assertions
+            .iter()
+            .map(|(n, r)| {
+                let val = match r {
+                    AssertResult::Pass => serde_json::json!({"status": "pass"}),
+                    AssertResult::Fail { message } => {
+                        serde_json::json!({"status": "fail", "message": message})
+                    }
+                    AssertResult::Error { message } => {
+                        serde_json::json!({"status": "error", "message": message})
+                    }
+                };
+                (n.as_str(), val)
+            })
+            .collect();
+        output.insert(
+            "assert".to_string(),
+            serde_json::to_value(assertions).unwrap(),
+        );
+    }
 
     println!(
         "{}",

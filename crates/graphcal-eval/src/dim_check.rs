@@ -100,6 +100,27 @@ pub fn check_dimensions_tir(
         }
     }
 
+    // Validate that assert bodies infer to Bool
+    for (name, body_expr, span) in &tir.asserts {
+        let inferred = infer_type(
+            body_expr,
+            &declared_types,
+            &empty_locals,
+            &tir.registry,
+            &builtin_fns,
+            &tir.resolved_fn_sigs,
+            src,
+        )?;
+        if inferred != InferredType::Bool {
+            return Err(GraphcalError::AssertBodyNotBool {
+                found: format_inferred_type(&inferred, &tir.registry),
+                src: src.clone(),
+                span: (*span).into(),
+            });
+        }
+        let _ = name; // used for future error context
+    }
+
     Ok(())
 }
 

@@ -461,6 +461,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("assert body must evaluate to Bool, got {found}")]
+    #[diagnostic(
+        code(graphcal::A004),
+        help("assert declarations must have a body that evaluates to Bool")
+    )]
+    AssertBodyNotBool {
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected Bool, found {found}")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),
