@@ -1,0 +1,3 @@
+// Error: assert body must evaluate to Bool
+param x: Dimensionless = 1.0;
+assert check = @x + 1.0;

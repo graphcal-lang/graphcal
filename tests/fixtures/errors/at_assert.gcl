@@ -1,0 +1,4 @@
+// Error: cannot reference assert with @
+param x: Dimensionless = 1.0;
+assert check = @x > 0.0;
+node y: Dimensionless = @check;

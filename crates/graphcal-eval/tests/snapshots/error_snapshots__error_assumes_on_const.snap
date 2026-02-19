@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`#[assumes(...)]` is not valid on `const` declarations
+    Diagnostic severity: error
+Begin snippet for assumes_on_const.gcl starting at line 3, column 1
+
+snippet line 3: 
+snippet line 4: #[assumes(check)]
+    label at line 4, columns 1 to 17: not a node or param
+snippet line 5: const X: Dimensionless = 1.0;
+diagnostic help: `#[assumes(...)]` is only valid on `node` and `param` declarations
+diagnostic code: graphcal::A006

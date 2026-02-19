@@ -315,3 +315,40 @@ fn error_range_index_invalid() {
     let rendered = render_error(source, "range_index_invalid.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Assertion error tests ---
+
+#[test]
+fn error_at_assert() {
+    let source = include_str!("../../../tests/fixtures/errors/at_assert.gcl");
+    let rendered = render_error(source, "at_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assert_not_bool() {
+    let source = include_str!("../../../tests/fixtures/errors/assert_not_bool.gcl");
+    let rendered = render_error(source, "assert_not_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_unknown_assert() {
+    let source = include_str!("../../../tests/fixtures/errors/assumes_unknown_assert.gcl");
+    let rendered = render_error(source, "assumes_unknown_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_on_const() {
+    let source = include_str!("../../../tests/fixtures/errors/assumes_on_const.gcl");
+    let rendered = render_error(source, "assumes_on_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_attribute() {
+    let source = include_str!("../../../tests/fixtures/errors/unknown_attribute.gcl");
+    let rendered = render_error(source, "unknown_attribute.gcl");
+    insta::assert_snapshot!(rendered);
+}

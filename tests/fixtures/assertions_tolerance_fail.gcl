@@ -1,0 +1,6 @@
+// assertions_tolerance_fail.gcl -- Tolerance assertion that fails
+
+param actual: Dimensionless = 100.0;
+
+// Tolerance too tight, should fail
+assert tight_check = @actual ~= 110.0 +/- 1.0;

@@ -36,6 +36,14 @@ idempotency_test!(idempotent_tagged_union, "tagged_union.gcl");
 idempotency_test!(idempotent_tagged_union_param, "tagged_union_param.gcl");
 idempotency_test!(idempotent_time_scan, "time_scan.gcl");
 idempotency_test!(idempotent_user_dimensions, "user_dimensions.gcl");
+idempotency_test!(idempotent_assertions, "assertions.gcl");
+idempotency_test!(idempotent_assertions_fail, "assertions_fail.gcl");
+idempotency_test!(
+    idempotent_assertions_tolerance_fail,
+    "assertions_tolerance_fail.gcl"
+);
+idempotency_test!(idempotent_assertions_assumes, "assertions_assumes.gcl");
+idempotency_test!(idempotent_assertions_indexed, "assertions_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -71,6 +79,14 @@ roundtrip_test!(roundtrip_tagged_union, "tagged_union.gcl");
 roundtrip_test!(roundtrip_tagged_union_param, "tagged_union_param.gcl");
 roundtrip_test!(roundtrip_time_scan, "time_scan.gcl");
 roundtrip_test!(roundtrip_user_dimensions, "user_dimensions.gcl");
+roundtrip_test!(roundtrip_assertions, "assertions.gcl");
+roundtrip_test!(roundtrip_assertions_fail, "assertions_fail.gcl");
+roundtrip_test!(
+    roundtrip_assertions_tolerance_fail,
+    "assertions_tolerance_fail.gcl"
+);
+roundtrip_test!(roundtrip_assertions_assumes, "assertions_assumes.gcl");
+roundtrip_test!(roundtrip_assertions_indexed, "assertions_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -216,5 +232,35 @@ fn format_multiple_attributes() {
     assert!(
         formatted.contains("#[lazy]\n#[assumes(x)]\nnode y"),
         "Multiple attributes not preserved: {formatted}"
+    );
+}
+
+#[test]
+fn format_assert_bool() {
+    let source = "param x: Dimensionless = 1.0;\nassert check = @x > 0.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("assert check = @x > 0.0;"),
+        "Assert formatting incorrect: {formatted}"
+    );
+}
+
+#[test]
+fn format_assert_tolerance() {
+    let source = "param x: Dimensionless = 1.0;\nassert check = @x ~= 1.0 +/- 0.1;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("assert check = @x ~= 1.0 +/- 0.1;"),
+        "Assert tolerance formatting incorrect: {formatted}"
+    );
+}
+
+#[test]
+fn format_assert_tolerance_relative() {
+    let source = "param x: Dimensionless = 1.0;\nassert check = @x ~= 1.0 +/- 5 %;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("assert check = @x ~= 1.0 +/- 5%;"),
+        "Assert relative tolerance formatting incorrect: {formatted}"
     );
 }

@@ -1,0 +1,5 @@
+// Error: #[assumes] on invalid declaration kind (const)
+assert check = true;
+
+#[assumes(check)]
+const X: Dimensionless = 1.0;

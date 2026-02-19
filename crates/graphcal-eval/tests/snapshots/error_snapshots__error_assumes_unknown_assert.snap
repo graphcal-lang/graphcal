@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown assert `nonexistent` in #[assumes(...)]
+    Diagnostic severity: error
+Begin snippet for assumes_unknown_assert.gcl starting at line 3, column 1
+
+snippet line 3: 
+snippet line 4: #[assumes(nonexistent)]
+    label at line 4, columns 11 to 21: not an assert declaration
+snippet line 5: node y: Dimensionless = @x * 2.0;
+diagnostic help: `#[assumes(...)]` arguments must reference `assert` declarations
+diagnostic code: graphcal::A005
