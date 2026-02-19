@@ -407,15 +407,30 @@ fn format_eval_values(result: &EvalResult) -> HashMap<String, String> {
     map
 }
 
+/// Maximum character length for inlay hint display strings.
+/// When the formatted value exceeds this, entries are truncated with `...`.
+const INLAY_HINT_MAX_LEN: usize = 80;
+
 /// Format a single `Value` as a compact inline string for inlay hints.
 ///
 /// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
 /// - Bool: `"true"` / `"false"`
 /// - Int: `"42"`
-/// - Struct/Indexed: type name only
+/// - Struct: `"LowThrust { thrust: 0.5 [N], duration: 3600 [s] }"`
+/// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
 fn format_value_inline(
     value: &Value,
     symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+) -> String {
+    format_value_inline_with_budget(value, symbols, INLAY_HINT_MAX_LEN)
+}
+
+/// Format a `Value` with a character budget. When the formatted entries would
+/// exceed `max_len`, remaining entries are replaced with `...`.
+fn format_value_inline_with_budget(
+    value: &Value,
+    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    max_len: usize,
 ) -> String {
     match value {
         Value::Scalar { .. } => {
@@ -427,9 +442,77 @@ fn format_value_inline(
         }
         Value::Bool(b) => format!("{b}"),
         Value::Int(i) => format!("{i}"),
-        Value::Struct { type_name, .. } => type_name.to_string(),
-        Value::Indexed { index_name, .. } => format!("[{index_name}]"),
+        Value::Struct {
+            variant, fields, ..
+        } => {
+            if fields.is_empty() {
+                return format!("{variant} {{}}");
+            }
+            format_braced_entries(
+                &format!("{variant} "),
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect::<Vec<_>>(),
+                symbols,
+                max_len,
+            )
+        }
+        Value::Indexed { entries, .. } => {
+            if entries.is_empty() {
+                return "{}".to_string();
+            }
+            format_braced_entries(
+                "",
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect::<Vec<_>>(),
+                symbols,
+                max_len,
+            )
+        }
     }
+}
+
+/// Format a list of key-value pairs as `{prefix}{ k1: v1, k2: v2, ... }`,
+/// truncating with `...` when the result would exceed `max_len`.
+fn format_braced_entries(
+    prefix: &str,
+    entries: Vec<(&str, &Value)>,
+    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    max_len: usize,
+) -> String {
+    let mut result = format!("{prefix}{{ ");
+    let suffix = " }";
+    let ellipsis = "... }";
+    let total = entries.len();
+
+    for (i, (key, val)) in entries.into_iter().enumerate() {
+        let remaining_budget = max_len.saturating_sub(result.len() + suffix.len());
+        let entry_str = format!(
+            "{key}: {}",
+            format_value_inline_with_budget(val, symbols, remaining_budget)
+        );
+
+        // Check if adding this entry (plus separator and closing) would exceed budget
+        let separator = if i + 1 < total { ", " } else { "" };
+        let needed = entry_str.len() + separator.len();
+
+        if i > 0 && result.len() + needed + suffix.len() > max_len {
+            // Truncate: replace with ellipsis
+            result.push_str(ellipsis);
+            return result;
+        }
+
+        result.push_str(&entry_str);
+        if i + 1 < total {
+            result.push_str(", ");
+        }
+    }
+
+    result.push_str(suffix);
+    result
 }
 
 /// Format a number for display: integers without decimal point, floats with
@@ -804,4 +887,159 @@ pub async fn run() {
         documents: Arc::new(RwLock::new(HashMap::new())),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "test code")]
+
+    use std::collections::BTreeMap;
+
+    use graphcal_eval::eval::Value;
+    use graphcal_syntax::dimension::Dimension;
+    use graphcal_syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
+    use indexmap::IndexMap;
+
+    use super::*;
+
+    fn empty_symbols() -> BTreeMap<graphcal_syntax::dimension::BaseDimId, String> {
+        BTreeMap::new()
+    }
+
+    fn scalar(si_value: f64) -> Value {
+        Value::Scalar {
+            si_value,
+            dimension: Dimension::dimensionless(),
+            display_unit: None,
+        }
+    }
+
+    #[test]
+    fn format_scalar_dimensionless() {
+        let symbols = empty_symbols();
+        assert_eq!(format_value_inline(&scalar(2.72), &symbols), "2.72");
+        assert_eq!(format_value_inline(&scalar(42.0), &symbols), "42");
+    }
+
+    #[test]
+    fn format_bool() {
+        let symbols = empty_symbols();
+        assert_eq!(format_value_inline(&Value::Bool(true), &symbols), "true");
+        assert_eq!(format_value_inline(&Value::Bool(false), &symbols), "false");
+    }
+
+    #[test]
+    fn format_int() {
+        let symbols = empty_symbols();
+        assert_eq!(format_value_inline(&Value::Int(7), &symbols), "7");
+    }
+
+    #[test]
+    fn format_struct_with_fields() {
+        let symbols = empty_symbols();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::new("dv1"), scalar(100.0));
+        fields.insert(FieldName::new("dv2"), scalar(200.0));
+        let val = Value::Struct {
+            type_name: StructTypeName::new("TransferResult"),
+            variant: VariantName::new("TransferResult"),
+            fields,
+        };
+        assert_eq!(
+            format_value_inline(&val, &symbols),
+            "TransferResult { dv1: 100, dv2: 200 }"
+        );
+    }
+
+    #[test]
+    fn format_struct_empty_fields() {
+        let symbols = empty_symbols();
+        let val = Value::Struct {
+            type_name: StructTypeName::new("Nominal"),
+            variant: VariantName::new("Nominal"),
+            fields: IndexMap::new(),
+        };
+        assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
+    }
+
+    #[test]
+    fn format_struct_multi_variant() {
+        let symbols = empty_symbols();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::new("thrust"), scalar(0.5));
+        fields.insert(FieldName::new("duration"), scalar(3600.0));
+        let val = Value::Struct {
+            type_name: StructTypeName::new("ManeuverKind"),
+            variant: VariantName::new("LowThrust"),
+            fields,
+        };
+        assert_eq!(
+            format_value_inline(&val, &symbols),
+            "LowThrust { thrust: 0.5, duration: 3600 }"
+        );
+    }
+
+    #[test]
+    fn format_indexed() {
+        let symbols = empty_symbols();
+        let mut entries = IndexMap::new();
+        entries.insert(VariantName::new("A"), scalar(1.0));
+        entries.insert(VariantName::new("B"), scalar(2.0));
+        entries.insert(VariantName::new("C"), scalar(3.0));
+        let val = Value::Indexed {
+            index_name: IndexName::new("Phase"),
+            entries,
+        };
+        assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
+    }
+
+    #[test]
+    fn format_indexed_empty() {
+        let symbols = empty_symbols();
+        let val = Value::Indexed {
+            index_name: IndexName::new("Phase"),
+            entries: IndexMap::new(),
+        };
+        assert_eq!(format_value_inline(&val, &symbols), "{}");
+    }
+
+    #[test]
+    fn format_indexed_truncation() {
+        let symbols = empty_symbols();
+        let mut entries = IndexMap::new();
+        // Create entries with long names to trigger truncation at 80 chars
+        entries.insert(VariantName::new("LongVariantAlpha"), scalar(1.23456));
+        entries.insert(VariantName::new("LongVariantBeta"), scalar(2.34567));
+        entries.insert(VariantName::new("LongVariantGamma"), scalar(3.45678));
+        entries.insert(VariantName::new("LongVariantDelta"), scalar(4.56789));
+        let val = Value::Indexed {
+            index_name: IndexName::new("Idx"),
+            entries,
+        };
+        let result = format_value_inline(&val, &symbols);
+        assert!(
+            result.len() <= INLAY_HINT_MAX_LEN + 10,
+            "result too long: {result}"
+        );
+        assert!(result.ends_with("... }"), "expected truncation: {result}");
+    }
+
+    #[test]
+    fn format_struct_inside_indexed() {
+        let symbols = empty_symbols();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::new("x"), scalar(1.0));
+        let struct_val = Value::Struct {
+            type_name: StructTypeName::new("Point"),
+            variant: VariantName::new("Point"),
+            fields,
+        };
+        let mut entries = IndexMap::new();
+        entries.insert(VariantName::new("A"), struct_val);
+        let val = Value::Indexed {
+            index_name: IndexName::new("Idx"),
+            entries,
+        };
+        assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
+    }
 }
