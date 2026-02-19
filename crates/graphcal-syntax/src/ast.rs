@@ -37,6 +37,24 @@ pub enum DeclKind {
     Fn(FnDecl),
     Index(IndexDecl),
     Use(UseDecl),
+    Assert(AssertDecl),
+}
+
+/// Assert declaration: `assert name = <expr>;`
+///
+/// The body must evaluate to `Bool`. No type annotation (it's always Bool).
+/// Assert declarations are leaf nodes — they are evaluated after the entire graph.
+#[derive(Debug, Clone)]
+pub struct AssertDecl {
+    pub name: Spanned<DeclName>,
+    pub body: AssertBody,
+}
+
+/// The body of an assert declaration.
+#[derive(Debug, Clone)]
+pub enum AssertBody {
+    /// Plain boolean expression: `assert name = expr;`
+    Expr(Expr),
 }
 
 /// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`

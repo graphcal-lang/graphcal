@@ -1,9 +1,9 @@
 use graphcal_syntax::ast::{
-    Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimTerm, Expr,
-    ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding, GenericConstraint,
-    GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind, LetBinding, MapEntry, MatchArm,
-    MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind,
-    UnaryOp, UnitDecl, UnitDef, UnitExpr, UseDecl, VariantDecl,
+    AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
+    DimExpr, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam,
+    ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind,
+    LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding,
+    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UseDecl, VariantDecl,
 };
 use graphcal_syntax::comments::SourceMetadata;
 use graphcal_syntax::span::Span;
@@ -145,6 +145,7 @@ fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static> {
         DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Use(d) => format_use_decl(fmt, d),
+        DeclKind::Assert(d) => format_assert_decl(fmt, d),
     };
 
     if decl.attributes.is_empty() {
@@ -464,6 +465,14 @@ fn format_use_decl(_fmt: &Formatter<'_>, d: &UseDecl) -> RcDoc<'static> {
     RcDoc::text(format!("use \"{}\" {{ ", d.path))
         .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
         .append(RcDoc::text(" };"))
+}
+
+/// `assert name = expr;`
+fn format_assert_decl(fmt: &mut Formatter<'_>, d: &AssertDecl) -> RcDoc<'static> {
+    let AssertBody::Expr(body_expr) = &d.body;
+    RcDoc::text(format!("assert {} = ", d.name.value))
+        .append(format_expr(fmt, body_expr))
+        .append(RcDoc::text(";"))
 }
 
 // ---------------------------------------------------------------------------

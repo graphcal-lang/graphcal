@@ -4,11 +4,12 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::ast::{
-    Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimExprItem,
-    DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding,
-    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind, LetBinding,
-    MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl,
-    TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
+    AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl,
+    FnParam, ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl,
+    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
+    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
+    UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -137,8 +138,7 @@ impl<'src> Parser<'src> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected =
-            "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, or `use`";
+        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `use`, or `assert`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -149,6 +149,7 @@ impl<'src> Parser<'src> {
             Some(Token::Fn) => self.parse_fn_decl(),
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Use) => self.parse_use_decl(),
+            Some(Token::Assert) => self.parse_assert(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
                 Err(self.unexpected_token(expected, &tok.to_string(), span))
@@ -254,6 +255,27 @@ impl<'src> Parser<'src> {
                 name,
                 type_ann,
                 value,
+            }),
+            span,
+        })
+    }
+
+    // --- assert declaration ---
+
+    fn parse_assert(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Assert)?;
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<DeclName>();
+        self.expect(Token::Eq)?;
+        let body_expr = self.parse_expr()?;
+        let (_, semi_span) = self.expect(Token::Semicolon)?;
+        let span = start_span.merge(semi_span);
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Assert(AssertDecl {
+                name,
+                body: AssertBody::Expr(body_expr),
             }),
             span,
         })
@@ -2913,6 +2935,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Fn(f) => f.name.value.as_str(),
                 DeclKind::Index(i) => i.name.value.as_str(),
                 DeclKind::Use(_) => "<use>",
+                DeclKind::Assert(a) => a.name.value.as_str(),
             })
             .collect();
         assert_eq!(

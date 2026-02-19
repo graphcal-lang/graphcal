@@ -134,6 +134,8 @@ pub struct TIR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Assert declarations in source order: (name, expr, span).
+    pub asserts: Vec<(String, Expr, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -142,6 +144,8 @@ pub struct TIR {
     pub source_order: Vec<(String, DeclCategory)>,
     /// User-defined function declarations: (name, decl, span).
     pub functions: Vec<(String, FnDecl, Span)>,
+    /// Set of all assert names.
+    pub assert_names: std::collections::HashSet<String>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
@@ -254,10 +258,12 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         consts: ir.consts,
         params: ir.params,
         nodes: ir.nodes,
+        asserts: ir.asserts,
         runtime_deps: ir.runtime_deps,
         const_deps: ir.const_deps,
         source_order: ir.source_order,
         functions: ir.functions,
+        assert_names: ir.assert_names,
         resolved_decl_types,
         resolved_fn_sigs,
     })

@@ -254,6 +254,12 @@ pub fn compile_and_eval_with_overrides(
                         actual_kind: "node".to_string(),
                     }));
                 }
+                DeclCategory::Assert => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "assert".to_string(),
+                    }));
+                }
             }
         } else {
             return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
@@ -366,6 +372,9 @@ pub fn compile_and_eval_project(
                     Some(ImportedDecl::Fn(fn_decl, span)) => {
                         imported.functions.push((local_name, fn_decl, span));
                     }
+                    Some(ImportedDecl::Assert(expr, span)) => {
+                        imported.asserts.push((local_name, expr, span));
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -407,6 +416,12 @@ pub fn compile_and_eval_project(
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
                         actual_kind: "node".to_string(),
+                    }));
+                }
+                DeclCategory::Assert => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "assert".to_string(),
                     }));
                 }
             }
@@ -531,6 +546,9 @@ pub fn compile_to_tir_project(
                     Some(ImportedDecl::Fn(fn_decl, span)) => {
                         imported.functions.push((local_name, fn_decl, span));
                     }
+                    Some(ImportedDecl::Assert(expr, span)) => {
+                        imported.asserts.push((local_name, expr, span));
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -578,6 +596,7 @@ enum ImportedDecl {
         graphcal_syntax::span::Span,
     ),
     Fn(graphcal_syntax::ast::FnDecl, graphcal_syntax::span::Span),
+    Assert(graphcal_syntax::ast::Expr, graphcal_syntax::span::Span),
 }
 
 /// Find a declaration by name in a file's AST.
@@ -607,6 +626,12 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             }
             DeclKind::Fn(f) if f.name.value.as_str() == name => {
                 return Some(ImportedDecl::Fn(f.clone(), decl.span));
+            }
+            DeclKind::Assert(a) if a.name.value.as_str() == name => {
+                let body_expr = match &a.body {
+                    graphcal_syntax::ast::AssertBody::Expr(expr) => expr.clone(),
+                };
+                return Some(ImportedDecl::Assert(body_expr, decl.span));
             }
             _ => {}
         }
@@ -1013,15 +1038,18 @@ fn evaluate_plan(
     let all = tir
         .source_order
         .iter()
+        .filter(|(_, cat)| !matches!(cat, DeclCategory::Assert))
         .map(|(name, cat)| {
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
+                DeclCategory::Assert => unreachable!("filtered out above"),
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
+                DeclCategory::Assert => unreachable!("filtered out above"),
             };
             (DeclName::new(name), result, decl_type)
         })

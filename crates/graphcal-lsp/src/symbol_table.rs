@@ -27,6 +27,7 @@ pub enum SymbolCategory {
     LocalVar,
     BuiltinFn,
     BuiltinConst,
+    Assert,
 }
 
 /// Information about a symbol definition.
@@ -394,6 +395,20 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                         );
                     }
                 }
+            }
+            DeclKind::Assert(a) => {
+                let name = a.name.value.to_string();
+                table.definitions.insert(
+                    name.clone(),
+                    DefinitionInfo {
+                        name: name.clone(),
+                        category: SymbolCategory::Assert,
+                        name_span: a.name.span,
+                        decl_span: decl.span,
+                        type_description: Some("Bool".to_string()),
+                        detail: Some("assert".to_string()),
+                    },
+                );
             }
             DeclKind::Use(u) => {
                 // Each imported name is a reference; target resolution for cross-file

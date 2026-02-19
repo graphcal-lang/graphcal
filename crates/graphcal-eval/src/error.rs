@@ -448,6 +448,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot reference assert `{name}` with `@`")]
+    #[diagnostic(
+        code(graphcal::A003),
+        help("assert declarations are post-evaluation checks and cannot be referenced with `@`")
+    )]
+    GraphRefToAssert {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("`@{name}` is an assert, not a param or node")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),

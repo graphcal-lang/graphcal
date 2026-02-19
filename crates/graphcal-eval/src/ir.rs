@@ -44,6 +44,8 @@ pub struct IR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Assert declarations in source order: (name, expr, span).
+    pub asserts: Vec<(String, Expr, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -52,6 +54,8 @@ pub struct IR {
     pub source_order: Vec<(String, DeclCategory)>,
     /// User-defined function declarations: (name, decl, span).
     pub functions: Vec<(String, FnDecl, Span)>,
+    /// Set of all assert names.
+    pub assert_names: HashSet<String>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -156,10 +160,12 @@ pub fn lower_with_imports(
         consts,
         params,
         nodes,
+        asserts: resolved.asserts,
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
         functions: resolved.functions,
+        assert_names: resolved.assert_names,
     })
 }
 

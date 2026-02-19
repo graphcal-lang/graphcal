@@ -114,5 +114,8 @@ fn format_hover(def: &DefinitionInfo) -> String {
                 def.name
             )
         }
+        SymbolCategory::Assert => {
+            format!("```graphcal\nassert {}: Bool\n```", def.name)
+        }
     }
 }
