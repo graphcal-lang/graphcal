@@ -371,15 +371,18 @@ This document unifies concepts spread across multiple existing docs:
 - **`VariantLabel` runtime value unified:** The current `RuntimeValue::VariantLabel { variant }` can be represented as a `RuntimeValue::Struct { type_name, variant, fields: {} }` — a struct with no fields. Or a dedicated `Tag` variant if performance matters.
 - **Index registry shares with type registry:** An `index Maneuver = { ... }` declaration creates entries in BOTH the index registry (for `T[I]` semantics) and the type registry (for ValueType semantics).
 
+## Resolved Questions
+
+- **Option type:** `Option<T>` is just a tagged union — a normal ValueType. Nothing special about it. `Option<Velocity>` is a ValueType. `Option<Velocity>[Maneuver]` is a DeclType. No special-casing needed.
+- **Exhaustiveness in `match`:** Yes, require exhaustive cases. Since named indexes ARE tagged unions, the same exhaustiveness rules apply uniformly.
+- **Cross-index label equality:** Type error. `m == p` where `m: Maneuver` and `p: Phase` is a compile-time error. They are different tagged union types.
+- **Axis order significance:** `T[I, J]` and `T[J, I]` are different types. Axis order determines `for` binding order, `scan` direction, and display order. No transpose operation — use explicit `for` to construct the transposed value.
+- **`type` vs `index` for fieldless tagged unions:** Require explicit `index` declaration. A regular `type Foo { A, B }` is NOT usable as a collection axis. The `index` keyword communicates intent and prevents accidental use of marker types as axes.
+- **Can `index` types also carry fields?** No. Indexes are fieldless. If you need data-carrying variants as an axis, compose: use an `index` for the axis and a separate `type` for the per-variant data. Too complex for too little value.
+
 ## Open Questions
 
-- **Option type:** Where does `Option<T>` fit? It is a built-in tagged union (ValueType). `Option<Velocity>` is a ValueType. `Option<Velocity>[Maneuver]` is a DeclType. An indexed value with Option elements can have per-label missing values.
-- **Exhaustiveness in `match`:** Should `match m { ... }` require exhaustive cases? (Recommendation: yes, consistent with tagged union matching. Since named indexes ARE tagged unions, the same exhaustiveness rules apply.)
-- **Cross-index label equality:** Can you compare labels from different indexes? `m == p` where `m: Maneuver` and `p: Phase`? (Recommendation: no, type error. They are different tagged union types.)
-- **Axis order significance:** `T[I, J]` is a flat product-key map, but axis order determines `for` binding order, `scan` direction, and display order. `T[I, J]` and `T[J, I]` are different types. Is there a transpose operation? (Recommendation: not needed initially — use `for` to construct the transposed value explicitly.)
-- **`type` vs `index` for fieldless tagged unions:** Should a regular `type Foo { A, B }` (with no fields on any variant) be automatically usable as an index? Or must it be declared with `index`? (Recommendation: require `index`. The keyword communicates intent and prevents accidental use of marker types as collection axes.)
-- **Can `index` types also carry fields?** If `index` is "tagged union + axis marker," could an index variant carry data in the future? This would unify `index` and `type` further. (Recommendation: no, keep indexes fieldless. If you need data-carrying variants as an axis, compose: use an `index` for the axis and a separate `type` for the per-variant data.)
-- **Range index as a separate concept?** Named indexes are tagged unions. Range indexes are not — they're scalar sequences. Should they share the `index` keyword? (Current answer: yes, for user simplicity. But the implementation can treat them differently.)
+- **Named index vs range index naming:** Named indexes are tagged unions. Range indexes are scalar sequences — a fundamentally different concept. Sharing the `index` keyword is acceptable for user simplicity, but if a better name emerges for one or both, we could differentiate them. The implementation treats them differently regardless.
 
 ## Dependencies
 
