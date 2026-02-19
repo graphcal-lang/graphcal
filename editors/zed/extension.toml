@@ -8,7 +8,7 @@ repository = "https://github.com/shunichironomura/graphcal"
 
 [grammars.graphcal]
 repository = "https://github.com/shunichironomura/graphcal"
-rev = "syntax-highlight-use-as"
+rev = "main"
 path = "tree-sitter-graphcal"
 
 [language_servers.graphcal-lsp]
