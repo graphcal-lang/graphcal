@@ -829,9 +829,6 @@ fn runtime_to_value(
                 entries: converted_entries,
             }
         }
-        RuntimeValue::VariantLabel { .. } => {
-            panic!("VariantLabel should not appear in final values")
-        }
         RuntimeValue::RangeLabel { .. } => {
             panic!("RangeLabel should not appear in final values")
         }

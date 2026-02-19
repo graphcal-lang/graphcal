@@ -401,7 +401,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                                 name_span: variant.span,
                                 decl_span: variant.span,
                                 type_description: None,
-                                detail: Some(format!("variant of index {name}")),
+                                detail: Some(format!("label/value variant of index {name}")),
                             },
                         );
                     }

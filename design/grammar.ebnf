@@ -642,10 +642,14 @@ paren_expr
 
 (* --- Match expression --- *)
 match_expr
-   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}";
+   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}"
+   | "match", "(", expr, ",", expr, { ",", expr }, ")", "{", [ tuple_match_arm, { ",", tuple_match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;
+
+tuple_match_arm
+   = tuple_match_pattern, "=>", expr;
 
 (* ================================================================== *)
 (* 8. Patterns                                                        *)
@@ -653,6 +657,10 @@ match_arm
 match_pattern
    = pascal_case_ident, "::", pascal_case_ident (* qualified: Index::Variant *)
    | pascal_case_ident, [ "{", pattern_binding, { ",", pattern_binding }, [ "," ], "}" ];
+
+tuple_match_pattern
+   = "_"
+   | "(", expr, ",", expr, { ",", expr }, ")";
 
 pattern_binding
    = IDENT, [ ":", ( "_"
@@ -665,7 +673,7 @@ pattern_binding
 (* 9. For, Scan, and Unfold Expressions                               *)
 (* ================================================================== *)
 for_expr
-   = "for", for_binding, { ",", for_binding }, "{", expr, "}";
+   = "for", for_binding, { ",", for_binding }, "{", [ "(", lower_snake_case_ident, { ",", lower_snake_case_ident }, ")", "=>" ], expr, "}";
 
 for_binding
    = lower_snake_case_ident, ":", pascal_case_ident;

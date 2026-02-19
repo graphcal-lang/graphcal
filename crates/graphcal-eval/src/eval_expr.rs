@@ -28,11 +28,6 @@ pub enum RuntimeValue {
         index_name: IndexName,
         entries: IndexMap<VariantName, Self>,
     },
-    /// A variant label during `for` comprehension iteration.
-    /// Not a "real" value — only exists in `local_values` during loop body evaluation.
-    VariantLabel {
-        variant: VariantName,
-    },
     /// A range index label during `Unfold` iteration.
     /// Carries the step index and SI value (for arithmetic like `t - prev_t`).
     /// Also carries the index name for index access resolution.
@@ -60,9 +55,6 @@ impl RuntimeValue {
             }
             Self::Indexed { index_name, .. } => {
                 panic!("expected scalar for {context}, got indexed value `{index_name}[...]`")
-            }
-            Self::VariantLabel { variant, .. } => {
-                panic!("expected scalar for {context}, got variant label `{variant}`")
             }
             Self::RangeLabel { value, .. } => *value,
         }
@@ -113,8 +105,10 @@ pub fn eval_expr(
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        ExprKind::VariantLiteral { variant, .. } => Ok(RuntimeValue::VariantLabel {
+        ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Struct {
+            type_name: StructTypeName::new(index.value.as_str()),
             variant: variant.value.clone(),
+            fields: IndexMap::new(),
         }),
         ExprKind::GraphRef(ident) => {
             values
@@ -197,7 +191,7 @@ pub fn eval_expr(
                 .expect_bool("OR operand");
                 Ok(RuntimeValue::Bool(l || r))
             }
-            // Equality: can compare Bool==Bool, Int==Int, or Scalar==Scalar
+            // Equality: compare same-typed value-level entities.
             BinOp::Eq | BinOp::Ne => {
                 let l = eval_expr(
                     lhs,
@@ -225,10 +219,10 @@ pub fn eval_expr(
                     (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
                         Ok(RuntimeValue::Bool(if is_eq { li == ri } else { li != ri }))
                     }
-                    (
-                        RuntimeValue::VariantLabel { variant: lv },
-                        RuntimeValue::VariantLabel { variant: rv },
-                    ) => Ok(RuntimeValue::Bool(if is_eq { lv == rv } else { lv != rv })),
+                    (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => {
+                        let eq = runtime_value_equals(&l, &r);
+                        Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
+                    }
                     _ => {
                         let lv = l.expect_scalar("comparison operand");
                         let rv = r.expect_scalar("comparison operand");
@@ -810,7 +804,7 @@ pub fn eval_expr(
                             }
                         })?;
                         match var_val {
-                            RuntimeValue::VariantLabel { variant, .. } => variant.clone(),
+                            RuntimeValue::Struct { variant, .. } => variant.clone(),
                             RuntimeValue::RangeLabel { step_index, .. } => {
                                 VariantName::new(format!("#{step_index}"))
                             }
@@ -919,27 +913,6 @@ pub fn eval_expr(
             )?;
 
             match &scrutinee_val {
-                RuntimeValue::VariantLabel { variant } => {
-                    // Index variant match: find arm by variant name
-                    let matched_arm = arms
-                        .iter()
-                        .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!("no match arm for variant `{variant}`"),
-                            src: src.clone(),
-                            span: expr.span.into(),
-                        })?;
-                    // No field bindings for index variants
-                    eval_expr(
-                        &matched_arm.body,
-                        values,
-                        local_values,
-                        builtin_consts,
-                        builtin_fns,
-                        registry,
-                        src,
-                    )
-                }
                 RuntimeValue::Struct {
                     variant,
                     fields: scrutinee_fields,
@@ -987,8 +960,7 @@ pub fn eval_expr(
                     )
                 }
                 _ => Err(GraphcalError::EvalError {
-                    message: "match scrutinee must be a struct/tagged union or variant label"
-                        .to_string(),
+                    message: "match scrutinee must be a struct/tagged union".to_string(),
                     src: src.clone(),
                     span: scrutinee.span.into(),
                 }),
@@ -1027,12 +999,27 @@ fn eval_for_comp(
     let mut entries = IndexMap::new();
     for variant in &variants {
         let mut inner_locals = local_values.clone();
-        inner_locals.insert(
-            binding.var.name.clone(),
-            RuntimeValue::VariantLabel {
+        let binding_value = match &idx_def.kind {
+            crate::registry::IndexKind::Named { .. } => RuntimeValue::Struct {
+                type_name: StructTypeName::new(idx_name.as_str()),
                 variant: variant.clone(),
+                fields: IndexMap::new(),
             },
-        );
+            crate::registry::IndexKind::Range { .. } => {
+                let step_index = variant
+                    .as_str()
+                    .strip_prefix('#')
+                    .expect("range variants use #<index> format")
+                    .parse::<usize>()
+                    .expect("range variant index must be a valid usize");
+                RuntimeValue::RangeLabel {
+                    index_name: idx_name.clone(),
+                    step_index,
+                    value: idx_def.step_value(step_index),
+                }
+            }
+        };
+        inner_locals.insert(binding.var.name.clone(), binding_value);
         let val = if remaining.is_empty() {
             eval_expr(
                 body,
@@ -1061,6 +1048,31 @@ fn eval_for_comp(
         index_name: idx_name,
         entries,
     })
+}
+
+fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
+    match (lhs, rhs) {
+        (
+            RuntimeValue::Struct {
+                type_name: lt,
+                variant: lv,
+                fields: lf,
+            },
+            RuntimeValue::Struct {
+                type_name: rt,
+                variant: rv,
+                fields: rf,
+            },
+        ) => {
+            lt == rt
+                && lv == rv
+                && lf.len() == rf.len()
+                && lf
+                    .iter()
+                    .all(|(k, lvf)| rf.get(k).is_some_and(|rvf| runtime_value_equals(lvf, rvf)))
+        }
+        _ => false,
+    }
 }
 
 /// Validate that a computed value is finite, returning an `EvalError` if it is NaN or infinite.

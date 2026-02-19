@@ -80,7 +80,10 @@ fn format_hover(def: &DefinitionInfo) -> String {
         }
         SymbolCategory::Index => {
             let desc = def.type_description.as_deref().unwrap_or("...");
-            format!("```graphcal\nindex {} = {desc}\n```", def.name)
+            format!(
+                "```graphcal\nindex {} = {desc}\n```\n(named index labels are first-class value variants)",
+                def.name
+            )
         }
         SymbolCategory::StructType => {
             let desc = def.type_description.as_deref().unwrap_or("...");

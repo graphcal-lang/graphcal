@@ -168,14 +168,30 @@
     },
 
     "for-binding": {
-      "comment": "for m: Maneuver — highlight the index type after ':'",
-      "match": "\\b(for)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)\\s*([A-Z][a-zA-Z0-9_]*)",
-      "captures": {
-        "1": { "name": "keyword.control.graphcal" },
-        "2": { "name": "variable.other.graphcal" },
-        "3": { "name": "punctuation.separator.colon.graphcal" },
-        "4": { "name": "entity.name.type.graphcal" }
-      }
+      "comment": "for m: Maneuver, n: Phase — highlight all bindings in the for-header",
+      "begin": "\\b(for)\\b",
+      "end": "(?=\\{)",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.graphcal" }
+      },
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)\\s*([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.graphcal" },
+            "2": { "name": "punctuation.separator.colon.graphcal" },
+            "3": { "name": "entity.name.type.graphcal" }
+          }
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        },
+        {
+          "match": "=>",
+          "name": "keyword.operator.fat-arrow.graphcal"
+        }
+      ]
     },
 
     "control-keywords": {

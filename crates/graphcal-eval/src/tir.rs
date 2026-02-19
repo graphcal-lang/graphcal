@@ -748,7 +748,6 @@ fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> 
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred(element, registry))
         }
-        InferredType::LoopVar(idx) => format!("<loop var: {idx}>"),
     }
 }
 
