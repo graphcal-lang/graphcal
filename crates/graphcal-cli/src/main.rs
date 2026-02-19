@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use graphcal_eval::eval::{EvalResult, compile_and_eval_project, compile_to_tir_project};
+use graphcal_eval::eval::{
+    EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
+};
 use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
@@ -687,48 +689,3 @@ fn print_json(result: &EvalResult) {
     );
 }
 
-/// Format a number for display: integers without decimal point, floats with
-/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "guarded by abs() < 1e15 check"
-)]
-fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        // Format with up to 6 decimal places, then strip trailing zeros
-        let s = format!("{value:.6}");
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
-    use super::*;
-
-    #[test]
-    fn format_integer() {
-        assert_eq!(format_number(1200.0), "1200");
-        assert_eq!(format_number(0.0), "0");
-        assert_eq!(format_number(-42.0), "-42");
-    }
-
-    #[test]
-    #[expect(
-        clippy::approx_constant,
-        reason = "testing exact format output of 3.14"
-    )]
-    fn format_decimal() {
-        assert_eq!(format_number(9.80665), "9.80665");
-        assert_eq!(format_number(3.14), "3.14");
-    }
-
-    #[test]
-    fn format_large_decimal() {
-        assert_eq!(format_number(3138.128), "3138.128");
-    }
-}

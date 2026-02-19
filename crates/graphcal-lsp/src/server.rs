@@ -22,8 +22,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use graphcal_eval::builtins::{DimSignature, builtin_functions};
 use graphcal_eval::eval::{
-    EvalResult, Value, compile_and_eval_named, compile_and_eval_project, compile_to_tir,
-    compile_to_tir_project,
+    compile_and_eval_named, compile_and_eval_project, compile_to_tir, compile_to_tir_project,
 };
 use graphcal_syntax::ast::DeclKind;
 
@@ -264,7 +263,7 @@ fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<Stri
     match eval_result {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result);
-            let values = format_eval_values(&result);
+            let values = result.format_eval_values();
             (diagnostics, values)
         }
         Err(e) => {
@@ -390,62 +389,6 @@ fn builtin_signature_parts(arity: usize, dim_sig: DimSignature) -> (Vec<String>,
             vec!["y: D".to_string(), "x: D".to_string()],
             "Angle".to_string(),
         ),
-    }
-}
-
-/// Format all successfully evaluated values into display strings.
-fn format_eval_values(result: &EvalResult) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for (name, value_result, _decl_type) in &result.all {
-        if let Ok(value) = value_result {
-            map.insert(
-                name.as_str().to_string(),
-                format_value_inline(value, &result.base_dim_symbols),
-            );
-        }
-    }
-    map
-}
-
-/// Format a single `Value` as a compact inline string for inlay hints.
-///
-/// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
-/// - Bool: `"true"` / `"false"`
-/// - Int: `"42"`
-/// - Struct/Indexed: type name only
-fn format_value_inline(
-    value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
-) -> String {
-    match value {
-        Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value());
-            value.display_label(symbols).map_or_else(
-                || formatted.clone(),
-                |label| format!("{formatted} [{label}]"),
-            )
-        }
-        Value::Bool(b) => format!("{b}"),
-        Value::Int(i) => format!("{i}"),
-        Value::Struct { type_name, .. } => type_name.to_string(),
-        Value::Indexed { index_name, .. } => format!("[{index_name}]"),
-    }
-}
-
-/// Format a number for display: integers without decimal point, floats with
-/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "guarded by abs() < 1e15 check"
-)]
-fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        let s = format!("{value:.6}");
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
     }
 }
 

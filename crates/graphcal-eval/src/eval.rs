@@ -142,6 +142,33 @@ impl Value {
             Self::Bool(_) | Self::Int(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
         }
     }
+
+    /// Format this value as a compact inline string for display in inlay hints
+    /// or watch output.
+    ///
+    /// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
+    /// - Bool: `"true"` / `"false"`
+    /// - Int: `"42"`
+    /// - Struct/Indexed: type name only
+    #[must_use]
+    pub fn format_inline(
+        &self,
+        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    ) -> String {
+        match self {
+            Self::Scalar { .. } => {
+                let formatted = format_number(self.display_value());
+                self.display_label(symbols).map_or_else(
+                    || formatted.clone(),
+                    |label| format!("{formatted} [{label}]"),
+                )
+            }
+            Self::Bool(b) => format!("{b}"),
+            Self::Int(i) => format!("{i}"),
+            Self::Struct { type_name, .. } => type_name.to_string(),
+            Self::Indexed { index_name, .. } => format!("[{index_name}]"),
+        }
+    }
 }
 
 /// A runtime error associated with a specific node or param evaluation.
@@ -191,6 +218,44 @@ impl EvalResult {
     #[must_use]
     pub fn has_errors(&self) -> bool {
         self.params.iter().any(|(_, r)| r.is_err()) || self.nodes.iter().any(|(_, r)| r.is_err())
+    }
+
+    /// Format all successfully evaluated values into display strings.
+    ///
+    /// Returns a map from declaration name to formatted value string suitable
+    /// for display in inlay hints, watch output, or other UI. This is the
+    /// shared formatting pipeline used by both `graphcal watch` and the LSP
+    /// inlay hint provider.
+    #[must_use]
+    pub fn format_eval_values(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (name, value_result, _decl_type) in &self.all {
+            if let Ok(value) = value_result {
+                map.insert(
+                    name.as_str().to_string(),
+                    value.format_inline(&self.base_dim_symbols),
+                );
+            }
+        }
+        map
+    }
+}
+
+/// Format a number for display: integers without decimal point, floats with
+/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "guarded by abs() < 1e15 check"
+)]
+pub fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        let s = format!("{value:.6}");
+        let s = s.trim_end_matches('0');
+        let s = s.trim_end_matches('.');
+        s.to_string()
     }
 }
 
@@ -2142,6 +2207,69 @@ mod tests {
         // `10 km` should be a parse error
         let err = compile_and_eval("param x: Length = 10 km;");
         assert!(err.is_err());
+    }
+
+    // --- format_number tests ---
+
+    #[test]
+    fn format_number_integer() {
+        assert_eq!(format_number(1200.0), "1200");
+        assert_eq!(format_number(0.0), "0");
+        assert_eq!(format_number(-42.0), "-42");
+    }
+
+    #[test]
+    #[expect(
+        clippy::approx_constant,
+        reason = "testing exact format output of 3.14"
+    )]
+    fn format_number_decimal() {
+        assert_eq!(format_number(9.80665), "9.80665");
+        assert_eq!(format_number(3.14), "3.14");
+    }
+
+    #[test]
+    fn format_number_large_decimal() {
+        assert_eq!(format_number(3138.128), "3138.128");
+    }
+
+    // --- format_inline tests ---
+
+    #[test]
+    fn format_inline_dimensionless_scalar() {
+        use graphcal_syntax::dimension::Dimension;
+        let val = Value::Scalar {
+            si_value: 42.0,
+            dimension: Dimension::dimensionless(),
+            display_unit: None,
+        };
+        let symbols = std::collections::BTreeMap::new();
+        assert_eq!(val.format_inline(&symbols), "42");
+    }
+
+    #[test]
+    fn format_inline_bool() {
+        let symbols = std::collections::BTreeMap::new();
+        assert_eq!(Value::Bool(true).format_inline(&symbols), "true");
+        assert_eq!(Value::Bool(false).format_inline(&symbols), "false");
+    }
+
+    #[test]
+    fn format_inline_int() {
+        let symbols = std::collections::BTreeMap::new();
+        assert_eq!(Value::Int(7).format_inline(&symbols), "7");
+        assert_eq!(Value::Int(-99).format_inline(&symbols), "-99");
+    }
+
+    // --- format_eval_values tests ---
+
+    #[test]
+    fn format_eval_values_basic() {
+        let source = "param x: Dimensionless = 42.0;\nnode y: Dimensionless = @x + 1.0;";
+        let result = compile_and_eval(source).unwrap();
+        let formatted = result.format_eval_values();
+        assert_eq!(formatted.get("x"), Some(&"42".to_string()));
+        assert_eq!(formatted.get("y"), Some(&"43".to_string()));
     }
 
     mod prop {
