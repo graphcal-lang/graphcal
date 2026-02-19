@@ -201,6 +201,8 @@ pub struct EvalResult {
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
     /// Assertion results in source order.
     pub assertions: Vec<(DeclName, AssertResult)>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
     pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
 }
@@ -1103,6 +1105,7 @@ fn evaluate_plan(
         nodes,
         all,
         assertions,
+        assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.base_dim_symbols().clone(),
     }
 }

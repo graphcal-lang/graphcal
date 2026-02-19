@@ -430,6 +430,13 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                 }
                 AssertResult::Fail { message } => {
                     eprintln!("  {n:w$}  FAIL  ({message})");
+                    if let Some(affected) = result.assumes_map.get(n) {
+                        eprintln!(
+                            "  {blank:w$}        affected: {nodes}",
+                            blank = "",
+                            nodes = affected.join(", ")
+                        );
+                    }
                 }
                 AssertResult::Error { message } => {
                     eprintln!("  {n:w$}  ERROR ({message})");
@@ -581,7 +588,11 @@ fn print_json(result: &EvalResult, no_assert: bool) {
                 let val = match r {
                     AssertResult::Pass => serde_json::json!({"status": "pass"}),
                     AssertResult::Fail { message } => {
-                        serde_json::json!({"status": "fail", "message": message})
+                        let mut obj = serde_json::json!({"status": "fail", "message": message});
+                        if let Some(affected) = result.assumes_map.get(n.as_str()) {
+                            obj["affected_nodes"] = serde_json::json!(affected);
+                        }
+                        obj
                     }
                     AssertResult::Error { message } => {
                         serde_json::json!({"status": "error", "message": message})

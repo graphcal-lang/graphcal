@@ -56,6 +56,8 @@ pub struct IR {
     pub functions: Vec<(String, FnDecl, Span)>,
     /// Set of all assert names.
     pub assert_names: HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -166,6 +168,7 @@ pub fn lower_with_imports(
         source_order: resolved.source_order,
         functions: resolved.functions,
         assert_names: resolved.assert_names,
+        assumes_map: resolved.assumes_map,
     })
 }
 

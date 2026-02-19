@@ -146,6 +146,8 @@ pub struct TIR {
     pub functions: Vec<(String, FnDecl, Span)>,
     /// Set of all assert names.
     pub assert_names: std::collections::HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
@@ -264,6 +266,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         source_order: ir.source_order,
         functions: ir.functions,
         assert_names: ir.assert_names,
+        assumes_map: ir.assumes_map,
         resolved_decl_types,
         resolved_fn_sigs,
     })

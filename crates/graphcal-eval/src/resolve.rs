@@ -55,6 +55,9 @@ pub struct ResolvedFile {
     pub functions: Vec<(String, FnDecl, Span)>,
     /// Set of all assert names (for checking `@assert_name` errors).
     pub assert_names: HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    /// Built from `#[assumes(...)]` attributes.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Resolve names, check casing, detect duplicates, and extract dependencies.
@@ -353,6 +356,72 @@ pub fn resolve_with_imports(
     }
     all_source_order.extend(source_order);
 
+    // Validate attributes and build assumes_map
+    let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
+    for decl in &file.declarations {
+        let decl_name = match &decl.kind {
+            DeclKind::Param(p) => Some(p.name.value.to_string()),
+            DeclKind::Node(n) => Some(n.name.value.to_string()),
+            DeclKind::Const(c) => Some(c.name.value.to_string()),
+            DeclKind::Assert(a) => Some(a.name.value.to_string()),
+            DeclKind::Fn(f) => Some(f.name.value.to_string()),
+            _ => None,
+        };
+        for attr in &decl.attributes {
+            let attr_name = attr.name.name.as_str();
+            match attr_name {
+                "assumes" => {
+                    // #[assumes] is only valid on node and param
+                    let kind = match &decl.kind {
+                        DeclKind::Param(_) | DeclKind::Node(_) => None,
+                        DeclKind::Const(_) => Some("const"),
+                        DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Fn(_) => Some("fn"),
+                        DeclKind::Dimension(_) => Some("dimension"),
+                        DeclKind::Unit(_) => Some("unit"),
+                        DeclKind::Type(_) => Some("type"),
+                        DeclKind::Index(_) => Some("index"),
+                        DeclKind::Use(_) => Some("use"),
+                    };
+                    if let Some(kind) = kind {
+                        return Err(GraphcalError::InvalidAssumesTarget {
+                            kind: kind.to_string(),
+                            src: src.clone(),
+                            span: attr.span.into(),
+                        });
+                    }
+                    // Each argument must reference an existing assert declaration
+                    for arg in &attr.args {
+                        let arg_name = arg.name.as_str();
+                        if !assert_names.contains(arg_name) {
+                            return Err(GraphcalError::UnknownAssertInAssumes {
+                                name: arg_name.to_string(),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        }
+                        if let Some(ref dname) = decl_name {
+                            assumes_map
+                                .entry(arg_name.to_string())
+                                .or_default()
+                                .push(dname.clone());
+                        }
+                    }
+                }
+                "lazy" => {
+                    // Recognized but semantics deferred — no validation needed
+                }
+                _ => {
+                    return Err(GraphcalError::UnknownAttribute {
+                        name: attr_name.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
+            }
+        }
+    }
+
     Ok(ResolvedFile {
         consts: all_consts,
         params: all_params,
@@ -363,6 +432,7 @@ pub fn resolve_with_imports(
         source_order: all_source_order,
         functions: all_functions,
         assert_names,
+        assumes_map,
     })
 }
 

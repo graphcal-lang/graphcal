@@ -29,6 +29,8 @@ pub struct ExecPlan {
     pub expressions: HashMap<String, Expr>,
     /// Assert bodies in source order: (name, body).
     pub assert_bodies: Vec<(String, AssertBody)>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -56,6 +58,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         topo_order,
         expressions,
         assert_bodies,
+        assumes_map: tir.assumes_map.clone(),
     })
 }
 
