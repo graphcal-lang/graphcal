@@ -1,0 +1,5 @@
+// Error: unknown assert in #[assumes]
+param x: Dimensionless = 1.0;
+
+#[assumes(nonexistent)]
+node y: Dimensionless = @x * 2.0;

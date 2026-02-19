@@ -1,0 +1,8 @@
+// main.gcl -- cross-file assumes test
+
+use "./checks.gcl" { limit, limit_positive };
+
+param value: Dimensionless = 42.0;
+
+#[assumes(limit_positive)]
+node ratio: Dimensionless = @value / @limit;

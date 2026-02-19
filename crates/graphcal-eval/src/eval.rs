@@ -16,6 +16,7 @@ use graphcal_syntax::ast::{DeclKind, ExprKind};
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{DeclName, FieldName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
+use graphcal_syntax::span::Span;
 
 use std::path::Path;
 
@@ -171,6 +172,23 @@ impl std::fmt::Display for NodeError {
     }
 }
 
+/// The result of evaluating an assertion.
+#[derive(Debug, Clone)]
+pub enum AssertResult {
+    /// The assertion passed (body evaluated to `true`).
+    Pass,
+    /// The assertion failed (body evaluated to `false`).
+    Fail {
+        /// Human-readable failure message.
+        message: String,
+    },
+    /// The assertion could not be evaluated (e.g., a dependency failed).
+    Error {
+        /// Human-readable error message.
+        message: String,
+    },
+}
+
 /// The result of evaluating a `.gcl` file.
 #[derive(Debug)]
 pub struct EvalResult {
@@ -182,15 +200,23 @@ pub struct EvalResult {
     pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
+    /// Assertion results in source order: (name, result, span).
+    pub assertions: Vec<(DeclName, AssertResult, Span)>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
     pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
 }
 
 impl EvalResult {
-    /// Returns `true` if all params and nodes evaluated successfully.
+    /// Returns `true` if any param/node evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.params.iter().any(|(_, r)| r.is_err()) || self.nodes.iter().any(|(_, r)| r.is_err())
+        self.params.iter().any(|(_, r)| r.is_err())
+            || self.nodes.iter().any(|(_, r)| r.is_err())
+            || self.assertions.iter().any(|(_, r, _)| {
+                matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
+            })
     }
 }
 
@@ -252,6 +278,12 @@ pub fn compile_and_eval_with_overrides(
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
                         actual_kind: "node".to_string(),
+                    }));
+                }
+                DeclCategory::Assert => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "assert".to_string(),
                     }));
                 }
             }
@@ -366,6 +398,9 @@ pub fn compile_and_eval_project(
                     Some(ImportedDecl::Fn(fn_decl, span)) => {
                         imported.functions.push((local_name, fn_decl, span));
                     }
+                    Some(ImportedDecl::Assert(expr, span)) => {
+                        imported.asserts.push((local_name, expr, span));
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -407,6 +442,12 @@ pub fn compile_and_eval_project(
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
                         actual_kind: "node".to_string(),
+                    }));
+                }
+                DeclCategory::Assert => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "assert".to_string(),
                     }));
                 }
             }
@@ -531,6 +572,9 @@ pub fn compile_to_tir_project(
                     Some(ImportedDecl::Fn(fn_decl, span)) => {
                         imported.functions.push((local_name, fn_decl, span));
                     }
+                    Some(ImportedDecl::Assert(expr, span)) => {
+                        imported.asserts.push((local_name, expr, span));
+                    }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: use_item.name.name.clone(),
@@ -578,6 +622,10 @@ enum ImportedDecl {
         graphcal_syntax::span::Span,
     ),
     Fn(graphcal_syntax::ast::FnDecl, graphcal_syntax::span::Span),
+    Assert(
+        graphcal_syntax::ast::AssertBody,
+        graphcal_syntax::span::Span,
+    ),
 }
 
 /// Find a declaration by name in a file's AST.
@@ -607,6 +655,9 @@ fn find_declaration_in_file(file: &graphcal_syntax::ast::File, name: &str) -> Op
             }
             DeclKind::Fn(f) if f.name.value.as_str() == name => {
                 return Some(ImportedDecl::Fn(f.clone(), decl.span));
+            }
+            DeclKind::Assert(a) if a.name.value.as_str() == name => {
+                return Some(ImportedDecl::Assert(a.body.clone(), decl.span));
             }
             _ => {}
         }
@@ -1013,17 +1064,38 @@ fn evaluate_plan(
     let all = tir
         .source_order
         .iter()
+        .filter(|(_, cat)| !matches!(cat, DeclCategory::Assert))
         .map(|(name, cat)| {
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
+                DeclCategory::Assert => unreachable!("filtered out above"),
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
+                DeclCategory::Assert => unreachable!("filtered out above"),
             };
             (DeclName::new(name), result, decl_type)
+        })
+        .collect();
+
+    // Evaluate assertions in source order
+    let assertions: Vec<(DeclName, AssertResult, Span)> = plan
+        .assert_bodies
+        .iter()
+        .map(|(name, body, span)| {
+            let assert_result = evaluate_assert_body(
+                body,
+                &values,
+                &empty_locals,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                src,
+            );
+            (DeclName::new(name), assert_result, *span)
         })
         .collect();
 
@@ -1032,7 +1104,178 @@ fn evaluate_plan(
         params,
         nodes,
         all,
+        assertions,
+        assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.base_dim_symbols().clone(),
+    }
+}
+
+/// Evaluate a single assert body and return an `AssertResult`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "tolerance evaluation has multiple eval_expr calls and error handling"
+)]
+fn evaluate_assert_body(
+    body: &graphcal_syntax::ast::AssertBody,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> AssertResult {
+    match body {
+        graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
+            match eval_expr(
+                body_expr,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
+                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
+                    message: "assertion evaluated to false".to_string(),
+                },
+                Ok(RuntimeValue::Indexed {
+                    index_name,
+                    entries,
+                }) => {
+                    let mut failing_variants = Vec::new();
+                    for (variant, value) in &entries {
+                        match value {
+                            RuntimeValue::Bool(true) => {}
+                            RuntimeValue::Bool(false) => {
+                                failing_variants.push(variant.to_string());
+                            }
+                            other => {
+                                return AssertResult::Error {
+                                    message: format!(
+                                        "expected Bool for {index_name}::{variant}, got {other:?}"
+                                    ),
+                                };
+                            }
+                        }
+                    }
+                    if failing_variants.is_empty() {
+                        AssertResult::Pass
+                    } else {
+                        AssertResult::Fail {
+                            message: format!(
+                                "failed at {}: {}",
+                                index_name,
+                                failing_variants.join(", ")
+                            ),
+                        }
+                    }
+                }
+                Ok(other) => AssertResult::Error {
+                    message: format!("expected Bool, got {other:?}"),
+                },
+                Err(e) => AssertResult::Error {
+                    message: format!("{e}"),
+                },
+            }
+        }
+        graphcal_syntax::ast::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative,
+        } => {
+            let actual_val = match eval_expr(
+                actual,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar actual, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+            let expected_val = match eval_expr(
+                expected,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar expected, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+            let tolerance_val = match eval_expr(
+                tolerance,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Scalar(v)) => v,
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "tolerance values are small integers"
+                )]
+                Ok(RuntimeValue::Int(i)) => i as f64,
+                Ok(other) => {
+                    return AssertResult::Error {
+                        message: format!("expected scalar tolerance, got {other:?}"),
+                    };
+                }
+                Err(e) => {
+                    return AssertResult::Error {
+                        message: format!("{e}"),
+                    };
+                }
+            };
+
+            let delta = (actual_val - expected_val).abs();
+            let limit = if *is_relative {
+                expected_val.abs() * tolerance_val / 100.0
+            } else {
+                tolerance_val
+            };
+
+            if delta <= limit {
+                AssertResult::Pass
+            } else {
+                let tol_display = if *is_relative {
+                    format!("{tolerance_val}%")
+                } else {
+                    format!("{tolerance_val}")
+                };
+                AssertResult::Fail {
+                    message: format!(
+                        "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
+                    ),
+                }
+            }
+        }
     }
 }
 

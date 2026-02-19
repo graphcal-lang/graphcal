@@ -8,13 +8,14 @@ Graphcal programs describe a **directed acyclic graph (DAG)** of computations. T
 
 ## Declaration Kinds
 
-Every top-level declaration belongs to one of three kinds:
+Every top-level declaration belongs to one of four kinds:
 
 | Kind | Keyword | Semantics | In DAG? |
 |------|---------|-----------|---------|
 | Parameter | `param` | User-supplied input with a default value | Yes |
 | Node | `node` | Computed value derived from other values | Yes |
 | Constant | `const` | Compile-time immutable value | No |
+| Assertion | `assert` | Post-evaluation boolean check | No |
 
 ### Parameters
 
@@ -39,6 +40,14 @@ const G0: Acceleration = 9.80665 m/s^2;
 ```
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes (the `@` sigil is prohibited in `const` expressions).
+
+### Assertions
+
+```
+assert fuel_positive = @fuel_mass > 0.0 kg;
+```
+
+Assertions are post-evaluation checks. They can reference parameters and nodes but are **not part of the DAG** -- no other declaration can reference an assert. Assertions are always evaluated last, after the entire graph. See [Assertions and Attributes](assertions.md) for full details.
 
 ## The `@` Sigil
 
@@ -71,6 +80,7 @@ The prohibition of `@` in `fn` bodies ensures functions are pure and reusable.
 4. **Const evaluation** -- Constants are evaluated in dependency order
 5. **DAG construction** -- A dependency graph is built from `param` and `node` declarations
 6. **Topological evaluation** -- Nodes are evaluated in topological order
+7. **Assertion checking** -- Assert declarations are evaluated and reported
 
 ### Cycle Detection
 
@@ -94,6 +104,7 @@ Graphcal enforces naming conventions at parse time:
 | `param` | `lower_snake_case` | `dry_mass` |
 | `node` | `lower_snake_case` | `total_dv` |
 | `const` | `UPPER_SNAKE_CASE` | `G0`, `MARGIN_FACTOR` |
+| `assert` | `lower_snake_case` | `fuel_positive` |
 | `fn` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |
 | `dimension` | `PascalCase` | `Velocity` |

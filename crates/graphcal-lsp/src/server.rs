@@ -171,7 +171,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // Produce diagnostics from the in-memory text (not disk) so the
             // user sees the parse error.
             let diagnostics = match compile_and_eval_named(text, name) {
-                Ok(result) => eval_result_to_diagnostics(&result),
+                Ok(result) => eval_result_to_diagnostics(&result, text),
                 Err(e) => compile_error_to_diagnostics(&e, text),
             };
 
@@ -263,7 +263,7 @@ fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<Stri
 
     match eval_result {
         Ok(result) => {
-            let diagnostics = eval_result_to_diagnostics(&result);
+            let diagnostics = eval_result_to_diagnostics(&result, text);
             let values = format_eval_values(&result);
             (diagnostics, values)
         }

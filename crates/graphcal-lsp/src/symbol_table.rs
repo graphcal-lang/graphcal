@@ -27,6 +27,7 @@ pub enum SymbolCategory {
     LocalVar,
     BuiltinFn,
     BuiltinConst,
+    Assert,
 }
 
 /// Information about a symbol definition.
@@ -174,6 +175,17 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
     }
 
     for decl in &ast.declarations {
+        // Collect references from #[assumes(...)] attribute arguments.
+        for attr in &decl.attributes {
+            if attr.name.name == "assumes" {
+                for arg in &attr.args {
+                    table.references.push(ReferenceInfo {
+                        span: arg.span,
+                        target: arg.name.clone(),
+                    });
+                }
+            }
+        }
         match &decl.kind {
             DeclKind::Param(p) => {
                 let name = p.name.value.to_string();
@@ -392,6 +404,36 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                                 detail: Some(format!("variant of index {name}")),
                             },
                         );
+                    }
+                }
+            }
+            DeclKind::Assert(a) => {
+                let name = a.name.value.to_string();
+                table.definitions.insert(
+                    name.clone(),
+                    DefinitionInfo {
+                        name: name.clone(),
+                        category: SymbolCategory::Assert,
+                        name_span: a.name.span,
+                        decl_span: decl.span,
+                        type_description: Some("Bool".to_string()),
+                        detail: Some("assert".to_string()),
+                    },
+                );
+                // Walk assert body expressions
+                match &a.body {
+                    graphcal_syntax::ast::AssertBody::Expr(expr) => {
+                        collect_expr_refs(expr, &mut table, &mut scopes);
+                    }
+                    graphcal_syntax::ast::AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => {
+                        collect_expr_refs(actual, &mut table, &mut scopes);
+                        collect_expr_refs(expected, &mut table, &mut scopes);
+                        collect_expr_refs(tolerance, &mut table, &mut scopes);
                     }
                 }
             }

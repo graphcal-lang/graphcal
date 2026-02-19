@@ -39,6 +39,8 @@ pub enum Token {
     Match,
     #[token("as")]
     As,
+    #[token("assert")]
+    Assert,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -85,6 +87,14 @@ pub enum Token {
     Pipe,
     #[token("=>")]
     FatArrow,
+    #[token("~=")]
+    TildeEq,
+    #[token("+/-")]
+    PlusMinus,
+
+    // Attribute prefix
+    #[token("#")]
+    Hash,
 
     // Delimiters
     #[token("(")]
@@ -143,6 +153,7 @@ impl std::fmt::Display for Token {
             Self::Use => write!(f, "use"),
             Self::Match => write!(f, "match"),
             Self::As => write!(f, "as"),
+            Self::Assert => write!(f, "assert"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -164,6 +175,9 @@ impl std::fmt::Display for Token {
             Self::ColonColon => write!(f, "::"),
             Self::Pipe => write!(f, "|"),
             Self::FatArrow => write!(f, "=>"),
+            Self::TildeEq => write!(f, "~="),
+            Self::PlusMinus => write!(f, "+/-"),
+            Self::Hash => write!(f, "#"),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
@@ -338,6 +352,34 @@ mod tests {
     }
 
     #[test]
+    fn lex_attribute() {
+        let tokens = lex_tokens("#[lazy]");
+        assert_eq!(
+            tokens,
+            vec![Token::Hash, Token::LBracket, Token::Ident, Token::RBracket,]
+        );
+    }
+
+    #[test]
+    fn lex_attribute_with_args() {
+        let tokens = lex_tokens("#[assumes(x, y)]");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Hash,
+                Token::LBracket,
+                Token::Ident,
+                Token::LParen,
+                Token::Ident,
+                Token::Comma,
+                Token::Ident,
+                Token::RParen,
+                Token::RBracket,
+            ]
+        );
+    }
+
+    #[test]
     fn lex_function_call() {
         let tokens = lex_tokens("sqrt(@x)");
         assert_eq!(
@@ -369,7 +411,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn index for use match as",
+            "param node const if else dimension unit type let fn index for use match as assert",
         );
         assert_eq!(
             tokens,
@@ -389,6 +431,7 @@ mod tests {
                 Token::Use,
                 Token::Match,
                 Token::As,
+                Token::Assert,
             ]
         );
     }

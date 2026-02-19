@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
 use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
@@ -44,6 +44,8 @@ pub struct IR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -52,6 +54,10 @@ pub struct IR {
     pub source_order: Vec<(String, DeclCategory)>,
     /// User-defined function declarations: (name, decl, span).
     pub functions: Vec<(String, FnDecl, Span)>,
+    /// Set of all assert names.
+    pub assert_names: HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -156,10 +162,13 @@ pub fn lower_with_imports(
         consts,
         params,
         nodes,
+        asserts: resolved.asserts,
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
         functions: resolved.functions,
+        assert_names: resolved.assert_names,
+        assumes_map: resolved.assumes_map,
     })
 }
 

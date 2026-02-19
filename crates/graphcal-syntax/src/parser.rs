@@ -4,11 +4,12 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::ast::{
-    BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl, DimExpr, DimExprItem, DimTerm,
-    Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam, ForBinding,
-    GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind, LetBinding,
-    MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding, TypeDecl,
-    TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UnitExprItem, VariantDecl,
+    AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl,
+    FnParam, ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl,
+    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
+    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
+    UnitExprItem, VariantDecl,
 };
 use crate::lexer::Lexer;
 use crate::names::{
@@ -131,7 +132,14 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
-        match self.lexer.peek() {
+        // Collect any leading attributes: #[name] or #[name(arg1, arg2)]
+        let mut attributes = Vec::new();
+        while self.lexer.peek() == Some(&Token::Hash) {
+            attributes.push(self.parse_attribute()?);
+        }
+
+        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `use`, or `assert`";
+        let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
             Some(Token::Const) => self.parse_const(),
@@ -141,18 +149,47 @@ impl<'src> Parser<'src> {
             Some(Token::Fn) => self.parse_fn_decl(),
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Use) => self.parse_use_decl(),
+            Some(Token::Assert) => self.parse_assert(),
             Some(_) => {
                 let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
-                Err(self.unexpected_token(
-                    "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, or `use`",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(self.unexpected_token(expected, &tok.to_string(), span))
             }
-            None => Err(self.unexpected_eof(
-                "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, or `use`",
-            )),
+            None => Err(self.unexpected_eof(expected)),
+        }?;
+
+        // Extend the declaration span to include the attributes
+        if let Some(first_attr) = attributes.first() {
+            decl.span = first_attr.span.merge(decl.span);
         }
+        decl.attributes = attributes;
+        Ok(decl)
+    }
+
+    /// Parse a single attribute: `#[name]` or `#[name(arg1, arg2)]`
+    fn parse_attribute(&mut self) -> Result<Attribute, ParseError> {
+        let (_, start_span) = self.expect(Token::Hash)?;
+        self.expect(Token::LBracket)?;
+        let name = self.parse_any_ident()?;
+        let mut args = Vec::new();
+        if self.lexer.peek() == Some(&Token::LParen) {
+            self.expect(Token::LParen)?;
+            // Parse comma-separated identifiers
+            if self.lexer.peek() != Some(&Token::RParen) {
+                args.push(self.parse_any_ident()?);
+                while self.lexer.peek() == Some(&Token::Comma) {
+                    self.expect(Token::Comma)?;
+                    // Allow trailing comma
+                    if self.lexer.peek() == Some(&Token::RParen) {
+                        break;
+                    }
+                    args.push(self.parse_any_ident()?);
+                }
+            }
+            self.expect(Token::RParen)?;
+        }
+        let (_, end_span) = self.expect(Token::RBracket)?;
+        let span = start_span.merge(end_span);
+        Ok(Attribute { name, args, span })
     }
 
     // --- param/node/const with required type annotation ---
@@ -169,6 +206,7 @@ impl<'src> Parser<'src> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Param(ParamDecl {
                 name,
                 type_ann,
@@ -190,6 +228,7 @@ impl<'src> Parser<'src> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Node(NodeDecl {
                 name,
                 type_ann,
@@ -211,11 +250,54 @@ impl<'src> Parser<'src> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Const(ConstDecl {
                 name,
                 type_ann,
                 value,
             }),
+            span,
+        })
+    }
+
+    // --- assert declaration ---
+
+    fn parse_assert(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Assert)?;
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<DeclName>();
+        self.expect(Token::Eq)?;
+        let first_expr = self.parse_expr()?;
+
+        let body = if self.lexer.peek() == Some(&Token::TildeEq) {
+            // Tolerance syntax: actual ~= expected +/- tolerance [%]
+            self.lexer.next_token(); // consume ~=
+            let expected = self.parse_expr()?;
+            self.expect(Token::PlusMinus)?;
+            // Parse tolerance as a unary expr (not full expr) so `%` isn't consumed as modulo
+            let tolerance = self.parse_unary()?;
+            let is_relative = if self.lexer.peek() == Some(&Token::Percent) {
+                self.lexer.next_token(); // consume %
+                true
+            } else {
+                false
+            };
+            AssertBody::Tolerance {
+                actual: Box::new(first_expr),
+                expected: Box::new(expected),
+                tolerance: Box::new(tolerance),
+                is_relative,
+            }
+        } else {
+            AssertBody::Expr(first_expr)
+        };
+
+        let (_, semi_span) = self.expect(Token::Semicolon)?;
+        let span = start_span.merge(semi_span);
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Assert(AssertDecl { name, body }),
             span,
         })
     }
@@ -236,6 +318,7 @@ impl<'src> Parser<'src> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Dimension(DimDecl { name, definition }),
             span,
         })
@@ -258,6 +341,7 @@ impl<'src> Parser<'src> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Unit(UnitDecl {
                 name,
                 dim_type,
@@ -323,6 +407,7 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Type(TypeDecl {
                 name,
                 generic_params,
@@ -508,6 +593,7 @@ impl<'src> Parser<'src> {
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Use(crate::ast::UseDecl {
                 path,
                 path_span,
@@ -560,6 +646,7 @@ impl<'src> Parser<'src> {
             self.expect(Token::Semicolon)?;
             let span = start_span.merge(end_span);
             return Ok(Declaration {
+                attributes: vec![],
                 kind: DeclKind::Index(IndexDecl {
                     name,
                     kind: IndexDeclKind::Range {
@@ -598,6 +685,7 @@ impl<'src> Parser<'src> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Index(IndexDecl {
                 name,
                 kind: IndexDeclKind::Named { variants },
@@ -666,6 +754,7 @@ impl<'src> Parser<'src> {
 
         let span = start_span.merge(end_span);
         Ok(Declaration {
+            attributes: vec![],
             kind: DeclKind::Fn(FnDecl {
                 name,
                 generic_params,
@@ -2867,6 +2956,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
                 DeclKind::Fn(f) => f.name.value.as_str(),
                 DeclKind::Index(i) => i.name.value.as_str(),
                 DeclKind::Use(_) => "<use>",
+                DeclKind::Assert(a) => a.name.value.as_str(),
             })
             .collect();
         assert_eq!(
@@ -3957,5 +4047,88 @@ param alt: Length = 400.0 km;
     fn parse_use_alias_missing_name_error() {
         let result = Parser::new(r#"use "./f.gcl" { x as };"#).parse_file();
         assert!(result.is_err());
+    }
+
+    // --- Attribute tests ---
+
+    #[test]
+    fn parse_attribute_no_args() {
+        let file = Parser::new("#[lazy]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
+        assert!(file.declarations[0].attributes[0].args.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_with_one_arg() {
+        let file = Parser::new("#[assumes(pressure_safe)]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.name.name, "assumes");
+        assert_eq!(attr.args.len(), 1);
+        assert_eq!(attr.args[0].name, "pressure_safe");
+    }
+
+    #[test]
+    fn parse_attribute_with_multiple_args() {
+        let file =
+            Parser::new("#[assumes(pressure_safe, temp_bounded)]\nnode x: Dimensionless = 1.0;")
+                .parse_file()
+                .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.name.name, "assumes");
+        assert_eq!(attr.args.len(), 2);
+        assert_eq!(attr.args[0].name, "pressure_safe");
+        assert_eq!(attr.args[1].name, "temp_bounded");
+    }
+
+    #[test]
+    fn parse_attribute_trailing_comma() {
+        let file = Parser::new("#[assumes(pressure_safe,)]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_attributes() {
+        let file = Parser::new("#[lazy]\n#[assumes(x)]\nnode y: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 2);
+        assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
+        assert_eq!(file.declarations[0].attributes[1].name.name, "assumes");
+    }
+
+    #[test]
+    fn parse_attribute_on_param() {
+        let file = Parser::new("#[assumes(x)]\nparam y: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        assert!(matches!(file.declarations[0].kind, DeclKind::Param(_)));
+    }
+
+    #[test]
+    fn parse_no_attributes_still_works() {
+        let file = Parser::new("param x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert!(file.declarations[0].attributes.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_span_covers_hash_to_bracket() {
+        let file = Parser::new("#[lazy]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        // Declaration span should start at '#' (offset 0), not at 'node'
+        assert_eq!(file.declarations[0].span.offset, 0);
     }
 }

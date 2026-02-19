@@ -23,7 +23,7 @@ graphcal [OPTIONS] <COMMAND>
 |---------|-------------|
 | [`eval`](#graphcal-eval) | Evaluate a `.gcl` file |
 | [`format`](#graphcal-format) | Format `.gcl` files |
-| [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
+| [`typecheck`](#graphcal-typecheck) | Check `.gcl` files for errors without evaluation |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
 
 ---
@@ -49,8 +49,17 @@ graphcal eval [OPTIONS] <FILE>
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--set <SET>` | Override a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
+| `--no-assert` | Skip assertion checking |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success, all assertions pass |
+| `1` | Assertion failure or evaluation error |
+| `2` | Compile error (parse or typecheck) |
 
 **Examples:**
 
@@ -107,6 +116,31 @@ $ graphcal eval rocket.gcl --format json
 }
 ```
 
+When a file contains assertions, they are checked after evaluation and printed
+below the values:
+
+```bash
+$ graphcal eval rocket.gcl
+dry_mass   = 1200 kg
+fuel_mass  = 2800 kg
+...
+
+Assertions:
+  fuel_budget    PASS
+  fuel_positive  PASS
+  pressure_safe  FAIL  (assertion evaluated to false)
+                       affected: safety_factor
+```
+
+Use `--no-assert` to skip assertion checking:
+
+```bash
+$ graphcal eval rocket.gcl --no-assert
+dry_mass   = 1200 kg
+fuel_mass  = 2800 kg
+...
+```
+
 ---
 
 ## `graphcal format`
@@ -144,12 +178,12 @@ graphcal format --check
 
 ---
 
-## `graphcal check`
+## `graphcal typecheck`
 
-Check `.gcl` files for errors without evaluation. Performs parsing and type/dimension checking.
+Check `.gcl` files for type/dimension errors without evaluation. Performs parsing and type/dimension checking.
 
 ```bash
-graphcal check [PATHS]...
+graphcal typecheck [PATHS]...
 ```
 
 **Arguments:**
@@ -162,13 +196,13 @@ graphcal check [PATHS]...
 
 ```bash
 # Check all .gcl files in the current directory
-graphcal check
+graphcal typecheck
 
 # Check a specific file
-graphcal check rocket.gcl
+graphcal typecheck rocket.gcl
 
 # Check a directory
-graphcal check my_project/
+graphcal typecheck my_project/
 ```
 
 **Exit codes:**
@@ -194,7 +228,7 @@ This command has no additional options. See [Editor Setup](editor-setup.md) for 
 
 The LSP server provides:
 
-- **Diagnostics** -- Real-time parse errors, dimension mismatches, unknown references
+- **Diagnostics** -- Real-time parse errors, dimension mismatches, unknown references, assertion failures
 - **Inlay hints** -- Computed param/node values displayed inline
 - **Go to definition** -- Navigate from references to declarations
 - **Hover** -- Show resolved type and dimension information

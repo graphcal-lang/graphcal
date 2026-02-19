@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::Expr;
+use graphcal_syntax::ast::{AssertBody, Expr};
 use graphcal_syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -27,6 +27,10 @@ pub struct ExecPlan {
     pub topo_order: Vec<String>,
     /// Runtime expressions keyed by declaration name (params + nodes).
     pub expressions: HashMap<String, Expr>,
+    /// Assert bodies in source order: (name, body, span).
+    pub assert_bodies: Vec<(String, AssertBody, Span)>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -43,10 +47,18 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     let const_values = eval_consts_from_tir(tir, src)?;
     let (topo_order, expressions) = build_runtime_dag(tir, src)?;
 
+    let assert_bodies: Vec<(String, AssertBody, Span)> = tir
+        .asserts
+        .iter()
+        .map(|(name, body, span)| (name.clone(), body.clone(), *span))
+        .collect();
+
     Ok(ExecPlan {
         const_values,
         topo_order,
         expressions,
+        assert_bodies,
+        assumes_map: tir.assumes_map.clone(),
     })
 }
 

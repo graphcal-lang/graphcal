@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{Expr, FnDecl, MulDivOp, TypeExpr, TypeExprKind};
+use graphcal_syntax::ast::{AssertBody, Expr, FnDecl, MulDivOp, TypeExpr, TypeExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
 use graphcal_syntax::span::Span;
@@ -134,6 +134,8 @@ pub struct TIR {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -142,6 +144,10 @@ pub struct TIR {
     pub source_order: Vec<(String, DeclCategory)>,
     /// User-defined function declarations: (name, decl, span).
     pub functions: Vec<(String, FnDecl, Span)>,
+    /// Set of all assert names.
+    pub assert_names: std::collections::HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    pub assumes_map: HashMap<String, Vec<String>>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
@@ -254,10 +260,13 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         consts: ir.consts,
         params: ir.params,
         nodes: ir.nodes,
+        asserts: ir.asserts,
         runtime_deps: ir.runtime_deps,
         const_deps: ir.const_deps,
         source_order: ir.source_order,
         functions: ir.functions,
+        assert_names: ir.assert_names,
+        assumes_map: ir.assumes_map,
         resolved_decl_types,
         resolved_fn_sigs,
     })

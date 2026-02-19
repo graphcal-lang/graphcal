@@ -1,0 +1,7 @@
+// assertions_fail.gcl -- Assertions that fail
+
+param x: Dimensionless = 10.0;
+param y: Dimensionless = 20.0;
+
+// This assertion should fail
+assert x_greater = @x > @y;

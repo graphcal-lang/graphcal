@@ -27,6 +27,7 @@ nav = [
     { "Functions" = "language/functions.md" },
     { "Expressions" = "language/expressions.md" },
     { "Multi-File Projects" = "language/multi-file.md" },
+    { "Assertions & Attributes" = "language/assertions.md" },
     { "Built-in Reference" = "language/built-ins.md" },
   ] },
   { "CLI Reference" = "cli-reference.md" },

@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#attribute" },
     { "include": "#fn-declaration" },
     { "include": "#type-declaration" },
     { "include": "#dimension-declaration" },
@@ -13,6 +14,7 @@
     { "include": "#param-declaration" },
     { "include": "#node-declaration" },
     { "include": "#const-declaration" },
+    { "include": "#assert-declaration" },
     { "include": "#use-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
@@ -113,6 +115,37 @@
       "captures": {
         "1": { "name": "keyword.declaration.const.graphcal" },
         "2": { "name": "variable.other.constant.graphcal" }
+      }
+    },
+
+    "attribute": {
+      "comment": "Attribute: #[name] or #[name(arg1, arg2)]",
+      "begin": "(#)(\\[)",
+      "end": "(\\])",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.attribute.graphcal" },
+        "2": { "name": "punctuation.definition.attribute.graphcal" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.attribute.graphcal" }
+      },
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\b",
+          "name": "entity.other.attribute-name.graphcal"
+        },
+        {
+          "match": "[(),]",
+          "name": "punctuation.separator.graphcal"
+        }
+      ]
+    },
+
+    "assert-declaration": {
+      "match": "\\b(assert)\\s+([a-z][a-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.assert.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
       }
     },
 
@@ -302,6 +335,14 @@
         {
           "match": "->",
           "name": "keyword.operator.arrow.graphcal"
+        },
+        {
+          "match": "~=",
+          "name": "keyword.operator.tolerance.graphcal"
+        },
+        {
+          "match": "\\+/-",
+          "name": "keyword.operator.plus-minus.graphcal"
         },
         {
           "match": "::",

@@ -10,9 +10,18 @@ pub struct File {
     pub declarations: Vec<Declaration>,
 }
 
+/// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: Ident,
+    pub args: Vec<Ident>,
+    pub span: Span,
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone)]
 pub struct Declaration {
+    pub attributes: Vec<Attribute>,
     pub kind: DeclKind,
     pub span: Span,
 }
@@ -28,6 +37,35 @@ pub enum DeclKind {
     Fn(FnDecl),
     Index(IndexDecl),
     Use(UseDecl),
+    Assert(AssertDecl),
+}
+
+/// Assert declaration: `assert name = <expr>;`
+///
+/// The body must evaluate to `Bool`. No type annotation (it's always Bool).
+/// Assert declarations are leaf nodes — they are evaluated after the entire graph.
+#[derive(Debug, Clone)]
+pub struct AssertDecl {
+    pub name: Spanned<DeclName>,
+    pub body: AssertBody,
+}
+
+/// The body of an assert declaration.
+#[derive(Debug, Clone)]
+pub enum AssertBody {
+    /// Plain boolean expression: `assert name = expr;`
+    Expr(Expr),
+    /// Tolerance: `assert name = actual ~= expected +/- tolerance;`
+    Tolerance {
+        /// The actual value expression (left of `~=`).
+        actual: Box<Expr>,
+        /// The expected value expression (right of `~=`).
+        expected: Box<Expr>,
+        /// The tolerance expression (right of `+/-`).
+        tolerance: Box<Expr>,
+        /// Whether the tolerance is relative (`%`).
+        is_relative: bool,
+    },
 }
 
 /// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`
@@ -593,6 +631,7 @@ mod tests {
     fn construct_ast_by_hand() {
         let file = File {
             declarations: vec![Declaration {
+                attributes: vec![],
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {

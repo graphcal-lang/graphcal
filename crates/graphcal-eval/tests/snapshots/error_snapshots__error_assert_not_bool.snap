@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+assert body must evaluate to Bool, got Dimensionless
+    Diagnostic severity: error
+Begin snippet for assert_not_bool.gcl starting at line 2, column 1
+
+snippet line 2: param x: Dimensionless = 1.0;
+snippet line 3: assert check = @x + 1.0;
+    label at line 3, columns 1 to 24: expected Bool, found Dimensionless
+diagnostic help: assert declarations must have a body that evaluates to Bool
+diagnostic code: graphcal::A004

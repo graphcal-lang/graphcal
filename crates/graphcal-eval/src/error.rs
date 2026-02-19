@@ -448,6 +448,83 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot reference assert `{name}` with `@`")]
+    #[diagnostic(
+        code(graphcal::A003),
+        help("assert declarations are post-evaluation checks and cannot be referenced with `@`")
+    )]
+    GraphRefToAssert {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("`@{name}` is an assert, not a param or node")]
+        span: SourceSpan,
+    },
+
+    #[error("assert body must evaluate to Bool, got {found}")]
+    #[diagnostic(
+        code(graphcal::A004),
+        help("assert declarations must have a body that evaluates to Bool")
+    )]
+    AssertBodyNotBool {
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected Bool, found {found}")]
+        span: SourceSpan,
+    },
+
+    #[error("assumed assertion `{name}` failed")]
+    #[diagnostic(code(graphcal::A002))]
+    AssumedAssertionFailed {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this assertion failed")]
+        span: SourceSpan,
+        #[help]
+        help: String,
+    },
+
+    #[error("unknown assert `{name}` in #[assumes(...)]")]
+    #[diagnostic(
+        code(graphcal::A005),
+        help("`#[assumes(...)]` arguments must reference `assert` declarations")
+    )]
+    UnknownAssertInAssumes {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not an assert declaration")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[assumes(...)]` is not valid on `{kind}` declarations")]
+    #[diagnostic(
+        code(graphcal::A006),
+        help("`#[assumes(...)]` is only valid on `node` and `param` declarations")
+    )]
+    InvalidAssumesTarget {
+        kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a node or param")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown attribute `{name}`")]
+    #[diagnostic(
+        code(graphcal::A007),
+        help("recognized attributes are `#[assumes(...)]` and `#[lazy]`")
+    )]
+    UnknownAttribute {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown attribute")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),

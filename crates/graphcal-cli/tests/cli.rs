@@ -711,3 +711,209 @@ fn eval_input_json_with_hohmann() {
         "expected parking_alt=300 in output: {stdout}"
     );
 }
+
+// --- Assertion tests ---
+
+#[test]
+fn eval_assertions_pass() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Assertions:"),
+        "expected Assertions section: {stdout}"
+    );
+    assert!(
+        stdout.contains("velocity_in_range") && stdout.contains("PASS"),
+        "expected velocity_in_range PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("mass_approx") && stdout.contains("PASS"),
+        "expected mass_approx PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("velocity_approx") && stdout.contains("PASS"),
+        "expected velocity_approx PASS: {stdout}"
+    );
+}
+
+#[test]
+fn eval_assertions_pass_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions.gcl"), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
+    assert_eq!(
+        json["assert"]["velocity_in_range"]["status"].as_str(),
+        Some("pass")
+    );
+    assert_eq!(
+        json["assert"]["mass_approx"]["status"].as_str(),
+        Some("pass")
+    );
+    assert_eq!(
+        json["assert"]["velocity_approx"]["status"].as_str(),
+        Some("pass")
+    );
+}
+
+#[test]
+fn eval_assertions_fail_exit_code() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions_fail.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for assertion failure"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("x_greater") && stderr.contains("FAIL"),
+        "expected x_greater FAIL in stderr: {stderr}"
+    );
+}
+
+#[test]
+fn eval_assertions_tolerance_fail() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions_tolerance_fail.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for tolerance failure"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("tight_check") && stderr.contains("FAIL"),
+        "expected tight_check FAIL: {stderr}"
+    );
+    assert!(
+        stderr.contains("off by"),
+        "expected tolerance detail in message: {stderr}"
+    );
+}
+
+#[test]
+fn eval_assertions_assumes_affected_nodes() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions_assumes.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for assumed assertion failure"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("pressure_safe") && stderr.contains("FAIL"),
+        "expected pressure_safe FAIL: {stderr}"
+    );
+    assert!(
+        stderr.contains("affected") && stderr.contains("margin"),
+        "expected affected: margin in output: {stderr}"
+    );
+}
+
+#[test]
+fn eval_assertions_no_assert_flag() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions_fail.gcl"), "--no-assert"])
+        .output()
+        .expect("failed to run graphcal");
+
+    // With --no-assert, even a failing assertion should not cause exit code 1
+    assert!(
+        output.status.success(),
+        "expected success with --no-assert, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("Assertions:"),
+        "expected no Assertions section with --no-assert: {stdout}"
+    );
+}
+
+#[test]
+fn eval_assertions_indexed_fail() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("assertions_indexed.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for indexed assertion failure"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("power_ok") && stderr.contains("FAIL"),
+        "expected power_ok FAIL: {stderr}"
+    );
+    assert!(
+        stderr.contains("Boost"),
+        "expected Boost variant in failure message: {stderr}"
+    );
+}
+
+#[test]
+fn eval_assertions_cross_file() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/assertions/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Assertions:"),
+        "expected Assertions section: {stdout}"
+    );
+    assert!(
+        stdout.contains("limit_positive") && stdout.contains("PASS"),
+        "expected limit_positive PASS: {stdout}"
+    );
+}
+
+#[test]
+fn eval_assertions_compile_error_exit_code() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("errors/assert_not_bool.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 for compile error"
+    );
+}

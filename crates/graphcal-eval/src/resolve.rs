@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, File, FnBody, FnDecl, TypeExpr};
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl, TypeExpr};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -22,6 +22,7 @@ pub struct ImportedNames {
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     pub functions: Vec<(String, FnDecl, Span)>,
+    pub asserts: Vec<(String, AssertBody, Span)>,
 }
 
 /// The kind of a declaration (used for source-order tracking).
@@ -30,6 +31,7 @@ pub enum DeclCategory {
     Const,
     Param,
     Node,
+    Assert,
 }
 
 /// The result of name resolution: declarations separated by category with dependency info.
@@ -41,6 +43,8 @@ pub struct ResolvedFile {
     pub params: Vec<(String, Expr, Span)>,
     /// Node declarations in source order: (name, expr, span).
     pub nodes: Vec<(String, Expr, Span)>,
+    /// Assert declarations in source order: (name, body, span).
+    pub asserts: Vec<(String, AssertBody, Span)>,
     /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of `CONST_REF` references (const deps).
@@ -49,6 +53,11 @@ pub struct ResolvedFile {
     pub source_order: Vec<(String, DeclCategory)>,
     /// User-defined function declarations: (name, decl, span).
     pub functions: Vec<(String, FnDecl, Span)>,
+    /// Set of all assert names (for checking `@assert_name` errors).
+    pub assert_names: HashSet<String>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    /// Built from `#[assumes(...)]` attributes.
+    pub assumes_map: HashMap<String, Vec<String>>,
 }
 
 /// Resolve names, check casing, detect duplicates, and extract dependencies.
@@ -88,11 +97,13 @@ pub fn resolve_with_imports(
     let mut consts = Vec::new();
     let mut params = Vec::new();
     let mut nodes = Vec::new();
+    let mut asserts = Vec::new();
     let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut source_order = Vec::new();
     let mut user_fn_names: HashSet<String> = HashSet::new();
+    let mut assert_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
@@ -109,6 +120,10 @@ pub fn resolve_with_imports(
         names.insert(name.clone(), *span);
         user_fn_names.insert(name.clone());
     }
+    for (name, _, span) in &imported.asserts {
+        names.insert(name.clone(), *span);
+        assert_names.insert(name.clone());
+    }
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
@@ -117,6 +132,7 @@ pub fn resolve_with_imports(
             DeclKind::Param(p) => (p.name.value.to_string(), p.name.span, false),
             DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
             DeclKind::Const(c) => (c.name.value.to_string(), c.name.span, true),
+            DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
             DeclKind::Fn(f) => {
                 let fn_name_str = f.name.value.to_string();
                 // Check fn name for duplicates (same namespace as param/node/const)
@@ -152,11 +168,15 @@ pub fn resolve_with_imports(
         }
         names.insert(name.clone(), name_span);
 
-        // Track source order
+        // Track source order and assert names
         let category = match &decl.kind {
             DeclKind::Const(_) => DeclCategory::Const,
             DeclKind::Param(_) => DeclCategory::Param,
             DeclKind::Node(_) => DeclCategory::Node,
+            DeclKind::Assert(_) => {
+                assert_names.insert(name.clone());
+                DeclCategory::Assert
+            }
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
@@ -209,6 +229,34 @@ pub fn resolve_with_imports(
             | DeclKind::Type(_)
             | DeclKind::Index(_)
             | DeclKind::Use(_) => {}
+            DeclKind::Assert(a) => {
+                // Collect all expressions from the assert body for validation
+                let body_exprs: Vec<&Expr> = match &a.body {
+                    AssertBody::Expr(expr) => vec![expr],
+                    AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => vec![actual, expected, tolerance],
+                };
+                for body_expr in &body_exprs {
+                    // Validate references in assert body (asserts CAN use @)
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        body_expr,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    // Check that assert body doesn't reference other assert names via @
+                    check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                }
+                let aname = a.name.value.to_string();
+                asserts.push((aname, a.body.clone(), decl.span));
+            }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
@@ -229,6 +277,7 @@ pub fn resolve_with_imports(
                 consts.push((cname, c.value.clone(), decl.span));
             }
             DeclKind::Param(p) => {
+                check_no_assert_graph_refs(&p.value, &assert_names, src)?;
                 let (graph_refs, _const_refs) = extract_all_refs(
                     &p.value,
                     &all_runtime_names,
@@ -243,6 +292,7 @@ pub fn resolve_with_imports(
                 params.push((pname, p.value.clone(), decl.span));
             }
             DeclKind::Node(n) => {
+                check_no_assert_graph_refs(&n.value, &assert_names, src)?;
                 let (mut graph_refs, _const_refs) = extract_all_refs(
                     &n.value,
                     &all_runtime_names,
@@ -287,6 +337,8 @@ pub fn resolve_with_imports(
     all_nodes.extend(nodes);
     let mut all_functions = imported.functions.clone();
     all_functions.extend(functions);
+    let mut all_asserts: Vec<(String, AssertBody, Span)> = imported.asserts.clone();
+    all_asserts.extend(asserts);
 
     // Prepend imported source_order entries
     let mut all_source_order: Vec<(String, DeclCategory)> = Vec::new();
@@ -299,16 +351,88 @@ pub fn resolve_with_imports(
     for (name, _, _, _) in &imported.nodes {
         all_source_order.push((name.clone(), DeclCategory::Node));
     }
+    for (name, _, _) in &imported.asserts {
+        all_source_order.push((name.clone(), DeclCategory::Assert));
+    }
     all_source_order.extend(source_order);
+
+    // Validate attributes and build assumes_map
+    let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
+    for decl in &file.declarations {
+        let decl_name = match &decl.kind {
+            DeclKind::Param(p) => Some(p.name.value.to_string()),
+            DeclKind::Node(n) => Some(n.name.value.to_string()),
+            DeclKind::Const(c) => Some(c.name.value.to_string()),
+            DeclKind::Assert(a) => Some(a.name.value.to_string()),
+            DeclKind::Fn(f) => Some(f.name.value.to_string()),
+            _ => None,
+        };
+        for attr in &decl.attributes {
+            let attr_name = attr.name.name.as_str();
+            match attr_name {
+                "assumes" => {
+                    // #[assumes] is only valid on node and param
+                    let kind = match &decl.kind {
+                        DeclKind::Param(_) | DeclKind::Node(_) => None,
+                        DeclKind::Const(_) => Some("const"),
+                        DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Fn(_) => Some("fn"),
+                        DeclKind::Dimension(_) => Some("dimension"),
+                        DeclKind::Unit(_) => Some("unit"),
+                        DeclKind::Type(_) => Some("type"),
+                        DeclKind::Index(_) => Some("index"),
+                        DeclKind::Use(_) => Some("use"),
+                    };
+                    if let Some(kind) = kind {
+                        return Err(GraphcalError::InvalidAssumesTarget {
+                            kind: kind.to_string(),
+                            src: src.clone(),
+                            span: attr.span.into(),
+                        });
+                    }
+                    // Each argument must reference an existing assert declaration
+                    for arg in &attr.args {
+                        let arg_name = arg.name.as_str();
+                        if !assert_names.contains(arg_name) {
+                            return Err(GraphcalError::UnknownAssertInAssumes {
+                                name: arg_name.to_string(),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        }
+                        if let Some(ref dname) = decl_name {
+                            assumes_map
+                                .entry(arg_name.to_string())
+                                .or_default()
+                                .push(dname.clone());
+                        }
+                    }
+                }
+                "lazy" => {
+                    // Recognized but semantics deferred — no validation needed
+                }
+                _ => {
+                    return Err(GraphcalError::UnknownAttribute {
+                        name: attr_name.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
+            }
+        }
+    }
 
     Ok(ResolvedFile {
         consts: all_consts,
         params: all_params,
         nodes: all_nodes,
+        asserts: all_asserts,
         runtime_deps,
         const_deps,
         source_order: all_source_order,
         functions: all_functions,
+        assert_names,
+        assumes_map,
     })
 }
 
@@ -507,6 +631,99 @@ fn check_no_graph_refs_in_fn_expr(
             check_no_graph_refs_in_fn_expr(scrutinee, fn_name, src)?;
             for arm in arms {
                 check_no_graph_refs_in_fn_expr(&arm.body, fn_name, src)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Check that an expression does not reference any assert name via `@`.
+///
+/// Assert declarations are leaf nodes — they cannot be referenced by other declarations.
+fn check_no_assert_graph_refs(
+    expr: &Expr,
+    assert_names: &HashSet<String>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match &expr.kind {
+        ExprKind::GraphRef(ident) => {
+            if assert_names.contains(ident.value.as_str()) {
+                return Err(GraphcalError::GraphRefToAssert {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            Ok(())
+        }
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_) => Ok(()),
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            check_no_assert_graph_refs(lhs, assert_names, src)?;
+            check_no_assert_graph_refs(rhs, assert_names, src)
+        }
+        ExprKind::UnaryOp { operand, .. } => check_no_assert_graph_refs(operand, assert_names, src),
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                check_no_assert_graph_refs(arg, assert_names, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            check_no_assert_graph_refs(condition, assert_names, src)?;
+            check_no_assert_graph_refs(then_branch, assert_names, src)?;
+            check_no_assert_graph_refs(else_branch, assert_names, src)
+        }
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+            check_no_assert_graph_refs(inner, assert_names, src)
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                check_no_assert_graph_refs(&stmt.value, assert_names, src)?;
+            }
+            check_no_assert_graph_refs(expr, assert_names, src)
+        }
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            check_no_assert_graph_refs(expr, assert_names, src)
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    check_no_assert_graph_refs(val, assert_names, src)?;
+                }
+            }
+            Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                check_no_assert_graph_refs(&entry.value, assert_names, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => check_no_assert_graph_refs(body, assert_names, src),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            check_no_assert_graph_refs(source, assert_names, src)?;
+            check_no_assert_graph_refs(init, assert_names, src)?;
+            check_no_assert_graph_refs(body, assert_names, src)
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            check_no_assert_graph_refs(init, assert_names, src)?;
+            check_no_assert_graph_refs(body, assert_names, src)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            check_no_assert_graph_refs(scrutinee, assert_names, src)?;
+            for arm in arms {
+                check_no_assert_graph_refs(&arm.body, assert_names, src)?;
             }
             Ok(())
         }
