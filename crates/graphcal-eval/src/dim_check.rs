@@ -533,6 +533,36 @@ fn check_derived_neg(
     Ok(Some(operand_type.clone()))
 }
 
+/// Check that all match arm types are identical, returning the common type.
+fn check_arm_types_match(
+    arm_types: &[InferredType],
+    arms: &[graphcal_syntax::ast::MatchArm],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    expr: &Expr,
+) -> Result<InferredType, GraphcalError> {
+    if let Some(first) = arm_types.first() {
+        for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
+            if arm_type != first {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format_inferred_type(first, registry),
+                    found: format_inferred_type(arm_type, registry),
+                    src: src.clone(),
+                    span: arms[i].body.span.into(),
+                    help: "all match arms must return the same type".to_string(),
+                });
+            }
+        }
+        Ok(first.clone())
+    } else {
+        Err(GraphcalError::EvalError {
+            message: "match expression has no arms".to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        })
+    }
+}
+
 fn expect_scalar(
     inferred: &InferredType,
     registry: &Registry,
@@ -569,6 +599,31 @@ fn infer_type(
         ExprKind::Number(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ExprKind::Integer(_) => Ok(InferredType::Int),
         ExprKind::Bool(_) => Ok(InferredType::Bool),
+
+        ExprKind::VariantLiteral { index, variant } => {
+            // Validate index exists
+            let idx_def = registry.get_index(index.value.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: index.value.clone(),
+                    src: src.clone(),
+                    span: index.span.into(),
+                }
+            })?;
+            // Validate variant exists in this index
+            if !idx_def
+                .variants()
+                .iter()
+                .any(|v| v.as_str() == variant.value.as_str())
+            {
+                return Err(GraphcalError::UnknownVariant {
+                    index_name: index.value.clone(),
+                    variant_name: variant.value.clone(),
+                    src: src.clone(),
+                    span: variant.span.into(),
+                });
+            }
+            Ok(InferredType::LoopVar(index.value.clone()))
+        }
 
         ExprKind::UnitLiteral { unit, .. } => {
             let (dim, _scale) = registry.resolve_unit_expr(unit).ok_or_else(|| {
@@ -666,8 +721,22 @@ fn infer_type(
                     }
                     Ok(InferredType::Bool)
                 }
-                // Equality: both operands must be same type (Bool, Int, or same-dimension Scalar)
+                // Equality: both operands must be same type (Bool, Int, LoopVar, or same-dimension Scalar)
                 BinOp::Eq | BinOp::Ne => {
+                    // LoopVar equality: both must refer to the same index
+                    if let (InferredType::LoopVar(l_idx), InferredType::LoopVar(r_idx)) =
+                        (&lhs_type, &rhs_type)
+                    {
+                        if l_idx != r_idx {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: l_idx.clone(),
+                                found: r_idx.clone(),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                            });
+                        }
+                        return Ok(InferredType::Bool);
+                    }
                     if lhs_type == InferredType::Bool
                         || rhs_type == InferredType::Bool
                         || lhs_type == InferredType::Int
@@ -1992,7 +2061,7 @@ fn infer_type(
         ExprKind::Match {
             scrutinee, arms, ..
         } => {
-            // Infer scrutinee type — must be a struct (tagged union) type
+            // Infer scrutinee type — must be a struct (tagged union) or LoopVar (index)
             let scrutinee_type = infer_type(
                 scrutinee,
                 declared_types,
@@ -2002,129 +2071,221 @@ fn infer_type(
                 resolved_fn_sigs,
                 src,
             )?;
-            let (type_name, scrutinee_type_args) = match &scrutinee_type {
-                InferredType::Struct(name, args) => (name.clone(), args.clone()),
+
+            Ok(match &scrutinee_type {
+                InferredType::LoopVar(index_name) => {
+                    // Index variant match
+                    let idx_def = registry.get_index(index_name.as_str()).ok_or_else(|| {
+                        GraphcalError::UnknownIndex {
+                            name: index_name.clone(),
+                            src: src.clone(),
+                            span: scrutinee.span.into(),
+                        }
+                    })?;
+
+                    let mut covered: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut arm_types: Vec<InferredType> = Vec::new();
+
+                    for arm in arms {
+                        let variant_name_str = arm.pattern.variant_name.value.as_str();
+
+                        // Require qualified pattern for index match
+                        let pat_index = arm.pattern.qualified_index.as_ref().ok_or_else(|| {
+                            GraphcalError::EvalError {
+                                message: format!(
+                                    "index match requires qualified pattern `{index_name}::{variant_name_str}`"
+                                ),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            }
+                        })?;
+
+                        // Validate pattern index matches scrutinee index
+                        if pat_index.value.as_str() != index_name.as_str() {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: index_name.clone(),
+                                found: pat_index.value.clone(),
+                                src: src.clone(),
+                                span: pat_index.span.into(),
+                            });
+                        }
+
+                        // Validate variant exists in this index
+                        if !idx_def
+                            .variants()
+                            .iter()
+                            .any(|v| v.as_str() == variant_name_str)
+                        {
+                            return Err(GraphcalError::UnknownVariant {
+                                index_name: index_name.clone(),
+                                variant_name: arm.pattern.variant_name.value.clone(),
+                                src: src.clone(),
+                                span: arm.pattern.variant_name.span.into(),
+                            });
+                        }
+
+                        // No field bindings allowed for index variants
+                        if !arm.pattern.bindings.is_empty() {
+                            return Err(GraphcalError::EvalError {
+                                message: "index variant patterns cannot have field bindings"
+                                    .to_string(),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            });
+                        }
+
+                        // Check for duplicate arms
+                        if !covered.insert(variant_name_str.to_string()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "duplicate match arm for variant `{variant_name_str}`"
+                                ),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            });
+                        }
+
+                        // Infer arm body type (no new locals for index match)
+                        let arm_type = infer_type(
+                            &arm.body,
+                            declared_types,
+                            local_types,
+                            registry,
+                            builtin_fns,
+                            resolved_fn_sigs,
+                            src,
+                        )?;
+                        arm_types.push(arm_type);
+                    }
+
+                    // Exhaustiveness: all index variants must be covered
+                    for variant in idx_def.variants() {
+                        if !covered.contains(variant.as_str()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "non-exhaustive match: variant `{index_name}::{variant}` not covered"
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
+                    }
+
+                    // All arm types must match
+                    check_arm_types_match(&arm_types, arms, registry, src, expr)?
+                }
+
+                InferredType::Struct(type_name, scrutinee_type_args) => {
+                    // Tagged union match (existing logic)
+                    let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
+                        GraphcalError::UnknownStructType {
+                            name: type_name.clone(),
+                            src: src.clone(),
+                            span: scrutinee.span.into(),
+                        }
+                    })?;
+
+                    let mut covered: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut arm_types: Vec<InferredType> = Vec::new();
+
+                    for arm in arms {
+                        let variant_name_str = arm.pattern.variant_name.value.as_str();
+
+                        // Check variant belongs to this type
+                        let variant = type_def.get_variant(variant_name_str).ok_or_else(|| {
+                            GraphcalError::UnknownField {
+                                type_name: type_name.clone(),
+                                field_name: FieldName::new(variant_name_str),
+                                src: src.clone(),
+                                span: arm.pattern.variant_name.span.into(),
+                            }
+                        })?;
+
+                        // Check for duplicate arms
+                        if !covered.insert(variant_name_str.to_string()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "duplicate match arm for variant `{variant_name_str}`"
+                                ),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            });
+                        }
+
+                        // Bind pattern variables as locals
+                        let mut arm_locals = local_types.clone();
+                        for binding in &arm.pattern.bindings {
+                            match binding {
+                                graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
+                                    let field_def = variant
+                                        .fields
+                                        .iter()
+                                        .find(|f| f.name.as_str() == field.value.as_str())
+                                        .ok_or_else(|| GraphcalError::UnknownField {
+                                            type_name: type_name.clone(),
+                                            field_name: field.value.clone(),
+                                            src: src.clone(),
+                                            span: field.span.into(),
+                                        })?;
+                                    let field_type = resolve_field_type(
+                                        &field_def.type_ann,
+                                        type_def,
+                                        scrutinee_type_args,
+                                        registry,
+                                        src,
+                                    )?;
+                                    arm_locals.insert(var.name.clone(), field_type);
+                                }
+                                graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {
+                                    // Wildcard: no binding needed
+                                }
+                            }
+                        }
+
+                        // Infer arm body type
+                        let arm_type = infer_type(
+                            &arm.body,
+                            declared_types,
+                            &arm_locals,
+                            registry,
+                            builtin_fns,
+                            resolved_fn_sigs,
+                            src,
+                        )?;
+                        arm_types.push(arm_type);
+                    }
+
+                    // Check exhaustiveness: all variants must be covered
+                    for variant in &type_def.variants {
+                        if !covered.contains(variant.name.as_str()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "non-exhaustive match: variant `{}` not covered",
+                                    variant.name.as_str()
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
+                    }
+
+                    // All arm types must match
+                    check_arm_types_match(&arm_types, arms, registry, src, expr)?
+                }
+
                 _ => {
-                    return Err(GraphcalError::NotAStruct {
-                        name: format_inferred_type(&scrutinee_type, registry),
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "cannot match on type `{}`; expected a tagged union or index loop variable",
+                            format_inferred_type(&scrutinee_type, registry)
+                        ),
                         src: src.clone(),
                         span: scrutinee.span.into(),
                     });
                 }
-            };
-            let type_def = registry.get_type(type_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
-                    name: type_name.clone(),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
-                }
-            })?;
-
-            // Track which variants are covered for exhaustiveness
-            let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut arm_types: Vec<InferredType> = Vec::new();
-
-            for arm in arms {
-                let variant_name_str = arm.pattern.variant_name.value.as_str();
-
-                // Check variant belongs to this type
-                let variant = type_def.get_variant(variant_name_str).ok_or_else(|| {
-                    GraphcalError::UnknownField {
-                        type_name: type_name.clone(),
-                        field_name: FieldName::new(variant_name_str),
-                        src: src.clone(),
-                        span: arm.pattern.variant_name.span.into(),
-                    }
-                })?;
-
-                // Check for duplicate arms
-                if !covered.insert(variant_name_str.to_string()) {
-                    return Err(GraphcalError::EvalError {
-                        message: format!("duplicate match arm for variant `{variant_name_str}`"),
-                        src: src.clone(),
-                        span: arm.pattern.span.into(),
-                    });
-                }
-
-                // Bind pattern variables as locals
-                let mut arm_locals = local_types.clone();
-                for binding in &arm.pattern.bindings {
-                    match binding {
-                        graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
-                            let field_def = variant
-                                .fields
-                                .iter()
-                                .find(|f| f.name.as_str() == field.value.as_str())
-                                .ok_or_else(|| GraphcalError::UnknownField {
-                                    type_name: type_name.clone(),
-                                    field_name: field.value.clone(),
-                                    src: src.clone(),
-                                    span: field.span.into(),
-                                })?;
-                            let field_type = resolve_field_type(
-                                &field_def.type_ann,
-                                type_def,
-                                &scrutinee_type_args,
-                                registry,
-                                src,
-                            )?;
-                            arm_locals.insert(var.name.clone(), field_type);
-                        }
-                        graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {
-                            // Wildcard: no binding needed
-                        }
-                    }
-                }
-
-                // Infer arm body type
-                let arm_type = infer_type(
-                    &arm.body,
-                    declared_types,
-                    &arm_locals,
-                    registry,
-                    builtin_fns,
-                    resolved_fn_sigs,
-                    src,
-                )?;
-                arm_types.push(arm_type);
-            }
-
-            // Check exhaustiveness: all variants must be covered
-            for variant in &type_def.variants {
-                if !covered.contains(variant.name.as_str()) {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "non-exhaustive match: variant `{}` not covered",
-                            variant.name.as_str()
-                        ),
-                        src: src.clone(),
-                        span: expr.span.into(),
-                    });
-                }
-            }
-
-            // All arm types must match
-            if let Some(first) = arm_types.first() {
-                for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
-                    if arm_type != first {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: format_inferred_type(first, registry),
-                            found: format_inferred_type(arm_type, registry),
-                            src: src.clone(),
-                            span: arms[i].body.span.into(),
-                            help: "all match arms must return the same type".to_string(),
-                        });
-                    }
-                }
-                Ok(first.clone())
-            } else {
-                // Empty match (empty type) — should not happen in practice
-                Err(GraphcalError::EvalError {
-                    message: "match expression has no arms".to_string(),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                })
-            }
+            })
         }
     }
 }

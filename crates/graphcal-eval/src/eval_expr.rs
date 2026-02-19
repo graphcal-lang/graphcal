@@ -113,6 +113,9 @@ pub fn eval_expr(
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
+        ExprKind::VariantLiteral { variant, .. } => Ok(RuntimeValue::VariantLabel {
+            variant: variant.value.clone(),
+        }),
         ExprKind::GraphRef(ident) => {
             values
                 .get(ident.value.as_str())
@@ -222,6 +225,10 @@ pub fn eval_expr(
                     (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
                         Ok(RuntimeValue::Bool(if is_eq { li == ri } else { li != ri }))
                     }
+                    (
+                        RuntimeValue::VariantLabel { variant: lv },
+                        RuntimeValue::VariantLabel { variant: rv },
+                    ) => Ok(RuntimeValue::Bool(if is_eq { lv == rv } else { lv != rv })),
                     _ => {
                         let lv = l.expect_scalar("comparison operand");
                         let rv = r.expect_scalar("comparison operand");
@@ -910,61 +917,82 @@ pub fn eval_expr(
                 registry,
                 src,
             )?;
-            let RuntimeValue::Struct {
-                variant,
-                fields: scrutinee_fields,
-                ..
-            } = &scrutinee_val
-            else {
-                return Err(GraphcalError::EvalError {
-                    message: "match scrutinee must be a struct/tagged union value".to_string(),
+
+            match &scrutinee_val {
+                RuntimeValue::VariantLabel { variant } => {
+                    // Index variant match: find arm by variant name
+                    let matched_arm = arms
+                        .iter()
+                        .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!("no match arm for variant `{variant}`"),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+                    // No field bindings for index variants
+                    eval_expr(
+                        &matched_arm.body,
+                        values,
+                        local_values,
+                        builtin_consts,
+                        builtin_fns,
+                        registry,
+                        src,
+                    )
+                }
+                RuntimeValue::Struct {
+                    variant,
+                    fields: scrutinee_fields,
+                    ..
+                } => {
+                    // Tagged union match
+                    let matched_arm = arms
+                        .iter()
+                        .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!("no match arm for variant `{variant}`"),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+
+                    // Bind pattern variables
+                    let mut arm_locals = local_values.clone();
+                    for binding in &matched_arm.pattern.bindings {
+                        match binding {
+                            graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
+                                let field_val = scrutinee_fields
+                                    .get(field.value.as_str())
+                                    .ok_or_else(|| GraphcalError::EvalError {
+                                        message: format!(
+                                            "no field `{}` on variant `{variant}`",
+                                            field.value
+                                        ),
+                                        src: src.clone(),
+                                        span: field.span.into(),
+                                    })?;
+                                arm_locals.insert(var.name.clone(), field_val.clone());
+                            }
+                            graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {}
+                        }
+                    }
+
+                    eval_expr(
+                        &matched_arm.body,
+                        values,
+                        &arm_locals,
+                        builtin_consts,
+                        builtin_fns,
+                        registry,
+                        src,
+                    )
+                }
+                _ => Err(GraphcalError::EvalError {
+                    message: "match scrutinee must be a struct/tagged union or variant label"
+                        .to_string(),
                     src: src.clone(),
                     span: scrutinee.span.into(),
-                });
-            };
-
-            // Find the matching arm
-            let matched_arm = arms
-                .iter()
-                .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("no match arm for variant `{variant}`"),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                })?;
-
-            // Bind pattern variables
-            let mut arm_locals = local_values.clone();
-            for binding in &matched_arm.pattern.bindings {
-                match binding {
-                    graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
-                        let field_val =
-                            scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
-                                GraphcalError::EvalError {
-                                    message: format!(
-                                        "no field `{}` on variant `{variant}`",
-                                        field.value
-                                    ),
-                                    src: src.clone(),
-                                    span: field.span.into(),
-                                }
-                            })?;
-                        arm_locals.insert(var.name.clone(), field_val.clone());
-                    }
-                    graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {}
-                }
+                }),
             }
-
-            // Evaluate the matched arm body
-            eval_expr(
-                &matched_arm.body,
-                values,
-                &arm_locals,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )
         }
     }
 }

@@ -98,6 +98,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -191,6 +195,10 @@
         },
         {
           "type": "parenthesized_expr",
+          "named": true
+        },
+        {
+          "type": "qualified_variant",
           "named": true
         },
         {
@@ -355,6 +363,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -442,6 +454,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -538,6 +554,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -649,6 +669,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -768,6 +792,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -881,6 +909,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -1070,6 +1102,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -1202,6 +1238,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -1309,6 +1349,10 @@
           "named": true
         },
         {
+          "type": "qualified_variant",
+          "named": true
+        },
+        {
           "type": "scan_expr",
           "named": true
         },
@@ -1401,6 +1445,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -1690,6 +1738,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -1803,6 +1855,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -1931,6 +1987,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2031,6 +2091,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2118,6 +2182,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -2289,6 +2357,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2392,6 +2464,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -2506,6 +2582,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2612,6 +2692,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2649,6 +2733,16 @@
     "type": "match_pattern",
     "named": true,
     "fields": {
+      "index": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
       "variant": {
         "multiple": false,
         "required": true,
@@ -2761,6 +2855,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -2890,6 +2988,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -2993,6 +3095,10 @@
         },
         {
           "type": "parenthesized_expr",
+          "named": true
+        },
+        {
+          "type": "qualified_variant",
           "named": true
         },
         {
@@ -3163,6 +3269,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -3253,6 +3363,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -3340,6 +3454,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -3537,6 +3655,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -3627,6 +3749,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -3714,6 +3840,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {
@@ -3924,6 +4054,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -4034,6 +4168,10 @@
             "named": true
           },
           {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
             "type": "scan_expr",
             "named": true
           },
@@ -4131,6 +4269,10 @@
           },
           {
             "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
             "named": true
           },
           {

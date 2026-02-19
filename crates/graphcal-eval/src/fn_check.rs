@@ -145,7 +145,8 @@ fn collect_fn_calls_in_expr(
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_) => {}
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
         ExprKind::MapLiteral { entries } => {
             for entry in entries {
                 collect_fn_calls_in_expr(&entry.value, user_fns, calls);

@@ -727,15 +727,42 @@ fn collect_expr_refs(
             collect_expr_refs(body, table, scopes);
             scopes.pop();
         }
+        ExprKind::VariantLiteral { index, variant } => {
+            // Reference to the index name
+            table.references.push(ReferenceInfo {
+                span: index.span,
+                target: index.value.to_string(),
+            });
+            // Reference to the qualified variant: Index::Variant
+            table.references.push(ReferenceInfo {
+                span: variant.span,
+                target: format!("{}::{}", index.value, variant.value),
+            });
+        }
         ExprKind::Match { scrutinee, arms } => {
             collect_expr_refs(scrutinee, table, scopes);
             for arm in arms {
                 let variant_name = arm.pattern.variant_name.value.to_string();
-                // Try to resolve variant as Type::Variant.
-                table.references.push(ReferenceInfo {
-                    span: arm.pattern.variant_name.span,
-                    target: variant_name.clone(),
-                });
+
+                // If the pattern has a qualified index (e.g., Maneuver::Departure),
+                // add a reference for the index name too.
+                if let Some(qi) = &arm.pattern.qualified_index {
+                    table.references.push(ReferenceInfo {
+                        span: qi.span,
+                        target: qi.value.to_string(),
+                    });
+                    // Reference the qualified variant: Index::Variant
+                    table.references.push(ReferenceInfo {
+                        span: arm.pattern.variant_name.span,
+                        target: format!("{}::{}", qi.value, variant_name),
+                    });
+                } else {
+                    // Try to resolve variant as Type::Variant (tagged union).
+                    table.references.push(ReferenceInfo {
+                        span: arm.pattern.variant_name.span,
+                        target: variant_name.clone(),
+                    });
+                }
 
                 scopes.push();
                 for binding in &arm.pattern.bindings {

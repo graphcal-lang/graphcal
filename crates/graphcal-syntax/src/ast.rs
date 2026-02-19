@@ -521,6 +521,12 @@ pub enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    /// Standalone index variant reference: `Maneuver::Departure`
+    /// Used in comparisons with loop variables: `m == Maneuver::Departure`
+    VariantLiteral {
+        index: Spanned<IndexName>,
+        variant: Spanned<VariantName>,
+    },
 }
 
 /// A `let` binding inside a block body.
@@ -576,9 +582,12 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Warning { message: _ }`
+/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Maneuver::Departure`
 #[derive(Debug, Clone)]
 pub struct MatchPattern {
+    /// For index variant match: `Maneuver::Departure` → `Some(Spanned<IndexName>)`
+    /// For tagged union match: `Nominal { ... }` → `None`
+    pub qualified_index: Option<Spanned<IndexName>>,
     pub variant_name: Spanned<VariantName>,
     pub bindings: Vec<PatternBinding>,
     pub span: Span,
