@@ -319,6 +319,11 @@ field_list
 field_decl
    = lower_snake_case_ident, ":", type_expr;
 
+(* Semantic constraint: struct field types must be ValueTypes
+   (type_expr_base), not indexed DeclTypes. You cannot put
+   Velocity[Maneuver] inside a struct field. To index structured
+   data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
+
 variant_list
    = variant_decl, { variant_decl };
 
@@ -346,6 +351,12 @@ derive_op
    | "Neg";
 
 (* --- fn --- *)
+(* Functions are declarations, not values — there is no function type
+   in the type system. No higher-order functions. scan's |acc, val|
+   body and for's bindings are special syntax, not function values.
+   Functions can accept and return DeclTypes (ValueTypes or indexed
+   types). Named index labels are passable as arguments because they
+   are ValueTypes. *)
 fn_decl
    = "fn", lower_snake_case_ident, [ generic_params ], "(", [ fn_param_list ], ")", "->", type_expr, fn_body;
 
@@ -361,6 +372,14 @@ fn_body
 
 (* block form *)
 (* --- index --- *)
+(* An index declares a finite, ordered set of labels usable as
+   collection axes in T[I]. A named index is a fieldless tagged union
+   additionally registered as a collection axis — its labels are
+   ValueTypes that can be passed to functions, stored in variables,
+   and pattern-matched. A range index generates scalar labels from a
+   range; its loop variable acts as a Scalar(Dim). Both flavors share
+   the same type constructor T[I] and consumption interface (for,
+   indexing, aggregation, scan). *)
 index_decl
    = "index", pascal_case_ident, "=", index_kind;
 
@@ -395,9 +414,24 @@ assert_body
 (* ================================================================== *)
 (* 4. Type Expressions                                                *)
 (* ================================================================== *)
+(* The type system has three levels (see design/20-type-system-
+   stratification.md):
+   Level 1 — Primitive:  Scalar(Dim) | Int | Bool
+   Level 2 — ValueType:  Primitive | Struct | TaggedUnion
+   Level 3 — DeclType:   ValueType | Indexed(ValueType, [Index])
+
+   type_expr corresponds to DeclType: a value_type optionally indexed.
+   type_expr_base corresponds to ValueType (without indexing).
+   Struct fields must be ValueTypes (type_expr_base), not DeclTypes.
+   param, node, const, and fn parameter/return annotations use DeclType
+   (type_expr). *)
 type_expr
    = type_expr_base, [ "[", uppercase_starting_ident, { ",", uppercase_starting_ident }, "]" ];
 
+(* The bracketed suffix lifts a ValueType into an indexed DeclType.
+   T[I] is a total map from index labels to values of type T.
+   T[I, J] is a flat product-key map (not nested). Axis order is
+   significant: T[I, J] and T[J, I] are different types. *)
 type_expr_base
    = "Dimensionless"
    | "Bool"
@@ -576,11 +610,24 @@ field_init
 (* When the colon and expression are omitted, the field name is used
    as a shorthand reference to a variable of the same name. *)
 (* --- Map literal --- *)
+(* Single-axis map literals use bare variant keys:
+     { Index::Variant1: expr1, Index::Variant2: expr2, ... }
+   Multi-axis map literals use tuple keys:
+     { (I1::V1, I2::V2): expr1, (I1::V1, I2::V3): expr2, ... }
+   All labels of the index (or all label tuples) must be present
+   (totality requirement). *)
 map_literal
    = "{", map_entry, { ",", map_entry }, [ "," ], "}";
 
 map_entry
+   = single_key_entry
+   | tuple_key_entry;
+
+single_key_entry
    = pascal_case_ident, "::", pascal_case_ident, ":", expr;
+
+tuple_key_entry
+   = "(", pascal_case_ident, "::", pascal_case_ident, { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
 
 (* --- Block expression --- *)
 block_expr

@@ -37,7 +37,6 @@ The indivisible types. Each represents a single atomic datum.
 | `Scalar(Dim)` | `f64` in SI base units | Yes | Yes |
 | `Int` | `i64` | No (dimensionless) | No |
 | `Bool` | `bool` | No (dimensionless) | No |
-| `Str` | `String` | No | No |
 
 Only `Scalar` carries a physical dimension. `Int` and `Bool` are non-scalable — you cannot multiply an integer by an arbitrary unit scale factor and get a meaningful integer back.
 
@@ -340,7 +339,6 @@ If higher-order functions are ever added (deferred per design doc 12), they woul
 | Scalar value | ValueType | Yes | Yes | Yes | Yes |
 | Int value | ValueType | Yes | Yes | Yes | Yes |
 | Bool value | ValueType | Yes | Yes | Yes | Yes |
-| Str value | ValueType | Yes | Yes | Yes | Yes |
 | Struct instance | ValueType | Yes | Yes | Yes | Yes |
 | Tagged union variant | ValueType | Yes | Yes | Yes | Yes |
 | Named index label | ValueType | Yes | Yes | Yes | Yes |
