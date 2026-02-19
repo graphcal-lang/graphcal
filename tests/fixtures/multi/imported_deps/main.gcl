@@ -1,0 +1,4 @@
+// Import both x and y. y's expression references @x internally.
+use "./lib.gcl" { x, y };
+
+node z: Dimensionless = @y + 1.0;

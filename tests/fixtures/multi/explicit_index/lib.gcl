@@ -1,0 +1,3 @@
+index Color = { Red, Green, Blue }
+
+param dummy: Dimensionless = 0.0;

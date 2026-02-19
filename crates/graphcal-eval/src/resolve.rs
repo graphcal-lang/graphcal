@@ -315,6 +315,48 @@ pub fn resolve_with_imports(
         }
     }
 
+    // Extract dependencies for imported declarations so the DAG is complete.
+    // Without this, imported nodes' @-references are invisible to the topological sort,
+    // causing evaluation-order errors (Bug 2).
+    for (name, _, expr, _) in &imported.consts {
+        let deps = extract_const_refs(
+            expr,
+            &all_const_names,
+            &builtin_consts,
+            &builtin_fns,
+            &user_fn_names,
+            src,
+        )?;
+        const_deps.insert(name.clone(), deps);
+    }
+    for (name, _, expr, _) in &imported.params {
+        let (graph_refs, _const_refs) = extract_all_refs(
+            expr,
+            &all_runtime_names,
+            &all_const_names,
+            &builtin_consts,
+            &builtin_fns,
+            &user_fn_names,
+            src,
+        )?;
+        runtime_deps.insert(name.clone(), graph_refs);
+    }
+    for (name, _, expr, _) in &imported.nodes {
+        let (mut graph_refs, _const_refs) = extract_all_refs(
+            expr,
+            &all_runtime_names,
+            &all_const_names,
+            &builtin_consts,
+            &builtin_fns,
+            &user_fn_names,
+            src,
+        )?;
+        if matches!(expr.kind, ExprKind::Unfold { .. }) {
+            graph_refs.remove(name);
+        }
+        runtime_deps.insert(name.clone(), graph_refs);
+    }
+
     // Prepend imported declarations so they appear before local ones in eval order.
     // Strip TypeExpr from imported tuples since ResolvedFile uses 3-tuples.
     let mut all_consts: Vec<(String, Expr, Span)> = imported

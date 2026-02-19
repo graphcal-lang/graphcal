@@ -117,11 +117,7 @@ pub fn check_dimensions_tir(
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
-                let is_bool = inferred == InferredType::Bool
-                    || matches!(
-                        &inferred,
-                        InferredType::Indexed { element, .. } if **element == InferredType::Bool
-                    );
+                let is_bool = is_bool_type(&inferred);
                 if !is_bool {
                     return Err(GraphcalError::AssertBodyNotBool {
                         found: format_inferred_type(&inferred, &tir.registry),
@@ -257,6 +253,15 @@ pub fn check_override_dimension(
         });
     }
     Ok(())
+}
+
+/// Check if a type is `Bool` or `Bool[I1][I2]...` (arbitrarily nested indexed Bool).
+fn is_bool_type(ty: &InferredType) -> bool {
+    match ty {
+        InferredType::Bool => true,
+        InferredType::Indexed { element, .. } => is_bool_type(element),
+        _ => false,
+    }
 }
 
 /// Check if a declared type matches an inferred type.
