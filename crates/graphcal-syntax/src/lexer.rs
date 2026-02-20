@@ -3,6 +3,24 @@ use crate::token::Token;
 use logos::Logos;
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
+///
+/// # Internal design
+///
+/// The inner `logos::Lexer` is **only** advanced inside `peek_with_span()`.
+/// Every other public method goes through `peek_with_span()` to get the next
+/// token, which keeps lexer-position bookkeeping in a single place and makes
+/// the state machine easy to reason about:
+///
+/// ```text
+///   peeked = None          (initial / just consumed)
+///       │
+///       ▼  peek_with_span() calls inner.next()
+///   peeked = Some(Some(_)) (token ready)
+///   peeked = Some(None)    (EOF)
+///       │
+///       ▼  next_token() takes the peeked value
+///   peeked = None          (consumed, ready for next peek)
+/// ```
 #[expect(
     clippy::option_option,
     reason = "None = not peeked, Some(None) = EOF, Some(Some(_)) = peeked token"
@@ -29,20 +47,35 @@ impl<'src> Lexer<'src> {
     }
 
     /// Peek at the next token and its span without consuming it.
+    ///
+    /// This is the **only** method that advances the inner logos lexer.
+    /// All other public methods delegate here to ensure a single point of
+    /// state mutation.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         if self.peeked.is_none() {
-            self.peeked = Some(self.advance());
+            // Advance the inner lexer, skipping unrecognized tokens.
+            // Error reporting for those will be handled by the parser.
+            self.peeked = Some(loop {
+                let result = self.inner.next()?;
+                let slice_span = self.inner.span();
+                let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
+                if let Ok(token) = result {
+                    break Some((token, span));
+                }
+            });
         }
-        // SAFETY: `self.peeked` is guaranteed `Some` after the block above.
-        // Using `as_ref().and_then()` to avoid `.expect()`.
         self.peeked
             .as_ref()
             .and_then(|inner| inner.as_ref().map(|(tok, span)| (tok, *span)))
     }
 
     /// Consume and return the next token and its span.
+    ///
+    /// Internally peeks first (if needed) then takes the peeked value,
+    /// so the inner lexer is only ever advanced via `peek_with_span()`.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
-        self.peeked.take().unwrap_or_else(|| self.advance())
+        self.peek_with_span(); // ensure peeked is Some
+        self.peeked.take().flatten()
     }
 
     /// Get the source text corresponding to a span.
@@ -51,31 +84,10 @@ impl<'src> Lexer<'src> {
         &self.source[span.offset..span.offset + span.len]
     }
 
-    /// Get the byte offset of the current position in the source.
-    /// Useful for generating error spans when the lexer has no more tokens.
+    /// Return the total length (in bytes) of the source string.
     #[must_use]
-    pub const fn current_offset(&self) -> usize {
-        if let Some(ref peeked) = self.peeked
-            && let Some((_, span)) = peeked
-        {
-            return span.offset;
-        }
-        // If no peeked token, the offset is at the end of source
-        // (logos doesn't expose position after exhaustion, so we approximate)
+    pub const fn source_len(&self) -> usize {
         self.source.len()
-    }
-
-    fn advance(&mut self) -> Option<(Token, Span)> {
-        loop {
-            let result = self.inner.next()?;
-            let slice_span = self.inner.span();
-            let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-            if let Ok(token) = result {
-                return Some((token, span));
-            }
-            // Skip unrecognized tokens for now; error reporting will
-            // be handled by the parser in later steps.
-        }
     }
 }
 
@@ -147,6 +159,24 @@ mod tests {
         assert_eq!(tok, Token::Number);
         assert!(lexer.next_token().is_none());
         assert!(lexer.peek().is_none());
+    }
+
+    #[test]
+    fn next_token_without_prior_peek() {
+        // next_token() internally peeks first, so calling it directly
+        // (without an explicit peek()) must work identically.
+        let input = "param x";
+        let mut lexer = Lexer::new(input);
+
+        let (tok, span) = lexer.next_token().unwrap();
+        assert_eq!(tok, Token::Param);
+        assert_eq!(lexer.slice_at(span), "param");
+
+        let (tok, span) = lexer.next_token().unwrap();
+        assert_eq!(tok, Token::Ident);
+        assert_eq!(lexer.slice_at(span), "x");
+
+        assert!(lexer.next_token().is_none());
     }
 
     #[test]
