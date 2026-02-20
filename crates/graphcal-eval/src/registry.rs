@@ -9,6 +9,10 @@ use graphcal_syntax::names::{
 };
 use graphcal_syntax::span::Span;
 
+// ---------------------------------------------------------------------------
+// Data types (unchanged)
+// ---------------------------------------------------------------------------
+
 /// Information about a registered unit.
 #[derive(Debug, Clone)]
 pub struct UnitInfo {
@@ -212,32 +216,253 @@ impl IndexDef {
     }
 }
 
-/// Maps dimension names to `Dimension` values and unit names to `UnitInfo`.
-///
-/// Also tracks base dimension metadata: ID assignment, names, and SI symbols.
-#[derive(Debug, Default)]
-pub struct Registry {
-    /// Counter for assigning unique `BaseDimId` values.
-    next_base_dim_id: u32,
+// ---------------------------------------------------------------------------
+// Domain-specific registries (frozen / read-only)
+// ---------------------------------------------------------------------------
+
+/// Dimension registry: maps dimension names to `Dimension` values and tracks
+/// base dimension metadata (ID assignment, names, SI symbols).
+#[derive(Debug)]
+pub struct DimensionRegistry {
     /// Base dimension ID → dimension name (for display).
     base_dim_names: BTreeMap<BaseDimId, String>,
     /// Base dimension ID → SI unit symbol (for `si_unit_string()`).
+    base_dim_symbols: BTreeMap<BaseDimId, String>,
+    dimensions: HashMap<DimName, Dimension>,
+}
+
+impl DimensionRegistry {
+    /// Look up a dimension by name.
+    #[must_use]
+    pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
+        self.dimensions.get(name)
+    }
+
+    /// Get the base dimension names map (for display purposes).
+    #[must_use]
+    pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_names
+    }
+
+    /// Get the base dimension symbols map (for SI unit string formatting).
+    #[must_use]
+    pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_symbols
+    }
+
+    /// Format a dimension as a human-readable string using registered base dimension names.
+    ///
+    /// Returns `"Dimensionless"` for dimensionless, or names like `"Length / Time"`.
+    #[must_use]
+    pub fn format_dimension(&self, dim: &Dimension) -> String {
+        format!("{}", dim.display_with(&self.base_dim_names))
+    }
+
+    /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
+    ///
+    /// Returns `None` if any dimension name is unknown.
+    #[must_use]
+    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
+        let mut result = Dimension::dimensionless();
+        for item in &expr.terms {
+            let base = self.dimensions.get(item.term.name.name.as_str())?;
+            let exp = item.term.power.unwrap_or(1);
+            let powered = base.pow(Rational::from_int(exp));
+            result = match item.op {
+                MulDivOp::Mul => result * powered,
+                MulDivOp::Div => result / powered,
+            };
+        }
+        Some(result)
+    }
+
+    /// Resolve a `TypeExpr` to a concrete `Dimension`.
+    ///
+    /// Returns `None` if the type references unknown dimensions.
+    #[must_use]
+    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
+        match &type_expr.kind {
+            TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
+            TypeExprKind::Bool | TypeExprKind::Int | TypeExprKind::TypeApplication { .. } => None,
+            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
+            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
+        }
+    }
+}
+
+/// Unit registry: maps unit names to `UnitInfo` (dimension + scale).
+#[derive(Debug)]
+pub struct UnitRegistry {
+    units: HashMap<UnitName, UnitInfo>,
+}
+
+impl UnitRegistry {
+    /// Look up a unit by name.
+    #[must_use]
+    pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
+        self.units.get(name)
+    }
+
+    /// Resolve a `UnitExpr` to its dimension and compound scale factor.
+    ///
+    /// Returns `None` if any unit name is unknown.
+    #[must_use]
+    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
+        let mut dim = Dimension::dimensionless();
+        let mut scale = 1.0;
+        for item in &expr.terms {
+            let info = self.units.get(item.name.value.as_str())?;
+            let exp = item.power.unwrap_or(1);
+            let powered_dim = info.dimension.pow(Rational::from_int(exp));
+            let powered_scale = info.scale.powi(exp);
+            match item.op {
+                MulDivOp::Mul => {
+                    dim = dim * powered_dim;
+                    scale *= powered_scale;
+                }
+                MulDivOp::Div => {
+                    dim = dim / powered_dim;
+                    scale /= powered_scale;
+                }
+            }
+        }
+        Some((dim, scale))
+    }
+}
+
+/// Type registry: maps type names to `TypeDef` and provides variant reverse lookup.
+#[derive(Debug)]
+pub struct TypeRegistry {
+    types: HashMap<StructTypeName, TypeDef>,
+    /// Reverse lookup: variant name → owning type name.
+    variant_to_type: HashMap<VariantName, StructTypeName>,
+}
+
+impl TypeRegistry {
+    /// Look up a type definition by type name.
+    #[must_use]
+    pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
+        self.types.get(name)
+    }
+
+    /// Look up a type definition and specific variant by variant name.
+    #[must_use]
+    pub fn get_type_by_variant(&self, variant_name: &str) -> Option<(&TypeDef, &VariantDef)> {
+        let type_name = self.variant_to_type.get(variant_name)?;
+        let type_def = self.types.get(type_name.as_str())?;
+        let variant_def = type_def.get_variant(variant_name)?;
+        Some((type_def, variant_def))
+    }
+
+    /// Iterate over all registered type definitions.
+    pub fn all_types(&self) -> impl Iterator<Item = &TypeDef> {
+        self.types.values()
+    }
+}
+
+/// Function registry: maps function names to `FnDef`.
+#[derive(Debug)]
+pub struct FunctionRegistry {
+    functions: HashMap<FnName, FnDef>,
+}
+
+impl FunctionRegistry {
+    /// Look up a user-defined function by name.
+    #[must_use]
+    pub fn get_function(&self, name: &str) -> Option<&FnDef> {
+        self.functions.get(name)
+    }
+
+    /// Iterate over all user-defined functions.
+    pub fn all_functions(&self) -> impl Iterator<Item = &FnDef> {
+        self.functions.values()
+    }
+}
+
+/// Index registry: maps index names to `IndexDef`.
+#[derive(Debug)]
+pub struct IndexRegistry {
+    indexes: HashMap<IndexName, IndexDef>,
+}
+
+impl IndexRegistry {
+    /// Look up an index definition by name.
+    #[must_use]
+    pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
+        self.indexes.get(name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frozen aggregate registry
+// ---------------------------------------------------------------------------
+
+/// The frozen, read-only aggregate of all domain registries.
+///
+/// Produced by [`RegistryBuilder::build`]. All fields are public so that
+/// consumers can access individual domain registries directly.
+#[derive(Debug)]
+pub struct Registry {
+    pub dimensions: DimensionRegistry,
+    pub units: UnitRegistry,
+    pub types: TypeRegistry,
+    pub functions: FunctionRegistry,
+    pub indexes: IndexRegistry,
+}
+
+// ---------------------------------------------------------------------------
+// Mutable builder
+// ---------------------------------------------------------------------------
+
+/// Mutable builder for constructing a [`Registry`].
+///
+/// Used during IR lowering and prelude loading. Call [`build()`](Self::build)
+/// to produce an immutable [`Registry`].
+#[derive(Debug, Default)]
+pub struct RegistryBuilder {
+    /// Counter for assigning unique `BaseDimId` values.
+    next_base_dim_id: u32,
+    base_dim_names: BTreeMap<BaseDimId, String>,
     base_dim_symbols: BTreeMap<BaseDimId, String>,
 
     dimensions: HashMap<DimName, Dimension>,
     units: HashMap<UnitName, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
-    /// Reverse lookup: variant name → owning type name.
     variant_to_type: HashMap<VariantName, StructTypeName>,
     functions: HashMap<FnName, FnDef>,
     indexes: HashMap<IndexName, IndexDef>,
 }
 
-impl Registry {
+impl RegistryBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Freeze the builder into an immutable [`Registry`].
+    #[must_use]
+    pub fn build(self) -> Registry {
+        Registry {
+            dimensions: DimensionRegistry {
+                base_dim_names: self.base_dim_names,
+                base_dim_symbols: self.base_dim_symbols,
+                dimensions: self.dimensions,
+            },
+            units: UnitRegistry { units: self.units },
+            types: TypeRegistry {
+                types: self.types,
+                variant_to_type: self.variant_to_type,
+            },
+            functions: FunctionRegistry {
+                functions: self.functions,
+            },
+            indexes: IndexRegistry {
+                indexes: self.indexes,
+            },
+        }
+    }
+
+    // -- Mutation methods (only on builder) --
 
     /// Register a new base dimension (bodyless `dimension Foo;`).
     ///
@@ -274,18 +499,6 @@ impl Registry {
         self.base_dim_symbols.entry(id).or_insert(symbol);
     }
 
-    /// Get the base dimension names map (for display purposes).
-    #[must_use]
-    pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
-        &self.base_dim_names
-    }
-
-    /// Get the base dimension symbols map (for SI unit string formatting).
-    #[must_use]
-    pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
-        &self.base_dim_symbols
-    }
-
     /// Register a named dimension.
     pub fn register_dimension(&mut self, name: DimName, dim: Dimension) {
         self.dimensions.insert(name, dim);
@@ -295,6 +508,27 @@ impl Registry {
     pub fn register_unit(&mut self, name: UnitName, dimension: Dimension, scale: f64) {
         self.units.insert(name, UnitInfo { dimension, scale });
     }
+
+    /// Register a type definition (single-variant struct sugar or multi-variant tagged union).
+    pub fn register_type(&mut self, def: TypeDef) {
+        for variant in &def.variants {
+            self.variant_to_type
+                .insert(variant.name.clone(), def.name.clone());
+        }
+        self.types.insert(def.name.clone(), def);
+    }
+
+    /// Register a user-defined function.
+    pub fn register_function(&mut self, def: FnDef) {
+        self.functions.insert(def.name.clone(), def);
+    }
+
+    /// Register an index definition.
+    pub fn register_index(&mut self, def: IndexDef) {
+        self.indexes.insert(def.name.clone(), def);
+    }
+
+    // -- Read methods (needed during mid-build reads in ir.rs) --
 
     /// Look up a dimension by name.
     #[must_use]
@@ -308,54 +542,10 @@ impl Registry {
         self.units.get(name)
     }
 
-    /// Register a type definition (single-variant struct sugar or multi-variant tagged union).
-    pub fn register_type(&mut self, def: TypeDef) {
-        for variant in &def.variants {
-            self.variant_to_type
-                .insert(variant.name.clone(), def.name.clone());
-        }
-        self.types.insert(def.name.clone(), def);
-    }
-
     /// Look up a type definition by type name.
     #[must_use]
     pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
         self.types.get(name)
-    }
-
-    /// Look up a type definition and specific variant by variant name.
-    #[must_use]
-    pub fn get_type_by_variant(&self, variant_name: &str) -> Option<(&TypeDef, &VariantDef)> {
-        let type_name = self.variant_to_type.get(variant_name)?;
-        let type_def = self.types.get(type_name.as_str())?;
-        let variant_def = type_def.get_variant(variant_name)?;
-        Some((type_def, variant_def))
-    }
-
-    /// Register a user-defined function.
-    pub fn register_function(&mut self, def: FnDef) {
-        self.functions.insert(def.name.clone(), def);
-    }
-
-    /// Look up a user-defined function by name.
-    #[must_use]
-    pub fn get_function(&self, name: &str) -> Option<&FnDef> {
-        self.functions.get(name)
-    }
-
-    /// Iterate over all user-defined functions.
-    pub fn all_functions(&self) -> impl Iterator<Item = &FnDef> {
-        self.functions.values()
-    }
-
-    /// Iterate over all registered type definitions.
-    pub fn all_types(&self) -> impl Iterator<Item = &TypeDef> {
-        self.types.values()
-    }
-
-    /// Register an index definition.
-    pub fn register_index(&mut self, def: IndexDef) {
-        self.indexes.insert(def.name.clone(), def);
     }
 
     /// Look up an index definition by name.
@@ -364,9 +554,19 @@ impl Registry {
         self.indexes.get(name)
     }
 
+    /// Get the base dimension names map (for display purposes).
+    #[must_use]
+    pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_names
+    }
+
+    /// Get the base dimension symbols map (for SI unit string formatting).
+    #[must_use]
+    pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_symbols
+    }
+
     /// Format a dimension as a human-readable string using registered base dimension names.
-    ///
-    /// Returns `"Dimensionless"` for dimensionless, or names like `"Length / Time"`.
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
         format!("{}", dim.display_with(&self.base_dim_names))
@@ -446,9 +646,9 @@ mod tests {
     const MASS_ID: BaseDimId = BaseDimId(2);
 
     fn make_registry() -> Registry {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        r
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.build()
     }
 
     fn make_ident(name: &str) -> Ident {
@@ -484,15 +684,24 @@ mod tests {
     #[test]
     fn registry_base_dimensions() {
         let r = make_registry();
-        assert_eq!(r.get_dimension("Length"), Some(&Dimension::base(LENGTH_ID)));
-        assert_eq!(r.get_dimension("Time"), Some(&Dimension::base(TIME_ID)));
-        assert_eq!(r.get_dimension("Mass"), Some(&Dimension::base(MASS_ID)));
+        assert_eq!(
+            r.dimensions.get_dimension("Length"),
+            Some(&Dimension::base(LENGTH_ID))
+        );
+        assert_eq!(
+            r.dimensions.get_dimension("Time"),
+            Some(&Dimension::base(TIME_ID))
+        );
+        assert_eq!(
+            r.dimensions.get_dimension("Mass"),
+            Some(&Dimension::base(MASS_ID))
+        );
     }
 
     #[test]
     fn registry_derived_dimensions() {
         let r = make_registry();
-        let velocity = r.get_dimension("Velocity").unwrap();
+        let velocity = r.dimensions.get_dimension("Velocity").unwrap();
         let expected = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
         assert_eq!(*velocity, expected);
     }
@@ -500,7 +709,7 @@ mod tests {
     #[test]
     fn registry_base_units() {
         let r = make_registry();
-        let m = r.get_unit("m").unwrap();
+        let m = r.units.get_unit("m").unwrap();
         assert_eq!(m.dimension, Dimension::base(LENGTH_ID));
         assert!((m.scale - 1.0).abs() < f64::EPSILON);
     }
@@ -508,7 +717,7 @@ mod tests {
     #[test]
     fn registry_derived_units() {
         let r = make_registry();
-        let km = r.get_unit("km").unwrap();
+        let km = r.units.get_unit("km").unwrap();
         assert_eq!(km.dimension, Dimension::base(LENGTH_ID));
         assert!((km.scale - 1000.0).abs() < f64::EPSILON);
     }
@@ -538,7 +747,7 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let dim = r.resolve_dim_expr(&expr).unwrap();
+        let dim = r.dimensions.resolve_dim_expr(&expr).unwrap();
         let expected = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
         assert_eq!(dim, expected);
     }
@@ -562,7 +771,7 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.resolve_unit_expr(&expr).unwrap();
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
         let expected_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID).pow_int(2);
         assert_eq!(dim, expected_dim);
         assert!((scale - 1.0).abs() < f64::EPSILON);
@@ -587,7 +796,7 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.resolve_unit_expr(&expr).unwrap();
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
         let expected_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
@@ -596,9 +805,9 @@ mod tests {
 
     #[test]
     fn registry_type_register_and_lookup() {
-        let mut r = make_registry();
-        let velocity_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
-        r.register_type(TypeDef {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
@@ -616,28 +825,31 @@ mod tests {
                 ],
             }],
         });
-        let def = r.get_type("TransferResult").unwrap();
+        let r = b.build();
+        let velocity_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
+        let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
         assert!(def.is_single_variant());
         let variant = def.get_variant("TransferResult").unwrap();
         assert_eq!(variant.fields.len(), 2);
         assert_eq!(variant.fields[0].name.as_str(), "dv1");
         assert_eq!(
-            r.resolve_type_expr(&variant.fields[0].type_ann),
+            r.dimensions.resolve_type_expr(&variant.fields[0].type_ann),
             Some(velocity_dim)
         );
-        assert!(r.get_type("NonExistent").is_none());
+        assert!(r.types.get_type("NonExistent").is_none());
 
         // variant_to_type reverse lookup
-        let (type_def, variant_def) = r.get_type_by_variant("TransferResult").unwrap();
+        let (type_def, variant_def) = r.types.get_type_by_variant("TransferResult").unwrap();
         assert_eq!(type_def.name.as_str(), "TransferResult");
         assert_eq!(variant_def.name.as_str(), "TransferResult");
     }
 
     #[test]
     fn registry_index_register_and_lookup() {
-        let mut r = make_registry();
-        r.register_index(IndexDef {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.register_index(IndexDef {
             name: IndexName::new("Maneuver"),
             kind: IndexKind::Named {
                 variants: vec![
@@ -647,44 +859,55 @@ mod tests {
                 ],
             },
         });
-        let def = r.get_index("Maneuver").unwrap();
+        let r = b.build();
+        let def = r.indexes.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
         let variants = def.variants();
         let variant_strs: Vec<&str> = variants.iter().map(VariantName::as_str).collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
-        assert!(r.get_index("NonExistent").is_none());
+        assert!(r.indexes.get_index("NonExistent").is_none());
     }
 
     #[test]
     fn register_user_defined_base_dimension() {
-        let mut r = make_registry();
-        let id = r.register_base_dimension(DimName::new("Information"));
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let id = b.register_base_dimension(DimName::new("Information"));
         // Should get the next ID after the 8 prelude base dimensions
         assert_eq!(id, BaseDimId(8));
+        let r = b.build();
         // Should be retrievable
-        let dim = r.get_dimension("Information").unwrap();
+        let dim = r.dimensions.get_dimension("Information").unwrap();
         assert_eq!(*dim, Dimension::base(id));
         // Name should be recorded
         assert_eq!(
-            r.base_dim_names().get(&id),
+            r.dimensions.base_dim_names().get(&id),
             Some(&"Information".to_string())
         );
     }
 
     #[test]
     fn register_base_dimension_with_symbol() {
-        let mut r = Registry::new();
-        let id = r.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
-        assert_eq!(r.base_dim_symbols().get(&id), Some(&"m".to_string()));
+        let mut b = RegistryBuilder::new();
+        let id = b.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
+        let r = b.build();
+        assert_eq!(
+            r.dimensions.base_dim_symbols().get(&id),
+            Some(&"m".to_string())
+        );
     }
 
     #[test]
     fn set_base_dim_symbol_only_first() {
-        let mut r = Registry::new();
-        let id = r.register_base_dimension(DimName::new("Information"));
-        r.set_base_dim_symbol(id, "bit".to_string());
+        let mut b = RegistryBuilder::new();
+        let id = b.register_base_dimension(DimName::new("Information"));
+        b.set_base_dim_symbol(id, "bit".to_string());
         // Second call should not overwrite
-        r.set_base_dim_symbol(id, "byte".to_string());
-        assert_eq!(r.base_dim_symbols().get(&id), Some(&"bit".to_string()));
+        b.set_base_dim_symbol(id, "byte".to_string());
+        let r = b.build();
+        assert_eq!(
+            r.dimensions.base_dim_symbols().get(&id),
+            Some(&"bit".to_string())
+        );
     }
 }

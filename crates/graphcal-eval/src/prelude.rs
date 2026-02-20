@@ -1,45 +1,67 @@
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{DimName, UnitName};
 
-use crate::registry::Registry;
+use crate::registry::RegistryBuilder;
 
-/// Load all built-in dimensions and units into the registry.
-pub fn load_prelude(registry: &mut Registry) {
-    load_base_dimensions(registry);
-    load_derived_dimensions(registry);
-    load_base_units(registry);
-    load_derived_units(registry);
+/// Base dimension IDs returned by `load_base_dimensions`.
+///
+/// Thread these through the prelude loading pipeline to avoid
+/// re-looking up dimensions by name.
+struct BaseDimIds {
+    length: Dimension,
+    time: Dimension,
+    mass: Dimension,
+    temperature: Dimension,
+    electric_current: Dimension,
+    amount: Dimension,
+    luminous_intensity: Dimension,
+    angle: Dimension,
 }
 
-fn load_base_dimensions(r: &mut Registry) {
-    r.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("Time"), "s".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("Mass"), "kg".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("Temperature"), "K".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("ElectricCurrent"), "A".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("Amount"), "mol".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("LuminousIntensity"), "cd".to_string());
-    r.register_base_dimension_with_symbol(DimName::new("Angle"), "rad".to_string());
+/// Load all built-in dimensions and units into the registry builder.
+pub fn load_prelude(builder: &mut RegistryBuilder) {
+    let ids = load_base_dimensions(builder);
+    load_derived_dimensions(builder, &ids);
+    load_base_units(builder, &ids);
+    load_derived_units(builder, &ids);
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "base dimensions are always registered before derived"
-)]
-fn load_derived_dimensions(r: &mut Registry) {
-    let length = r.get_dimension("Length").unwrap().clone();
-    let time = r.get_dimension("Time").unwrap().clone();
-    let mass = r.get_dimension("Mass").unwrap().clone();
+fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
+    let length_id = r.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
+    let time_id = r.register_base_dimension_with_symbol(DimName::new("Time"), "s".to_string());
+    let mass_id = r.register_base_dimension_with_symbol(DimName::new("Mass"), "kg".to_string());
+    let temperature_id =
+        r.register_base_dimension_with_symbol(DimName::new("Temperature"), "K".to_string());
+    let electric_current_id =
+        r.register_base_dimension_with_symbol(DimName::new("ElectricCurrent"), "A".to_string());
+    let amount_id =
+        r.register_base_dimension_with_symbol(DimName::new("Amount"), "mol".to_string());
+    let luminous_intensity_id =
+        r.register_base_dimension_with_symbol(DimName::new("LuminousIntensity"), "cd".to_string());
+    let angle_id = r.register_base_dimension_with_symbol(DimName::new("Angle"), "rad".to_string());
 
-    let velocity = length.clone() / time.clone();
-    let acceleration = length.clone() / time.pow_int(2);
-    let force = mass * acceleration.clone();
-    let energy = force.clone() * length.clone();
-    let power = energy.clone() / time.clone();
-    let frequency = Dimension::dimensionless() / time;
-    let pressure = force.clone() / length.pow_int(2);
-    let area = length.pow_int(2);
-    let volume = length.pow_int(3);
+    BaseDimIds {
+        length: Dimension::base(length_id),
+        time: Dimension::base(time_id),
+        mass: Dimension::base(mass_id),
+        temperature: Dimension::base(temperature_id),
+        electric_current: Dimension::base(electric_current_id),
+        amount: Dimension::base(amount_id),
+        luminous_intensity: Dimension::base(luminous_intensity_id),
+        angle: Dimension::base(angle_id),
+    }
+}
+
+fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) {
+    let velocity = ids.length.clone() / ids.time.clone();
+    let acceleration = ids.length.clone() / ids.time.pow_int(2);
+    let force = ids.mass.clone() * acceleration.clone();
+    let energy = force.clone() * ids.length.clone();
+    let power = energy.clone() / ids.time.clone();
+    let frequency = Dimension::dimensionless() / ids.time.clone();
+    let pressure = force.clone() / ids.length.pow_int(2);
+    let area = ids.length.pow_int(2);
+    let volume = ids.length.pow_int(3);
 
     r.register_dimension(DimName::new("Velocity"), velocity);
     r.register_dimension(DimName::new("Acceleration"), acceleration);
@@ -52,68 +74,42 @@ fn load_derived_dimensions(r: &mut Registry) {
     r.register_dimension(DimName::new("Volume"), volume);
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "dimensions are always registered before units"
-)]
-fn load_base_units(r: &mut Registry) {
-    let length = r.get_dimension("Length").unwrap().clone();
-    let time = r.get_dimension("Time").unwrap().clone();
-    let mass = r.get_dimension("Mass").unwrap().clone();
-    let temperature = r.get_dimension("Temperature").unwrap().clone();
-    let electric_current = r.get_dimension("ElectricCurrent").unwrap().clone();
-    let amount = r.get_dimension("Amount").unwrap().clone();
-    let luminous_intensity = r.get_dimension("LuminousIntensity").unwrap().clone();
-    let angle = r.get_dimension("Angle").unwrap().clone();
-
-    r.register_unit(UnitName::new("m"), length, 1.0);
-    r.register_unit(UnitName::new("s"), time, 1.0);
-    r.register_unit(UnitName::new("kg"), mass, 1.0);
-    r.register_unit(UnitName::new("K"), temperature, 1.0);
-    r.register_unit(UnitName::new("A"), electric_current, 1.0);
-    r.register_unit(UnitName::new("mol"), amount, 1.0);
-    r.register_unit(UnitName::new("cd"), luminous_intensity, 1.0);
-    r.register_unit(UnitName::new("rad"), angle, 1.0);
+fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
+    r.register_unit(UnitName::new("m"), ids.length.clone(), 1.0);
+    r.register_unit(UnitName::new("s"), ids.time.clone(), 1.0);
+    r.register_unit(UnitName::new("kg"), ids.mass.clone(), 1.0);
+    r.register_unit(UnitName::new("K"), ids.temperature.clone(), 1.0);
+    r.register_unit(UnitName::new("A"), ids.electric_current.clone(), 1.0);
+    r.register_unit(UnitName::new("mol"), ids.amount.clone(), 1.0);
+    r.register_unit(UnitName::new("cd"), ids.luminous_intensity.clone(), 1.0);
+    r.register_unit(UnitName::new("rad"), ids.angle.clone(), 1.0);
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "dimensions are always registered before units"
-)]
-fn load_derived_units(r: &mut Registry) {
-    let length = r.get_dimension("Length").unwrap().clone();
-    let time = r.get_dimension("Time").unwrap().clone();
-    let mass = r.get_dimension("Mass").unwrap().clone();
-    let angle = r.get_dimension("Angle").unwrap().clone();
-
-    let force = mass.clone() * length.clone() / time.pow_int(2);
-    let energy = force.clone() * length.clone();
-    let power = energy.clone() / time.clone();
-    let pressure = force.clone() / length.pow_int(2);
-    let frequency = Dimension::dimensionless() / time;
+fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
+    let force = ids.mass.clone() * ids.length.clone() / ids.time.pow_int(2);
+    let energy = force.clone() * ids.length.clone();
+    let power = energy.clone() / ids.time.clone();
+    let pressure = force.clone() / ids.length.pow_int(2);
+    let frequency = Dimension::dimensionless() / ids.time.clone();
 
     // Length
-    r.register_unit(UnitName::new("km"), length.clone(), 1000.0);
-    r.register_unit(UnitName::new("cm"), length.clone(), 0.01);
-    r.register_unit(UnitName::new("mm"), length, 0.001);
+    r.register_unit(UnitName::new("km"), ids.length.clone(), 1000.0);
+    r.register_unit(UnitName::new("cm"), ids.length.clone(), 0.01);
+    r.register_unit(UnitName::new("mm"), ids.length.clone(), 0.001);
 
     // Time
-    r.register_unit(
-        UnitName::new("hour"),
-        r.get_dimension("Time").unwrap().clone(),
-        3600.0,
-    );
-    r.register_unit(
-        UnitName::new("min"),
-        r.get_dimension("Time").unwrap().clone(),
-        60.0,
-    );
+    r.register_unit(UnitName::new("hour"), ids.time.clone(), 3600.0);
+    r.register_unit(UnitName::new("min"), ids.time.clone(), 60.0);
 
     // Angle
-    r.register_unit(UnitName::new("deg"), angle, std::f64::consts::PI / 180.0);
+    r.register_unit(
+        UnitName::new("deg"),
+        ids.angle.clone(),
+        std::f64::consts::PI / 180.0,
+    );
 
     // Mass
-    r.register_unit(UnitName::new("g"), mass, 0.001);
+    r.register_unit(UnitName::new("g"), ids.mass.clone(), 0.001);
 
     // Force
     r.register_unit(UnitName::new("N"), force.clone(), 1.0);
@@ -140,6 +136,7 @@ fn load_derived_units(r: &mut Registry) {
 mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
+    use crate::registry::RegistryBuilder;
     use graphcal_syntax::dimension::{BaseDimId, Rational};
 
     // Well-known IDs matching registration order in load_base_dimensions.
@@ -149,8 +146,9 @@ mod tests {
 
     #[test]
     fn prelude_loads_all_base_dims() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
         for name in [
             "Length",
             "Time",
@@ -161,14 +159,18 @@ mod tests {
             "LuminousIntensity",
             "Angle",
         ] {
-            assert!(r.get_dimension(name).is_some(), "missing dimension: {name}");
+            assert!(
+                r.dimensions.get_dimension(name).is_some(),
+                "missing dimension: {name}"
+            );
         }
     }
 
     #[test]
     fn prelude_loads_all_derived_dims() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
         for name in [
             "Velocity",
             "Acceleration",
@@ -180,15 +182,19 @@ mod tests {
             "Area",
             "Volume",
         ] {
-            assert!(r.get_dimension(name).is_some(), "missing dimension: {name}");
+            assert!(
+                r.dimensions.get_dimension(name).is_some(),
+                "missing dimension: {name}"
+            );
         }
     }
 
     #[test]
     fn prelude_force_dimension_is_correct() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let force = r.get_dimension("Force").unwrap();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let force = r.dimensions.get_dimension("Force").unwrap();
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(MASS_ID), Rational::ONE);
         assert_eq!(force.get_exponent(LENGTH_ID), Rational::ONE);
@@ -197,35 +203,39 @@ mod tests {
 
     #[test]
     fn prelude_newton_matches_force_dim() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let force_dim = r.get_dimension("Force").unwrap().clone();
-        let newton = r.get_unit("N").unwrap();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
+        let newton = r.units.get_unit("N").unwrap();
         assert_eq!(newton.dimension, force_dim);
         assert!((newton.scale - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn prelude_km_scale_correct() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let km = r.get_unit("km").unwrap();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let km = r.units.get_unit("km").unwrap();
         assert!((km.scale - 1000.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn prelude_deg_scale_correct() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let deg = r.get_unit("deg").unwrap();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let deg = r.units.get_unit("deg").unwrap();
         assert!((deg.scale - std::f64::consts::PI / 180.0).abs() < 1e-15);
     }
 
     #[test]
     fn prelude_base_dim_names_registered() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let names = r.base_dim_names();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let names = r.dimensions.base_dim_names();
         assert_eq!(names.len(), 8);
         assert_eq!(names.get(&LENGTH_ID), Some(&"Length".to_string()));
         assert_eq!(names.get(&TIME_ID), Some(&"Time".to_string()));
@@ -233,9 +243,10 @@ mod tests {
 
     #[test]
     fn prelude_base_dim_symbols_registered() {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        let symbols = r.base_dim_symbols();
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        let r = b.build();
+        let symbols = r.dimensions.base_dim_symbols();
         assert_eq!(symbols.len(), 8);
         assert_eq!(symbols.get(&LENGTH_ID), Some(&"m".to_string()));
         assert_eq!(symbols.get(&TIME_ID), Some(&"s".to_string()));

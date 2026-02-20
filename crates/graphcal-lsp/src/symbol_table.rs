@@ -906,28 +906,28 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     for (name, def) in &table.definitions.clone() {
         match def.category {
             SymbolCategory::Dimension => {
-                if let Some(dim) = registry.get_dimension(name)
+                if let Some(dim) = registry.dimensions.get_dimension(name)
                     && let Some(def_mut) = table.definitions.get_mut(name)
                 {
                     def_mut.type_description = Some(format!(
                         "dimension {name} = {}",
-                        registry.format_dimension(dim)
+                        registry.dimensions.format_dimension(dim)
                     ));
                 }
             }
             SymbolCategory::Unit => {
-                if let Some(unit_info) = registry.get_unit(name)
+                if let Some(unit_info) = registry.units.get_unit(name)
                     && let Some(def_mut) = table.definitions.get_mut(name)
                 {
                     def_mut.type_description = Some(format!(
                         "{}, scale = {}",
-                        registry.format_dimension(&unit_info.dimension),
+                        registry.dimensions.format_dimension(&unit_info.dimension),
                         unit_info.scale
                     ));
                 }
             }
             SymbolCategory::Index => {
-                if let Some(idx_def) = registry.get_index(name)
+                if let Some(idx_def) = registry.indexes.get_index(name)
                     && let Some(def_mut) = table.definitions.get_mut(name)
                 {
                     match &idx_def.kind {
@@ -948,7 +948,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                 }
             }
             SymbolCategory::StructType => {
-                if let Some(type_def) = registry.get_type(name)
+                if let Some(type_def) = registry.types.get_type(name)
                     && let Some(def_mut) = table.definitions.get_mut(name)
                 {
                     let variants_desc: Vec<String> = type_def
@@ -973,7 +973,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
 
     // Register field definitions from struct types so that `field::name`
     // references resolve to a definition with hover info.
-    for type_def in registry.all_types() {
+    for type_def in registry.types.all_types() {
         for variant in &type_def.variants {
             for field in &variant.fields {
                 let field_key = format!("field::{}", field.name);

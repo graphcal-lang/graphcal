@@ -68,7 +68,7 @@ impl ResolvedTypeExpr {
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
             Self::Scalar(dim) => {
-                let formatted = registry.format_dimension(dim);
+                let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
                     "Dimensionless".to_string()
                 } else {
@@ -133,7 +133,9 @@ impl ResolvedDimTerm {
     #[must_use]
     pub fn format(&self, registry: &Registry) -> String {
         let (name, power, op) = match self {
-            Self::Concrete { dim, power, op } => (registry.format_dimension(dim), *power, *op),
+            Self::Concrete { dim, power, op } => {
+                (registry.dimensions.format_dimension(dim), *power, *op)
+            }
             Self::GenericParam {
                 name, power, op, ..
             } => (name.to_string(), *power, *op),
@@ -276,7 +278,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
     }
 
     // Resolve function signatures from the registry (which has FnDef with TypeExpr).
-    for fn_def in ir.registry.all_functions() {
+    for fn_def in ir.registry.functions.all_functions() {
         let dim_params: Vec<GenericParamName> = fn_def
             .generic_params
             .iter()
@@ -518,7 +520,7 @@ pub fn unify_resolved_type(
             if !actual_dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
-                    found: registry.format_dimension(&actual_dim),
+                    found: registry.dimensions.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Dimensionless argument".to_string(),
@@ -531,8 +533,8 @@ pub fn unify_resolved_type(
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if *expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.format_dimension(expected_dim),
-                    found: registry.format_dimension(&actual_dim),
+                    expected: registry.dimensions.format_dimension(expected_dim),
+                    found: registry.dimensions.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
@@ -571,14 +573,14 @@ pub fn unify_resolved_type(
             if let Some(prev) = dim_sub.get(gp) {
                 if *prev != actual_dim {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: registry.format_dimension(prev),
-                        found: registry.format_dimension(&actual_dim),
+                        expected: registry.dimensions.format_dimension(prev),
+                        found: registry.dimensions.format_dimension(&actual_dim),
                         src: src.clone(),
                         span: span.into(),
                         help: format!(
                             "generic `{gp}` was bound to {} but this argument requires {}",
-                            registry.format_dimension(prev),
-                            registry.format_dimension(&actual_dim),
+                            registry.dimensions.format_dimension(prev),
+                            registry.dimensions.format_dimension(&actual_dim),
                         ),
                     });
                 }
@@ -608,14 +610,14 @@ pub fn unify_resolved_type(
                 if let Some(prev) = dim_sub.get(gp) {
                     if *prev != bound_dim {
                         return Err(GraphcalError::DimensionMismatch {
-                            expected: registry.format_dimension(prev),
-                            found: registry.format_dimension(&bound_dim),
+                            expected: registry.dimensions.format_dimension(prev),
+                            found: registry.dimensions.format_dimension(&bound_dim),
                             src: src.clone(),
                             span: span.into(),
                             help: format!(
                                 "generic `{gp}` was bound to {} but this argument requires {}",
-                                registry.format_dimension(prev),
-                                registry.format_dimension(&bound_dim),
+                                registry.dimensions.format_dimension(prev),
+                                registry.dimensions.format_dimension(&bound_dim),
                             ),
                         });
                     }
@@ -640,7 +642,7 @@ pub fn unify_resolved_type(
                         } else {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("generic `{gp}` (unresolved)"),
-                                found: registry.format_dimension(&actual_dim),
+                                found: registry.dimensions.format_dimension(&actual_dim),
                                 src: src.clone(),
                                 span: span.into(),
                                 help: format!(
@@ -658,8 +660,8 @@ pub fn unify_resolved_type(
 
             if expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.format_dimension(&expected_dim),
-                    found: registry.format_dimension(&actual_dim),
+                    expected: registry.dimensions.format_dimension(&expected_dim),
+                    found: registry.dimensions.format_dimension(&actual_dim),
                     src: src.clone(),
                     span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
@@ -796,7 +798,7 @@ fn expect_scalar_from_inferred(
 fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> String {
     use crate::dim_check::InferredType;
     match it {
-        InferredType::Scalar(d) => registry.format_dimension(d),
+        InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
         InferredType::Struct(name, args) => {
@@ -850,7 +852,7 @@ pub fn resolve_type_expr(
                 let idx_name = &idx.name;
                 if let Some(gp) = index_params.iter().find(|p| p.as_str() == idx_name) {
                     resolved_indexes.push(ResolvedIndex::GenericParam(gp.clone(), idx.span));
-                } else if registry.get_index(idx_name).is_some() {
+                } else if registry.indexes.get_index(idx_name).is_some() {
                     resolved_indexes
                         .push(ResolvedIndex::Concrete(IndexName::new(idx_name), idx.span));
                 } else {
@@ -874,7 +876,7 @@ pub fn resolve_type_expr(
                 let span = dim_expr.terms[0].term.span;
 
                 // Check type (struct sugar or tagged union) first
-                if registry.get_type(name).is_some() {
+                if registry.types.get_type(name).is_some() {
                     return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
                 }
 
@@ -905,7 +907,7 @@ pub fn resolve_type_expr(
                             op,
                             span: item.term.span,
                         });
-                    } else if let Some(dim) = registry.get_dimension(name) {
+                    } else if let Some(dim) = registry.dimensions.get_dimension(name) {
                         terms.push(ResolvedDimTerm::Concrete {
                             dim: dim.clone(),
                             power,
@@ -928,7 +930,7 @@ pub fn resolve_type_expr(
                 let mut result = Dimension::dimensionless();
                 for item in &dim_expr.terms {
                     let name = &item.term.name.name;
-                    let base = registry.get_dimension(name).ok_or_else(|| {
+                    let base = registry.dimensions.get_dimension(name).ok_or_else(|| {
                         GraphcalError::UnknownDimension {
                             name: DimName::new(name),
                             src: src.clone(),
@@ -949,14 +951,13 @@ pub fn resolve_type_expr(
         TypeExprKind::TypeApplication { name, type_args } => {
             let type_name = &name.name;
             // Verify this is a known generic type
-            let type_def =
-                registry
-                    .get_type(type_name)
-                    .ok_or_else(|| GraphcalError::UnknownStructType {
-                        name: StructTypeName::new(type_name),
-                        src: src.clone(),
-                        span: name.span.into(),
-                    })?;
+            let type_def = registry.types.get_type(type_name).ok_or_else(|| {
+                GraphcalError::UnknownStructType {
+                    name: StructTypeName::new(type_name),
+                    src: src.clone(),
+                    span: name.span.into(),
+                }
+            })?;
             let total_params = type_def.generic_params.len();
             // Count required params (those without defaults)
             let required_count = type_def
@@ -1008,13 +1009,14 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::prelude::load_prelude;
+    use crate::registry::RegistryBuilder;
     use graphcal_syntax::dimension::BaseDimId;
     use graphcal_syntax::parser::Parser;
 
     fn make_registry() -> Registry {
-        let mut r = Registry::new();
-        load_prelude(&mut r);
-        r
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.build()
     }
 
     /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
@@ -1039,8 +1041,9 @@ mod tests {
     }
 
     fn make_registry_with_struct() -> Registry {
-        let mut r = make_registry();
-        r.register_type(crate::registry::TypeDef {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.register_type(crate::registry::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
@@ -1058,12 +1061,13 @@ mod tests {
                 ],
             }],
         });
-        r
+        b.build()
     }
 
     fn make_registry_with_index() -> Registry {
-        let mut r = make_registry();
-        r.register_index(crate::registry::IndexDef {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b);
+        b.register_index(crate::registry::IndexDef {
             name: IndexName::new("Maneuver"),
             kind: crate::registry::IndexKind::Named {
                 variants: vec![
@@ -1072,7 +1076,7 @@ mod tests {
                 ],
             },
         });
-        r
+        b.build()
     }
 
     fn make_src() -> NamedSource<Arc<String>> {
