@@ -180,20 +180,22 @@ impl IndexDef {
         }
     }
 
-    /// Returns the f64 value at step `i` for a range index.
+    /// Returns the SI value at step `i` for a range index.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if this is a named index.
-    #[must_use]
+    /// Returns an error message if this is a named (non-range) index.
     #[expect(
         clippy::cast_precision_loss,
         reason = "range step indices are small enough for exact f64 representation"
     )]
-    pub fn step_value(&self, i: usize) -> f64 {
+    pub fn step_value(&self, i: usize) -> Result<f64, String> {
         match &self.kind {
-            IndexKind::Named { .. } => panic!("step_value() called on named index"),
-            IndexKind::Range { start, step, .. } => start + (i as f64) * step,
+            IndexKind::Named { .. } => Err(format!(
+                "step_value() called on named index `{}`",
+                self.name
+            )),
+            IndexKind::Range { start, step, .. } => Ok(start + (i as f64) * step),
         }
     }
 

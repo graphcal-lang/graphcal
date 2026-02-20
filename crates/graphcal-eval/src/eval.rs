@@ -68,58 +68,71 @@ pub enum Value {
     },
 }
 
+/// Error returned when a [`Value`] accessor is called on an incompatible variant.
+#[derive(Debug, Clone, Error)]
+#[error("expected Scalar value, got {actual}")]
+pub struct ValueError {
+    /// A short description of the actual variant (e.g. "Bool", "Int", "struct `Foo`").
+    pub actual: String,
+}
+
 impl Value {
-    /// Get the SI value. Panics on non-scalar values.
-    #[must_use]
-    pub fn si_value(&self) -> f64 {
+    /// A short description of this value's variant for error messages.
+    fn variant_description(&self) -> String {
         match self {
-            Self::Scalar { si_value, .. } => *si_value,
-            Self::Bool(_) => panic!("called si_value() on Bool"),
-            Self::Int(_) => panic!("called si_value() on Int"),
-            Self::Struct { type_name, .. } => {
-                panic!("called si_value() on struct `{type_name}`")
-            }
-            Self::Indexed { index_name, .. } => {
-                panic!("called si_value() on indexed value `{index_name}[...]`")
-            }
+            Self::Scalar { .. } => "Scalar".to_string(),
+            Self::Bool(_) => "Bool".to_string(),
+            Self::Int(_) => "Int".to_string(),
+            Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
+            Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
         }
     }
 
-    /// Get the dimension. Panics on non-scalar values.
-    #[must_use]
-    pub fn dimension(&self) -> Dimension {
+    /// Get the SI value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError`] if this is not a `Scalar`.
+    pub fn si_value(&self) -> Result<f64, ValueError> {
         match self {
-            Self::Scalar { dimension, .. } => dimension.clone(),
-            Self::Bool(_) => panic!("called dimension() on Bool"),
-            Self::Int(_) => panic!("called dimension() on Int"),
-            Self::Struct { type_name, .. } => {
-                panic!("called dimension() on struct `{type_name}`")
-            }
-            Self::Indexed { index_name, .. } => {
-                panic!("called dimension() on indexed value `{index_name}[...]`")
-            }
+            Self::Scalar { si_value, .. } => Ok(*si_value),
+            other => Err(ValueError {
+                actual: other.variant_description(),
+            }),
+        }
+    }
+
+    /// Get the dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError`] if this is not a `Scalar`.
+    pub fn dimension(&self) -> Result<Dimension, ValueError> {
+        match self {
+            Self::Scalar { dimension, .. } => Ok(dimension.clone()),
+            other => Err(ValueError {
+                actual: other.variant_description(),
+            }),
         }
     }
 
     /// Get the value formatted for display: in display units if available, otherwise SI.
-    #[must_use]
-    pub fn display_value(&self) -> f64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError`] if this is not a `Scalar`.
+    pub fn display_value(&self) -> Result<f64, ValueError> {
         match self {
             Self::Scalar {
                 si_value,
                 display_unit,
                 ..
-            } => display_unit
+            } => Ok(display_unit
                 .as_ref()
-                .map_or(*si_value, |du| *si_value / du.scale),
-            Self::Bool(_) => panic!("called display_value() on Bool"),
-            Self::Int(_) => panic!("called display_value() on Int"),
-            Self::Struct { type_name, .. } => {
-                panic!("called display_value() on struct `{type_name}`")
-            }
-            Self::Indexed { index_name, .. } => {
-                panic!("called display_value() on indexed value `{index_name}[...]`")
-            }
+                .map_or(*si_value, |du| *si_value / du.scale)),
+            other => Err(ValueError {
+                actual: other.variant_description(),
+            }),
         }
     }
 
@@ -830,7 +843,7 @@ fn runtime_to_value(
             }
         }
         RuntimeValue::RangeLabel { .. } => {
-            panic!("RangeLabel should not appear in final values")
+            unreachable!("RangeLabel should not appear in final values")
         }
     }
 }
@@ -919,8 +932,12 @@ fn eval_unfold(
             },
         );
 
-        let prev_value = idx_def.step_value(i - 1);
-        let curr_value = idx_def.step_value(i);
+        let prev_value = idx_def
+            .step_value(i - 1)
+            .expect("unfold only applies to range indexes");
+        let curr_value = idx_def
+            .step_value(i)
+            .expect("unfold only applies to range indexes");
 
         let mut scan_locals = HashMap::new();
         scan_locals.insert(
@@ -1434,7 +1451,9 @@ fn extract_flat_display_unit(
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
 fn format_range_step(idx_def: &crate::registry::IndexDef, step_index: usize) -> String {
-    let si_value = idx_def.step_value(step_index);
+    let si_value = idx_def
+        .step_value(step_index)
+        .expect("format_range_step called on range index");
     if let crate::registry::IndexKind::Range {
         display_label,
         display_scale,
@@ -1529,7 +1548,7 @@ mod tests {
     fn find_value(result: &EvalResult, name: &str) -> f64 {
         // Check consts first (they are not wrapped in Result)
         if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
-            return val.si_value();
+            return val.si_value().unwrap();
         }
         // Check params and nodes (wrapped in Result)
         result
@@ -1542,6 +1561,7 @@ mod tests {
             .as_ref()
             .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
             .si_value()
+            .unwrap()
     }
 
     #[test]
@@ -1746,7 +1766,7 @@ mod tests {
             speed_kmh_val.display_label(&result.base_dim_symbols),
             Some("km/hour".to_string())
         );
-        let display_kmh = speed_kmh_val.display_value();
+        let display_kmh = speed_kmh_val.display_value().unwrap();
         let expected_kmh = expected_speed / (1000.0 / 3600.0);
         assert!(
             (display_kmh - expected_kmh).abs() < 0.01,
@@ -1785,7 +1805,7 @@ mod tests {
             tof_val.display_label(&result.base_dim_symbols),
             Some("hour".to_string())
         );
-        let tof_display = tof_val.display_value();
+        let tof_display = tof_val.display_value().unwrap();
         assert!(
             tof_display > 5.0 && tof_display < 6.0,
             "tof display = {tof_display} hours"
@@ -1902,7 +1922,7 @@ mod tests {
             } => {
                 assert_eq!(type_name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 3);
-                let total_dv = fields["total_dv"].si_value();
+                let total_dv = fields["total_dv"].si_value().unwrap();
                 assert!(
                     total_dv > 3900.0 && total_dv < 4000.0,
                     "total_dv = {total_dv}"
@@ -1930,7 +1950,7 @@ mod tests {
         match value {
             Value::Indexed { entries, .. } => entries
                 .iter()
-                .map(|(k, v)| (k.as_str(), v.si_value()))
+                .map(|(k, v)| (k.as_str(), v.si_value().unwrap()))
                 .collect(),
             _ => panic!("expected indexed value, got {value:?}"),
         }
@@ -2466,7 +2486,7 @@ mod tests {
                     .unwrap().1;
                 match z_result {
                     Ok(val) => {
-                        let z = val.si_value();
+                        let z = val.si_value().unwrap();
                         prop_assert!(z.is_finite(), "division produced non-finite: {z}");
                     }
                     Err(NodeError::EvalFailed { message }) => {

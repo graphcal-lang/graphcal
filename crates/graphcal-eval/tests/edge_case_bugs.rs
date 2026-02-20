@@ -25,7 +25,7 @@ use proptest::prelude::*;
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
-        return val.si_value();
+        return val.si_value().unwrap();
     }
     result
         .params
@@ -37,6 +37,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .si_value()
+        .unwrap()
 }
 
 /// Find the Int value of a named declaration.
