@@ -519,16 +519,18 @@ fn collect_imported_definitions(
             });
             let source = loaded_file.source.to_string();
 
-            for use_item in &use_decl.names {
-                if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
-                    result.insert(
-                        use_item.name.name.clone(),
-                        ImportedDefinition {
-                            uri: imported_uri.clone(),
-                            source: source.clone(),
-                            definition: def,
-                        },
-                    );
+            if let graphcal_syntax::ast::UseKind::Selective(names) = &use_decl.kind {
+                for use_item in names {
+                    if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
+                        result.insert(
+                            use_item.name.name.clone(),
+                            ImportedDefinition {
+                                uri: imported_uri.clone(),
+                                source: source.clone(),
+                                definition: def,
+                            },
+                        );
+                    }
                 }
             }
         }

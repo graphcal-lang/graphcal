@@ -447,24 +447,33 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
     }
 }
 
-/// `use "path" { name1, name2 };`
+/// `use "path" { name1, name2 };` or `use "path";` or `use "path" as alias;`
 fn format_use_decl(_fmt: &Formatter<'_>, d: &UseDecl) -> RcDoc<'static> {
-    let name_docs: Vec<RcDoc<'static>> = d
-        .names
-        .iter()
-        .map(|item| {
-            let mut doc = RcDoc::text(item.name.name.clone());
-            if let Some(ref alias) = item.alias {
-                doc = doc
-                    .append(RcDoc::text(" as "))
-                    .append(RcDoc::text(alias.name.clone()));
-            }
-            doc
-        })
-        .collect();
-    RcDoc::text(format!("use \"{}\" {{ ", d.path))
-        .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(" };"))
+    match &d.kind {
+        graphcal_syntax::ast::UseKind::Selective(names) => {
+            let name_docs: Vec<RcDoc<'static>> = names
+                .iter()
+                .map(|item| {
+                    let mut doc = RcDoc::text(item.name.name.clone());
+                    if let Some(ref alias) = item.alias {
+                        doc = doc
+                            .append(RcDoc::text(" as "))
+                            .append(RcDoc::text(alias.name.clone()));
+                    }
+                    doc
+                })
+                .collect();
+            RcDoc::text(format!("use \"{}\" {{ ", d.path))
+                .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(" };"))
+        }
+        graphcal_syntax::ast::UseKind::Module { alias: None } => {
+            RcDoc::text(format!("use \"{}\";", d.path))
+        }
+        graphcal_syntax::ast::UseKind::Module { alias: Some(a) } => {
+            RcDoc::text(format!("use \"{}\" as {};", d.path, a.name))
+        }
+    }
 }
 
 /// `assert name = expr;`
@@ -592,7 +601,13 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value.as_str())),
+        ExprKind::QualifiedGraphRef { module, name } => {
+            RcDoc::text(format!("@{}::{}", module.name.as_str(), name.value.as_str()))
+        }
         ExprKind::ConstRef(name) => RcDoc::text(name.value.as_str().to_string()),
+        ExprKind::QualifiedConstRef { module, name } => {
+            RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
+        }
         ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -607,6 +622,15 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             let sep = RcDoc::text(",").append(RcDoc::line());
             let inner = RcDoc::intersperse(arg_docs, sep);
             RcDoc::text(name.value.as_str().to_string())
+                .append(RcDoc::text("("))
+                .append(inner.nest(INDENT).group())
+                .append(RcDoc::text(")"))
+        }
+        ExprKind::QualifiedFnCall { module, name, args } => {
+            let arg_docs: Vec<RcDoc<'static>> = args.iter().map(|a| format_expr(fmt, a)).collect();
+            let sep = RcDoc::text(",").append(RcDoc::line());
+            let inner = RcDoc::intersperse(arg_docs, sep);
+            RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
                 .append(RcDoc::text("("))
                 .append(inner.nest(INDENT).group())
                 .append(RcDoc::text(")"))

@@ -663,7 +663,7 @@ fn infer_type(
             Ok(InferredType::Scalar(dim))
         }
 
-        ExprKind::ConstRef(ident) => {
+        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
             let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownConstRef {
                     name: ident.value.clone(),
@@ -674,7 +674,7 @@ fn infer_type(
             Ok(declared_to_inferred(dt))
         }
 
-        ExprKind::GraphRef(ident) => {
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownGraphRef {
                     name: ident.value.clone(),
@@ -960,7 +960,7 @@ fn infer_type(
             }
         }
 
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
             if matches!(
                 name.value.as_str(),

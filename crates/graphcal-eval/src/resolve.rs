@@ -496,15 +496,18 @@ fn is_lower_snake_case(s: &str) -> bool {
 /// Check that an expression contains no `@` references (for const expressions).
 fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<(), GraphcalError> {
     match &expr.kind {
-        ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInConst {
-            name: ident.value.clone(),
-            src: src.clone(),
-            span: expr.span.into(),
-        }),
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
+            Err(GraphcalError::GraphRefInConst {
+                name: ident.value.clone(),
+                src: src.clone(),
+                span: expr.span.into(),
+            })
+        }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
@@ -513,7 +516,7 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(rhs, src)
         }
         ExprKind::UnaryOp { operand, .. } => check_no_graph_refs(operand, src),
-        ExprKind::FnCall { args, .. } => {
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
             for arg in args {
                 check_no_graph_refs(arg, src)?;
             }
@@ -601,16 +604,19 @@ fn check_no_graph_refs_in_fn_expr(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        ExprKind::GraphRef(ident) => Err(GraphcalError::GraphRefInFn {
-            name: ident.value.clone(),
-            src: src.clone(),
-            span: expr.span.into(),
-            help: format!("pass `{fn_name}` as a function parameter instead"),
-        }),
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
+            Err(GraphcalError::GraphRefInFn {
+                name: ident.value.clone(),
+                src: src.clone(),
+                span: expr.span.into(),
+                help: format!("pass `{fn_name}` as a function parameter instead"),
+            })
+        }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
@@ -619,7 +625,7 @@ fn check_no_graph_refs_in_fn_expr(
             check_no_graph_refs_in_fn_expr(rhs, fn_name, src)
         }
         ExprKind::UnaryOp { operand, .. } => check_no_graph_refs_in_fn_expr(operand, fn_name, src),
-        ExprKind::FnCall { args, .. } => {
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
             for arg in args {
                 check_no_graph_refs_in_fn_expr(arg, fn_name, src)?;
             }
@@ -691,7 +697,7 @@ fn check_no_assert_graph_refs(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        ExprKind::GraphRef(ident) => {
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             if assert_names.contains(ident.value.as_str()) {
                 return Err(GraphcalError::GraphRefToAssert {
                     name: ident.value.clone(),
@@ -705,6 +711,7 @@ fn check_no_assert_graph_refs(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
@@ -713,7 +720,7 @@ fn check_no_assert_graph_refs(
             check_no_assert_graph_refs(rhs, assert_names, src)
         }
         ExprKind::UnaryOp { operand, .. } => check_no_assert_graph_refs(operand, assert_names, src),
-        ExprKind::FnCall { args, .. } => {
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
             for arg in args {
                 check_no_assert_graph_refs(arg, assert_names, src)?;
             }
@@ -818,15 +825,17 @@ fn collect_const_refs(
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
-        ExprKind::GraphRef(ident) => Err(GraphcalError::EvalError {
-            message: format!(
-                "internal: graph reference `@{}` found in const expression",
-                ident.value
-            ),
-            src: src.clone(),
-            span: expr.span.into(),
-        }),
-        ExprKind::ConstRef(ident) => {
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
+            Err(GraphcalError::EvalError {
+                message: format!(
+                    "internal: graph reference `@{}` found in const expression",
+                    ident.value
+                ),
+                src: src.clone(),
+                span: expr.span.into(),
+            })
+        }
+        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
             if builtin_consts.contains_key(ident.value.as_str()) {
                 Ok(())
             } else if all_const_names.contains(ident.value.as_str()) {
@@ -840,7 +849,7 @@ fn collect_const_refs(
                 })
             }
         }
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
@@ -1154,7 +1163,7 @@ fn collect_all_refs(
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
-        ExprKind::GraphRef(ident) => {
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             if all_runtime_names.contains(ident.value.as_str()) {
                 graph_refs.insert(ident.value.to_string());
                 Ok(())
@@ -1166,7 +1175,7 @@ fn collect_all_refs(
                 })
             }
         }
-        ExprKind::ConstRef(ident) => {
+        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
             if builtin_consts.contains_key(ident.value.as_str()) {
                 Ok(())
             } else if all_const_names.contains(ident.value.as_str()) {
@@ -1180,7 +1189,7 @@ fn collect_all_refs(
                 })
             }
         }
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
@@ -1493,7 +1502,7 @@ pub fn collect_graph_refs(
     refs: &mut HashSet<String>,
 ) {
     match &expr.kind {
-        ExprKind::GraphRef(ident) => {
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             if all_runtime_names.contains(ident.value.as_str()) {
                 refs.insert(ident.value.to_string());
             }
@@ -1505,7 +1514,7 @@ pub fn collect_graph_refs(
         ExprKind::UnaryOp { operand, .. } => {
             collect_graph_refs(operand, all_runtime_names, refs);
         }
-        ExprKind::FnCall { args, .. } => {
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
             for arg in args {
                 collect_graph_refs(arg, all_runtime_names, refs);
             }
@@ -1568,6 +1577,7 @@ pub fn collect_graph_refs(
         | ExprKind::Bool(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => {}
     }

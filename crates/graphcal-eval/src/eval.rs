@@ -307,7 +307,11 @@ fn lower_project_to_ir(
 
             let imported_file = &project.files[&import_canonical];
 
-            for use_item in &use_decl.names {
+            let graphcal_syntax::ast::UseKind::Selective(names) = &use_decl.kind else {
+                // Module imports are handled in a separate pass (not yet implemented).
+                continue;
+            };
+            for use_item in names {
                 let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
                 let local_name = use_item.local_name().to_string();
 

@@ -538,6 +538,58 @@ impl<'src> Parser<'src> {
             }
         };
 
+        // Determine the kind of import based on the next token:
+        //   `{`  → selective import (existing)
+        //   `as` → module import with alias
+        //   `;`  → module import with name derived from filename
+        let (kind, end_span) = match self.lexer.peek() {
+            Some(Token::LBrace) => {
+                let names = self.parse_use_selective_body()?;
+                let (_, end_span) = self.expect(Token::Semicolon)?;
+                (crate::ast::UseKind::Selective(names), end_span)
+            }
+            Some(Token::As) => {
+                self.lexer.next_token(); // consume `as`
+                let alias = self.parse_any_ident()?;
+                let (_, end_span) = self.expect(Token::Semicolon)?;
+                (
+                    crate::ast::UseKind::Module {
+                        alias: Some(alias),
+                    },
+                    end_span,
+                )
+            }
+            Some(Token::Semicolon) => {
+                let (_, end_span) = self.expect(Token::Semicolon)?;
+                (crate::ast::UseKind::Module { alias: None }, end_span)
+            }
+            Some(tok) => {
+                let tok_str = tok.to_string();
+                let (_, span) = self.advance()?;
+                return Err(
+                    self.unexpected_token("`{`, `as`, or `;` after path", &tok_str, span)
+                );
+            }
+            None => {
+                return Err(self.unexpected_eof("`{`, `as`, or `;` after path"));
+            }
+        };
+
+        let span = start_span.merge(end_span);
+
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Use(crate::ast::UseDecl {
+                path,
+                path_span,
+                kind,
+            }),
+            span,
+        })
+    }
+
+    /// Parse the `{ name1, name2 as alias, ... }` body of a selective import.
+    fn parse_use_selective_body(&mut self) -> Result<Vec<crate::ast::UseItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
         let mut names = Vec::new();
@@ -598,18 +650,7 @@ impl<'src> Parser<'src> {
         }
 
         self.expect(Token::RBrace)?;
-        let (_, end_span) = self.expect(Token::Semicolon)?;
-        let span = start_span.merge(end_span);
-
-        Ok(Declaration {
-            attributes: vec![],
-            kind: DeclKind::Use(crate::ast::UseDecl {
-                path,
-                path_span,
-                names,
-            }),
-            span,
-        })
+        Ok(names)
     }
 
     // --- index declaration ---
@@ -1578,11 +1619,26 @@ impl<'src> Parser<'src> {
                 let (_, at_span) = self.advance()?;
                 let ident =
                     self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
-                let span = at_span.merge(ident.span);
-                Ok(Expr {
-                    kind: ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
-                    span,
-                })
+                // Check for module-qualified graph ref: @module::name
+                if self.lexer.peek() == Some(&Token::ColonColon) {
+                    self.lexer.next_token(); // consume '::'
+                    let member =
+                        self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                    let span = at_span.merge(member.span);
+                    Ok(Expr {
+                        kind: ExprKind::QualifiedGraphRef {
+                            module: ident,
+                            name: member.into_spanned::<DeclName>(),
+                        },
+                        span,
+                    })
+                } else {
+                    let span = at_span.merge(ident.span);
+                    Ok(Expr {
+                        kind: ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
+                        span,
+                    })
+                }
             }
             Some(Token::Ident) => {
                 let (_, span) = self.advance()?;
@@ -1631,6 +1687,62 @@ impl<'src> Parser<'src> {
                         },
                         span,
                     })
+                } else if is_lower_snake_case(&name)
+                    && self.lexer.peek() == Some(&Token::ColonColon)
+                {
+                    // Module-qualified reference: module::CONST or module::fn(args)
+                    self.lexer.next_token(); // consume '::'
+                    let member_ident = self.parse_any_ident()?;
+                    let member = member_ident.name.clone();
+                    if is_upper_snake_case(&member) {
+                        // module::CONST_NAME
+                        let full_span = span.merge(member_ident.span);
+                        Ok(Expr {
+                            kind: ExprKind::QualifiedConstRef {
+                                module: Ident {
+                                    name,
+                                    span,
+                                },
+                                name: Spanned::new(DeclName::new(member), member_ident.span),
+                            },
+                            span: full_span,
+                        })
+                    } else if is_lower_snake_case(&member)
+                        && self.lexer.peek() == Some(&Token::LParen)
+                    {
+                        // module::fn_name(args...)
+                        self.lexer.next_token(); // consume '('
+                        let mut args = Vec::new();
+                        if self.lexer.peek() != Some(&Token::RParen) {
+                            args.push(self.parse_expr()?);
+                            while self.lexer.peek() == Some(&Token::Comma) {
+                                self.lexer.next_token();
+                                if self.lexer.peek() == Some(&Token::RParen) {
+                                    break; // trailing comma
+                                }
+                                args.push(self.parse_expr()?);
+                            }
+                        }
+                        let (_, rparen_span) = self.expect(Token::RParen)?;
+                        let call_span = span.merge(rparen_span);
+                        Ok(Expr {
+                            kind: ExprKind::QualifiedFnCall {
+                                module: Ident {
+                                    name,
+                                    span,
+                                },
+                                name: Spanned::new(FnName::new(member), member_ident.span),
+                                args,
+                            },
+                            span: call_span,
+                        })
+                    } else {
+                        Err(self.unexpected_token(
+                            "a CONST_NAME or function_name after `::`",
+                            &member,
+                            member_ident.span,
+                        ))
+                    }
                 } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
                     // Scan expression: scan(source, init, |acc, val| body)
                     self.parse_scan(&Ident { name, span })
@@ -4315,13 +4427,16 @@ param alt: Length = 400.0 km;
             panic!("expected Use");
         };
         assert_eq!(u.path, "./helper.gcl");
-        assert_eq!(u.names.len(), 2);
-        assert_eq!(u.names[0].name.name, "x");
-        assert!(u.names[0].alias.is_none());
-        assert_eq!(u.names[0].local_name(), "x");
-        assert_eq!(u.names[1].name.name, "Y");
-        assert!(u.names[1].alias.is_none());
-        assert_eq!(u.names[1].local_name(), "Y");
+        let crate::ast::UseKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].name.name, "x");
+        assert!(names[0].alias.is_none());
+        assert_eq!(names[0].local_name(), "x");
+        assert_eq!(names[1].name.name, "Y");
+        assert!(names[1].alias.is_none());
+        assert_eq!(names[1].local_name(), "Y");
     }
 
     #[test]
@@ -4332,10 +4447,13 @@ param alt: Length = 400.0 km;
         let DeclKind::Use(u) = &file.declarations[0].kind else {
             panic!("expected Use");
         };
-        assert_eq!(u.names.len(), 1);
-        assert_eq!(u.names[0].name.name, "x");
-        assert_eq!(u.names[0].alias.as_ref().unwrap().name, "y");
-        assert_eq!(u.names[0].local_name(), "y");
+        let crate::ast::UseKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name.name, "x");
+        assert_eq!(names[0].alias.as_ref().unwrap().name, "y");
+        assert_eq!(names[0].local_name(), "y");
     }
 
     #[test]
@@ -4346,20 +4464,136 @@ param alt: Length = 400.0 km;
         let DeclKind::Use(u) = &file.declarations[0].kind else {
             panic!("expected Use");
         };
-        assert_eq!(u.names.len(), 3);
-        assert_eq!(u.names[0].name.name, "x");
-        assert!(u.names[0].alias.is_none());
-        assert_eq!(u.names[1].name.name, "Y");
-        assert_eq!(u.names[1].alias.as_ref().unwrap().name, "Z");
-        assert_eq!(u.names[1].local_name(), "Z");
-        assert_eq!(u.names[2].name.name, "w");
-        assert!(u.names[2].alias.is_none());
+        let crate::ast::UseKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0].name.name, "x");
+        assert!(names[0].alias.is_none());
+        assert_eq!(names[1].name.name, "Y");
+        assert_eq!(names[1].alias.as_ref().unwrap().name, "Z");
+        assert_eq!(names[1].local_name(), "Z");
+        assert_eq!(names[2].name.name, "w");
+        assert!(names[2].alias.is_none());
     }
 
     #[test]
     fn parse_use_alias_missing_name_error() {
         let result = Parser::new(r#"use "./f.gcl" { x as };"#).parse_file();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_use_module_bare() {
+        let file = Parser::new(r#"use "./constants.gcl";"#)
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        let DeclKind::Use(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./constants.gcl");
+        let crate::ast::UseKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert!(alias.is_none());
+    }
+
+    #[test]
+    fn parse_use_module_with_alias() {
+        let file = Parser::new(r#"use "./constants.gcl" as consts;"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Use(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./constants.gcl");
+        let crate::ast::UseKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert_eq!(alias.as_ref().unwrap().name, "consts");
+    }
+
+    #[test]
+    fn parse_use_module_missing_alias_ident_error() {
+        let result = Parser::new(r#"use "./f.gcl" as;"#).parse_file();
+        assert!(result.is_err());
+    }
+
+    // --- Qualified reference tests ---
+
+    #[test]
+    fn parse_qualified_graph_ref() {
+        let file = Parser::new("node x: Dimensionless = @params::dry_mass;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedGraphRef { module, name } => {
+                assert_eq!(module.name, "params");
+                assert_eq!(name.value.as_str(), "dry_mass");
+            }
+            other => panic!("expected QualifiedGraphRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_const_ref() {
+        let file = Parser::new("node x: Dimensionless = constants::G0;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedConstRef { module, name } => {
+                assert_eq!(module.name, "constants");
+                assert_eq!(name.value.as_str(), "G0");
+            }
+            other => panic!("expected QualifiedConstRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_fn_call() {
+        let file = Parser::new("node x: Dimensionless = lib::compute(1.0, 2.0);")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedFnCall { module, name, args } => {
+                assert_eq!(module.name, "lib");
+                assert_eq!(name.value.as_str(), "compute");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected QualifiedFnCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_fn_call_no_args() {
+        let file = Parser::new("node x: Dimensionless = lib::get_value();")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedFnCall { module, name, args } => {
+                assert_eq!(module.name, "lib");
+                assert_eq!(name.value.as_str(), "get_value");
+                assert_eq!(args.len(), 0);
+            }
+            other => panic!("expected QualifiedFnCall, got {other:?}"),
+        }
     }
 
     // --- Attribute tests ---
