@@ -45,7 +45,7 @@ fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
             continue;
         }
         // Skip builtins.
-        if def.name_span.len == 0 {
+        if def.name_span.is_empty() {
             continue;
         }
         items.push(CompletionItem {
@@ -89,7 +89,7 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
 
     for def in analysis.symbol_table.definitions.values() {
         // Skip builtins.
-        if def.name_span.len == 0 {
+        if def.name_span.is_empty() {
             continue;
         }
         match def.category {

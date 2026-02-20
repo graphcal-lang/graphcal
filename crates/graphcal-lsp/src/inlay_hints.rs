@@ -25,12 +25,12 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
         }
 
         // Skip builtins and synthetic definitions.
-        if def.name_span.len == 0 {
+        if def.name_span.is_empty() {
             continue;
         }
 
         // Check if the definition is within the requested range.
-        let name_pos = byte_offset_to_position(source, def.name_span.offset);
+        let name_pos = byte_offset_to_position(source, def.name_span.offset());
         if name_pos.line < range.start.line || name_pos.line > range.end.line {
             continue;
         }
@@ -46,7 +46,7 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
 
         // Position the hint after the declaration name.
         let hint_position =
-            byte_offset_to_position(source, def.name_span.offset + def.name_span.len);
+            byte_offset_to_position(source, def.name_span.offset() + def.name_span.len());
 
         hints.push(InlayHint {
             position: hint_position,

@@ -2264,7 +2264,7 @@ impl<'src> Parser<'src> {
     /// Scans the raw source after the ident span to find `<` (skipping whitespace).
     fn is_lt_after_ident(&self, ident_span: Span) -> bool {
         let bytes = self.source.as_bytes();
-        let mut pos = ident_span.offset + ident_span.len;
+        let mut pos = ident_span.offset() + ident_span.len();
         while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
             pos += 1;
         }
@@ -2282,7 +2282,7 @@ impl<'src> Parser<'src> {
             return false;
         };
         let bytes = self.source.as_bytes();
-        let mut pos = lt_span.offset + lt_span.len; // byte after `<`
+        let mut pos = lt_span.offset() + lt_span.len(); // byte after `<`
         let mut depth: usize = 1;
         while pos < bytes.len() {
             match bytes[pos] {
@@ -4978,6 +4978,6 @@ param alt: Length = 400.0 km;
             .parse_file()
             .unwrap();
         // Declaration span should start at '#' (offset 0), not at 'node'
-        assert_eq!(file.declarations[0].span.offset, 0);
+        assert_eq!(file.declarations[0].span.offset(), 0);
     }
 }

@@ -43,7 +43,7 @@ fn token_index_at(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
     // Find the last token whose start is <= offset.
     let mut result = None;
     for (i, (_, span)) in tokens.iter().enumerate() {
-        if span.offset <= offset {
+        if span.offset() <= offset {
             result = Some(i);
         } else {
             break;
@@ -69,7 +69,7 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
     // Determine where to start: if the cursor is inside a token that starts
     // before offset, start from that token. Otherwise skip tokens that start
     // at exactly offset (cursor is right before them).
-    let scan_start = if tokens[start_idx].1.offset + tokens[start_idx].1.len > offset {
+    let scan_start = if tokens[start_idx].1.offset() + tokens[start_idx].1.len() > offset {
         // Cursor is inside this token — don't count it as a delimiter.
         if start_idx == 0 {
             return None;
@@ -91,8 +91,9 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                     if i > 0
                         && let (Token::Ident, name_span) = &tokens[i - 1]
                     {
-                        let fn_name =
-                            source[name_span.offset..name_span.offset + name_span.len].to_string();
+                        let fn_name = source
+                            [name_span.offset()..name_span.offset() + name_span.len()]
+                            .to_string();
                         return Some(FnCallContext {
                             fn_name,
                             active_param: comma_count,
@@ -170,7 +171,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 fn find_preceding_token(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
     let mut result = None;
     for (i, (_, span)) in tokens.iter().enumerate() {
-        match span.offset.cmp(&offset) {
+        match span.offset().cmp(&offset) {
             std::cmp::Ordering::Less => {
                 result = Some(i);
             }

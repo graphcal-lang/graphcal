@@ -70,9 +70,9 @@ impl SymbolTable {
         let idx = self
             .references
             .binary_search_by(|r| {
-                if offset < r.span.offset {
+                if offset < r.span.offset() {
                     std::cmp::Ordering::Greater
-                } else if offset >= r.span.offset + r.span.len {
+                } else if offset >= r.span.offset() + r.span.len() {
                     std::cmp::Ordering::Less
                 } else {
                     std::cmp::Ordering::Equal
@@ -84,9 +84,9 @@ impl SymbolTable {
 
     /// Find the definition whose name span contains the given byte offset, if any.
     pub fn find_definition_at(&self, offset: usize) -> Option<&DefinitionInfo> {
-        self.definitions
-            .values()
-            .find(|d| offset >= d.name_span.offset && offset < d.name_span.offset + d.name_span.len)
+        self.definitions.values().find(|d| {
+            offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len()
+        })
     }
 
     /// Find all references that point to the given target name.
@@ -460,7 +460,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
     }
 
     // Sort references by offset for binary search.
-    table.references.sort_by_key(|r| r.span.offset);
+    table.references.sort_by_key(|r| r.span.offset());
     table
 }
 
@@ -531,7 +531,7 @@ fn collect_expr_refs(
         }
         ExprKind::Block { stmts, expr } => {
             scopes.push();
-            let scope_prefix = format!("block@{}", expr.span.offset);
+            let scope_prefix = format!("block@{}", expr.span.offset());
             for stmt in stmts {
                 collect_expr_refs(&stmt.value, table, scopes);
                 let lname = stmt.name.name.clone();
@@ -614,7 +614,7 @@ fn collect_expr_refs(
                     target: binding.index.value.to_string(),
                 });
                 let var_name = binding.var.name.clone();
-                let key = format!("for@{}::{var_name}", binding.var.span.offset);
+                let key = format!("for@{}::{var_name}", binding.var.span.offset());
                 table.definitions.insert(
                     key.clone(),
                     DefinitionInfo {
@@ -668,8 +668,8 @@ fn collect_expr_refs(
             collect_expr_refs(source, table, scopes);
             collect_expr_refs(init, table, scopes);
             scopes.push();
-            let acc_key = format!("scan@{}::acc", expr.span.offset);
-            let val_key = format!("scan@{}::val", expr.span.offset);
+            let acc_key = format!("scan@{}::acc", expr.span.offset());
+            let val_key = format!("scan@{}::val", expr.span.offset());
             table.definitions.insert(
                 acc_key.clone(),
                 DefinitionInfo {
@@ -705,8 +705,8 @@ fn collect_expr_refs(
         } => {
             collect_expr_refs(init, table, scopes);
             scopes.push();
-            let prev_key = format!("unfold@{}::prev", expr.span.offset);
-            let curr_key = format!("unfold@{}::curr", expr.span.offset);
+            let prev_key = format!("unfold@{}::prev", expr.span.offset());
+            let curr_key = format!("unfold@{}::curr", expr.span.offset());
             table.definitions.insert(
                 prev_key.clone(),
                 DefinitionInfo {
@@ -779,7 +779,7 @@ fn collect_expr_refs(
                                 span: field.span,
                                 target: format!("field::{}", field.value),
                             });
-                            let var_key = format!("match@{}::{}", arm.span.offset, var.name);
+                            let var_key = format!("match@{}::{}", arm.span.offset(), var.name);
                             table.definitions.insert(
                                 var_key.clone(),
                                 DefinitionInfo {

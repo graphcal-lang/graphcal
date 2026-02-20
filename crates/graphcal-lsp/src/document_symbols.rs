@@ -17,7 +17,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     for def in analysis.symbol_table.definitions.values() {
         // Skip builtins, locals, and variants (variants are shown as children).
         // Also skip definitions with zero-length spans (synthetic/builtins).
-        if def.decl_span.len == 0 {
+        if def.decl_span.is_empty() {
             continue;
         }
 

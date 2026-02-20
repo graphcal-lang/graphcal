@@ -50,8 +50,8 @@ pub fn eval_result_to_diagnostics(
             ),
         };
 
-        let start = byte_offset_to_position(source, span.offset);
-        let end = byte_offset_to_position(source, span.offset + span.len);
+        let start = byte_offset_to_position(source, span.offset());
+        let end = byte_offset_to_position(source, span.offset() + span.len());
 
         diagnostics.push(Diagnostic {
             range: Range { start, end },

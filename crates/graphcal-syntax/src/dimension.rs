@@ -7,8 +7,8 @@ use std::hash::{Hash, Hasher};
 /// Always stored in reduced form with `den > 0`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rational {
-    pub num: i32,
-    pub den: i32,
+    num: i32,
+    den: i32,
 }
 
 impl fmt::Debug for Rational {
@@ -64,6 +64,18 @@ impl Rational {
         } else {
             Self { num: n, den: 1 }
         }
+    }
+
+    /// Returns the numerator.
+    #[must_use]
+    pub const fn num(self) -> i32 {
+        self.num
+    }
+
+    /// Returns the denominator (always positive).
+    #[must_use]
+    pub const fn den(self) -> i32 {
+        self.den
     }
 
     #[must_use]
@@ -248,7 +260,7 @@ impl Dimension {
 
         // Positive exponents (numerator)
         for (&id, &exp) in &self.exponents {
-            if exp.num <= 0 {
+            if exp.num() <= 0 {
                 continue;
             }
             if !first {
@@ -267,7 +279,7 @@ impl Dimension {
 
         // Negative exponents (denominator)
         for (&id, &exp) in &self.exponents {
-            if exp.num >= 0 {
+            if exp.num() >= 0 {
                 continue;
             }
             let symbol = symbols
@@ -310,7 +322,7 @@ impl fmt::Display for DimensionDisplay<'_> {
 
         // Positive exponents first (numerator part)
         for (&id, &exp) in &self.dim.exponents {
-            if exp.num <= 0 {
+            if exp.num() <= 0 {
                 continue;
             }
             if !first {
@@ -329,7 +341,7 @@ impl fmt::Display for DimensionDisplay<'_> {
 
         // Negative exponents (denominator part)
         for (&id, &exp) in &self.dim.exponents {
-            if exp.num >= 0 {
+            if exp.num() >= 0 {
                 continue;
             }
             let name = self
@@ -668,13 +680,13 @@ mod tests {
                 prop_assume!(d != 0);
                 let r = Rational::new(n, d);
                 // den is always positive
-                prop_assert!(r.den > 0, "den must be positive, got {}", r.den);
+                prop_assert!(r.den() > 0, "den must be positive, got {}", r.den());
                 // gcd(|num|, den) == 1 (reduced form)
-                if r.num != 0 {
-                    let g = gcd(r.num.unsigned_abs(), r.den.unsigned_abs());
-                    prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num, r.den);
+                if r.num() != 0 {
+                    let g = gcd(r.num().unsigned_abs(), r.den().unsigned_abs());
+                    prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num(), r.den());
                 } else {
-                    prop_assert_eq!(r.den, 1, "zero should have den=1, got {}", r.den);
+                    prop_assert_eq!(r.den(), 1, "zero should have den=1, got {}", r.den());
                 }
             }
 

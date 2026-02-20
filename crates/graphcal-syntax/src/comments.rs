@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(meta.comments.len(), 1);
         assert_eq!(meta.comments[0].kind, CommentKind::Line);
         assert_eq!(meta.comments[0].text, "// hello world");
-        assert_eq!(meta.comments[0].span.offset, 0);
+        assert_eq!(meta.comments[0].span.offset(), 0);
     }
 
     #[test]
