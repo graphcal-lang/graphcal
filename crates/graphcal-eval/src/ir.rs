@@ -68,6 +68,7 @@ pub struct IR {
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
+#[cfg(test)]
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
     lower_with_imports(ast, src, &ImportedNames::default())
 }
