@@ -381,3 +381,10 @@ fn error_nested_indexed_map() {
     let rendered = render_error(source, "nested_indexed_map.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_table_row_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/table_row_mismatch.gcl");
+    let rendered = render_error(source, "table_row_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}

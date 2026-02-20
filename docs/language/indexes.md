@@ -94,6 +94,85 @@ Arguments:
 
 The result is an indexed value where each element is the accumulated result up to and including that element.
 
+## Multi-Indexed Values
+
+Values can be indexed by multiple indexes using tuple keys:
+
+```
+index Phase = { Launch, Cruise, Arrival }
+
+param spacecraft_mass: Mass[Phase, Maneuver] = {
+    (Phase::Launch, Maneuver::Departure): 5000.0 kg,
+    (Phase::Launch, Maneuver::Correction): 0.0 kg,
+    (Phase::Launch, Maneuver::Insertion): 0.0 kg,
+    (Phase::Cruise, Maneuver::Departure): 0.0 kg,
+    (Phase::Cruise, Maneuver::Correction): 4500.0 kg,
+    (Phase::Cruise, Maneuver::Insertion): 0.0 kg,
+    (Phase::Arrival, Maneuver::Departure): 0.0 kg,
+    (Phase::Arrival, Maneuver::Correction): 0.0 kg,
+    (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
+};
+```
+
+Access elements with multiple index arguments:
+
+```
+node launch_dep: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+```
+
+## Table Literals
+
+For multi-indexed values, the `table` expression provides a spreadsheet-like layout that is easier to read:
+
+### 1D Table
+
+```
+param delta_v: Velocity[Maneuver] = table[Maneuver] {
+    Departure:  2.46 km/s;
+    Correction: 0.12 km/s;
+    Insertion:  1.83 km/s;
+};
+```
+
+Labels in the table body are unqualified (`Departure` instead of `Maneuver::Departure`) since the index is declared in `table[...]`. Rows are terminated with `;`.
+
+### 2D Table
+
+```
+param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+    Departure, Correction, Insertion;
+    Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
+    Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
+    Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
+};
+```
+
+The last index becomes columns, the second-to-last becomes rows. The first row lists column headers, followed by data rows with `RowLabel: value, value, ...;`.
+
+### 3D+ Table
+
+For three or more indexes, use slice sections with qualified labels:
+
+```
+param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
+    [Time::T1]
+    Departure, Correction, Insertion;
+    Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
+    Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
+    Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
+
+    [Time::T2]
+    Departure, Correction, Insertion;
+    Launch:  4800.0 kg, 0.0 kg,    0.0 kg;
+    Cruise:     0.0 kg, 4300.0 kg, 0.0 kg;
+    Arrival:    0.0 kg, 0.0 kg,    3800.0 kg;
+};
+```
+
+Each `[SliceLabel]` section contains its own column header row and data rows. Slice labels use `Index::Variant` syntax.
+
+The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
+
 ## Range Indexes
 
 Range indexes generate labels from numeric stepping:

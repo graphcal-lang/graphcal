@@ -407,6 +407,7 @@ module.exports = grammar({
       $.for_expr,
       $.scan_expr,
       $.unfold_expr,
+      $.table_expr,
       $._postfix_expr,
     ),
 
@@ -612,6 +613,62 @@ module.exports = grammar({
       "|",
       field("body", $._expr),
       ")",
+    ),
+
+    // Table expression: table[Index1, Index2] { ... }
+    // Syntax sugar for map literals with spreadsheet-like layout
+    table_expr: $ => seq(
+      "table",
+      "[",
+      field("index", $.identifier),
+      repeat(seq(",", field("index", $.identifier))),
+      "]",
+      "{",
+      $.table_body,
+      "}",
+    ),
+
+    table_body: $ => choice(
+      // 3D+: slice sections
+      repeat1($.table_slice_section),
+      // 2D: header + data rows
+      $.table_single,
+      // 1D: data rows only
+      repeat1($.table_data_row_1d),
+    ),
+
+    table_slice_section: $ => seq(
+      "[",
+      $.qualified_variant,
+      repeat(seq(",", $.qualified_variant)),
+      "]",
+      $.table_single,
+    ),
+
+    table_single: $ => seq(
+      $.table_header_row,
+      repeat1($.table_data_row),
+    ),
+
+    table_header_row: $ => seq(
+      field("column", $.identifier),
+      repeat(seq(",", field("column", $.identifier))),
+      ";",
+    ),
+
+    table_data_row: $ => seq(
+      field("row_label", $.identifier),
+      ":",
+      field("value", $._expr),
+      repeat(seq(",", field("value", $._expr))),
+      ";",
+    ),
+
+    table_data_row_1d: $ => seq(
+      field("row_label", $.identifier),
+      ":",
+      field("value", $._expr),
+      ";",
     ),
 
     // Postfix expressions: field access, index access, function calls

@@ -2321,6 +2321,32 @@ mod tests {
         assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
     }
 
+    #[test]
+    fn eval_table_literal() {
+        let source = include_str!("../../../tests/fixtures/table_literal.gcl");
+        let result = compile_and_eval(source).unwrap();
+
+        // 1D table: delta_v should match delta_v_map
+        let dv = find_entry(&result, "delta_v");
+        let dv_map = find_entry(&result, "delta_v_map");
+        let dv_vals = indexed_si_values(&dv);
+        let dv_map_vals = indexed_si_values(&dv_map);
+        assert_eq!(dv_vals.len(), dv_map_vals.len());
+        for (a, b) in dv_vals.iter().zip(dv_map_vals.iter()) {
+            assert!((a.1 - b.1).abs() < f64::EPSILON, "{} != {}", a.1, b.1);
+        }
+
+        // Derived nodes work: total_dv = 2460 + 120 + 1830 = 4410 m/s
+        assert!((find_value(&result, "total_dv") - 4410.0).abs() < 0.01);
+
+        // Access specific 2D entry: launch_departure_mass = 5000 kg
+        assert!((find_value(&result, "launch_departure_mass") - 5000.0).abs() < 0.01);
+
+        // 3D table: access specific entries
+        assert!((find_value(&result, "nominal_launch_departure") - 5000.0).abs() < 0.01);
+        assert!((find_value(&result, "contingency_arrival_insertion") - 3800.0).abs() < 0.01);
+    }
+
     // --- Comparison and boolean operator tests ---
 
     #[test]
