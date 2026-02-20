@@ -100,6 +100,15 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Consume the next token, returning an error if the lexer is exhausted.
+    ///
+    /// Use this after `peek()` has confirmed `Some`.
+    fn advance(&mut self) -> Result<(Token, Span), ParseError> {
+        self.lexer
+            .next_token()
+            .ok_or_else(|| self.unexpected_eof("token"))
+    }
+
     /// Parse a single expression from the source string.
     ///
     /// Expects the entire input to be consumed; returns an error if there
@@ -151,7 +160,7 @@ impl<'src> Parser<'src> {
             Some(Token::Use) => self.parse_use_decl(),
             Some(Token::Assert) => self.parse_assert(),
             Some(_) => {
-                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(expected, &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof(expected)),
@@ -453,7 +462,7 @@ impl<'src> Parser<'src> {
             }
         }
         if fields.is_empty() {
-            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            let (tok, span) = self.advance()?;
             return Err(self.unexpected_token("at least one field", &tok.to_string(), span));
         }
         Ok(fields)
@@ -470,7 +479,7 @@ impl<'src> Parser<'src> {
             variants.push(self.parse_variant_decl()?);
         }
         if variants.is_empty() {
-            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            let (tok, span) = self.advance()?;
             return Err(self.unexpected_token("a variant declaration", &tok.to_string(), span));
         }
         Ok(variants)
@@ -637,7 +646,7 @@ impl<'src> Parser<'src> {
             if is_step {
                 self.lexer.next_token(); // consume "step"
             } else {
-                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (tok, span) = self.advance()?;
                 return Err(self.unexpected_token("`step`", &tok.to_string(), span));
             }
             self.expect(Token::Colon)?;
@@ -678,7 +687,7 @@ impl<'src> Parser<'src> {
         }
 
         if variants.is_empty() {
-            let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+            let (tok, span) = self.advance()?;
             return Err(self.unexpected_token("at least one variant", &tok.to_string(), span));
         }
 
@@ -883,7 +892,7 @@ impl<'src> Parser<'src> {
     fn parse_unit_scale(&mut self) -> Result<(f64, Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
                 let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
                     ParseError::InvalidNumber {
@@ -901,7 +910,7 @@ impl<'src> Parser<'src> {
                 // However, UnitDef.scale is f64 -- we need to handle this.
                 // For Phase 1, the only non-trivial case is `(PI / 180)`.
                 // We'll parse the paren expression, evaluate if it's a simple const expr.
-                let (_, lp_span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, lp_span) = self.advance()?;
                 let expr = self.parse_expr()?;
                 let (_, rp_span) = self.expect(Token::RParen)?;
                 let span = lp_span.merge(rp_span);
@@ -910,7 +919,7 @@ impl<'src> Parser<'src> {
                 Ok((scale, span))
             }
             Some(_) => {
-                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (tok, span) = self.advance()?;
                 Err(self.unexpected_token("number or `(`", &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof("number or `(`")),
@@ -967,19 +976,19 @@ impl<'src> Parser<'src> {
         let mut base = if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
             let text = self.lexer.slice_at(span);
             if text == "Dimensionless" {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Dimensionless,
                     span,
                 }
             } else if text == "Bool" {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Bool,
                     span,
                 }
             } else if text == "Int" {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Int,
                     span,
@@ -1016,7 +1025,7 @@ impl<'src> Parser<'src> {
 
         // Check for optional `[Index, ...]` suffix
         if self.lexer.peek() == Some(&Token::LBracket) {
-            let (_, _bracket_span) = self.lexer.next_token().expect("peek confirmed Some");
+            let (_, _bracket_span) = self.advance()?;
             let mut indexes = Vec::new();
             loop {
                 if self.lexer.peek() == Some(&Token::RBracket) {
@@ -1076,7 +1085,11 @@ impl<'src> Parser<'src> {
             }
         }
 
-        let end_span = terms.last().expect("at least one term").term.span;
+        let end_span = terms
+            .last()
+            .ok_or_else(|| self.unexpected_eof("dimension term"))?
+            .term
+            .span;
         Ok(DimExpr {
             terms,
             span: start_span.merge(end_span),
@@ -1253,7 +1266,7 @@ impl<'src> Parser<'src> {
 
     fn parse_conditional(&mut self) -> Result<Expr, ParseError> {
         if self.lexer.peek() == Some(&Token::If) {
-            let (_, if_span) = self.lexer.next_token().expect("peek confirmed Some");
+            let (_, if_span) = self.advance()?;
             let condition = self.parse_expr()?;
             self.expect(Token::LBrace)?;
             let then_branch = self.parse_expr()?;
@@ -1390,7 +1403,7 @@ impl<'src> Parser<'src> {
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Minus) => {
-                let (_, op_span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, op_span) = self.advance()?;
                 let operand = self.parse_unary()?;
                 let span = op_span.merge(operand.span);
                 Ok(Expr {
@@ -1402,7 +1415,7 @@ impl<'src> Parser<'src> {
                 })
             }
             Some(Token::Bang) => {
-                let (_, op_span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, op_span) = self.advance()?;
                 let operand = self.parse_unary()?;
                 let span = op_span.merge(operand.span);
                 Ok(Expr {
@@ -1491,7 +1504,7 @@ impl<'src> Parser<'src> {
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
                 let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
 
@@ -1548,21 +1561,21 @@ impl<'src> Parser<'src> {
                 }
             }
             Some(Token::True) => {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 Ok(Expr {
                     kind: ExprKind::Bool(true),
                     span,
                 })
             }
             Some(Token::False) => {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 Ok(Expr {
                     kind: ExprKind::Bool(false),
                     span,
                 })
             }
             Some(Token::At) => {
-                let (_, at_span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, at_span) = self.advance()?;
                 let ident =
                     self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
                 let span = at_span.merge(ident.span);
@@ -1572,7 +1585,7 @@ impl<'src> Parser<'src> {
                 })
             }
             Some(Token::Ident) => {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 let name = self.lexer.slice_at(span).to_string();
 
                 if is_upper_snake_case(&name) {
@@ -1663,7 +1676,7 @@ impl<'src> Parser<'src> {
             Some(Token::LBrace) => {
                 // Disambiguate: map literal vs block expression
                 // Consume '{' and peek at what follows
-                let (_, start_span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, start_span) = self.advance()?;
                 if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
                     let text = self.lexer.slice_at(ident_span);
                     if is_pascal_case(text) {
@@ -1671,7 +1684,7 @@ impl<'src> Parser<'src> {
                         // Save the ident text to check further
                         let saved_text = text.to_string();
                         // Consume the ident to peek at what's next
-                        let (_, saved_span) = self.lexer.next_token().expect("peek confirmed");
+                        let (_, saved_span) = self.advance()?;
                         if self.lexer.peek() == Some(&Token::ColonColon) {
                             // Could be map literal or VariantLiteral in block.
                             // Consume `::` and variant, then check next token.
@@ -1737,7 +1750,7 @@ impl<'src> Parser<'src> {
                 Ok(expr)
             }
             Some(_) => {
-                let (tok, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (tok, span) = self.advance()?;
                 Err(self.unexpected_token("expression", &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof("expression")),
@@ -1927,7 +1940,7 @@ impl<'src> Parser<'src> {
                     eq
                 });
             }
-            let condition = cond.expect("tuple arity checked to be >= 1");
+            let condition = cond.ok_or_else(|| self.unexpected_eof("condition"))?;
             else_expr = Expr {
                 kind: ExprKind::If {
                     condition: Box::new(condition.clone()),
@@ -2027,7 +2040,7 @@ impl<'src> Parser<'src> {
             self.lexer.next_token(); // consume ':'
             // Check for wildcard `_`
             if self.lexer.peek() == Some(&Token::Underscore) {
-                let (_, span) = self.lexer.next_token().expect("peek confirmed Some");
+                let (_, span) = self.advance()?;
                 return Ok(PatternBinding::Wildcard { field, span });
             }
             // Renamed binding: `field_name: var_name`
@@ -2643,7 +2656,13 @@ fn is_uppercase_starting(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
 
     // --- Phase 1 declaration tests ---

@@ -1542,9 +1542,18 @@ fn infer_type(
                         .iter()
                         .skip(constructor_type_args.len())
                     {
-                        let default_expr = param.default.as_ref().expect(
-                            "params without defaults should have been caught by count check above",
-                        );
+                        let default_expr =
+                            param
+                                .default
+                                .as_ref()
+                                .ok_or_else(|| GraphcalError::EvalError {
+                                    message: format!(
+                                        "internal: generic parameter `{}` has no default",
+                                        param.name
+                                    ),
+                                    src: src.clone(),
+                                    span: type_name.span.into(),
+                                })?;
                         let resolved = crate::tir::resolve_type_expr(
                             default_expr,
                             registry,
@@ -1602,7 +1611,14 @@ fn infer_type(
                     .fields
                     .iter()
                     .find(|f| f.name.as_str() == field_init.name.value.as_str())
-                    .expect("extra fields already checked");
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!(
+                            "internal: unknown field `{}` in struct `{}`",
+                            field_init.name.value, type_name.value
+                        ),
+                        src: src.clone(),
+                        span: field_init.name.span.into(),
+                    })?;
 
                 let value_type = if let Some(value_expr) = &field_init.value {
                     infer_type(
@@ -1653,21 +1669,16 @@ fn infer_type(
             let mut inner_locals = local_types.clone();
             for binding in bindings {
                 let idx_name = binding.index.value.as_str();
-                if registry.indexes.get_index(idx_name).is_none() {
-                    return Err(GraphcalError::UnknownIndex {
+                let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
                         name: binding.index.value.clone(),
                         src: src.clone(),
                         span: binding.index.span.into(),
-                    });
-                }
+                    }
+                })?;
                 inner_locals.insert(
                     binding.var.name.clone(),
-                    match &registry
-                        .indexes
-                        .get_index(idx_name)
-                        .expect("index existence checked above")
-                        .kind
-                    {
+                    match &idx_def.kind {
                         crate::registry::IndexKind::Named { .. } => InferredType::Struct(
                             StructTypeName::new(binding.index.value.as_str()),
                             vec![],
@@ -1955,10 +1966,15 @@ fn infer_type(
                             });
                         }
                         // Validate variant exists
-                        let idx_def = registry
-                            .indexes
-                            .get_index(idx_name.as_str())
-                            .expect("index validated");
+                        let idx_def =
+                            registry
+                                .indexes
+                                .get_index(idx_name.as_str())
+                                .ok_or_else(|| GraphcalError::UnknownIndex {
+                                    name: idx_name.clone(),
+                                    src: src.clone(),
+                                    span: index.span.into(),
+                                })?;
                         if !idx_def
                             .variants()
                             .iter()
@@ -1998,7 +2014,11 @@ fn infer_type(
                                 let idx_def = registry
                                     .indexes
                                     .get_index(idx_name.as_str())
-                                    .expect("index validated");
+                                    .ok_or_else(|| GraphcalError::UnknownIndex {
+                                        name: idx_name.clone(),
+                                        src: src.clone(),
+                                        span: ident.span.into(),
+                                    })?;
                                 if !idx_def.is_range() {
                                     return Err(GraphcalError::EvalError {
                                         message: format!("`{}` is not a loop variable", ident.name),
@@ -2417,7 +2437,13 @@ fn infer_fn_dim(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use graphcal_syntax::dimension::BaseDimId;
     use graphcal_syntax::parser::Parser;

@@ -380,7 +380,7 @@ fn format_value_inline_with_budget(
 ) -> String {
     match value {
         Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value().expect("matched as Scalar"));
+            let formatted = format_number(value.display_value().unwrap_or_default());
             value.display_label(symbols).map_or_else(
                 || formatted.clone(),
                 |label| format!("{formatted} [{label}]"),
@@ -781,7 +781,13 @@ pub async fn run() {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
 
     use std::collections::BTreeMap;
 

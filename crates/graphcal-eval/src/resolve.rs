@@ -183,7 +183,8 @@ pub fn resolve_with_imports(
             | DeclKind::Fn(_)
             | DeclKind::Index(_)
             | DeclKind::Use(_) => {
-                unreachable!()
+                // These declarations are handled earlier (continue'd before reaching here).
+                continue;
             }
         };
         source_order.push((name.clone(), category));
@@ -817,7 +818,14 @@ fn collect_const_refs(
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
-        ExprKind::GraphRef(_) => unreachable!("should be caught by check_no_graph_refs"),
+        ExprKind::GraphRef(ident) => Err(GraphcalError::EvalError {
+            message: format!(
+                "internal: graph reference `@{}` found in const expression",
+                ident.value
+            ),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
         ExprKind::ConstRef(ident) => {
             if builtin_consts.contains_key(ident.value.as_str()) {
                 Ok(())
@@ -1567,7 +1575,13 @@ pub fn collect_graph_refs(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use graphcal_syntax::parser::Parser;
 

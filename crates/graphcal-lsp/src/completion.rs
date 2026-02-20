@@ -131,7 +131,7 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                         SymbolCategory::Dimension => CompletionItemKind::CLASS,
                         SymbolCategory::StructType => CompletionItemKind::STRUCT,
                         SymbolCategory::Index => CompletionItemKind::ENUM,
-                        _ => unreachable!(),
+                        _ => continue,
                     }),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()
@@ -200,7 +200,7 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                     kind: Some(match imported.definition.category {
                         SymbolCategory::Const => CompletionItemKind::CONSTANT,
                         SymbolCategory::Function => CompletionItemKind::FUNCTION,
-                        _ => unreachable!(),
+                        _ => continue,
                     }),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()

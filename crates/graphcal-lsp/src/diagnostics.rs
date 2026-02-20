@@ -96,7 +96,11 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
                 .ok()
                 .or_else(|| Url::from_file_path(name).ok())
         })
-        .unwrap_or_else(|| Url::parse("file:///unknown").expect("static URL"));
+        .unwrap_or_else(|| {
+            // "file:///unknown" is a valid static URL; this parse cannot fail.
+            #[expect(clippy::unwrap_used, reason = "static URL literal is always valid")]
+            Url::parse("file:///unknown").unwrap()
+        });
 
     let mut diagnostics = Vec::new();
 
@@ -164,7 +168,13 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
 
     use std::collections::HashMap;
 

@@ -134,7 +134,13 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use crate::registry::RegistryBuilder;
     use graphcal_syntax::dimension::{BaseDimId, Rational};
