@@ -1,0 +1,1074 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    reason = "test code"
+)]
+use super::*;
+use crate::error::GraphcalError;
+
+/// Find the SI value of a named scalar declaration.
+fn find_value(result: &EvalResult, name: &str) -> f64 {
+    // Check consts first (they are not wrapped in Result)
+    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
+        return val.si_value().unwrap();
+    }
+    // Check params and nodes (wrapped in Result)
+    result
+        .params
+        .iter()
+        .chain(result.nodes.iter())
+        .find(|(n, _)| n.as_str() == name)
+        .unwrap_or_else(|| panic!("value `{name}` not found"))
+        .1
+        .as_ref()
+        .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
+        .si_value()
+        .unwrap()
+}
+
+#[test]
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "clearer to express expected math directly"
+)]
+fn eval_rocket_milestone() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "dry_mass") - 1200.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "fuel_mass") - 2800.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "isp") - 320.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "G0") - 9.80665).abs() < 1e-10);
+
+    let v_exhaust = find_value(&result, "v_exhaust");
+    assert!(
+        (v_exhaust - 320.0 * 9.80665).abs() < 0.001,
+        "v_exhaust = {v_exhaust}"
+    );
+
+    let mass_ratio = find_value(&result, "mass_ratio");
+    assert!(
+        (mass_ratio - (4000.0 / 1200.0)).abs() < 1e-6,
+        "mass_ratio = {mass_ratio}"
+    );
+
+    let delta_v = find_value(&result, "delta_v");
+    let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
+    assert!(
+        (delta_v - expected_delta_v).abs() < 0.001,
+        "delta_v = {delta_v}, expected = {expected_delta_v}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "clearer to express expected math directly"
+)]
+fn eval_constants_ksr() {
+    let source = include_str!("../../../../tests/fixtures/constants.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "G0") - 9.80665).abs() < f64::EPSILON);
+    assert!((find_value(&result, "TWO_G0") - 19.6133).abs() < 1e-10);
+    assert!((find_value(&result, "HALF_PI") - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
+    assert!((find_value(&result, "SQRT2") - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
+
+    let circumference = find_value(&result, "circumference");
+    let expected = 2.0 * std::f64::consts::PI * 100.0;
+    assert!(
+        (circumference - expected).abs() < 1e-10,
+        "circumference = {circumference}"
+    );
+
+    let area = find_value(&result, "area");
+    let expected_area = std::f64::consts::PI * 100.0_f64.powf(2.0);
+    assert!((area - expected_area).abs() < 1e-10, "area = {area}");
+}
+
+#[test]
+fn eval_if_else_true_branch() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_if_else_false_branch() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = -3.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_boolean_and() {
+    let result = compile_and_eval(
+        "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 0.0;\nnode c: Dimensionless = if @a > 0.0 && @b > 0.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "c") - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_boolean_or() {
+    let result = compile_and_eval(
+        "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 0.0;\nnode c: Dimensionless = if @a > 0.0 || @b > 0.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "c") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_unary_neg() {
+    let result =
+        compile_and_eval("param x: Dimensionless = 5.0;\nnode y: Dimensionless = -@x;").unwrap();
+    assert!((find_value(&result, "y") - (-5.0)).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_power() {
+    let result =
+        compile_and_eval("param x: Dimensionless = 3.0;\nnode y: Dimensionless = @x ^ 2.0;")
+            .unwrap();
+    assert!((find_value(&result, "y") - 9.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_result_source_order() {
+    let result = compile_and_eval(
+        "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
+    )
+    .unwrap();
+    assert_eq!(result.params[0].0.as_str(), "b");
+    assert_eq!(result.params[1].0.as_str(), "a");
+    assert_eq!(result.nodes[0].0.as_str(), "z");
+    assert_eq!(result.nodes[1].0.as_str(), "y");
+}
+
+#[test]
+fn eval_result_all_field_source_order() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    let result = compile_and_eval(source).unwrap();
+    let names: Vec<&str> = result.all.iter().map(|(n, _, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "dry_mass",
+            "fuel_mass",
+            "isp",
+            "G0",
+            "v_exhaust",
+            "mass_ratio",
+            "delta_v"
+        ]
+    );
+    assert_eq!(result.all[0].2, DeclType::Param);
+    assert_eq!(result.all[3].2, DeclType::Const);
+    assert_eq!(result.all[4].2, DeclType::Node);
+}
+
+#[test]
+fn eval_orbital_milestone() {
+    let source = include_str!("../../../../tests/fixtures/orbital.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // alt = 400 km -> SI: 400_000.0 m
+    assert!(
+        (find_value(&result, "alt") - 400_000.0).abs() < f64::EPSILON,
+        "alt = {}",
+        find_value(&result, "alt")
+    );
+    // period = 90 min -> SI: 5400.0 s
+    assert!(
+        (find_value(&result, "period") - 5400.0).abs() < f64::EPSILON,
+        "period = {}",
+        find_value(&result, "period")
+    );
+    // R_EARTH = 6371 km -> SI: 6_371_000.0 m
+    assert!(
+        (find_value(&result, "R_EARTH") - 6_371_000.0).abs() < f64::EPSILON,
+        "R_EARTH = {}",
+        find_value(&result, "R_EARTH")
+    );
+
+    // circumference = 2 * PI * (6_371_000 + 400_000)
+    let expected_circumference = 2.0 * std::f64::consts::PI * 6_771_000.0;
+    assert!(
+        (find_value(&result, "circumference") - expected_circumference).abs() < 0.01,
+        "circumference = {}",
+        find_value(&result, "circumference")
+    );
+
+    // speed = circumference / period
+    let expected_speed = expected_circumference / 5400.0;
+    assert!(
+        (find_value(&result, "speed") - expected_speed).abs() < 0.01,
+        "speed = {}",
+        find_value(&result, "speed")
+    );
+
+    // speed_kmh = speed (same SI value, only display unit changes)
+    assert!(
+        (find_value(&result, "speed_kmh") - expected_speed).abs() < 0.01,
+        "speed_kmh SI = {}",
+        find_value(&result, "speed_kmh")
+    );
+
+    // Check display units
+    let speed_kmh = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "speed_kmh")
+        .unwrap();
+    let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
+    assert_eq!(
+        speed_kmh_val.display_label(&result.base_dim_symbols),
+        Some("km/hour".to_string())
+    );
+    let display_kmh = speed_kmh_val.display_value().unwrap();
+    let expected_kmh = expected_speed / (1000.0 / 3600.0);
+    assert!(
+        (display_kmh - expected_kmh).abs() < 0.01,
+        "speed_kmh display = {display_kmh}"
+    );
+}
+
+#[test]
+fn eval_hohmann_milestone() {
+    let source = include_str!("../../../../tests/fixtures/hohmann.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // transfer is a struct — check its fields via total_dv and tof_hours nodes
+    let total_dv = find_value(&result, "total_dv");
+    // LEO-to-GEO Hohmann total delta-v should be ~3935 m/s
+    assert!(
+        total_dv > 3900.0 && total_dv < 4000.0,
+        "total_dv = {total_dv}"
+    );
+
+    let tof_hours = find_value(&result, "tof_hours");
+    // Transfer time ~5.26 hours -> SI ~18924 seconds
+    assert!(
+        tof_hours > 18000.0 && tof_hours < 20000.0,
+        "tof_hours SI = {tof_hours}"
+    );
+
+    // Check that tof_hours has display unit "hour"
+    let tof_entry = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "tof_hours")
+        .unwrap();
+    let tof_val = tof_entry.1.as_ref().unwrap();
+    assert_eq!(
+        tof_val.display_label(&result.base_dim_symbols),
+        Some("hour".to_string())
+    );
+    let tof_display = tof_val.display_value().unwrap();
+    assert!(
+        tof_display > 5.0 && tof_display < 6.0,
+        "tof display = {tof_display} hours"
+    );
+
+    // Check that transfer node is a struct
+    let transfer_entry = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "transfer")
+        .unwrap();
+    match transfer_entry.1.as_ref().unwrap() {
+        Value::Struct {
+            type_name, fields, ..
+        } => {
+            assert_eq!(type_name.as_str(), "TransferResult");
+            assert_eq!(fields.len(), 4);
+            assert!(fields.contains_key("dv1"));
+            assert!(fields.contains_key("dv2"));
+            assert!(fields.contains_key("total_dv"));
+            assert!(fields.contains_key("tof"));
+        }
+        _ => panic!("expected struct for transfer"),
+    }
+}
+
+#[test]
+fn eval_generics_milestone() {
+    let source = include_str!("../../../../tests/fixtures/generics.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // x_pos: field access on Vec3<Length, Eci>, should be 6878 km = 6878000 m
+    let x_pos = find_value(&result, "x_pos");
+    assert!((x_pos - 6_878_000.0).abs() < 1.0, "x_pos = {x_pos}");
+
+    // y_vel: field access on Vec3<Velocity, Eci>, should be 7.67 km/s = 7670 m/s
+    let y_vel = find_value(&result, "y_vel");
+    assert!((y_vel - 7670.0).abs() < 1.0, "y_vel = {y_vel}");
+
+    // pos3_eci_x: explicit type args, 100 km = 100000 m
+    let pos3_eci_x = find_value(&result, "pos3_eci_x");
+    assert!(
+        (pos3_eci_x - 100_000.0).abs() < 1.0,
+        "pos3_eci_x = {pos3_eci_x}"
+    );
+
+    // pos3_default_y: default type param (F = Unframed), 20 km = 20000 m
+    let pos3_default_y = find_value(&result, "pos3_default_y");
+    assert!(
+        (pos3_default_y - 20_000.0).abs() < 1.0,
+        "pos3_default_y = {pos3_default_y}"
+    );
+
+    // dv_sum_x: derive(Add), 100 + 10 = 110 m/s
+    let dv_sum_x = find_value(&result, "dv_sum_x");
+    assert!((dv_sum_x - 110.0).abs() < 0.01, "dv_sum_x = {dv_sum_x}");
+
+    // dv_diff_y: derive(Sub), 200 - 20 = 180 m/s
+    let dv_diff_y = find_value(&result, "dv_diff_y");
+    assert!((dv_diff_y - 180.0).abs() < 0.01, "dv_diff_y = {dv_diff_y}");
+
+    // dv_neg_z: derive(Neg), -(300 m/s) = -300 m/s
+    let dv_neg_z = find_value(&result, "dv_neg_z");
+    assert!((dv_neg_z - (-300.0)).abs() < 0.01, "dv_neg_z = {dv_neg_z}");
+
+    // pos_body_x: as cast (phantom only), same value as pos_eci.x = 6878 km = 6878000 m
+    let pos_body_x = find_value(&result, "pos_body_x");
+    assert!(
+        (pos_body_x - 6_878_000.0).abs() < 1.0,
+        "pos_body_x = {pos_body_x}"
+    );
+
+    // total_dv: non-generic struct still works, 100 + 200 = 300 m/s
+    let total_dv = find_value(&result, "total_dv");
+    assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");
+}
+
+#[test]
+fn eval_functions_milestone() {
+    let source = include_str!("../../../../tests/fixtures/functions.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // v_parking: orbital velocity at LEO (R_EARTH + 200 km)
+    // sqrt(GM_EARTH / (R_EARTH + 200 km)) = sqrt(3.986004418e14 / 6571000)
+    let v_parking = find_value(&result, "v_parking");
+    assert!(
+        v_parking > 7700.0 && v_parking < 7800.0,
+        "v_parking = {v_parking}"
+    );
+
+    // v_check should equal v_parking (same computation via fn-calling-fn)
+    let v_check = find_value(&result, "v_check");
+    assert!(
+        (v_check - v_parking).abs() < 1e-6,
+        "v_check = {v_check}, v_parking = {v_parking}"
+    );
+
+    // midpoint_alt: lerp(200 km, 35786 km, 0.5) = 17993 km -> 17993000 m SI
+    let midpoint = find_value(&result, "midpoint_alt");
+    assert!(
+        (midpoint - 17_993_000.0).abs() < 1.0,
+        "midpoint_alt = {midpoint}"
+    );
+
+    // transfer: Hohmann LEO-to-GEO, total_dv ~3935 m/s
+    let transfer_entry = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "transfer")
+        .unwrap();
+    match transfer_entry.1.as_ref().unwrap() {
+        Value::Struct {
+            type_name, fields, ..
+        } => {
+            assert_eq!(type_name.as_str(), "TransferResult");
+            assert_eq!(fields.len(), 3);
+            let total_dv = fields["total_dv"].si_value().unwrap();
+            assert!(
+                total_dv > 3900.0 && total_dv < 4000.0,
+                "total_dv = {total_dv}"
+            );
+        }
+        _ => panic!("expected struct for transfer"),
+    }
+}
+
+/// Helper: find a named value and return it (for indexed value tests).
+fn find_entry(result: &EvalResult, name: &str) -> Value {
+    result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == name)
+        .unwrap_or_else(|| panic!("value `{name}` not found"))
+        .1
+        .as_ref()
+        .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
+        .clone()
+}
+
+/// Helper: extract indexed entries as `Vec<(variant, si_value)>`.
+fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
+    match value {
+        Value::Indexed { entries, .. } => entries
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.si_value().unwrap()))
+            .collect(),
+        _ => panic!("expected indexed value, got {value:?}"),
+    }
+}
+
+#[test]
+fn eval_indexed_milestone() {
+    let source = include_str!("../../../../tests/fixtures/indexed.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // delta_v param: 2460, 120, 1830 m/s (SI)
+    let dv = find_entry(&result, "delta_v");
+    let dv_vals = indexed_si_values(&dv);
+    assert_eq!(dv_vals.len(), 3);
+    assert!(
+        (dv_vals[0].1 - 2460.0).abs() < 0.01,
+        "Departure = {}",
+        dv_vals[0].1
+    );
+    assert!(
+        (dv_vals[1].1 - 120.0).abs() < 0.01,
+        "Correction = {}",
+        dv_vals[1].1
+    );
+    assert!(
+        (dv_vals[2].1 - 1830.0).abs() < 0.01,
+        "Insertion = {}",
+        dv_vals[2].1
+    );
+
+    // double_dv: doubled values
+    let ddv = find_entry(&result, "double_dv");
+    let double_dv_vals = indexed_si_values(&ddv);
+    assert!((double_dv_vals[0].1 - 4920.0).abs() < 0.01);
+    assert!((double_dv_vals[1].1 - 240.0).abs() < 0.01);
+    assert!((double_dv_vals[2].1 - 3660.0).abs() < 0.01);
+
+    // total_dv: 2460 + 120 + 1830 = 4410 m/s
+    assert!((find_value(&result, "total_dv") - 4410.0).abs() < 0.01);
+
+    // max_dv: 2460
+    assert!((find_value(&result, "max_dv") - 2460.0).abs() < 0.01);
+
+    // min_dv: 120
+    assert!((find_value(&result, "min_dv") - 120.0).abs() < 0.01);
+
+    // mean_dv: 4410 / 3 = 1470
+    assert!((find_value(&result, "mean_dv") - 1470.0).abs() < 0.01);
+
+    // n_maneuvers: 3
+    assert!((find_value(&result, "n_maneuvers") - 3.0).abs() < f64::EPSILON);
+
+    // departure_dv: 2460
+    assert!((find_value(&result, "departure_dv") - 2460.0).abs() < 0.01);
+
+    // cumulative_dv: scan cumulative [2460, 2460+120=2580, 2580+1830=4410]
+    let cumulative = find_entry(&result, "cumulative_dv");
+    let cumulative_vals = indexed_si_values(&cumulative);
+    assert!((cumulative_vals[0].1 - 2460.0).abs() < 0.01);
+    assert!((cumulative_vals[1].1 - 2580.0).abs() < 0.01);
+    assert!((cumulative_vals[2].1 - 4410.0).abs() < 0.01);
+
+    // total_check (generic function): same as total_dv
+    assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
+}
+
+#[test]
+fn eval_table_literal() {
+    let source = include_str!("../../../../tests/fixtures/table_literal.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // 1D table: delta_v should match delta_v_map
+    let dv = find_entry(&result, "delta_v");
+    let dv_map = find_entry(&result, "delta_v_map");
+    let dv_vals = indexed_si_values(&dv);
+    let dv_map_vals = indexed_si_values(&dv_map);
+    assert_eq!(dv_vals.len(), dv_map_vals.len());
+    for (a, b) in dv_vals.iter().zip(dv_map_vals.iter()) {
+        assert!((a.1 - b.1).abs() < f64::EPSILON, "{} != {}", a.1, b.1);
+    }
+
+    // Derived nodes work: total_dv = 2460 + 120 + 1830 = 4410 m/s
+    assert!((find_value(&result, "total_dv") - 4410.0).abs() < 0.01);
+
+    // Access specific 2D entry: launch_departure_mass = 5000 kg
+    assert!((find_value(&result, "launch_departure_mass") - 5000.0).abs() < 0.01);
+
+    // 3D table: access specific entries
+    assert!((find_value(&result, "nominal_launch_departure") - 5000.0).abs() < 0.01);
+    assert!((find_value(&result, "contingency_arrival_insertion") - 3800.0).abs() < 0.01);
+}
+
+// --- Comparison and boolean operator tests ---
+
+#[test]
+fn eval_comparison_eq() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x == 5.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_comparison_neq() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x != 3.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_comparison_lt() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 3.0;\nnode y: Dimensionless = if @x < 5.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_comparison_lte() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x <= 5.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_comparison_gt() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 10.0;\nnode y: Dimensionless = if @x > 5.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_comparison_gte() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x >= 5.0 { 1.0 } else { 0.0 };",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_boolean_not() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 0.0;\nnode y: Dimensionless = if !(@x > 0.0) { 1.0 } else { 0.0 };",
+    ).unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_boolean_and_short_circuit() {
+    // When first operand is false, second should not matter
+    let result = compile_and_eval(
+        "param x: Dimensionless = 0.0;\nnode y: Dimensionless = if @x > 0.0 && @x < 10.0 { 1.0 } else { 0.0 };",
+    ).unwrap();
+    assert!((find_value(&result, "y") - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_boolean_or_short_circuit() {
+    // When first operand is true, second should not matter
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 || @x < -10.0 { 1.0 } else { 0.0 };",
+    ).unwrap();
+    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_nested_if_else() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 10.0 { 3.0 } else { if @x > 0.0 { 2.0 } else { 1.0 } };",
+    ).unwrap();
+    assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_unary_neg_dimensioned() {
+    let result = compile_and_eval("param x: Length = 100.0 m;\nnode y: Length = -@x;").unwrap();
+    assert!((find_value(&result, "y") - (-100.0)).abs() < f64::EPSILON);
+}
+
+// --- Override tests ---
+
+fn parse_expr(s: &str) -> graphcal_syntax::ast::Expr {
+    graphcal_syntax::parser::Parser::new(s)
+        .parse_single_expr()
+        .unwrap()
+}
+
+#[test]
+fn override_param_changes_result() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    // Default isp=320 s, override to 450 s => higher delta_v
+    let default = compile_and_eval_named(source, "test").unwrap();
+    let default_dv = find_value(&default, "delta_v");
+
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
+    let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
+    let new_dv = find_value(&overridden, "delta_v");
+
+    assert!(new_dv > default_dv, "higher isp should give higher delta_v");
+}
+
+#[test]
+fn override_with_wrong_dimension_errors() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    // isp expects Time, not Mass
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("isp"), parse_expr("450.0 kg"));
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    assert!(result.is_err());
+}
+
+#[test]
+fn override_node_errors() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("delta_v"), parse_expr("100.0 m/s"));
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    match result {
+        Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
+            assert_eq!(name.as_str(), "delta_v");
+            assert_eq!(actual_kind, "node");
+        }
+        other => panic!("expected OverrideNotAParam, got {other:?}"),
+    }
+}
+
+#[test]
+fn override_const_errors() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("G0"), parse_expr("10.0 m/s^2"));
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    match result {
+        Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
+            assert_eq!(name.as_str(), "G0");
+            assert_eq!(actual_kind, "const");
+        }
+        other => panic!("expected OverrideNotAParam, got {other:?}"),
+    }
+}
+
+#[test]
+fn override_unknown_param_errors() {
+    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("nonexistent"), parse_expr("100"));
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    match result {
+        Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
+            assert_eq!(name.as_str(), "nonexistent");
+        }
+        other => panic!("expected OverrideUnknownParam, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_multi_file_rocket() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/rocket_split/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let delta_v = find_value(&result, "delta_v");
+    let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
+    assert!(
+        (delta_v - expected_delta_v).abs() < 0.001,
+        "delta_v = {delta_v}, expected = {expected_delta_v}"
+    );
+}
+
+#[test]
+fn project_import_alias() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/alias/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let y = find_value(&result, "y");
+    assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
+}
+
+#[test]
+fn project_import_alias_conflict_resolution() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/alias_conflict/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let sum = find_value(&result, "sum");
+    assert!(
+        (sum - 3.0).abs() < f64::EPSILON,
+        "sum = {sum}, expected 3.0"
+    );
+}
+
+// --- Module import tests ---
+
+#[test]
+fn project_module_import_const() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/module_import/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let g = find_value(&result, "g");
+    assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
+}
+
+#[test]
+fn project_module_import_const_alias() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let g = find_value(&result, "g");
+    assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
+}
+
+#[test]
+fn project_module_import_graph_ref() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/module_import_graph_ref/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let total = find_value(&result, "total_mass");
+    assert!(
+        (total - 4000.0).abs() < f64::EPSILON,
+        "total_mass = {total}, expected 4000.0"
+    );
+}
+
+#[test]
+fn project_module_import_fn_call() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let y = find_value(&result, "y");
+    assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
+}
+
+#[test]
+fn project_module_import_mixed() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/module_import_mixed/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let delta_v = find_value(&result, "delta_v");
+    let expected = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
+    assert!(
+        (delta_v - expected).abs() < 0.001,
+        "delta_v = {delta_v}, expected = {expected}"
+    );
+}
+
+// --- Runtime arithmetic error tests ---
+
+/// Helper: assert that a specific node in the result has a `NodeError::EvalFailed`
+/// whose message contains `needle`.
+fn assert_node_error(source: &str, node_name: &str, needle: &str) {
+    let result = compile_and_eval(source).unwrap();
+    let (_, node_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == node_name)
+        .unwrap_or_else(|| panic!("node `{node_name}` not found"));
+    match node_result {
+        Err(NodeError::EvalFailed { message }) => {
+            assert!(
+                message.contains(needle),
+                "expected error containing {needle:?}, got {message:?}"
+            );
+        }
+        Err(other) => panic!("expected EvalFailed containing {needle:?}, got {other:?}"),
+        Ok(val) => panic!("expected error for `{node_name}`, got value {val:?}"),
+    }
+}
+
+#[test]
+fn eval_division_by_zero() {
+    assert_node_error(
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x / 0.0;",
+        "y",
+        "division by zero",
+    );
+}
+
+#[test]
+fn eval_zero_divided_by_zero() {
+    assert_node_error(
+        "param x: Dimensionless = 0.0;\nnode y: Dimensionless = @x / 0.0;",
+        "y",
+        "division by zero",
+    );
+}
+
+#[test]
+fn eval_sqrt_negative() {
+    assert_node_error("node y: Dimensionless = sqrt(-1.0);", "y", "NaN");
+}
+
+#[test]
+fn eval_ln_zero() {
+    assert_node_error("node y: Dimensionless = ln(0.0);", "y", "infinite");
+}
+
+#[test]
+fn eval_ln_negative() {
+    assert_node_error("node y: Dimensionless = ln(-1.0);", "y", "NaN");
+}
+
+#[test]
+fn eval_exp_overflow() {
+    assert_node_error("node y: Dimensionless = exp(1000.0);", "y", "infinite");
+}
+
+#[test]
+fn eval_power_negative_base_frac_exp() {
+    assert_node_error("node y: Dimensionless = (-1.0) ^ 0.5;", "y", "NaN");
+}
+
+#[test]
+fn eval_valid_division_ok() {
+    let result =
+        compile_and_eval("param x: Dimensionless = 10.0;\nnode y: Dimensionless = @x / 2.0;")
+            .unwrap();
+    assert!((find_value(&result, "y") - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_valid_sqrt_ok() {
+    let result = compile_and_eval("node y: Dimensionless = sqrt(4.0);").unwrap();
+    assert!((find_value(&result, "y") - 2.0).abs() < f64::EPSILON);
+}
+
+// --- Error containment tests ---
+
+#[test]
+fn eval_error_does_not_block_independent_nodes() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         node bad: Dimensionless = @x / 0.0;\n\
+         node good: Dimensionless = @x + 1.0;",
+    )
+    .unwrap();
+    // bad should have an error
+    assert!(
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == "bad")
+            .unwrap()
+            .1
+            .is_err()
+    );
+    // good should succeed because it does not depend on bad
+    assert!((find_value(&result, "good") - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_error_propagates_to_dependents() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         node bad: Dimensionless = @x / 0.0;\n\
+         node downstream: Dimensionless = @bad + 1.0;",
+    )
+    .unwrap();
+    // bad fails with EvalFailed
+    let bad_result = &result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "bad")
+        .unwrap()
+        .1;
+    assert!(matches!(bad_result, Err(NodeError::EvalFailed { .. })));
+    // downstream fails with DependencyFailed
+    let ds_result = &result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "downstream")
+        .unwrap()
+        .1;
+    assert!(matches!(ds_result, Err(NodeError::DependencyFailed { .. })));
+}
+
+#[test]
+fn eval_has_errors_true_when_node_fails() {
+    let result =
+        compile_and_eval("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x / 0.0;")
+            .unwrap();
+    assert!(result.has_errors());
+}
+
+#[test]
+fn eval_has_errors_false_when_all_ok() {
+    let result =
+        compile_and_eval("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;")
+            .unwrap();
+    assert!(!result.has_errors());
+}
+
+// --- Integer type tests ---
+
+/// Helper: find a named Int value.
+fn find_int_value(result: &EvalResult, name: &str) -> i64 {
+    let val = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == name)
+        .unwrap_or_else(|| panic!("value `{name}` not found"))
+        .1
+        .as_ref()
+        .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+    match val {
+        Value::Int(i) => *i,
+        other => panic!("expected Int for `{name}`, got {other:?}"),
+    }
+}
+
+/// Helper: find a named Bool value.
+fn find_bool_value(result: &EvalResult, name: &str) -> bool {
+    let val = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == name)
+        .unwrap_or_else(|| panic!("value `{name}` not found"))
+        .1
+        .as_ref()
+        .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+    match val {
+        Value::Bool(b) => *b,
+        other => panic!("expected Bool for `{name}`, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_integers_milestone() {
+    let source = include_str!("../../../../tests/fixtures/integers.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert_eq!(find_int_value(&result, "a"), 10);
+    assert_eq!(find_int_value(&result, "b"), 3);
+    assert_eq!(find_int_value(&result, "sum"), 13);
+    assert_eq!(find_int_value(&result, "diff"), 7);
+    assert_eq!(find_int_value(&result, "prod"), 30);
+    assert_eq!(find_int_value(&result, "quot"), 3); // truncating division
+    assert_eq!(find_int_value(&result, "rem"), 1);
+    assert_eq!(find_int_value(&result, "power"), 9);
+    assert_eq!(find_int_value(&result, "neg_a"), -10);
+
+    assert!(find_bool_value(&result, "a_gt_b"));
+    assert!(!find_bool_value(&result, "a_eq_b"));
+    assert!(!find_bool_value(&result, "a_le_b"));
+
+    assert_eq!(find_int_value(&result, "SEVEN"), 7);
+    assert_eq!(find_int_value(&result, "clamped"), 7); // 10 > 7, so clamp to 7
+
+    // to_float(10) = 10.0
+    assert!((find_value(&result, "a_float") - 10.0).abs() < f64::EPSILON);
+    // to_int(3.7) = 3 (truncating)
+    assert_eq!(find_int_value(&result, "back_to_int"), 3);
+}
+
+#[test]
+fn eval_int_division_by_zero() {
+    assert_node_error(
+        "param x: Int = 10;\nnode y: Int = @x / 0;",
+        "y",
+        "integer division by zero",
+    );
+}
+
+#[test]
+fn eval_int_modulo_by_zero() {
+    assert_node_error(
+        "param x: Int = 10;\nnode y: Int = @x % 0;",
+        "y",
+        "integer modulo by zero",
+    );
+}
+
+#[test]
+fn eval_int_negative_exponent() {
+    // `-1` is parsed as UnaryOp::Neg(Integer(1)), not a literal, so dim_check
+    // rejects it as a non-literal exponent before the evaluator sees it.
+    let err = compile_and_eval("param x: Int = 2;\nnode y: Int = @x ^ -1;");
+    assert!(err.is_err());
+}
+
+#[test]
+fn eval_int_mixed_type_error() {
+    // Int + Scalar should be a type error
+    let err = compile_and_eval("param x: Int = 10;\nnode y: Dimensionless = @x + 1.0;");
+    assert!(err.is_err());
+}
+
+#[test]
+fn eval_int_with_unit_parse_error() {
+    // `10 km` should be a parse error
+    let err = compile_and_eval("param x: Length = 10 km;");
+    assert!(err.is_err());
+}
+
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn division_of_finite_nonzero_is_finite(
+            a in proptest::num::f64::NORMAL,
+            b in proptest::num::f64::NORMAL,
+        ) {
+            prop_assume!(b != 0.0 && a.is_finite() && b.is_finite());
+            let source = format!(
+                "param x: Dimensionless = {a:e};\nparam y: Dimensionless = {b:e};\nnode z: Dimensionless = @x / @y;"
+            );
+            let r = compile_and_eval(&source).unwrap();
+            let z_result = &r.all.iter()
+                .find(|(n, _, _)| n.as_str() == "z")
+                .unwrap().1;
+            match z_result {
+                Ok(val) => {
+                    let z = val.si_value().unwrap();
+                    prop_assert!(z.is_finite(), "division produced non-finite: {z}");
+                }
+                Err(NodeError::EvalFailed { message }) => {
+                    // Overflow to infinity is correctly caught
+                    prop_assert!(
+                        message.contains("overflow") || message.contains("infinite"),
+                        "unexpected error: {message}"
+                    );
+                }
+                Err(e) => prop_assert!(false, "unexpected error type: {e:?}"),
+            }
+        }
+
+        #[test]
+        fn sqrt_of_positive_is_finite(a in 0.0f64..1e150) {
+            let source = format!(
+                "param x: Dimensionless = {a:e};\nnode y: Dimensionless = sqrt(@x);"
+            );
+            let result = compile_and_eval(&source).unwrap();
+            let y = find_value(&result, "y");
+            prop_assert!(y.is_finite(), "sqrt produced non-finite: {y}");
+        }
+
+        #[test]
+        fn exp_of_small_is_finite(a in -700.0f64..700.0) {
+            let source = format!(
+                "param x: Dimensionless = {a:e};\nnode y: Dimensionless = exp(@x);"
+            );
+            let result = compile_and_eval(&source).unwrap();
+            let y = find_value(&result, "y");
+            prop_assert!(y.is_finite(), "exp produced non-finite: {y}");
+        }
+    }
+}
