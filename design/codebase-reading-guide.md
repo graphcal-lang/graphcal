@@ -7,15 +7,17 @@ A comprehensive guide for understanding, maintaining, and extending the graphcal
 1. [What is Graphcal?](#1-what-is-graphcal)
 2. [Theoretical Foundations](#2-theoretical-foundations)
 3. [High-Level Architecture](#3-high-level-architecture)
-4. [The Evaluation Pipeline](#4-the-evaluation-pipeline)
+4. [The Compilation and Evaluation Pipeline](#4-the-compilation-and-evaluation-pipeline)
 5. [Incremental Reading Order](#5-incremental-reading-order)
 6. [Crate: graphcal-syntax](#6-crate-graphcal-syntax)
 7. [Crate: graphcal-eval](#7-crate-graphcal-eval)
 8. [Crate: graphcal-cli](#8-crate-graphcal-cli)
-9. [Testing Infrastructure](#9-testing-infrastructure)
-10. [CI/CD and Developer Tooling](#10-cicd-and-developer-tooling)
-11. [Design Documents and Phased Development](#11-design-documents-and-phased-development)
-12. [Extending Graphcal](#12-extending-graphcal)
+9. [Crate: graphcal-fmt](#9-crate-graphcal-fmt)
+10. [Crate: graphcal-lsp](#10-crate-graphcal-lsp)
+11. [Testing Infrastructure](#11-testing-infrastructure)
+12. [CI/CD and Developer Tooling](#12-cicd-and-developer-tooling)
+13. [Design Documents and Phased Development](#13-design-documents-and-phased-development)
+14. [Extending Graphcal](#14-extending-graphcal)
 
 ---
 
@@ -141,14 +143,20 @@ Operations on indexed values include `for` comprehensions (map), aggregations (`
 
 ## 3. High-Level Architecture
 
-The project is a **Cargo workspace** with three crates:
+The project is a **Cargo workspace** with five crates:
 
 ```
 graphcal/
 ├── crates/
-│   ├── graphcal-syntax/   # Lexer, parser, AST, dimension algebra
-│   ├── graphcal-eval/     # Name resolution, type checking, evaluation
+│   ├── graphcal-syntax/   # Lexer, parser, AST, dimension algebra, name types
+│   ├── graphcal-eval/     # Name resolution, type checking, compilation, evaluation
+│   ├── graphcal-fmt/      # AST-based code formatter
+│   ├── graphcal-lsp/      # Language Server Protocol implementation
 │   └── graphcal-cli/      # CLI binary (clap)
+├── tree-sitter-graphcal/  # Tree-sitter grammar for syntax highlighting
+├── editors/
+│   ├── zed/               # Zed editor extension
+│   └── vscode/            # VS Code extension
 ├── tests/fixtures/        # .gcl example files and error test cases
 ├── design/                # Language design documents
 │   └── phases/            # Phased implementation plans
@@ -161,6 +169,15 @@ graphcal/
 graphcal-cli
   ├── graphcal-eval
   │     └── graphcal-syntax
+  ├── graphcal-fmt
+  │     └── graphcal-syntax
+  └── graphcal-syntax
+
+graphcal-lsp
+  ├── graphcal-eval
+  │     └── graphcal-syntax
+  ├── graphcal-fmt
+  │     └── graphcal-syntax
   └── graphcal-syntax
 ```
 
@@ -168,30 +185,36 @@ graphcal-cli
   `miette` (diagnostics), and `thiserror`.
 - **`graphcal-eval`** depends on `graphcal-syntax` and adds `petgraph` (DAG), `indexmap`
   (ordered maps), and `serde` (serialization).
-- **`graphcal-cli`** depends on both and adds `clap` (argument parsing) and `serde_json`
-  (JSON output).
+- **`graphcal-fmt`** depends on `graphcal-syntax` and adds `pretty` (pretty-printing).
+- **`graphcal-lsp`** depends on `graphcal-eval`, `graphcal-fmt`, and `graphcal-syntax`, and adds
+  `tower-lsp` (LSP protocol) and `tokio` (async runtime).
+- **`graphcal-cli`** depends on `graphcal-eval`, `graphcal-fmt`, and `graphcal-syntax`, and adds
+  `clap` (argument parsing) and `serde_json` (JSON output).
 
 ### Layered Design
 
 ```
 ┌─────────────────────────────────┐
-│        graphcal-cli             │  User-facing: argument parsing, output formatting
+│     graphcal-cli / graphcal-lsp │  User-facing: CLI, editor integration
 ├─────────────────────────────────┤
-│        graphcal-eval            │  Semantic analysis: resolution, type checking,
-│                                 │  DAG construction, evaluation
+│   graphcal-eval / graphcal-fmt  │  Semantic analysis & formatting:
+│                                 │  IR, TIR, type checking, evaluation, formatting
 ├─────────────────────────────────┤
 │       graphcal-syntax           │  Syntactic analysis: lexing, parsing, AST,
-│                                 │  dimension algebra
+│                                 │  dimension algebra, name types
 └─────────────────────────────────┘
 ```
 
 ---
 
-## 4. The Evaluation Pipeline
+## 4. The Compilation and Evaluation Pipeline
 
 This is the core flow from source text to computed results. Understanding this pipeline is
 essential for working on the codebase. The pipeline is orchestrated in
 `graphcal-eval/src/eval.rs`.
+
+The pipeline is structured as a series of **intermediate representations** (IRs), each adding
+more semantic information:
 
 ```
 Source text (.gcl files)
@@ -203,14 +226,15 @@ Source text (.gcl files)
         │  File (list of Declarations)
         ▼
    ┌──────────┐
-   │ Resolve  │  resolve.rs: extract declarations, validate names,
-   └────┬─────┘  build dependency maps, check for @-in-const violations
-        │  ResolvedFile (separated consts/params/nodes, dependency maps)
+   │  Lower   │  ir.rs: name resolution (resolve.rs) + registry
+   └────┬─────┘  construction (registry.rs + prelude.rs)
+        │  IR (resolved names + frozen Registry)
         ▼
-   ┌──────────┐
-   │ Register │  registry.rs + prelude.rs: populate Registry with
-   └────┬─────┘  dimensions, units, struct types, index types, functions
-        │  Registry (lookup tables for the type system)
+   ┌────────────┐
+   │ Type       │  tir.rs: resolve type annotations to semantic
+   │ Resolve    │  types, resolve generics
+   └────┬───────┘
+        │  TIR (resolved types + function signatures)
         ▼
    ┌───────────┐
    │ Fn Check  │  fn_check.rs: detect recursive function calls
@@ -221,16 +245,11 @@ Source text (.gcl files)
    │ Dim Check │  dim_check.rs: infer and validate dimensions for
    └────┬──────┘  all expressions; check type annotations match
         │
-        ▼
-   ┌────────────┐
-   │ Const Eval │  const_eval.rs: topological sort of consts,
-   └────┬───────┘  evaluate at compile time
-        │  HashMap<String, RuntimeValue> (const values)
-        ▼
+        ▼                      ← compile_to_tir_*() stops here (for LSP)
    ┌───────────┐
-   │ Build DAG │  dag.rs: build petgraph from param/node dependencies,
-   └────┬──────┘  topological sort (detect cycles)
-        │  RuntimeGraph (petgraph + topo order + expressions)
+   │  Compile  │  exec_plan.rs: topological sort of consts + eval,
+   └────┬──────┘  build runtime DAG (detect cycles)
+        │  ExecPlan (const values + topo order)
         ▼
    ┌──────────┐
    │ Evaluate │  eval.rs + eval_expr.rs: walk DAG in topo order,
@@ -242,9 +261,19 @@ Source text (.gcl files)
    └──────────┘
 ```
 
+The pipeline has two important **stopping points**:
+
+- **`compile_to_tir_*()`** stops after dimension checking and returns the TIR. This is used by
+  the LSP server, which needs type information but does not need to evaluate.
+- **`compile_and_eval_*()`** runs the full pipeline through evaluation.
+
 For **multi-file projects**, the pipeline begins with `loader.rs` which performs a DFS over
 `use` declarations to load and parse all files in dependency order. Then the pipeline runs for
 each file, with imported declarations propagated via `ImportedNames`.
+
+The pipeline is also **decoupled from I/O**: `compile_and_eval_project()` reads from disk, while
+`compile_and_eval_named()` accepts an in-memory source string. This separation is critical for
+the LSP server, which works with unsaved editor buffers.
 
 ---
 
@@ -265,7 +294,10 @@ Start with these fixture files to get an intuitive sense of the language:
 4. **`tests/fixtures/indexed.gcl`** -- Adds `index`, indexed params (map literals), `for`
    comprehensions, aggregations (`sum`, `max`, `min`, `mean`, `count`), `scan`, and index
    generics (`<I: Index>`).
-5. **`tests/fixtures/multi/rocket_split/`** -- Shows multi-file imports with `use`.
+5. **`tests/fixtures/tagged_union.gcl`** -- Adds tagged union types and `match` expressions.
+6. **`tests/fixtures/assertions.gcl`** -- Shows `assert` declarations for self-checking
+   calculations.
+7. **`tests/fixtures/multi/rocket_split/`** -- Shows multi-file imports with `use`.
 
 ### Step 2: Understand the AST (what the parser produces)
 
@@ -291,7 +323,7 @@ Read these files in order:
 ### Step 4: Understand the parser
 
 Read **`crates/graphcal-syntax/src/parser.rs`**. This is the largest file in the syntax crate
-(~2900 lines). It is a **recursive descent parser** with precedence climbing for expressions.
+(~4400 lines). It is a **recursive descent parser** with precedence climbing for expressions.
 
 Key entry points:
 
@@ -343,32 +375,70 @@ Read **`crates/graphcal-syntax/src/dimension.rs`**. This is a standalone math mo
 
 This module is independent of all other syntax code and is used by the eval crate.
 
+### Step 5b: Understand typed name wrappers
+
+Read **`crates/graphcal-syntax/src/names.rs`**. This module defines newtype wrappers for
+identifiers to prevent mixing up different kinds of names:
+
+- `DeclName`, `DimName`, `UnitName`, `StructTypeName`, `IndexName`, `FnName`, `FieldName`,
+  `VariantName`, `GenericParamName`.
+- `Spanned<T>` wraps any name type with a source `Span`.
+
+These types are used throughout the eval crate for type-safe name lookups.
+
 ### Step 6: Understand name resolution
 
 Read **`crates/graphcal-eval/src/resolve.rs`**. This is the first semantic pass after parsing:
 
-- Separates `const`, `param`, and `node` declarations.
+- Separates `const`, `param`, `node`, and `assert` declarations.
 - Validates all references: `@name` must refer to a known param/node; bare `NAME` in const
   context must refer to a known const.
 - Builds **dependency maps**: for each declaration, which other declarations does it reference?
 - Enforces `@`-prohibition rules: consts and function bodies must not use `@`.
 - The output is `ResolvedFile` with separated declaration lists and dependency maps.
 
-### Step 7: Understand the type system registry
+### Step 7: Understand the IR lowering pass
+
+Read **`crates/graphcal-eval/src/ir.rs`**. This module combines name resolution and registry
+construction into a single lowering step:
+
+- `lower_to_builder()` takes an AST `File` and returns a `(RegistryBuilder, UnfrozenIR)`.
+- The `UnfrozenIR` holds resolved declarations, dependency maps, and source order.
+- After imports are registered, call `UnfrozenIR::freeze(builder.build())` to produce the
+  final `IR` with a frozen, immutable `Registry`.
+
+### Step 8: Understand the type system registry
 
 Read these files in order:
 
-1. **`crates/graphcal-eval/src/builtins.rs`** -- Defines built-in functions (`sqrt`, `ln`,
-   `sin`, ...) and constants (`PI`, `E`). Each built-in has a `DimSignature` that describes its
-   dimensional behavior (e.g., `sqrt` takes `D` and returns `D^(1/2)`).
+1. **`crates/graphcal-eval/src/builtins.rs`** -- Defines 14 built-in functions (`sqrt`, `ln`,
+   `sin`, `cos`, `abs`, `floor`, `ceil`, `atan2`, `min`, `max`, ...) and constants (`PI`, `E`).
+   Each built-in has a `DimSignature` that describes its dimensional behavior.
 2. **`crates/graphcal-eval/src/prelude.rs`** -- Registers the standard library: 8 base
-   dimensions, 9 derived dimensions, and ~25 units with their scale factors.
-3. **`crates/graphcal-eval/src/registry.rs`** -- The `Registry` struct is the central lookup
-   table for the type system. It stores dimensions, units, struct definitions, function
-   definitions, and index definitions. Methods like `resolve_dim_expr()` convert AST type
-   annotations into concrete `Dimension` values.
+   dimensions, 9 derived dimensions, and 20+ units with their scale factors.
+3. **`crates/graphcal-eval/src/registry.rs`** -- The type system's lookup tables, split into
+   **domain-specific registries** with a **builder/frozen pattern**:
+   - `RegistryBuilder` -- mutable during construction (registers dimensions, units, etc.)
+   - `Registry` -- frozen, read-only aggregate after `builder.build()`:
+     - `DimensionRegistry` -- dimension names → `Dimension`
+     - `UnitRegistry` -- unit names → `UnitInfo` (dimension + scale)
+     - `TypeRegistry` -- struct/union type definitions + variant reverse lookup
+     - `FunctionRegistry` -- function definitions
+     - `IndexRegistry` -- index definitions
 
-### Step 8: Understand dimension checking
+### Step 9: Understand the TIR (Typed IR)
+
+Read **`crates/graphcal-eval/src/tir.rs`**. The TIR resolves all type annotations from their
+AST form to semantic types:
+
+- `type_resolve()` takes an `IR` and produces a `TIR`.
+- `ResolvedTypeExpr` variants: `Dimensionless`, `Bool`, `Int`, `Scalar(Dimension)`, `Struct`,
+  `GenericStruct`, `GenericDimParam`, `GenericDimExpr`, `Indexed`.
+- `ResolvedFnSig` -- fully-resolved function signature with generic params, param types, and
+  return type.
+- Handles generic dimension parameters and index parameters.
+
+### Step 10: Understand dimension checking
 
 Read **`crates/graphcal-eval/src/dim_check.rs`**. This is the type checker:
 
@@ -380,30 +450,32 @@ Read **`crates/graphcal-eval/src/dim_check.rs`**. This is the type checker:
 
 Key types: `DeclaredType` (Scalar, Struct, Indexed) and `InferredType` (same + LoopVar).
 
-### Step 9: Understand evaluation
+### Step 11: Understand compilation and evaluation
 
 Read these files:
 
-1. **`crates/graphcal-eval/src/const_eval.rs`** -- Topologically sorts constants and evaluates
-   them. Simple: build a mini-DAG of const dependencies, sort, evaluate in order.
-2. **`crates/graphcal-eval/src/dag.rs`** -- Builds the runtime DAG from param/node dependencies
-   using petgraph. Returns a `RuntimeGraph` with topological order.
-3. **`crates/graphcal-eval/src/eval_expr.rs`** -- The recursive expression evaluator. Defines
+1. **`crates/graphcal-eval/src/exec_plan.rs`** -- Compiles a TIR into an `ExecPlan`: topological
+   sort of const declarations + compile-time evaluation, then topological sort of runtime
+   declarations (params + nodes) into evaluation order.
+2. **`crates/graphcal-eval/src/eval_expr.rs`** -- The recursive expression evaluator. Defines
    `RuntimeValue` (Scalar, Struct, Indexed, VariantLabel) and `eval_expr()` which pattern-matches
    on `ExprKind` to compute values. This is where the actual math happens.
-4. **`crates/graphcal-eval/src/eval.rs`** -- The **orchestrator**. Contains `compile_and_eval()`
-   and `compile_and_eval_project()` which wire together all the phases listed in Section 4. Also
-   handles parameter overrides (`--set`) and display unit extraction.
+3. **`crates/graphcal-eval/src/eval.rs`** -- The **orchestrator**. Key public functions:
+   - `compile_and_eval_project()` -- disk-based, multi-file, full pipeline.
+   - `compile_and_eval_named()` -- in-memory source, full pipeline.
+   - `compile_to_tir_project()` -- disk-based, stops at TIR (for tooling/LSP).
+   - `compile_and_eval_from_project()` -- full pipeline from a `LoadedProject`.
 
-### Step 10: Understand multi-file support
+### Step 12: Understand multi-file support
 
 Read **`crates/graphcal-eval/src/loader.rs`**. It performs a DFS from the root `.gcl` file:
 
 - For each `use` declaration, resolves the file path, loads and parses it.
 - Detects circular imports via a loading stack.
 - Returns files in topological (post-order) so dependencies are processed before dependents.
+- `LoadedProject` can mix disk files and in-memory overrides (for the LSP).
 
-### Step 11: Understand error handling
+### Step 13: Understand error handling
 
 Read **`crates/graphcal-eval/src/error.rs`**. All semantic errors are variants of
 `GraphcalError`, which implements `miette::Diagnostic`. Error codes follow the pattern
@@ -418,16 +490,18 @@ Read **`crates/graphcal-eval/src/error.rs`**. All semantic errors are variants o
 | D | Dimensions | D001 mismatch, D004 unknown unit |
 | S | Structs | S001 duplicate let, S003 unknown field |
 | I | Indexes | I001 unknown index, I004 index mismatch |
-| M | Multi-file | M001 file not found, M002 circular import |
+| M | Multi-file | M000 file not found, M002 circular import |
+| A | Assertions | A002 assumes on const, A003 @-in-assert |
 | O | Overrides | O001 override non-param |
 
-### Step 12: Understand the CLI
+### Step 14: Understand the CLI
 
 Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry point:
 
 - Uses `clap` for argument parsing.
-- Currently has one subcommand: `eval`.
+- Has four subcommands: `eval`, `format`, `typecheck`, and `lsp`.
 - Parses `--set` overrides by using `graphcal_syntax::parser::Parser::parse_single_expr()`.
+- Supports JSON parameter input files via `json_input.rs`.
 - Calls `compile_and_eval_project()` from the eval crate.
 - Formats output as text (aligned columns with units) or JSON.
 - Uses `miette`'s fancy handler for colorful error reporting in the terminal.
@@ -442,13 +516,15 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 
 | File | Lines | Purpose |
 | ------ | ------- | --------- |
-| `lib.rs` | 12 | Module declarations. The `lexer` module is `pub(crate)`, all others are `pub`. |
-| `span.rs` | 58 | `Span` struct (offset + length). Converts to `miette::SourceSpan`. |
-| `token.rs` | 652 | `Token` enum with `logos` derive. 40+ token variants. Display impl for error messages. |
-| `lexer.rs` | 164 | `Lexer` wrapper: peekable token stream. Yields `(Token, Span)` pairs. |
-| `ast.rs` | 548 | Full AST definition. 9 declaration kinds, 19 expression kinds, type/unit/dimension expressions. |
-| `dimension.rs` | 617 | `Rational`, `BaseDim`, `Dimension`. Pure math, no dependencies on other syntax modules. |
-| `parser.rs` | 2934 | Recursive descent parser. Precedence climbing for expressions. 80+ unit tests. |
+| `lib.rs` | ~14 | Module declarations. All modules are `pub`. |
+| `span.rs` | ~66 | `Span` struct (offset + length). Converts to `miette::SourceSpan`. |
+| `token.rs` | ~739 | `Token` enum with `logos` derive. 40+ token variants. Display impl for error messages. |
+| `lexer.rs` | ~166 | `Lexer` wrapper: peekable token stream. Yields `(Token, Span)` pairs. |
+| `ast.rs` | ~813 | Full AST definition. 10 declaration kinds, 23 expression kinds, type/unit/dimension expressions. |
+| `names.rs` | ~250 | Type-safe newtype wrappers for identifiers (`DeclName`, `DimName`, `UnitName`, etc.) and `Spanned<T>`. |
+| `comments.rs` | ~175 | Comment extraction and source metadata for the formatter. `SourceMetadata`, `Comment`, `CommentKind`. |
+| `dimension.rs` | ~750 | `Rational`, `BaseDim`, `Dimension`. Pure math, no dependencies on other syntax modules. |
+| `parser.rs` | ~4447 | Recursive descent parser. Precedence climbing for expressions. 100+ unit tests. |
 
 ### Key Design Decisions
 
@@ -467,6 +543,10 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 5. **Span on every node**: Every AST node carries a `Span`, enabling precise error reporting
    throughout the pipeline.
 
+6. **Type-safe names**: The `names.rs` module uses newtype wrappers to prevent accidentally
+   passing a `DimName` where a `UnitName` is expected. This catches name-category bugs at
+   compile time.
+
 ---
 
 ## 7. Crate: graphcal-eval
@@ -477,37 +557,44 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 
 | File | Lines | Purpose |
 | ------ | ------- | --------- |
-| `lib.rs` | 22 | Module declarations. Only `eval`, `error`, and `loader` are fully `pub`. |
-| `resolve.rs` | 1578 | Name resolution: separate declarations, validate refs, build dep maps. |
-| `dim_check.rs` | 2541 | Dimension type checking with inference and generic unification. |
-| `eval.rs` | 1623 | Pipeline orchestrator: `compile_and_eval()`, `compile_and_eval_project()`. |
-| `eval_expr.rs` | 769 | Recursive expression evaluator: `eval_expr()` and `RuntimeValue`. |
-| `fn_check.rs` | 378 | Function recursion detection via call graph + topological sort. |
-| `dag.rs` | 146 | DAG construction from dependencies using petgraph. |
-| `const_eval.rs` | 173 | Compile-time constant evaluation in topological order. |
-| `registry.rs` | 392 | Type system lookup tables: dimensions, units, types, functions, indexes. |
-| `builtins.rs` | 228 | Built-in functions (sqrt, sin, ...) and constants (PI, E). |
-| `prelude.rs` | 194 | Standard library: base/derived dimensions and units. |
-| `loader.rs` | 245 | Multi-file DFS loader with cycle detection. |
-| `error.rs` | 431 | `GraphcalError` enum with miette diagnostic support. |
+| `lib.rs` | ~23 | Module declarations. `eval`, `error`, `loader`, `registry`, `tir`, and `builtins` are `pub`. |
+| `resolve.rs` | ~2022 | Name resolution: separate declarations, validate refs, build dep maps. |
+| `ir.rs` | ~674 | Intermediate Representation: combines resolution + registry building. `lower_to_builder()`, `UnfrozenIR`, `IR`. |
+| `tir.rs` | ~1530 | Typed IR: resolves type annotations to semantic types. `type_resolve()`, `TIR`, `ResolvedTypeExpr`. |
+| `dim_check.rs` | ~3420 | Dimension type checking with inference and generic unification. |
+| `eval.rs` | ~2434 | Pipeline orchestrator: `compile_and_eval_*()`, `compile_to_tir_*()`. |
+| `eval_expr.rs` | ~1517 | Recursive expression evaluator: `eval_expr()` and `RuntimeValue`. |
+| `exec_plan.rs` | ~266 | Compilation to execution plan: const eval + DAG topological sort. Replaces former `dag.rs` + `const_eval.rs`. |
+| `fn_check.rs` | ~421 | Function recursion detection via call graph + topological sort. |
+| `registry.rs` | ~919 | Domain-specific registries with builder/frozen pattern. `RegistryBuilder` → `Registry`. |
+| `builtins.rs` | ~236 | 14 built-in functions (sqrt, sin, abs, floor, ceil, atan2, min, max, ...) and constants (PI, E). |
+| `prelude.rs` | ~260 | Standard library: 8 base dimensions, 9 derived dimensions, and 20+ units. |
+| `loader.rs` | ~415 | Multi-file DFS loader with cycle detection. `LoadedProject`. |
+| `error.rs` | ~541 | `GraphcalError` enum with miette diagnostic support. 10 error code families (N/F/G/E/D/S/I/M/A/O). |
 
 ### Key Design Decisions
 
-1. **Multi-pass architecture**: The pipeline has distinct, well-separated passes (resolve →
-   register → dim_check → const_eval → dag → eval). Each pass has a clear input and output.
-   This makes it easy to reason about and test each phase independently.
+1. **IR-based multi-pass architecture**: The pipeline transforms through explicit IRs
+   (AST → IR → TIR → ExecPlan → EvalResult). Each IR adds semantic information while
+   maintaining a clear boundary.
 
-2. **Registry as central state**: The `Registry` is built incrementally and passed to later
-   phases. It acts as the "symbol table" for the type system.
+2. **Builder/frozen pattern for Registry**: The `RegistryBuilder` is mutable during construction,
+   then frozen into an immutable `Registry` with domain-specific sub-registries
+   (`DimensionRegistry`, `UnitRegistry`, `TypeRegistry`, `FunctionRegistry`, `IndexRegistry`).
+   This ensures the type system is read-only during later phases.
 
-3. **Two evaluation phases**: Constants are evaluated at "compile time" (before the DAG is
-   built), and params/nodes are evaluated at "runtime" (in DAG topological order). This
-   separation is clean because `@` is prohibited in constants.
+3. **Pipeline decoupled from I/O**: `compile_and_eval_project()` reads from disk, while
+   `compile_and_eval_named()` works with in-memory strings. `LoadedProject` can mix disk files
+   with in-memory overrides. This enables the LSP to analyze unsaved buffers.
 
-4. **IndexMap for ordered results**: The `EvalResult` uses `IndexMap` to preserve source-code
+4. **Two evaluation phases**: Constants are evaluated at "compile time" (in `ExecPlan`), and
+   params/nodes are evaluated at "runtime" (in DAG topological order). This separation is clean
+   because `@` is prohibited in constants.
+
+5. **IndexMap for ordered results**: The `EvalResult` uses `IndexMap` to preserve source-code
    order in output, which is important for human-readable display.
 
-5. **Display unit extraction**: When a node uses unit conversion (`->`) or a unit literal, the
+6. **Display unit extraction**: When a node uses unit conversion (`->`) or a unit literal, the
    display unit is extracted for pretty-printing. The internal value is always in SI base units.
 
 ### Important Internal Types
@@ -515,12 +602,16 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 | Type | Location | Purpose |
 | ------ | ---------- | --------- |
 | `ResolvedFile` | resolve.rs | Output of name resolution: separated declarations + dependency maps |
-| `Registry` | registry.rs | Lookup table for dimensions, units, types, functions, indexes |
+| `UnfrozenIR` / `IR` | ir.rs | Lowered IR with resolved names and registry |
+| `TIR` | tir.rs | Typed IR with resolved type expressions and function signatures |
+| `ResolvedTypeExpr` | tir.rs | Semantic type: Scalar, Struct, GenericStruct, Indexed, Bool, Int, etc. |
+| `RegistryBuilder` / `Registry` | registry.rs | Mutable builder → frozen lookup tables for the type system |
 | `DeclaredType` | dim_check.rs | Resolved type annotation: Scalar(Dimension), Struct, or Indexed |
 | `RuntimeValue` | eval_expr.rs | Runtime value: Scalar(f64), Struct(IndexMap), Indexed(IndexMap), VariantLabel |
-| `RuntimeGraph` | dag.rs | petgraph + topological order + expression map |
+| `ExecPlan` | exec_plan.rs | Compiled execution plan: const values + topo order + expressions |
 | `EvalResult` | eval.rs | Final output: consts, params, nodes with display metadata |
 | `Value` | eval.rs | Display-friendly value with SI value, display value, and unit label |
+| `LoadedProject` | loader.rs | Collection of loaded/parsed files (disk or in-memory) |
 
 ---
 
@@ -532,22 +623,27 @@ Read **`crates/graphcal-cli/src/main.rs`**. The CLI is the user-facing entry poi
 
 | File | Lines | Purpose |
 | ------ | ------- | --------- |
-| `src/main.rs` | ~180 | CLI entry point: clap args, `--set` parsing, output formatting. |
-| `tests/cli.rs` | ~350 | End-to-end integration tests using the compiled binary. |
+| `main.rs` | ~670 | CLI entry point: clap args, subcommands, output formatting. |
+| `json_input.rs` | ~658 | Converts JSON input files to parameter overrides. Supports scalars, structs, tagged unions, indexed params. |
+| `tests/cli.rs` | ~350+ | End-to-end integration tests using the compiled binary. |
 
 ### CLI Structure
 
 ```sh
-graphcal eval <FILE> [--format text|json] [--set 'name=expr'] ...
+graphcal eval <FILE> [--format text|json] [--set 'name=expr'] [--input input.json] [--no-assert]
+graphcal format [--check] <PATHS>...
+graphcal typecheck <PATHS>...
+graphcal lsp
 ```
 
-The CLI is deliberately thin:
+Four subcommands:
 
-1. Parse arguments with `clap`.
-2. Parse `--set` override expressions using `graphcal_syntax::parser::Parser::parse_single_expr()`.
-3. Call `graphcal_eval::eval::compile_and_eval_project()`.
-4. Format and print the result.
-5. On error, use `miette`'s fancy handler for colorful diagnostics.
+1. **`eval`** -- Evaluate a `.gcl` file. Supports `--set` for inline overrides, `--input` for
+   JSON parameter files, `--format` for text/JSON output, and `--no-assert` to skip assertions.
+2. **`format`** -- Format `.gcl` files using `graphcal-fmt`. With `--check`, reports unformatted
+   files without modifying them.
+3. **`typecheck`** -- Check files for errors without evaluation (stops at TIR).
+4. **`lsp`** -- Start the Language Server Protocol server.
 
 ### Output Formats
 
@@ -565,9 +661,109 @@ delta_v     = 3778.691 m/s
 **JSON output**: Structured with `si_value`, optional `display_value` and `unit`, and nested
 struct/indexed values.
 
+### JSON Input
+
+The `--input` flag accepts a JSON file to set parameter values. The `json_input.rs` module
+converts JSON values to GCL expressions:
+
+- Strings are parsed as GCL expressions (e.g., `"1200 kg"`)
+- Numbers become numeric literals
+- Booleans become boolean literals
+- Objects with `"variant"` key become tagged union values
+- Objects with named keys become indexed param values
+
 ---
 
-## 9. Testing Infrastructure
+## 9. Crate: graphcal-fmt
+
+**Location**: `crates/graphcal-fmt/src/`
+
+### File-by-File Reference
+
+| File | Lines | Purpose |
+| ------ | ------- | --------- |
+| `lib.rs` | ~28 | Public API: `format_source(source: &str) -> Option<String>`. |
+| `format.rs` | ~1002 | `Formatter` struct and format functions for every AST node type. |
+| `tests/format_tests.rs` | | Snapshot tests for formatter output. |
+
+### Architecture
+
+The formatter is **AST-based**: it parses the source, formats the AST using the `pretty` crate
+for layout, and produces formatted output. It returns `None` if parsing fails (unparsable files
+are not formatted).
+
+Key features:
+
+- **Comment preservation**: Uses `SourceMetadata` from `graphcal-syntax/src/comments.rs` to
+  extract and reattach comments to their corresponding AST nodes.
+- **Blank line preservation**: Blank lines between declarations are preserved.
+- **Pretty-printing**: Uses the `pretty` crate's optimal layout algorithm with a default line
+  width of 100 characters.
+- **Number formatting**: Preserves original number formatting from the source text.
+
+---
+
+## 10. Crate: graphcal-lsp
+
+**Location**: `crates/graphcal-lsp/src/`
+
+### File-by-File Reference
+
+| File | Lines | Purpose |
+| ------ | ------- | --------- |
+| `lib.rs` | ~22 | Module declarations. Public API: `async fn run()`. |
+| `server.rs` | ~941 | Main LSP server: file tracking, incremental analysis, request dispatch. |
+| `symbol_table.rs` | ~1062 | Symbol resolution and scope analysis from TIR. |
+| `cursor_context.rs` | ~350 | Determines what entity is under the cursor (for hover, go-to-def, etc.). |
+| `diagnostics.rs` | ~291 | Converts `GraphcalError` to LSP diagnostics with related information. |
+| `rename.rs` | ~265 | Rename refactoring across declarations and references. |
+| `completion.rs` | ~214 | Code completion for declarations, fields, variants, built-ins. |
+| `convert.rs` | ~133 | Conversions between internal types and LSP protocol types. |
+| `hover.rs` | ~124 | Hover information: type, dimension, documentation. |
+| `document_symbols.rs` | ~94 | Document outline (symbols for breadcrumbs/outline view). |
+| `references.rs` | ~79 | Find all references to a symbol. |
+| `goto_definition.rs` | ~77 | Jump to definition of a symbol. |
+| `inlay_hints.rs` | ~67 | Inline type hints showing computed values. |
+| `formatting.rs` | ~64 | Document formatting using `graphcal-fmt`. |
+| `signature_help.rs` | ~43 | Function signature help while typing arguments. |
+| `document_links.rs` | ~39 | Clickable links for `use` import paths. |
+
+### Architecture
+
+The LSP server uses `tower-lsp` on a `tokio` async runtime:
+
+1. **File tracking**: On `did_open` / `did_change`, the server stores the current buffer content
+   in memory.
+2. **Incremental analysis**: `run_analysis()` in `server.rs` compiles the in-memory source using
+   `compile_and_eval_named()` or `compile_to_tir_project()`. It handles four cases based on
+   whether TIR compilation and in-memory parsing succeed or fail.
+3. **Symbol table**: Built from the TIR, mapping source spans to declarations, references, and
+   types.
+4. **Pull-based features**: Inlay hints and document symbols are pull-based (the editor requests
+   them). After updating analysis, the server sends `client.inlay_hint_refresh()` to trigger
+   re-fetching.
+5. **Push-based features**: Diagnostics are push-based via `publish_diagnostics`.
+
+### LSP Features
+
+| Feature | Status |
+| --------- | -------- |
+| Document Symbols | Implemented |
+| Go to Definition | Implemented |
+| Hover | Implemented |
+| Find References | Implemented |
+| Rename | Implemented |
+| Diagnostics | Implemented (with related information) |
+| Inlay Hints | Implemented (with computed values) |
+| Completion | Implemented |
+| Signature Help | Implemented |
+| Formatting | Implemented (via graphcal-fmt) |
+| Document Links | Implemented |
+| Semantic Tokens | Deferred |
+
+---
+
+## 11. Testing Infrastructure
 
 ### Test Categories
 
@@ -594,7 +790,7 @@ These tests:
 3. Render the error using `miette::NarratableReportHandler` (deterministic, non-colorful).
 4. Compare against a stored `.snap` file using the `insta` crate.
 
-This ensures error messages don't regress. There are **34+ snapshot tests** covering:
+This ensures error messages don't regress. There are **48+ snapshot tests** covering:
 
 - Duplicate names, unknown references, casing violations
 - Dimension mismatches, unknown units/dimensions
@@ -603,6 +799,9 @@ This ensures error messages don't regress. There are **34+ snapshot tests** cove
 - Index errors (unknown index, missing/extra variants)
 - Function errors (wrong arity, recursion, @-in-fn)
 - Runtime errors (division by zero, sqrt of negative)
+- Assertion errors (non-bool assert, assumes violations)
+- Tagged union errors (non-exhaustive match, duplicate arms)
+- Range index errors
 
 **To update snapshots** after intentional changes: `cargo insta review`.
 
@@ -623,7 +822,17 @@ Used in `dimension.rs` to verify algebraic properties:
 - `Rational` reduction, arithmetic identities, associativity.
 - `Dimension` multiplication/division laws, dimensionless identity.
 
-#### 5. Test Fixtures
+#### 5. Regression Tests
+
+Located in `crates/graphcal-eval/tests/edge_case_bugs.rs` (~850 lines). These tests cover
+specific bugs that have been found and fixed, ensuring they do not regress.
+
+#### 6. Formatter Snapshot Tests
+
+Located in `crates/graphcal-fmt/tests/format_tests.rs`. These verify that the formatter
+produces expected output for various `.gcl` files.
+
+#### 7. Test Fixtures
 
 Located in `tests/fixtures/`:
 
@@ -632,19 +841,34 @@ tests/fixtures/
 ├── rocket.gcl              # Tsiolkovsky rocket equation
 ├── hohmann.gcl             # Hohmann transfer with structs
 ├── functions.gcl           # Pure functions with generics
+├── generics.gcl            # Generic functions and types
 ├── indexed.gcl             # Indexed values and aggregation
+├── range_index.gcl         # Range-based indexes
+├── tagged_union.gcl        # Tagged union types
+├── tagged_union_param.gcl  # Tagged union as parameters
+├── variant_match.gcl       # Pattern matching on variants
+├── variant_comparison.gcl  # Variant comparisons
+├── assertions.gcl          # Assert declarations
+├── assertions_assumes.gcl  # Assert with assumes
+├── integers.gcl            # Integer type support
+├── time_scan.gcl           # Time-based scan (system dynamics)
+├── user_dimensions.gcl     # User-defined dimensions
 ├── orbital.gcl             # Simple orbital velocity
 ├── constants.gcl           # Constants-only file
-├── multi/
-│   └── rocket_split/       # Multi-file import example
-│       ├── main.gcl
-│       ├── constants.gcl
-│       └── params.gcl
-└── errors/                 # 34+ files designed to trigger specific errors
+├── multi/                  # Multi-file test projects
+│   ├── rocket_split/       # Basic multi-file import
+│   ├── alias/              # Import aliases
+│   ├── alias_conflict/     # Import alias conflicts
+│   ├── assertions/         # Multi-file assertions
+│   ├── explicit_index/     # Explicit index imports
+│   └── imported_deps/      # Imported dependencies
+└── errors/                 # 50+ files designed to trigger specific errors
     ├── duplicate.gcl
     ├── unknown_ref.gcl
     ├── dim_mismatch_add.gcl
     ├── cycle.gcl
+    ├── non_exhaustive_match.gcl
+    ├── assert_not_bool.gcl
     └── ...
 ```
 
@@ -667,7 +891,7 @@ cargo test -p graphcal-cli
 
 ---
 
-## 10. CI/CD and Developer Tooling
+## 12. CI/CD and Developer Tooling
 
 ### CI Pipeline (`.github/workflows/ci.yaml`)
 
@@ -714,13 +938,13 @@ The workspace uses **strict clippy settings** (defined in root `Cargo.toml`):
 
 ---
 
-## 11. Design Documents and Phased Development
+## 13. Design Documents and Phased Development
 
 ### Design Document Structure
 
 All design documents are in `design/`. The `design/README.md` is the index.
 
-**17 aspect documents** cover orthogonal design dimensions:
+**20 aspect documents** cover orthogonal design dimensions:
 
 | # | Document | Topic |
 | --- | ---------- | ------- |
@@ -741,6 +965,14 @@ All design documents are in `design/`. The `design/README.md` is the index.
 | 15 | python-interop | PyO3 bindings |
 | 16 | git-workflow | Scenarios and version control |
 | 17 | error-messages | Error codes and diagnostics |
+| 18 | non-si-dimensions | Non-SI unit systems |
+| 19 | assertions-and-testing | Assert/assumes/test features |
+| 20 | type-system-stratification | Type system layers (proposal) |
+
+Additional design documents:
+
+- **`graphcal-format-plan.md`** -- Design and implementation plan for the code formatter.
+- **`primitive-types-analysis.md`** -- Analysis of primitive type choices.
 
 ### Phased Implementation
 
@@ -755,7 +987,7 @@ working artifact with locked design decisions.
 | 3 | Pure functions | Complete |
 | 4 | Multi-file and namespaces | Complete |
 | 5 | Indexed values | Complete |
-| 6 | Scenarios and CLI (MVP) | In progress |
+| 6 | Scenarios and CLI (MVP) | Complete |
 | 7+ | System dynamics, spaces, tagged unions, TUI, ... | Future |
 
 ### Key Design Inspirations
@@ -771,7 +1003,7 @@ working artifact with locked design decisions.
 
 ---
 
-## 12. Extending Graphcal
+## 14. Extending Graphcal
 
 ### Adding a New Built-in Function
 
@@ -781,6 +1013,8 @@ working artifact with locked design decisions.
    `BuiltinFunction` match arm in `infer_type()`.
 3. Add test fixtures in `tests/fixtures/` and snapshot tests in
    `crates/graphcal-eval/tests/error_snapshots.rs` for error cases.
+4. Update LSP completion in `crates/graphcal-lsp/src/completion.rs` if the function needs
+   special handling.
 
 ### Adding a New Declaration Kind
 
@@ -789,11 +1023,17 @@ working artifact with locked design decisions.
 3. Add parsing logic in `crates/graphcal-syntax/src/parser.rs` (handle the new keyword in
    `parse_declaration()`).
 4. Handle the new declaration in `crates/graphcal-eval/src/resolve.rs` (name resolution).
-5. Handle dimension checking in `crates/graphcal-eval/src/dim_check.rs` if applicable.
-6. Handle evaluation in `crates/graphcal-eval/src/eval.rs` and `eval_expr.rs`.
-7. Update the CLI output formatting in `crates/graphcal-cli/src/main.rs` if the declaration
-   produces output.
-8. Add tests at every level.
+5. Handle IR lowering in `crates/graphcal-eval/src/ir.rs`.
+6. Handle type resolution in `crates/graphcal-eval/src/tir.rs` if it has type annotations.
+7. Handle dimension checking in `crates/graphcal-eval/src/dim_check.rs` if applicable.
+8. Handle compilation in `crates/graphcal-eval/src/exec_plan.rs` if it participates in the DAG.
+9. Handle evaluation in `crates/graphcal-eval/src/eval.rs` and `eval_expr.rs`.
+10. Update the CLI output formatting in `crates/graphcal-cli/src/main.rs` if the declaration
+    produces output.
+11. Update the formatter in `crates/graphcal-fmt/src/format.rs`.
+12. Update LSP features (symbol table, document symbols, completion, etc.).
+13. Update the tree-sitter grammar in `tree-sitter-graphcal/grammar.js`.
+14. Add tests at every level.
 
 ### Adding a New Expression Kind
 
@@ -801,13 +1041,14 @@ working artifact with locked design decisions.
 2. Add parsing in `parser.rs` at the appropriate precedence level.
 3. Add dimension inference in `dim_check.rs` (in the `infer_type()` match).
 4. Add evaluation in `eval_expr.rs` (in the `eval_expr()` match).
-5. Add test fixtures and snapshot tests.
+5. Update the formatter in `format.rs`.
+6. Add test fixtures and snapshot tests.
 
 ### Adding a New Unit or Dimension to the Prelude
 
 1. Edit `crates/graphcal-eval/src/prelude.rs`.
-2. Use `registry.register_dimension()` for new dimensions.
-3. Use `registry.register_unit()` for new units, specifying the dimension and SI scale factor.
+2. Use `builder.register_dimension()` for new dimensions.
+3. Use `builder.register_unit()` for new units, specifying the dimension and SI scale factor.
 
 ### Adding a New Error
 
@@ -817,12 +1058,16 @@ working artifact with locked design decisions.
 4. Create a `.gcl` fixture file in `tests/fixtures/errors/`.
 5. Add a snapshot test in `crates/graphcal-eval/tests/error_snapshots.rs`.
 6. Run `cargo insta review` to approve the new snapshot.
+7. Ensure the LSP diagnostics module handles the new error properly.
 
 ### General Tips for Contributors
 
 - **Read the design doc first**: Before implementing a feature, check if there's a design
   document in `design/` or a phase document in `design/phases/`.
-- **Follow the pipeline order**: Changes typically flow from syntax → resolve → dim_check → eval.
+- **Follow the pipeline order**: Changes typically flow from syntax → IR → TIR → dim_check →
+  exec_plan → eval.
+- **Update all layers**: New features need updates across the syntax crate, eval crate,
+  formatter, LSP, tree-sitter grammar, and editor extensions.
 - **Every error needs a test**: Add both the error fixture (`.gcl`) and a snapshot test.
 - **Use `insta` for regression**: Snapshot tests catch unintended changes to error messages.
 - **Run `just lint` and `just test`** before committing.
