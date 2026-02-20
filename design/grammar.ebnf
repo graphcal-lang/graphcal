@@ -396,8 +396,21 @@ range_index
 (* "range" and "step" are contextual keywords here.
    Note: named index has no trailing semicolon; range index does. *)
 (* --- use --- *)
+(* Three forms:
+   1. Selective import:   use "./file.gcl" { name1, name2 };
+   2. Module import:      use "./file.gcl";
+   3. Module with alias:  use "./file.gcl" as alias;
+   Module imports bring the entire file in as a namespace. Members are
+   accessed via "::" (e.g., constants::G0, @params::dry_mass).
+   The module name defaults to the filename stem, which must be a
+   valid lower_snake_case identifier; use "as" to override. *)
 use_decl
-   = "use", STRING_LITERAL, "{", use_item, { ",", use_item }, [ "," ], "}", ";";
+   = "use", STRING_LITERAL, use_body;
+
+use_body
+   = "{", use_item, { ",", use_item }, [ "," ], "}", ";"   (* selective *)
+   | "as", lower_snake_case_ident, ";"                       (* module with alias *)
+   | ";";                                                    (* module, name from filename *)
 
 use_item
    = IDENT, [ "as", IDENT ];
@@ -579,19 +592,23 @@ bool_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", lower_snake_case_ident;
+   = "@", [ lower_snake_case_ident, "::" ], lower_snake_case_ident;
 
+(* @name — local graph ref.  @module::name — qualified graph ref. *)
 const_ref
-   = upper_snake_case_ident;
+   = [ lower_snake_case_ident, "::" ], upper_snake_case_ident;
 
-(* Includes built-in constants PI and E. *)
+(* NAME — local const ref.  module::NAME — qualified const ref.
+   Includes built-in constants PI and E. *)
 local_ref
    = lower_snake_case_ident;
 
 (* Reference to a let binding or function parameter. *)
 (* --- Function call --- *)
 fn_call
-   = lower_snake_case_ident, "(", [ expr, { ",", expr }, [ "," ] ], ")";
+   = [ lower_snake_case_ident, "::" ], lower_snake_case_ident, "(", [ expr, { ",", expr }, [ "," ] ], ")";
+
+(* fn(args) — local call.  module::fn(args) — qualified call. *)
 
 (* --- Variant literal --- *)
 variant_literal
