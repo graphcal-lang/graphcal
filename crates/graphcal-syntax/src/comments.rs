@@ -33,82 +33,89 @@ pub struct SourceMetadata {
 /// to preserve them during formatting.
 #[must_use]
 pub fn extract_source_metadata(source: &str) -> SourceMetadata {
-    let mut comments = Vec::new();
-    let mut blank_line_offsets = Vec::new();
+    let mut scanner = Scanner::new(source);
+    scanner.scan();
+    SourceMetadata {
+        comments: scanner.comments,
+        blank_line_offsets: scanner.blank_line_offsets,
+    }
+}
 
-    let bytes = source.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    let mut prev_was_newline = true; // treat start of file as after newline
+struct Scanner<'a> {
+    bytes: &'a [u8],
+    source: &'a str,
+    pos: usize,
+    comments: Vec<Comment>,
+    blank_line_offsets: Vec<usize>,
+}
 
-    while i < len {
-        let b = bytes[i];
-
-        // Track blank lines: two consecutive newlines with only whitespace between
-        if b == b'\n' {
-            let after = i + 1;
-            // Skip whitespace (spaces/tabs) after the newline
-            let mut j = after;
-            while j < len && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-            if j < len && bytes[j] == b'\n' {
-                blank_line_offsets.push(i);
-            }
-            prev_was_newline = true;
-            i += 1;
-            continue;
+impl<'a> Scanner<'a> {
+    const fn new(source: &'a str) -> Self {
+        Self {
+            bytes: source.as_bytes(),
+            source,
+            pos: 0,
+            comments: Vec::new(),
+            blank_line_offsets: Vec::new(),
         }
-
-        // Skip inside string literals to avoid false-positive `//` matches
-        if b == b'"' {
-            i += 1;
-            while i < len && bytes[i] != b'"' {
-                i += 1;
-            }
-            if i < len {
-                i += 1; // skip closing quote
-            }
-            prev_was_newline = false;
-            continue;
-        }
-
-        // Detect `//` comment start
-        if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
-            let start = i;
-            // Find end of line
-            let mut end = i;
-            while end < len && bytes[end] != b'\n' {
-                end += 1;
-            }
-            let text = &source[start..end];
-            let kind = if text.starts_with("///") && !text.starts_with("////") {
-                CommentKind::Doc
-            } else {
-                CommentKind::Line
-            };
-            comments.push(Comment {
-                kind,
-                text: text.to_string(),
-                span: Span::new(start, end - start),
-            });
-            i = end;
-            prev_was_newline = false;
-            continue;
-        }
-
-        if b != b' ' && b != b'\t' && b != b'\r' {
-            prev_was_newline = false;
-        }
-        i += 1;
     }
 
-    // Suppress the unused variable warning — we track this for potential future use
-    let _ = prev_was_newline;
+    fn scan(&mut self) {
+        while self.pos < self.bytes.len() {
+            match self.bytes[self.pos] {
+                b'\n' => self.scan_newline(),
+                b'"' => self.skip_string_literal(),
+                b'/' if self.next_byte() == Some(b'/') => self.scan_comment(),
+                _ => self.pos += 1,
+            }
+        }
+    }
 
-    SourceMetadata {
-        comments,
-        blank_line_offsets,
+    fn next_byte(&self) -> Option<u8> {
+        self.bytes.get(self.pos + 1).copied()
+    }
+
+    /// Record the offset if a blank line follows (two newlines with only
+    /// whitespace between them), then advance past the newline.
+    fn scan_newline(&mut self) {
+        let mut j = self.pos + 1;
+        while j < self.bytes.len() && matches!(self.bytes[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j < self.bytes.len() && self.bytes[j] == b'\n' {
+            self.blank_line_offsets.push(self.pos);
+        }
+        self.pos += 1;
+    }
+
+    /// Skip past a string literal to avoid false-positive `//` matches.
+    fn skip_string_literal(&mut self) {
+        self.pos += 1; // skip opening quote
+        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' {
+            self.pos += 1;
+        }
+        if self.pos < self.bytes.len() {
+            self.pos += 1; // skip closing quote
+        }
+    }
+
+    /// Extract a `//` or `///` comment and advance to the end of the line.
+    fn scan_comment(&mut self) {
+        let start = self.pos;
+        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
+            self.pos += 1;
+        }
+        let text = &self.source[start..self.pos];
+        let kind = if text.starts_with("///") && !text.starts_with("////") {
+            CommentKind::Doc
+        } else {
+            CommentKind::Line
+        };
+        self.comments.push(Comment {
+            kind,
+            text: text.to_string(),
+            span: Span::new(start, self.pos - start),
+        });
     }
 }
 
