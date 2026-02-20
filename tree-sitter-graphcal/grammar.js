@@ -258,18 +258,29 @@ module.exports = grammar({
       field("type", $.type_expr),
     ),
 
-    // use "./path.gcl" { name1, name2 as alias2 };
+    // use "./path.gcl" { name1, name2 as alias2 };  -- selective import
+    // use "./path.gcl";                               -- module import (name from filename)
+    // use "./path.gcl" as alias;                      -- module import with alias
     use_declaration: $ => seq(
       "use",
       field("path", $.string_literal),
-      "{",
-      optional(seq(
-        $.use_item,
-        repeat(seq(",", $.use_item)),
-        optional(","),
-      )),
-      "}",
-      ";",
+      choice(
+        // Selective import: { name1, name2 as alias }
+        seq(
+          "{",
+          optional(seq(
+            $.use_item,
+            repeat(seq(",", $.use_item)),
+            optional(","),
+          )),
+          "}",
+          ";",
+        ),
+        // Module import with alias: as name ;
+        seq("as", field("alias", $.identifier), ";"),
+        // Module import (bare): ;
+        ";",
+      ),
     ),
 
     // Import item with optional alias: name or name as alias
@@ -608,6 +619,7 @@ module.exports = grammar({
       $.field_access,
       $.index_access,
       $.fn_call,
+      $.qualified_fn_call,
       $._primary_expr,
     ),
 
@@ -648,6 +660,20 @@ module.exports = grammar({
       ")",
     )),
 
+    // module::fn_name(args) — qualified function call
+    qualified_fn_call: $ => prec(PREC.CALL, seq(
+      field("module", $.identifier),
+      "::",
+      field("name", $.identifier),
+      "(",
+      optional(seq(
+        $._expr,
+        repeat(seq(",", $._expr)),
+        optional(","),
+      )),
+      ")",
+    )),
+
     // Primary expressions
     _primary_expr: $ => choice(
       $.number,
@@ -672,6 +698,7 @@ module.exports = grammar({
 
     graph_ref: $ => seq(
       "@",
+      optional(seq(field("module", $.identifier), "::")),
       field("name", $.identifier),
     ),
 
