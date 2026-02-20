@@ -54,15 +54,12 @@ impl<'src> Lexer<'src> {
     /// Get the byte offset of the current position in the source.
     /// Useful for generating error spans when the lexer has no more tokens.
     #[must_use]
-    pub const fn current_offset(&self) -> usize {
-        if let Some(ref peeked) = self.peeked
-            && let Some((_, span)) = peeked
-        {
-            return span.offset;
+    pub fn current_offset(&self) -> usize {
+        match &self.peeked {
+            Some(Some((_, span))) => span.offset,
+            Some(None) => self.source.len(),
+            None => self.source.len() - self.inner.remainder().len(),
         }
-        // If no peeked token, the offset is at the end of source
-        // (logos doesn't expose position after exhaustion, so we approximate)
-        self.source.len()
     }
 
     fn advance(&mut self) -> Option<(Token, Span)> {
@@ -147,6 +144,37 @@ mod tests {
         assert_eq!(tok, Token::Number);
         assert!(lexer.next_token().is_none());
         assert!(lexer.peek().is_none());
+    }
+
+    #[test]
+    fn current_offset_before_any_peek_or_next() {
+        let input = "param x = 1.0;";
+        let lexer = Lexer::new(input);
+        assert_eq!(lexer.current_offset(), 0);
+    }
+
+    #[test]
+    fn current_offset_after_consuming_peeked_token() {
+        let input = "param x = 1.0;";
+        let mut lexer = Lexer::new(input);
+
+        // peek() forces advance, then next_token() takes the peeked value,
+        // leaving self.peeked = None while the inner lexer has moved past "param".
+        lexer.peek().unwrap();
+        lexer.next_token().unwrap();
+        // peeked is None here, but offset must NOT be 0 — the inner lexer
+        // has already advanced past "param" (5 bytes). Whitespace is not yet
+        // consumed because logos skips it lazily on the next advance.
+        assert_eq!(lexer.current_offset(), 5);
+    }
+
+    #[test]
+    fn current_offset_at_eof() {
+        let input = "42";
+        let mut lexer = Lexer::new(input);
+        lexer.next_token().unwrap(); // consume "42"
+        assert!(lexer.peek().is_none()); // peek EOF
+        assert_eq!(lexer.current_offset(), input.len());
     }
 
     #[test]
