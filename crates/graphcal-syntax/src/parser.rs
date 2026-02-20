@@ -107,7 +107,7 @@ impl<'src> Parser<'src> {
         ParseError::UnexpectedEof {
             expected: expected.to_string(),
             src: self.named_source(),
-            span: Span::new(self.lexer.current_offset(), 0).into(),
+            span: Span::new(self.lexer.source_len(), 0).into(),
         }
     }
 
@@ -131,8 +131,8 @@ impl<'src> Parser<'src> {
     /// or if there are unexpected trailing tokens.
     pub fn parse_single_expr(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_expr()?;
-        if let Some(tok) = self.lexer.peek().cloned() {
-            let span = Span::new(self.lexer.current_offset(), 0);
+        if let Some((tok, span)) = self.lexer.peek_with_span() {
+            let tok = tok.clone();
             return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
         }
         Ok(expr)
