@@ -15,9 +15,9 @@ use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ImportedNames};
 use graphcal_syntax::ast::{DeclKind, Expr, ExprKind};
 use graphcal_syntax::dimension::Dimension;
+use graphcal_syntax::names::Spanned;
 use graphcal_syntax::names::{DeclName, FieldName, FnName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
-use graphcal_syntax::names::Spanned;
 use graphcal_syntax::span::Span;
 
 use std::path::Path;
@@ -563,10 +563,7 @@ fn lower_project_to_ir(
                             first: (*first_span).into(),
                         }));
                     }
-                    module_map.insert(
-                        module_name,
-                        (import_canonical.clone(), use_decl.path_span),
-                    );
+                    module_map.insert(module_name, (import_canonical.clone(), use_decl.path_span));
                     continue;
                 }
             };
@@ -652,14 +649,13 @@ fn lower_project_to_ir(
         let mut already_imported: HashSet<(String, String)> = HashSet::new();
 
         for qref in &qualified_refs {
-            let (module_path, _) =
-                module_map.get(&qref.module).ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::UnknownModule {
-                        name: qref.module.clone(),
-                        src: root_src.clone(),
-                        span: qref.module_span.into(),
-                    })
-                })?;
+            let (module_path, _) = module_map.get(&qref.module).ok_or_else(|| {
+                CompileError::Eval(GraphcalError::UnknownModule {
+                    name: qref.module.clone(),
+                    src: root_src.clone(),
+                    span: qref.module_span.into(),
+                })
+            })?;
 
             let key = (qref.module.clone(), qref.name.clone());
             if !already_imported.insert(key) {
@@ -2534,10 +2530,7 @@ mod tests {
             .join("../../tests/fixtures/multi/module_import/main.gcl");
         let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
         let g = find_value(&result, "g");
-        assert!(
-            (g - 9.80665).abs() < 1e-6,
-            "g = {g}, expected 9.80665"
-        );
+        assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
     }
 
     #[test]
@@ -2546,10 +2539,7 @@ mod tests {
             .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
         let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
         let g = find_value(&result, "g");
-        assert!(
-            (g - 9.80665).abs() < 1e-6,
-            "g = {g}, expected 9.80665"
-        );
+        assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
     }
 
     #[test]
@@ -2570,10 +2560,7 @@ mod tests {
             .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
         let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
         let y = find_value(&result, "y");
-        assert!(
-            (y - 42.0).abs() < f64::EPSILON,
-            "y = {y}, expected 42.0"
-        );
+        assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
     }
 
     #[test]

@@ -552,12 +552,7 @@ impl<'src> Parser<'src> {
                 self.lexer.next_token(); // consume `as`
                 let alias = self.parse_any_ident()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (
-                    crate::ast::UseKind::Module {
-                        alias: Some(alias),
-                    },
-                    end_span,
-                )
+                (crate::ast::UseKind::Module { alias: Some(alias) }, end_span)
             }
             Some(Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
@@ -566,9 +561,7 @@ impl<'src> Parser<'src> {
             Some(tok) => {
                 let tok_str = tok.to_string();
                 let (_, span) = self.advance()?;
-                return Err(
-                    self.unexpected_token("`{`, `as`, or `;` after path", &tok_str, span)
-                );
+                return Err(self.unexpected_token("`{`, `as`, or `;` after path", &tok_str, span));
             }
             None => {
                 return Err(self.unexpected_eof("`{`, `as`, or `;` after path"));
@@ -1699,10 +1692,7 @@ impl<'src> Parser<'src> {
                         let full_span = span.merge(member_ident.span);
                         Ok(Expr {
                             kind: ExprKind::QualifiedConstRef {
-                                module: Ident {
-                                    name,
-                                    span,
-                                },
+                                module: Ident { name, span },
                                 name: Spanned::new(DeclName::new(member), member_ident.span),
                             },
                             span: full_span,
@@ -1727,10 +1717,7 @@ impl<'src> Parser<'src> {
                         let call_span = span.merge(rparen_span);
                         Ok(Expr {
                             kind: ExprKind::QualifiedFnCall {
-                                module: Ident {
-                                    name,
-                                    span,
-                                },
+                                module: Ident { name, span },
                                 name: Spanned::new(FnName::new(member), member_ident.span),
                                 args,
                             },

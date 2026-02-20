@@ -422,7 +422,9 @@ pub enum GraphcalError {
     #[error("filename `{stem}` is not a valid module name")]
     #[diagnostic(
         code(graphcal::M004),
-        help("module names must be lower_snake_case identifiers; use `as alias` to specify an explicit name")
+        help(
+            "module names must be lower_snake_case identifiers; use `as alias` to specify an explicit name"
+        )
     )]
     InvalidModuleName {
         stem: String,

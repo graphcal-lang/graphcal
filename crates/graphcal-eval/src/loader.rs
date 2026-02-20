@@ -456,10 +456,7 @@ mod tests {
 
     #[test]
     fn derive_module_name_with_underscores() {
-        assert_eq!(
-            derive_module_name("./my_utils.gcl").unwrap(),
-            "my_utils"
-        );
+        assert_eq!(derive_module_name("./my_utils.gcl").unwrap(), "my_utils");
     }
 
     #[test]
@@ -477,10 +474,7 @@ mod tests {
 
     #[test]
     fn derive_module_name_invalid_uppercase_start() {
-        assert_eq!(
-            derive_module_name("./MyUtils.gcl").unwrap_err(),
-            "MyUtils"
-        );
+        assert_eq!(derive_module_name("./MyUtils.gcl").unwrap_err(), "MyUtils");
     }
 
     #[test]
