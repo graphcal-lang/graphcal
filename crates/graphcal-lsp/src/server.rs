@@ -29,7 +29,7 @@ use graphcal_syntax::ast::DeclKind;
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolTable, format_resolved_type};
+use crate::symbol_table::{self, DefinitionInfo, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub struct ImportedDefinition {
@@ -319,13 +319,7 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
             let param_strs: Vec<String> = sig
                 .params
                 .iter()
-                .map(|p| {
-                    format!(
-                        "{}: {}",
-                        p.name,
-                        format_resolved_type(&p.resolved_type, registry)
-                    )
-                })
+                .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
                 .collect();
 
             let generics =
@@ -345,7 +339,7 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
                     format!("<{}>", all.join(", "))
                 };
 
-            let ret = format_resolved_type(&sig.return_type, registry);
+            let ret = sig.return_type.format(registry);
             let label = format!("fn {fn_name}{generics}({}) -> {ret}", param_strs.join(", "));
             sigs.insert(
                 fn_name.as_str().to_string(),

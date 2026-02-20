@@ -348,6 +348,11 @@ impl Registry {
         self.functions.values()
     }
 
+    /// Iterate over all registered type definitions.
+    pub fn all_types(&self) -> impl Iterator<Item = &TypeDef> {
+        self.types.values()
+    }
+
     /// Register an index definition.
     pub fn register_index(&mut self, def: IndexDef) {
         self.indexes.insert(def.name.clone(), def);

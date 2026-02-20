@@ -8,8 +8,8 @@ use graphcal_syntax::ast::{
 use graphcal_syntax::span::Span;
 
 use graphcal_eval::builtins::{builtin_constants, builtin_functions};
-use graphcal_eval::registry::{IndexKind, Registry};
-use graphcal_eval::tir::{ResolvedTypeExpr, TIR};
+use graphcal_eval::registry::IndexKind;
+use graphcal_eval::tir::TIR;
 
 /// The category of a symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -863,7 +863,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     // Enrich param/node/const declarations with resolved types.
     for (name, resolved_type) in &tir.resolved_decl_types {
         if let Some(def) = table.definitions.get_mut(name) {
-            def.type_description = Some(format_resolved_type(resolved_type, registry));
+            def.type_description = Some(resolved_type.format(registry));
         }
     }
 
@@ -873,13 +873,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
             let params_str: Vec<String> = sig
                 .params
                 .iter()
-                .map(|p| {
-                    format!(
-                        "{}: {}",
-                        p.name,
-                        format_resolved_type(&p.resolved_type, registry)
-                    )
-                })
+                .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
                 .collect();
 
             let generics =
@@ -899,7 +893,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                     format!("<{}>", all.join(", "))
                 };
 
-            let ret = format_resolved_type(&sig.return_type, registry);
+            let ret = sig.return_type.format(registry);
             def.type_description = Some(format!(
                 "fn {}{generics}({}) -> {ret}",
                 fn_name,
@@ -976,71 +970,26 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
             _ => {}
         }
     }
-}
 
-/// Format a `ResolvedTypeExpr` as a human-readable string.
-pub fn format_resolved_type(resolved: &ResolvedTypeExpr, registry: &Registry) -> String {
-    match resolved {
-        ResolvedTypeExpr::Dimensionless => "Dimensionless".to_string(),
-        ResolvedTypeExpr::Bool => "Bool".to_string(),
-        ResolvedTypeExpr::Int => "Int".to_string(),
-        ResolvedTypeExpr::Scalar(dim) => {
-            let formatted = registry.format_dimension(dim);
-            if formatted.is_empty() {
-                "Dimensionless".to_string()
-            } else {
-                formatted
+    // Register field definitions from struct types so that `field::name`
+    // references resolve to a definition with hover info.
+    for type_def in registry.all_types() {
+        for variant in &type_def.variants {
+            for field in &variant.fields {
+                let field_key = format!("field::{}", field.name);
+                table
+                    .definitions
+                    .entry(field_key)
+                    .or_insert_with(|| DefinitionInfo {
+                        name: field.name.to_string(),
+                        category: SymbolCategory::Field,
+                        name_span: Span::new(0, 0),
+                        decl_span: Span::new(0, 0),
+                        type_description: None,
+                        detail: Some(format!("field of {}", type_def.name)),
+                    });
             }
         }
-        ResolvedTypeExpr::Struct(name, _) => name.to_string(),
-        ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
-        } => {
-            let args: Vec<String> = type_args
-                .iter()
-                .map(|a| format_resolved_type(a, registry))
-                .collect();
-            format!("{}<{}>", name, args.join(", "))
-        }
-        ResolvedTypeExpr::GenericDimParam(name, _) => name.to_string(),
-        ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
-            let parts: Vec<String> = terms
-                .iter()
-                .map(|t| match t {
-                    graphcal_eval::tir::ResolvedDimTerm::Concrete { dim, power, op } => {
-                        let formatted = registry.format_dimension(dim);
-                        format_dim_term_str(&formatted, *power, *op)
-                    }
-                    graphcal_eval::tir::ResolvedDimTerm::GenericParam {
-                        name, power, op, ..
-                    } => format_dim_term_str(name.as_ref(), *power, *op),
-                })
-                .collect();
-            parts.join(" ")
-        }
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            let base_str = format_resolved_type(base, registry);
-            let idx_strs: Vec<String> = indexes
-                .iter()
-                .map(|i| match i {
-                    graphcal_eval::tir::ResolvedIndex::Concrete(name, _) => name.to_string(),
-                    graphcal_eval::tir::ResolvedIndex::GenericParam(name, _) => name.to_string(),
-                })
-                .collect();
-            format!("{base_str}[{}]", idx_strs.join(", "))
-        }
-    }
-}
-
-pub fn format_dim_term_str(name: &str, power: i32, op: graphcal_syntax::ast::MulDivOp) -> String {
-    let prefix = match op {
-        graphcal_syntax::ast::MulDivOp::Mul => "",
-        graphcal_syntax::ast::MulDivOp::Div => "/ ",
-    };
-    if power == 1 {
-        format!("{prefix}{name}")
-    } else {
-        format!("{prefix}{name}^{power}")
     }
 }
 
