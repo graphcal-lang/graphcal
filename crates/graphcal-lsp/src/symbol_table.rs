@@ -440,17 +440,19 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
             DeclKind::Use(u) => {
                 // Each imported name is a reference; target resolution for cross-file
                 // go-to-definition is handled separately.
-                for use_item in &u.names {
-                    table.references.push(ReferenceInfo {
-                        span: use_item.name.span,
-                        target: use_item.name.name.clone(),
-                    });
-                    // If aliased, the alias also resolves to the same target.
-                    if let Some(alias) = &use_item.alias {
+                if let graphcal_syntax::ast::UseKind::Selective(names) = &u.kind {
+                    for use_item in names {
                         table.references.push(ReferenceInfo {
-                            span: alias.span,
+                            span: use_item.name.span,
                             target: use_item.name.name.clone(),
                         });
+                        // If aliased, the alias also resolves to the same target.
+                        if let Some(alias) = &use_item.alias {
+                            table.references.push(ReferenceInfo {
+                                span: alias.span,
+                                target: use_item.name.name.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -473,13 +475,16 @@ fn collect_expr_refs(
     scopes: &mut ScopeStack,
 ) {
     match &expr.kind {
-        ExprKind::GraphRef(name) | ExprKind::ConstRef(name) => {
+        ExprKind::GraphRef(name)
+        | ExprKind::QualifiedGraphRef { name, .. }
+        | ExprKind::ConstRef(name)
+        | ExprKind::QualifiedConstRef { name, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: name.value.to_string(),
             });
         }
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: name.value.to_string(),

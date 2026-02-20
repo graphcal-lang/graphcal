@@ -68,15 +68,25 @@ pub enum AssertBody {
     },
 }
 
+/// The kind of a `use` declaration.
+#[derive(Debug, Clone)]
+pub enum UseKind {
+    /// Selective import: `use "path" { name1, name2 as alias };`
+    Selective(Vec<UseItem>),
+    /// Module import: `use "path";` or `use "path" as alias;`
+    Module { alias: Option<Ident> },
+}
+
 /// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`
+/// or module import: `use "./path/to/file.gcl";` / `use "./path/to/file.gcl" as mod;`
 #[derive(Debug, Clone)]
 pub struct UseDecl {
     /// The file path (quotes stripped, relative to the importing file).
     pub path: String,
     /// The path literal's span (for diagnostics).
     pub path_span: Span,
-    /// The items to import (each optionally aliased with `as`).
-    pub names: Vec<UseItem>,
+    /// The kind of import (selective or module).
+    pub kind: UseKind,
 }
 
 /// A single item in a `use` declaration, optionally aliased.
@@ -526,6 +536,22 @@ pub enum ExprKind {
     VariantLiteral {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
+    },
+    /// Module-qualified graph reference: `@module::name`
+    QualifiedGraphRef {
+        module: Ident,
+        name: Spanned<DeclName>,
+    },
+    /// Module-qualified const reference: `module::CONST_NAME`
+    QualifiedConstRef {
+        module: Ident,
+        name: Spanned<DeclName>,
+    },
+    /// Module-qualified function call: `module::fn_name(args...)`
+    QualifiedFnCall {
+        module: Ident,
+        name: Spanned<FnName>,
+        args: Vec<Expr>,
     },
 }
 

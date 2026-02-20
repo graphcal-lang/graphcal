@@ -136,11 +136,22 @@
 ; fn calls: sqrt(x), ln(x)
 (fn_call name: (identifier) @function.call)
 
+; qualified fn calls: module::fn_name(args)
+(qualified_fn_call module: (identifier) @module name: (identifier) @function.call)
+
 ; ---------------------------------------------------------------
-; Graph references: @name
+; Graph references: @name, @module::name
 ; ---------------------------------------------------------------
 
 (graph_ref "@" @operator name: (identifier) @variable)
+(graph_ref module: (identifier) @module)
+
+; ---------------------------------------------------------------
+; Module imports
+; ---------------------------------------------------------------
+
+; use "./path.gcl" as alias;
+(use_declaration alias: (identifier) @module)
 
 ; ---------------------------------------------------------------
 ; Struct and index usage

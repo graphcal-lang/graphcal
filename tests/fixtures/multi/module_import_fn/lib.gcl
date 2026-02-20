@@ -1,0 +1,2 @@
+// lib.gcl -- utility functions
+fn double(x: Dimensionless) -> Dimensionless = x * 2.0;

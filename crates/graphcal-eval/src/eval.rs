@@ -13,9 +13,10 @@ use crate::error::GraphcalError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ImportedNames};
-use graphcal_syntax::ast::{DeclKind, ExprKind};
+use graphcal_syntax::ast::{DeclKind, Expr, ExprKind};
 use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{DeclName, FieldName, IndexName, StructTypeName, VariantName};
+use graphcal_syntax::names::Spanned;
+use graphcal_syntax::names::{DeclName, FieldName, FnName, IndexName, StructTypeName, VariantName};
 use graphcal_syntax::parser::ParseError;
 use graphcal_syntax::span::Span;
 
@@ -278,10 +279,240 @@ pub fn compile_and_eval_with_overrides(
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
 // ---------------------------------------------------------------------------
 
+/// A qualified reference found during expression walking.
+struct QualifiedRef {
+    module: String,
+    module_span: Span,
+    name: String,
+    name_span: Span,
+}
+
+/// Walk an expression tree and collect all qualified references.
+fn collect_qualified_refs(expr: &Expr, refs: &mut Vec<QualifiedRef>) {
+    match &expr.kind {
+        ExprKind::QualifiedGraphRef { module, name }
+        | ExprKind::QualifiedConstRef { module, name } => {
+            refs.push(QualifiedRef {
+                module: module.name.clone(),
+                module_span: module.span,
+                name: name.value.to_string(),
+                name_span: name.span,
+            });
+        }
+        ExprKind::QualifiedFnCall { module, name, args } => {
+            refs.push(QualifiedRef {
+                module: module.name.clone(),
+                module_span: module.span,
+                name: name.value.to_string(),
+                name_span: name.span,
+            });
+            for arg in args {
+                collect_qualified_refs(arg, refs);
+            }
+        }
+        // Recurse into sub-expressions
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_qualified_refs(lhs, refs);
+            collect_qualified_refs(rhs, refs);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_qualified_refs(operand, refs),
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_qualified_refs(arg, refs);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_qualified_refs(condition, refs);
+            collect_qualified_refs(then_branch, refs);
+            collect_qualified_refs(else_branch, refs);
+        }
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+            collect_qualified_refs(inner, refs);
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                collect_qualified_refs(&stmt.value, refs);
+            }
+            collect_qualified_refs(expr, refs);
+        }
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            collect_qualified_refs(expr, refs);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    collect_qualified_refs(val, refs);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_qualified_refs(&entry.value, refs);
+            }
+        }
+        ExprKind::ForComp { body, .. } => collect_qualified_refs(body, refs),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_qualified_refs(source, refs);
+            collect_qualified_refs(init, refs);
+            collect_qualified_refs(body, refs);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            collect_qualified_refs(init, refs);
+            collect_qualified_refs(body, refs);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_qualified_refs(scrutinee, refs);
+            for arm in arms {
+                collect_qualified_refs(&arm.body, refs);
+            }
+        }
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
+    }
+}
+
+/// Rewrite qualified references to flat names in-place.
+///
+/// Replaces `QualifiedGraphRef { module: "m", name: "x" }` with `GraphRef("m::x")`,
+/// `QualifiedConstRef` with `ConstRef`, and `QualifiedFnCall` with `FnCall`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match over all ExprKind variants plus rewrite logic"
+)]
+fn rewrite_qualified_refs(expr: &mut Expr) {
+    // First, rewrite children recursively
+    match &mut expr.kind {
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            rewrite_qualified_refs(lhs);
+            rewrite_qualified_refs(rhs);
+        }
+        ExprKind::UnaryOp { operand, .. } => rewrite_qualified_refs(operand),
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
+            for arg in args {
+                rewrite_qualified_refs(arg);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            rewrite_qualified_refs(condition);
+            rewrite_qualified_refs(then_branch);
+            rewrite_qualified_refs(else_branch);
+        }
+        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+            rewrite_qualified_refs(inner);
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                rewrite_qualified_refs(&mut stmt.value);
+            }
+            rewrite_qualified_refs(expr);
+        }
+        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
+            rewrite_qualified_refs(expr);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &mut field.value {
+                    rewrite_qualified_refs(val);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                rewrite_qualified_refs(&mut entry.value);
+            }
+        }
+        ExprKind::ForComp { body, .. } => rewrite_qualified_refs(body),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            rewrite_qualified_refs(source);
+            rewrite_qualified_refs(init);
+            rewrite_qualified_refs(body);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            rewrite_qualified_refs(init);
+            rewrite_qualified_refs(body);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            rewrite_qualified_refs(scrutinee);
+            for arm in arms {
+                rewrite_qualified_refs(&mut arm.body);
+            }
+        }
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedGraphRef { .. }
+        | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
+    }
+
+    // Now rewrite the current node if it's a qualified ref.
+    // For QualifiedFnCall we need to move args out, so we use mem::replace.
+    match &expr.kind {
+        ExprKind::QualifiedGraphRef { .. }
+        | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::QualifiedFnCall { .. } => {}
+        _ => return,
+    }
+    let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
+    expr.kind = match old_kind {
+        ExprKind::QualifiedGraphRef { module, name } => {
+            let flat = DeclName::new(format!("{}::{}", module.name, name.value));
+            ExprKind::GraphRef(Spanned {
+                value: flat,
+                span: name.span,
+            })
+        }
+        ExprKind::QualifiedConstRef { module, name } => {
+            let flat = DeclName::new(format!("{}::{}", module.name, name.value));
+            ExprKind::ConstRef(Spanned {
+                value: flat,
+                span: name.span,
+            })
+        }
+        ExprKind::QualifiedFnCall { module, name, args } => {
+            let flat = FnName::new(format!("{}::{}", module.name, name.value));
+            ExprKind::FnCall {
+                name: Spanned {
+                    value: flat,
+                    span: name.span,
+                },
+                args,
+            }
+        }
+        other => other,
+    };
+}
+
 /// Resolve imports from `use` declarations and lower a project's root file to IR.
 ///
 /// This is the shared first half of the compilation pipeline for both
 /// `compile_to_tir_from_project` and `compile_and_eval_from_project`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "handles both selective and module import resolution in a single pass"
+)]
 fn lower_project_to_ir(
     project: &crate::loader::LoadedProject,
 ) -> Result<(crate::ir::IR, NamedSource<Arc<String>>), CompileError> {
@@ -294,6 +525,8 @@ fn lower_project_to_ir(
     // Track which type-system declarations (dims/units/indexes/types) are explicitly
     // imported from each file, so we only register those (not everything in the file).
     let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    // Module imports: map module_name → (canonical_path, span_of_use_decl).
+    let mut module_map: HashMap<String, (PathBuf, Span)> = HashMap::new();
     for decl in &root_file.ast.declarations {
         if let DeclKind::Use(use_decl) = &decl.kind {
             let import_path = root_dir.join(&use_decl.path);
@@ -307,7 +540,34 @@ fn lower_project_to_ir(
 
             let imported_file = &project.files[&import_canonical];
 
-            for use_item in &use_decl.names {
+            let names = match &use_decl.kind {
+                graphcal_syntax::ast::UseKind::Selective(names) => names,
+                graphcal_syntax::ast::UseKind::Module { alias } => {
+                    // Module imports: derive module name, store mapping for later resolution.
+                    let module_name = if let Some(alias_ident) = alias {
+                        alias_ident.name.clone()
+                    } else {
+                        crate::loader::derive_module_name(&use_decl.path).map_err(|stem| {
+                            CompileError::Eval(GraphcalError::InvalidModuleName {
+                                stem,
+                                src: root_src.clone(),
+                                span: use_decl.path_span.into(),
+                            })
+                        })?
+                    };
+                    if let Some((_, first_span)) = module_map.get(&module_name) {
+                        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+                            name: module_name,
+                            src: root_src.clone(),
+                            span: use_decl.path_span.into(),
+                            first: (*first_span).into(),
+                        }));
+                    }
+                    module_map.insert(module_name, (import_canonical.clone(), use_decl.path_span));
+                    continue;
+                }
+            };
+            for use_item in names {
                 let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
                 let local_name = use_item.local_name().to_string();
 
@@ -346,8 +606,142 @@ fn lower_project_to_ir(
         }
     }
 
+    // Resolve module-qualified references: walk root file expressions, look up
+    // each `module::name` in the module's file, and import under flat names.
+    if !module_map.is_empty() {
+        let mut qualified_refs: Vec<QualifiedRef> = Vec::new();
+        for decl in &root_file.ast.declarations {
+            match &decl.kind {
+                DeclKind::Const(c) => collect_qualified_refs(&c.value, &mut qualified_refs),
+                DeclKind::Param(p) => collect_qualified_refs(&p.value, &mut qualified_refs),
+                DeclKind::Node(n) => collect_qualified_refs(&n.value, &mut qualified_refs),
+                DeclKind::Assert(a) => match &a.body {
+                    graphcal_syntax::ast::AssertBody::Expr(e) => {
+                        collect_qualified_refs(e, &mut qualified_refs);
+                    }
+                    graphcal_syntax::ast::AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => {
+                        collect_qualified_refs(actual, &mut qualified_refs);
+                        collect_qualified_refs(expected, &mut qualified_refs);
+                        collect_qualified_refs(tolerance, &mut qualified_refs);
+                    }
+                },
+                DeclKind::Fn(f) => match &f.body {
+                    graphcal_syntax::ast::FnBody::Short(e) => {
+                        collect_qualified_refs(e, &mut qualified_refs);
+                    }
+                    graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                        for stmt in stmts {
+                            collect_qualified_refs(&stmt.value, &mut qualified_refs);
+                        }
+                        collect_qualified_refs(expr, &mut qualified_refs);
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // Deduplicate: track which (module, name) pairs we've already imported.
+        let mut already_imported: HashSet<(String, String)> = HashSet::new();
+
+        for qref in &qualified_refs {
+            let (module_path, _) = module_map.get(&qref.module).ok_or_else(|| {
+                CompileError::Eval(GraphcalError::UnknownModule {
+                    name: qref.module.clone(),
+                    src: root_src.clone(),
+                    span: qref.module_span.into(),
+                })
+            })?;
+
+            let key = (qref.module.clone(), qref.name.clone());
+            if !already_imported.insert(key) {
+                continue; // Already imported this (module, name) pair.
+            }
+
+            let module_file = &project.files[module_path];
+            let flat_name = format!("{}::{}", qref.module, qref.name);
+
+            let found = find_declaration_in_file(&module_file.ast, &qref.name);
+            match found {
+                Some(ImportedDecl::Const(type_ann, expr, span)) => {
+                    imported.consts.push((flat_name, type_ann, expr, span));
+                }
+                Some(ImportedDecl::Param(type_ann, expr, span)) => {
+                    imported.params.push((flat_name, type_ann, expr, span));
+                }
+                Some(ImportedDecl::Node(type_ann, expr, span)) => {
+                    imported.nodes.push((flat_name, type_ann, expr, span));
+                }
+                Some(ImportedDecl::Fn(fn_decl, span)) => {
+                    imported.functions.push((flat_name, fn_decl, span));
+                }
+                Some(ImportedDecl::Assert(body, span)) => {
+                    imported.asserts.push((flat_name, body, span));
+                }
+                Some(ImportedDecl::TypeSystem) => {
+                    imported_type_system_names
+                        .entry(module_path.clone())
+                        .or_default()
+                        .insert(qref.name.clone());
+                }
+                None => {
+                    return Err(CompileError::Eval(GraphcalError::QualifiedNameNotFound {
+                        module: qref.module.clone(),
+                        name: qref.name.clone(),
+                        src: root_src.clone(),
+                        span: qref.name_span.into(),
+                    }));
+                }
+            }
+        }
+    }
+
+    // Rewrite qualified references to flat names in the root AST before lowering.
+    // This must happen before `lower_to_builder` because name resolution inside it
+    // expects all references to use flat names (e.g. "constants::G0" not QualifiedConstRef).
+    let root_ast = if module_map.is_empty() {
+        std::borrow::Cow::Borrowed(&root_file.ast)
+    } else {
+        let mut ast = root_file.ast.clone();
+        for decl in &mut ast.declarations {
+            match &mut decl.kind {
+                DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
+                DeclKind::Param(p) => rewrite_qualified_refs(&mut p.value),
+                DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
+                DeclKind::Assert(a) => match &mut a.body {
+                    graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
+                    graphcal_syntax::ast::AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => {
+                        rewrite_qualified_refs(actual);
+                        rewrite_qualified_refs(expected);
+                        rewrite_qualified_refs(tolerance);
+                    }
+                },
+                DeclKind::Fn(f) => match &mut f.body {
+                    graphcal_syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
+                    graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                        for stmt in stmts {
+                            rewrite_qualified_refs(&mut stmt.value);
+                        }
+                        rewrite_qualified_refs(expr);
+                    }
+                },
+                _ => {}
+            }
+        }
+        std::borrow::Cow::Owned(ast)
+    };
+
     // Lower root AST → builder + unfrozen IR (includes root file declarations + functions)
-    let (mut builder, unfrozen) = crate::ir::lower_to_builder(&root_file.ast, root_src, &imported)?;
+    let (mut builder, unfrozen) = crate::ir::lower_to_builder(&root_ast, root_src, &imported)?;
 
     // Register only explicitly imported type-system declarations from imported files.
     for file_path in &project.load_order {
@@ -2125,6 +2519,60 @@ mod tests {
         assert!(
             (sum - 3.0).abs() < f64::EPSILON,
             "sum = {sum}, expected 3.0"
+        );
+    }
+
+    // --- Module import tests ---
+
+    #[test]
+    fn project_module_import_const() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/module_import/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let g = find_value(&result, "g");
+        assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
+    }
+
+    #[test]
+    fn project_module_import_const_alias() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let g = find_value(&result, "g");
+        assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
+    }
+
+    #[test]
+    fn project_module_import_graph_ref() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/module_import_graph_ref/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let total = find_value(&result, "total_mass");
+        assert!(
+            (total - 4000.0).abs() < f64::EPSILON,
+            "total_mass = {total}, expected 4000.0"
+        );
+    }
+
+    #[test]
+    fn project_module_import_fn_call() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let y = find_value(&result, "y");
+        assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
+    }
+
+    #[test]
+    fn project_module_import_mixed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/module_import_mixed/main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+        let delta_v = find_value(&result, "delta_v");
+        let expected = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
+        assert!(
+            (delta_v - expected).abs() < 0.001,
+            "delta_v = {delta_v}, expected = {expected}"
         );
     }
 

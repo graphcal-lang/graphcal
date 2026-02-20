@@ -105,17 +105,15 @@ pub fn eval_expr(
             variant: variant.value.clone(),
             fields: IndexMap::new(),
         }),
-        ExprKind::GraphRef(ident) => {
-            values
-                .get(ident.value.as_str())
-                .cloned()
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("undefined graph reference `@{}`", ident.value),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                })
-        }
-        ExprKind::ConstRef(ident) => values
+        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => values
+            .get(ident.value.as_str())
+            .cloned()
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!("undefined graph reference `@{}`", ident.value),
+                src: src.clone(),
+                span: expr.span.into(),
+            }),
+        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
             .get(ident.value.as_str())
             .cloned()
             .or_else(|| {
@@ -430,7 +428,7 @@ pub fn eval_expr(
                 Ok(RuntimeValue::Bool(!v))
             }
         },
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
             if matches!(
                 name.value.as_str(),

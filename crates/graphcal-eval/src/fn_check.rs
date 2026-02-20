@@ -101,7 +101,7 @@ fn collect_fn_calls_in_expr(
     calls: &mut Vec<FnName>,
 ) {
     match &expr.kind {
-        ExprKind::FnCall { name, args } => {
+        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             if user_fns.contains_key(name.value.as_str()) {
                 calls.push(name.value.clone());
             }
@@ -148,7 +148,9 @@ fn collect_fn_calls_in_expr(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::GraphRef(_)
+        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => {}

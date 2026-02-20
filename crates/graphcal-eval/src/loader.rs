@@ -234,6 +234,37 @@ fn load_file_dfs(
     Ok(())
 }
 
+/// Derive a module name from a file path string.
+///
+/// Extracts the filename stem (e.g. `"constants"` from `"./constants.gcl"`)
+/// and validates it is a valid `lower_snake_case` identifier.
+///
+/// # Errors
+///
+/// Returns `Err` with the invalid stem if the filename stem is not a valid
+/// `lower_snake_case` identifier.
+pub fn derive_module_name(path: &str) -> Result<String, String> {
+    let file_path = Path::new(path);
+    let stem = file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| path.to_string())?;
+
+    if is_valid_module_name(stem) {
+        Ok(stem.to_string())
+    } else {
+        Err(stem.to_string())
+    }
+}
+
+/// Check if a string is a valid module name (`lower_snake_case` identifier).
+fn is_valid_module_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_lowercase())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 fn io_not_found(path: &Path) -> CompileError {
     CompileError::Eval(GraphcalError::FileNotFound {
@@ -411,5 +442,46 @@ mod tests {
         // d should appear first in load order
         let d_canonical = dir.path().join("d.gcl").canonicalize().unwrap();
         assert_eq!(project.load_order[0], d_canonical);
+    }
+
+    #[test]
+    fn derive_module_name_simple() {
+        assert_eq!(derive_module_name("./constants.gcl").unwrap(), "constants");
+    }
+
+    #[test]
+    fn derive_module_name_nested_path() {
+        assert_eq!(derive_module_name("./lib/orbital.gcl").unwrap(), "orbital");
+    }
+
+    #[test]
+    fn derive_module_name_with_underscores() {
+        assert_eq!(derive_module_name("./my_utils.gcl").unwrap(), "my_utils");
+    }
+
+    #[test]
+    fn derive_module_name_with_digits() {
+        assert_eq!(derive_module_name("./lib2.gcl").unwrap(), "lib2");
+    }
+
+    #[test]
+    fn derive_module_name_invalid_hyphen() {
+        assert_eq!(
+            derive_module_name("./my-utils.gcl").unwrap_err(),
+            "my-utils"
+        );
+    }
+
+    #[test]
+    fn derive_module_name_invalid_uppercase_start() {
+        assert_eq!(derive_module_name("./MyUtils.gcl").unwrap_err(), "MyUtils");
+    }
+
+    #[test]
+    fn derive_module_name_invalid_all_caps() {
+        assert_eq!(
+            derive_module_name("./CONSTANTS.gcl").unwrap_err(),
+            "CONSTANTS"
+        );
     }
 }

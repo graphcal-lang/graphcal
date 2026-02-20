@@ -4,9 +4,11 @@ icon: material/file-multiple
 
 # Multi-File Projects
 
-Graphcal supports splitting projects across multiple files using `use` imports.
+Graphcal supports splitting projects across multiple files using `use` imports. There are two import styles: **selective imports** and **module imports**.
 
-## The `use` Statement
+## Selective Imports
+
+Selective imports bring specific names into the local scope:
 
 ```
 use "./path/to/file.gcl" { name1, name2 };
@@ -15,6 +17,31 @@ use "./path/to/file.gcl" { name1, name2 };
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
 - All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `index`, `fn`
+
+## Module Imports
+
+Module imports bring an entire file in as a namespace, accessed via `::`:
+
+```
+use "./constants.gcl";                  // module named "constants"
+use "./constants.gcl" as consts;        // module named "consts"
+```
+
+When no alias is given, the module name is derived from the filename stem (e.g., `constants.gcl` becomes `constants`). The filename stem must be a valid `lower_snake_case` identifier; otherwise, use `as` to provide an explicit alias.
+
+Members are accessed with `::`:
+
+```
+use "./constants.gcl";
+use "./params.gcl";
+use "./lib.gcl";
+
+node g: Acceleration = constants::G0;           // qualified const
+node total: Mass = @params::dry_mass;           // qualified graph ref
+node y: Dimensionless = lib::double(@x);        // qualified fn call
+```
+
+Module imports only resolve declarations that are actually referenced via `::` in the importing file. Unreferenced declarations are not imported.
 
 ## Path Resolution
 
@@ -39,6 +66,8 @@ node diff: Velocity = @velocity_a - @velocity_b;
 
 ## What Can Be Imported
 
+### Selective imports
+
 | Declaration | How to Import | How to Reference |
 |-------------|--------------|-----------------|
 | `param` | `use "..." { name }` | `@name` |
@@ -51,6 +80,22 @@ node diff: Velocity = @velocity_a - @velocity_b;
 | `fn` | `use "..." { fn_name }` | `fn_name(...)` |
 
 Imported `param` and `node` declarations are referenced with `@` just like local ones.
+
+### Module imports
+
+| Declaration | How to Reference |
+|-------------|-----------------|
+| `param` | `@module::name` |
+| `node` | `@module::name` |
+| `const` | `module::NAME` |
+| `fn` | `module::fn_name(...)` |
+
+Dimension, unit, type, and index declarations cannot currently be referenced via module-qualified syntax. To use types or dimensions from another file, use selective imports.
+
+## When to Use Each Style
+
+- **Selective imports** are best when you need only a few names, or when you need to import types and dimensions
+- **Module imports** are best when you import many values from a file and want to keep their origin clear
 
 ## Circular Import Detection
 
