@@ -197,7 +197,7 @@
     },
 
     "control-keywords": {
-      "match": "\\b(if|else|for|match)\\b",
+      "match": "\\b(if|else|for|match|table)\\b",
       "name": "keyword.control.graphcal"
     },
 

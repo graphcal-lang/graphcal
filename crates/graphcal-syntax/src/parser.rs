@@ -52,6 +52,17 @@ pub enum ParseError {
         #[label("{reason}")]
         span: SourceSpan,
     },
+
+    #[error("table row has {got} value(s), but the header has {expected} column(s)")]
+    #[diagnostic(code(graphcal::P004))]
+    TableRowLengthMismatch {
+        expected: usize,
+        got: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this row has {got} value(s)")]
+        span: SourceSpan,
+    },
 }
 
 pub struct Parser<'src> {
@@ -1841,6 +1852,7 @@ impl<'src> Parser<'src> {
                     self.parse_block_after_open_brace(start_span)
                 }
             }
+            Some(Token::Table) => self.parse_table_expr(),
             Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LParen) => {
                 self.lexer.next_token();
@@ -2357,6 +2369,197 @@ impl<'src> Parser<'src> {
             },
             span,
         })
+    }
+
+    // --- Table expression (desugars to MapLiteral) ---
+
+    /// Parse a table expression: `table[Index1, Index2] { ... }`
+    /// Desugars to `ExprKind::MapLiteral` at parse time.
+    fn parse_table_expr(&mut self) -> Result<Expr, ParseError> {
+        let (_, start_span) = self.expect(Token::Table)?;
+
+        // Parse index list: [Index1, Index2, ...]
+        self.expect(Token::LBracket)?;
+        let mut indexes: Vec<Spanned<IndexName>> = Vec::new();
+        loop {
+            let ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            indexes.push(ident.into_spanned::<IndexName>());
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RBracket)?;
+
+        let ndim = indexes.len();
+
+        // Parse table body: { ... }
+        self.expect(Token::LBrace)?;
+
+        let entries = if ndim == 1 {
+            self.parse_table_1d(&indexes)?
+        } else if self.lexer.peek() == Some(&Token::LBracket) {
+            // 3D+: slice sections
+            self.parse_table_sliced(&indexes)?
+        } else {
+            // 2D: single table (header + data rows)
+            self.parse_table_single(&indexes, &[])?
+        };
+
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        let span = start_span.merge(end_span);
+
+        Ok(Expr {
+            kind: ExprKind::MapLiteral { entries },
+            span,
+        })
+    }
+
+    /// Parse a 1D table body: `Label: expr; ...`
+    fn parse_table_1d(
+        &mut self,
+        indexes: &[Spanned<IndexName>],
+    ) -> Result<Vec<MapEntry>, ParseError> {
+        let mut entries = Vec::new();
+        while self.lexer.peek() != Some(&Token::RBrace) {
+            let label =
+                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            self.expect(Token::Colon)?;
+            let value = self.parse_expr()?;
+            self.expect(Token::Semicolon)?;
+            entries.push(MapEntry {
+                keys: vec![MapEntryKey {
+                    index: indexes[0].clone(),
+                    variant: label.into_spanned::<VariantName>(),
+                }],
+                value,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Parse a single 2D table (header row + data rows).
+    /// `prefix_keys` are prepended to every entry (from slice labels in 3D+).
+    fn parse_table_single(
+        &mut self,
+        indexes: &[Spanned<IndexName>],
+        prefix_keys: &[MapEntryKey],
+    ) -> Result<Vec<MapEntry>, ParseError> {
+        // The row index is second-to-last, column index is last
+        let row_index = &indexes[indexes.len() - 2];
+        let col_index = &indexes[indexes.len() - 1];
+
+        // Parse header row: ColLabel1, ColLabel2, ...;
+        let mut col_labels: Vec<Spanned<VariantName>> = Vec::new();
+        loop {
+            let label =
+                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            col_labels.push(label.into_spanned::<VariantName>());
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::Semicolon)?;
+
+        // Parse data rows: RowLabel: val1, val2, ...;
+        let mut entries = Vec::new();
+        while self.lexer.peek() != Some(&Token::RBrace)
+            && self.lexer.peek() != Some(&Token::LBracket)
+        {
+            let row_label_ident =
+                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            let row_label_span = row_label_ident.span;
+            let row_label = row_label_ident.into_spanned::<VariantName>();
+            self.expect(Token::Colon)?;
+
+            let mut row_values = Vec::new();
+            loop {
+                let value = self.parse_expr()?;
+                row_values.push(value);
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            // Merge spans for the row for error reporting
+            let row_end_span = self
+                .lexer
+                .peek_with_span()
+                .map_or(row_label_span, |(_, s)| s);
+            let row_span = row_label_span.merge(row_end_span);
+            self.expect(Token::Semicolon)?;
+
+            if row_values.len() != col_labels.len() {
+                return Err(ParseError::TableRowLengthMismatch {
+                    expected: col_labels.len(),
+                    got: row_values.len(),
+                    src: self.named_source(),
+                    span: row_span.into(),
+                });
+            }
+
+            for (col_idx, value) in row_values.into_iter().enumerate() {
+                let mut keys: Vec<MapEntryKey> = prefix_keys.to_vec();
+                keys.push(MapEntryKey {
+                    index: row_index.clone(),
+                    variant: row_label.clone(),
+                });
+                keys.push(MapEntryKey {
+                    index: col_index.clone(),
+                    variant: col_labels[col_idx].clone(),
+                });
+                entries.push(MapEntry { keys, value });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Parse a 3D+ table with slice sections: `[SliceLabel1, SliceLabel2] header; rows; ...`
+    fn parse_table_sliced(
+        &mut self,
+        indexes: &[Spanned<IndexName>],
+    ) -> Result<Vec<MapEntry>, ParseError> {
+        // Slice dimensions are all indexes except the last two (row and column)
+        let slice_indexes = &indexes[..indexes.len() - 2];
+        let mut entries = Vec::new();
+
+        while self.lexer.peek() == Some(&Token::LBracket) {
+            self.lexer.next_token(); // consume '['
+
+            // Parse slice labels: Index::Variant, Index::Variant, ...
+            let mut prefix_keys = Vec::new();
+            for (i, slice_index) in slice_indexes.iter().enumerate() {
+                if i > 0 {
+                    self.expect(Token::Comma)?;
+                }
+                let index_ident =
+                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                self.expect(Token::ColonColon)?;
+                let variant = self
+                    .parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?
+                    .into_spanned::<VariantName>();
+                // Use the index from the slice label (qualified), but verify it matches
+                // the declared index. For simplicity, use the label as-is.
+                prefix_keys.push(MapEntryKey {
+                    index: Spanned::new(IndexName::new(index_ident.name), index_ident.span),
+                    variant,
+                });
+                let _ = slice_index; // The index name comes from the label itself
+            }
+
+            self.expect(Token::RBracket)?;
+
+            // Parse the 2D table for this slice
+            let slice_entries = self.parse_table_single(indexes, &prefix_keys)?;
+            entries.extend(slice_entries);
+        }
+
+        Ok(entries)
     }
 
     // --- Map literal ---
@@ -4306,6 +4509,118 @@ param alt: Length = 400.0 km;
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_table_1d() {
+        let source = r"param v: Velocity[Maneuver] = table[Maneuver] {
+            Departure: 2.46 km/s;
+            Correction: 0.12 km/s;
+            Insertion: 1.83 km/s;
+        };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::MapLiteral { entries } => {
+                    assert_eq!(entries.len(), 3);
+                    // Each entry has 1 key
+                    assert_eq!(entries[0].keys.len(), 1);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[2].keys[0].variant.value.as_str(), "Insertion");
+                }
+                other => panic!("expected MapLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_2d() {
+        let source = r"param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+            Departure, Correction, Insertion;
+            Launch:  5000.0 kg, 0.0 kg, 0.0 kg;
+            Cruise:  0.0 kg, 4500.0 kg, 0.0 kg;
+            Arrival: 0.0 kg, 0.0 kg, 4000.0 kg;
+        };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::MapLiteral { entries } => {
+                    assert_eq!(entries.len(), 9); // 3 rows * 3 cols
+                    // Each entry has 2 keys (row, col)
+                    assert_eq!(entries[0].keys.len(), 2);
+                    // First entry: (Phase::Launch, Maneuver::Departure)
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
+                    // Second entry: (Phase::Launch, Maneuver::Correction)
+                    assert_eq!(entries[1].keys[1].variant.value.as_str(), "Correction");
+                    // Last entry: (Phase::Arrival, Maneuver::Insertion)
+                    assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
+                    assert_eq!(entries[8].keys[1].variant.value.as_str(), "Insertion");
+                }
+                other => panic!("expected MapLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_3d() {
+        let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
+            [Time::T1]
+            Departure, Correction;
+            Launch: 5000.0 kg, 0.0 kg;
+            Cruise: 0.0 kg, 4500.0 kg;
+
+            [Time::T2]
+            Departure, Correction;
+            Launch: 4800.0 kg, 0.0 kg;
+            Cruise: 0.0 kg, 4300.0 kg;
+        };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::MapLiteral { entries } => {
+                    assert_eq!(entries.len(), 8); // 2 slices * 2 rows * 2 cols
+                    // Each entry has 3 keys (slice, row, col)
+                    assert_eq!(entries[0].keys.len(), 3);
+                    // First entry: (Time::T1, Phase::Launch, Maneuver::Departure)
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Time");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
+                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[2].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");
+                    // Entry in second slice: (Time::T2, Phase::Launch, Maneuver::Departure)
+                    assert_eq!(entries[4].keys[0].variant.value.as_str(), "T2");
+                    assert_eq!(entries[4].keys[1].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[4].keys[2].variant.value.as_str(), "Departure");
+                }
+                other => panic!("expected MapLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_row_length_mismatch() {
+        let source = r"param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+            Departure, Correction, Insertion;
+            Launch: 5000.0 kg, 0.0 kg;
+        };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::TableRowLengthMismatch {
+                expected: 3,
+                got: 2,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -1,0 +1,9 @@
+dimension Mass = Mass;
+
+index Phase = { Launch, Cruise, Arrival }
+index Maneuver = { Departure, Correction, Insertion }
+
+param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+    Departure, Correction, Insertion;
+    Launch: 5000.0 kg, 0.0 kg;
+};

@@ -568,6 +568,7 @@ atom
    | variant_literal
    | struct_construction
    | map_literal
+   | table_expr
    | block_expr
    | paren_expr
    | match_expr
@@ -645,6 +646,36 @@ single_key_entry
 
 tuple_key_entry
    = "(", pascal_case_ident, "::", pascal_case_ident, { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
+
+(* --- Table expression (syntax sugar, desugars to map_literal) --- *)
+table_expr
+   = "table", "[", index_list, "]", "{", table_body, "}";
+
+index_list
+   = pascal_case_ident, { ",", pascal_case_ident };
+
+table_body
+   = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
+   | table_single                                    (* 2D: header + data rows *)
+   | table_data_row_1d, { table_data_row_1d };       (* 1D: data rows only *)
+
+table_slice_section
+   = "[", qualified_variant, { ",", qualified_variant }, "]", table_single;
+
+table_single
+   = table_header_row, table_data_row, { table_data_row };
+
+table_header_row
+   = pascal_case_ident, { ",", pascal_case_ident }, ";";
+
+table_data_row
+   = pascal_case_ident, ":", expr, { ",", expr }, ";";
+
+table_data_row_1d
+   = pascal_case_ident, ":", expr, ";";
+
+qualified_variant
+   = pascal_case_ident, "::", pascal_case_ident;
 
 (* --- Block expression --- *)
 block_expr

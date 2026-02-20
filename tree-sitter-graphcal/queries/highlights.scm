@@ -28,6 +28,7 @@
   "match"
   "for"
   "assert"
+  "table"
 ] @keyword
 
 ; ---------------------------------------------------------------
@@ -110,6 +111,9 @@
 ; ---------------------------------------------------------------
 ; Types in annotations
 ; ---------------------------------------------------------------
+
+; Indexed type index names: Velocity[Maneuver], Mass[Phase, Maneuver]
+(indexed_type (identifier) @type)
 
 ; Dimensionless keyword in type positions
 (dimensionless) @type.builtin
@@ -246,3 +250,19 @@
 ; ---------------------------------------------------------------
 
 (index_declaration "range" @function.builtin)
+
+; ---------------------------------------------------------------
+; Table expressions
+; ---------------------------------------------------------------
+
+; Index names in table[Index1, Index2]: highlighted as types
+(table_expr index: (identifier) @type)
+
+; Column headers in table header row: highlighted as index variants
+(table_header_row column: (identifier) @constant)
+
+; Row labels in 2D table data rows: highlighted as index variants
+(table_data_row row_label: (identifier) @constant)
+
+; Row labels in 1D table data rows: highlighted as index variants
+(table_data_row_1d row_label: (identifier) @constant)
