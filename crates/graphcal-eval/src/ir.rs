@@ -112,7 +112,7 @@ pub fn lower_to_builder(
     register_file_declarations(ast, &mut builder, src)?;
 
     // Step 3: Register user-defined functions
-    register_functions(&resolved, &mut builder);
+    register_functions(&resolved, &mut builder, src)?;
 
     // Step 4: Extract type annotations from the AST and pair with resolved declarations.
     // Build a map from declaration name to TypeExpr.
@@ -148,30 +148,42 @@ pub fn lower_to_builder(
         .map(|(name, expr, span)| {
             let type_ann = type_anns
                 .remove(&name)
-                .expect("type annotation must exist for every declaration");
-            (name, type_ann, expr, span)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
         })
-        .collect();
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
     let params = resolved
         .params
         .into_iter()
         .map(|(name, expr, span)| {
             let type_ann = type_anns
                 .remove(&name)
-                .expect("type annotation must exist for every declaration");
-            (name, type_ann, expr, span)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
         })
-        .collect();
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
     let nodes = resolved
         .nodes
         .into_iter()
         .map(|(name, expr, span)| {
             let type_ann = type_anns
                 .remove(&name)
-                .expect("type annotation must exist for every declaration");
-            (name, type_ann, expr, span)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
         })
-        .collect();
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
 
     let unfrozen = UnfrozenIR {
         consts,
@@ -510,16 +522,19 @@ fn lower_range_index(
 }
 
 /// Register user-defined functions from a [`ResolvedFile`] into the registry builder.
-fn register_functions(resolved: &ResolvedFile, registry: &mut RegistryBuilder) {
+fn register_functions(
+    resolved: &ResolvedFile,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     for (name, fn_decl, span) in &resolved.functions {
         registry.register_function(registry::FnDef {
             name: FnName::new(name),
             generic_params: fn_decl
                 .generic_params
                 .iter()
-                .map(|g| registry::FnGenericParam {
-                    name: g.name.value.clone(),
-                    constraint: match g.constraint {
+                .map(|g| {
+                    let constraint = match g.constraint {
                         graphcal_syntax::ast::GenericConstraint::Dim => {
                             registry::FnGenericConstraint::Dim
                         }
@@ -527,15 +542,22 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut RegistryBuilder) {
                             registry::FnGenericConstraint::Index
                         }
                         graphcal_syntax::ast::GenericConstraint::Type => {
-                            // Type constraint is for type declarations, not functions.
-                            // This should be caught by validation before reaching here.
-                            unreachable!(
-                                "`Type` constraint is not valid on function generic parameters"
-                            )
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "internal: `Type` constraint is not valid on function generic parameter `{}`",
+                                    g.name.value
+                                ),
+                                src: src.clone(),
+                                span: g.name.span.into(),
+                            });
                         }
-                    },
+                    };
+                    Ok(registry::FnGenericParam {
+                        name: g.name.value.clone(),
+                        constraint,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, GraphcalError>>()?,
             params: fn_decl
                 .params
                 .iter()
@@ -549,11 +571,18 @@ fn register_functions(resolved: &ResolvedFile, registry: &mut RegistryBuilder) {
             span: *span,
         });
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use graphcal_syntax::parser::Parser;
 

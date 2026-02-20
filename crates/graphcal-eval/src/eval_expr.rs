@@ -253,7 +253,9 @@ pub fn eval_expr(
                                 span: expr.span.into(),
                             }
                         })?;
-                        Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
+                        Ok(RuntimeValue::Bool(eval_comparison(
+                            *op, lv, rv, src, expr.span,
+                        )?))
                     }
                 }
             }
@@ -283,7 +285,15 @@ pub fn eval_expr(
                         BinOp::Gt => li > ri,
                         BinOp::Le => li <= ri,
                         BinOp::Ge => li >= ri,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "internal: unexpected operator {op:?} in integer comparison"
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
                     };
                     return Ok(RuntimeValue::Bool(result));
                 }
@@ -301,7 +311,9 @@ pub fn eval_expr(
                         span: expr.span.into(),
                     }
                 })?;
-                Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
+                Ok(RuntimeValue::Bool(eval_comparison(
+                    *op, lv, rv, src, expr.span,
+                )?))
             }
             // Arithmetic operators: Int, Scalar, or derived struct operands
             _ => {
@@ -482,7 +494,16 @@ pub fn eval_expr(
                             let n = entries.len() as f64;
                             RuntimeValue::Scalar(n)
                         }
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "internal: unexpected aggregate function `{}`",
+                                    name.value
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
                     });
                 }
                 // If not indexed, fall through to builtins (min/max are 2-arg builtins)
@@ -1186,7 +1207,15 @@ fn eval_for_comp(
                     })?;
                 RuntimeValue::RangeLabel {
                     step_index,
-                    value: idx_def.step_value(step_index).expect("inside Range branch"),
+                    value: idx_def.step_value(step_index).map_err(|e| {
+                        GraphcalError::EvalError {
+                            message: format!(
+                                "internal: range index step {step_index} out of bounds: {e}"
+                            ),
+                            src: src.clone(),
+                            span: binding.index.span.into(),
+                        }
+                    })?,
                 }
             }
         };
@@ -1272,15 +1301,25 @@ fn check_finite(
 
 /// Evaluate a comparison operator on two f64 values.
 #[expect(clippy::float_cmp, reason = "DSL equality uses exact comparison")]
-fn eval_comparison(op: BinOp, l: f64, r: f64) -> bool {
+fn eval_comparison(
+    op: BinOp,
+    l: f64,
+    r: f64,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<bool, GraphcalError> {
     match op {
-        BinOp::Eq => l == r,
-        BinOp::Ne => l != r,
-        BinOp::Lt => l < r,
-        BinOp::Gt => l > r,
-        BinOp::Le => l <= r,
-        BinOp::Ge => l >= r,
-        _ => unreachable!("eval_comparison called with non-comparison operator"),
+        BinOp::Eq => Ok(l == r),
+        BinOp::Ne => Ok(l != r),
+        BinOp::Lt => Ok(l < r),
+        BinOp::Gt => Ok(l > r),
+        BinOp::Le => Ok(l <= r),
+        BinOp::Ge => Ok(l >= r),
+        _ => Err(GraphcalError::EvalError {
+            message: format!("internal: unexpected operator {op:?} in comparison"),
+            src: src.clone(),
+            span: span.into(),
+        }),
     }
 }
 
@@ -1331,7 +1370,13 @@ fn eval_int_binop(
             })?;
             l.checked_pow(exp)
         }
-        _ => unreachable!("eval_int_binop called with non-arithmetic operator"),
+        _ => {
+            return Err(GraphcalError::EvalError {
+                message: format!("internal: unexpected operator {op:?} in integer arithmetic"),
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
     }
     .ok_or_else(|| GraphcalError::EvalError {
         message: "integer arithmetic overflow".to_string(),
@@ -1363,7 +1408,13 @@ fn eval_binop(
             l / r
         }
         BinOp::Pow => l.powf(r),
-        _ => unreachable!("eval_binop called with non-arithmetic operator"),
+        _ => {
+            return Err(GraphcalError::EvalError {
+                message: format!("internal: unexpected operator {op:?} in arithmetic"),
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
     };
 
     // Post-check: if inputs were finite but result is not, report an error.

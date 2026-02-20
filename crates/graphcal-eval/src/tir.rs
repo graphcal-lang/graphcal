@@ -988,9 +988,18 @@ pub fn resolve_type_expr(
             }
             // Fill in defaults for any remaining params
             for param in type_def.generic_params.iter().skip(type_args.len()) {
-                let default_expr = param.default.as_ref().expect(
-                    "params without defaults should have been caught by the count check above",
-                );
+                let default_expr =
+                    param
+                        .default
+                        .as_ref()
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!(
+                                "internal: generic parameter `{}` has no default",
+                                param.name
+                            ),
+                            src: src.clone(),
+                            span: type_ann.span.into(),
+                        })?;
                 let resolved =
                     resolve_type_expr(default_expr, registry, dim_params, index_params, src)?;
                 resolved_args.push(resolved);
@@ -1006,7 +1015,13 @@ pub fn resolve_type_expr(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use crate::prelude::load_prelude;
     use crate::registry::RegistryBuilder;

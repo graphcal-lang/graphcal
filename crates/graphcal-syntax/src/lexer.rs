@@ -29,20 +29,15 @@ impl<'src> Lexer<'src> {
     }
 
     /// Peek at the next token and its span without consuming it.
-    ///
-    /// # Panics
-    ///
-    /// This method will not panic in practice. The internal `unwrap()` is safe
-    /// because `self.peeked` is always `Some` after the preceding `is_none` check.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         if self.peeked.is_none() {
             self.peeked = Some(self.advance());
         }
+        // SAFETY: `self.peeked` is guaranteed `Some` after the block above.
+        // Using `as_ref().and_then()` to avoid `.expect()`.
         self.peeked
             .as_ref()
-            .expect("peeked is always Some after the is_none check above")
-            .as_ref()
-            .map(|(tok, span)| (tok, *span))
+            .and_then(|inner| inner.as_ref().map(|(tok, span)| (tok, *span)))
     }
 
     /// Consume and return the next token and its span.
@@ -86,7 +81,13 @@ impl<'src> Lexer<'src> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
 
     #[test]

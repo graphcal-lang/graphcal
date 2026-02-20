@@ -86,6 +86,10 @@ fn main() {
             run_format(&paths, check);
         }
         Commands::Lsp => {
+            #[expect(
+                clippy::expect_used,
+                reason = "fatal: cannot run LSP without a runtime"
+            )]
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -398,8 +402,7 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                     println!("{name:width$} = {}", variant.as_str());
                 }
                 _ => {
-                    let formatted =
-                        format_number(value.display_value().expect("only Scalar reaches this arm"));
+                    let formatted = format_number(value.display_value().unwrap_or_default());
                     if let Some(label) = value.display_label(&result.base_dim_symbols) {
                         println!("{name:width$} = {formatted} {label}");
                     } else {
@@ -474,7 +477,7 @@ fn print_json(result: &EvalResult, no_assert: bool) {
                 if let Some(du) = display_unit {
                     map.insert(
                         "display_value".to_string(),
-                        serde_json::json!(v.display_value().expect("matched as Scalar")),
+                        serde_json::json!(v.display_value().unwrap_or_default()),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {
@@ -634,7 +637,13 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
 
     #[test]

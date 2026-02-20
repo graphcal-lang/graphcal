@@ -734,8 +734,15 @@ fn runtime_to_value(
                 entries: converted_entries,
             }
         }
-        RuntimeValue::RangeLabel { .. } => {
-            unreachable!("RangeLabel should not appear in final values")
+        RuntimeValue::RangeLabel { value, .. } => {
+            // RangeLabel is an intermediate value used during unfold evaluation;
+            // it should never appear in final output. Return a fallback scalar.
+            debug_assert!(false, "RangeLabel should not appear in final values");
+            Value::Scalar {
+                si_value: *value,
+                dimension: Dimension::dimensionless(),
+                display_unit: None,
+            }
         }
     }
 }
@@ -826,10 +833,18 @@ fn eval_unfold(
 
         let prev_value = idx_def
             .step_value(i - 1)
-            .expect("unfold only applies to range indexes");
+            .map_err(|e| GraphcalError::EvalError {
+                message: format!("internal: range index step {} out of bounds: {e}", i - 1),
+                src: src.clone(),
+                span: (0, 0).into(),
+            })?;
         let curr_value = idx_def
             .step_value(i)
-            .expect("unfold only applies to range indexes");
+            .map_err(|e| GraphcalError::EvalError {
+                message: format!("internal: range index step {i} out of bounds: {e}"),
+                src: src.clone(),
+                span: (0, 0).into(),
+            })?;
 
         let mut scan_locals = HashMap::new();
         scan_locals.insert(
@@ -1014,20 +1029,19 @@ fn evaluate_plan(
     let all = tir
         .source_order
         .iter()
-        .filter(|(_, cat)| !matches!(cat, DeclCategory::Assert))
-        .map(|(name, cat)| {
+        .filter_map(|(name, cat)| {
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
-                DeclCategory::Assert => unreachable!("filtered out above"),
+                DeclCategory::Assert => return None,
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
-                DeclCategory::Assert => unreachable!("filtered out above"),
+                DeclCategory::Assert => return None,
             };
-            (DeclName::new(name), result, decl_type)
+            Some((DeclName::new(name), result, decl_type))
         })
         .collect();
 
@@ -1341,9 +1355,9 @@ fn extract_flat_display_unit(
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
 fn format_range_step(idx_def: &crate::registry::IndexDef, step_index: usize) -> String {
-    let si_value = idx_def
-        .step_value(step_index)
-        .expect("format_range_step called on range index");
+    let Ok(si_value) = idx_def.step_value(step_index) else {
+        return format!("#{step_index}");
+    };
     if let crate::registry::IndexKind::Range {
         display_label,
         display_scale,
@@ -1431,7 +1445,13 @@ pub enum CompileError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
 
     /// Find the SI value of a named scalar declaration.

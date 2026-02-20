@@ -182,7 +182,13 @@ fn collect_fn_calls_in_expr(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
     use super::*;
     use crate::prelude::load_prelude;
     use crate::registry::RegistryBuilder;
