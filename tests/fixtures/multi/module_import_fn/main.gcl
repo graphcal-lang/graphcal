@@ -1,0 +1,6 @@
+// Module import: qualified function call
+use "./lib.gcl";
+
+param x: Dimensionless = 21.0;
+
+node y: Dimensionless = lib::double(@x);

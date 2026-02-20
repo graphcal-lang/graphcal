@@ -211,15 +211,29 @@ pub fn resolve_with_imports(
         }
     }
 
-    // Build the set of all known names for reference checking
+    // Build the set of all known names for reference checking.
+    // Module-qualified names (e.g. "constants::G0", "params::dry_mass") are classified
+    // by the casing of the part after "::" so they land in the right set.
     let all_const_names: HashSet<&str> = names
         .keys()
-        .filter(|n| is_upper_snake_case(n))
+        .filter(|n| {
+            if let Some((_module, member)) = n.split_once("::") {
+                is_upper_snake_case(member)
+            } else {
+                is_upper_snake_case(n)
+            }
+        })
         .map(String::as_str)
         .collect();
     let all_runtime_names: HashSet<&str> = names
         .keys()
-        .filter(|n| is_lower_snake_case(n))
+        .filter(|n| {
+            if let Some((_module, member)) = n.split_once("::") {
+                is_lower_snake_case(member)
+            } else {
+                is_lower_snake_case(n)
+            }
+        })
         .map(String::as_str)
         .collect();
     // Second pass: resolve references and extract dependencies

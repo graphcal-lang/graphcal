@@ -419,6 +419,58 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("filename `{stem}` is not a valid module name")]
+    #[diagnostic(
+        code(graphcal::M004),
+        help("module names must be lower_snake_case identifiers; use `as alias` to specify an explicit name")
+    )]
+    InvalidModuleName {
+        stem: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("imported here")]
+        span: SourceSpan,
+    },
+
+    #[error("duplicate module name `{name}`")]
+    #[diagnostic(code(graphcal::M005))]
+    DuplicateModuleName {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate module import")]
+        span: SourceSpan,
+        #[label("first imported here")]
+        first: SourceSpan,
+    },
+
+    #[error("unknown module `{name}`")]
+    #[diagnostic(
+        code(graphcal::M006),
+        help("check that a `use` declaration imports this module")
+    )]
+    UnknownModule {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown module")]
+        span: SourceSpan,
+    },
+
+    #[error("name `{name}` not found in module `{module}`")]
+    #[diagnostic(
+        code(graphcal::M007),
+        help("check that the name is declared in the imported file")
+    )]
+    QualifiedNameNotFound {
+        module: String,
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not found in module")]
+        span: SourceSpan,
+    },
+
     #[error(
         "range index `{name}`: start, end, and step must have the same dimension (found {start_dim}, {end_dim}, {step_dim})"
     )]

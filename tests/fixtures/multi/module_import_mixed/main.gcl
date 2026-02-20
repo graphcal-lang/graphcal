@@ -1,0 +1,10 @@
+// Mixed: selective import and module import from different files
+use "./constants.gcl" { G0 };
+use "./params.gcl";
+
+dimension Acceleration = Length / Time^2;
+dimension Velocity = Length / Time;
+
+node v_exhaust: Velocity = @params::isp * G0;
+node mass_ratio: Dimensionless = (@params::dry_mass + @params::fuel_mass) / @params::dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
