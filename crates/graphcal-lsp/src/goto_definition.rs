@@ -46,7 +46,7 @@ fn resolve_local_definition(
         return None;
     }
     // Skip synthetic definitions (zero-length span).
-    if definition.name_span.len == 0 {
+    if definition.name_span.is_empty() {
         return None;
     }
     let range = span_to_range(source, definition.name_span);
@@ -66,7 +66,7 @@ fn resolve_imported_definition(
     ) {
         return None;
     }
-    if imported.definition.name_span.len == 0 {
+    if imported.definition.name_span.is_empty() {
         return None;
     }
     let range = span_to_range(&imported.source, imported.definition.name_span);

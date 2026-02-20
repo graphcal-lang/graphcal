@@ -29,7 +29,7 @@ impl<'src> Formatter<'src> {
 
     /// Get the original source text for a span.
     fn slice(&self, span: Span) -> &'src str {
-        &self.source[span.offset..span.offset + span.len]
+        &self.source[span.offset()..span.offset() + span.len()]
     }
 
     /// Drain all comments whose span starts before `before_offset`,
@@ -38,7 +38,7 @@ impl<'src> Formatter<'src> {
         let mut docs: Vec<RcDoc<'static>> = Vec::new();
         while self.next_comment < self.metadata.comments.len() {
             let comment = &self.metadata.comments[self.next_comment];
-            if comment.span.offset >= before_offset {
+            if comment.span.offset() >= before_offset {
                 break;
             }
             docs.push(RcDoc::text(comment.text.clone()));
@@ -57,9 +57,9 @@ impl<'src> Formatter<'src> {
         let comment = &self.metadata.comments[self.next_comment];
         // A trailing comment must be on the same line — its offset must be
         // between the end of the node and the next newline.
-        if comment.span.offset > line_end_offset {
+        if comment.span.offset() > line_end_offset {
             // Check there's no newline between node end and comment start
-            let between = &self.source[line_end_offset..comment.span.offset.min(self.source.len())];
+            let between = &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if !between.contains('\n') {
                 self.next_comment += 1;
                 return RcDoc::text(format!(" {}", comment.text));
@@ -88,13 +88,13 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     let mut prev_end: usize = 0;
     for (i, decl) in file.declarations.iter().enumerate() {
         // Emit leading comments before this declaration
-        let leading = fmt.drain_comments_before(decl.span.offset);
+        let leading = fmt.drain_comments_before(decl.span.offset());
         let has_leading_comments = !is_nil(&leading);
 
         if i > 0 {
             docs.push(RcDoc::hardline());
             // Extra blank line before comments or when original had a blank line
-            if has_leading_comments || fmt.has_blank_line_between(prev_end, decl.span.offset) {
+            if has_leading_comments || fmt.has_blank_line_between(prev_end, decl.span.offset()) {
                 docs.push(RcDoc::hardline());
             }
         }
@@ -103,7 +103,7 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
         }
 
         let decl_doc = format_decl(&mut fmt, decl);
-        let decl_end = decl.span.offset + decl.span.len;
+        let decl_end = decl.span.offset() + decl.span.len();
         let trailing = fmt.drain_trailing_comment(decl_end);
         docs.push(decl_doc.append(trailing));
         prev_end = decl_end;
@@ -239,9 +239,9 @@ fn format_unit_decl(fmt: &Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
 fn format_unit_def(fmt: &Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
     // Recover original scale text from source
     let scale_text = fmt.slice(Span::new(
-        def.span.offset,
+        def.span.offset(),
         // Find where the unit expr starts
-        def.unit_expr.span.offset - def.span.offset,
+        def.unit_expr.span.offset() - def.span.offset(),
     ));
     // The scale text includes the number and trailing space; trim it
     let scale_text = scale_text.trim_end();
@@ -644,8 +644,8 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         } => format_if(fmt, condition, then_branch, else_branch),
         ExprKind::UnitLiteral { value: _, unit } => {
             // Recover the full literal from source to preserve number formatting
-            let unit_start = unit.span.offset;
-            let lit_source = &fmt.source[expr.span.offset..unit_start];
+            let unit_start = unit.span.offset();
+            let lit_source = &fmt.source[expr.span.offset()..unit_start];
             let lit_text = lit_source.trim_end();
             RcDoc::text(lit_text.to_string())
                 .append(RcDoc::text(" "))

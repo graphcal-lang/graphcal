@@ -81,7 +81,7 @@ impl<'src> Lexer<'src> {
     /// Get the source text corresponding to a span.
     #[must_use]
     pub fn slice_at(&self, span: Span) -> &'src str {
-        &self.source[span.offset..span.offset + span.len]
+        &self.source[span.offset()..span.offset() + span.len()]
     }
 
     /// Return the total length (in bytes) of the source string.
@@ -186,11 +186,11 @@ mod tests {
         let mut lexer = Lexer::new(input);
 
         let (_, span) = lexer.next_token().unwrap(); // node
-        assert_eq!(span.offset, 0);
-        assert_eq!(span.len, 4);
+        assert_eq!(span.offset(), 0);
+        assert_eq!(span.len(), 4);
 
         let (_, span) = lexer.next_token().unwrap(); // delta_v
-        assert_eq!(span.offset, 5);
-        assert_eq!(span.len, 7);
+        assert_eq!(span.offset(), 5);
+        assert_eq!(span.len(), 7);
     }
 }

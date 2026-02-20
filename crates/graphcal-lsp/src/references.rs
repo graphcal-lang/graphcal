@@ -49,7 +49,7 @@ pub fn references(
                 !matches!(
                     def.category,
                     SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-                ) && def.name_span.len > 0
+                ) && !def.name_span.is_empty()
             })
             .map(|def| Location {
                 uri: uri.clone(),
@@ -59,7 +59,7 @@ pub fn references(
                 analysis
                     .imported_definitions
                     .get(&target_name)
-                    .filter(|imported| imported.definition.name_span.len > 0)
+                    .filter(|imported| !imported.definition.name_span.is_empty())
                     .map(|imported| Location {
                         uri: imported.uri.clone(),
                         range: span_to_range(&imported.source, imported.definition.name_span),

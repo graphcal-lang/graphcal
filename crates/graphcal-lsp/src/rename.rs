@@ -94,7 +94,7 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
     // Get the current name text for the placeholder.
     let placeholder = analysis
         .source
-        .get(span.offset..span.offset + span.len)
+        .get(span.offset()..span.offset() + span.len())
         .unwrap_or(&target.key)
         .to_string();
 
@@ -131,7 +131,7 @@ pub fn rename(
     // Include the definition's name span if it's local.
     if target.is_local
         && let Some(def) = analysis.symbol_table.definitions.get(&target.key)
-        && def.name_span.len > 0
+        && !def.name_span.is_empty()
     {
         current_file_edits.push(TextEdit {
             range: span_to_range(&analysis.source, def.name_span),
@@ -146,7 +146,7 @@ pub fn rename(
     // For imported symbols, also rename the definition in the source file.
     if !target.is_local
         && let Some(imported) = analysis.imported_definitions.get(&target.key)
-        && imported.definition.name_span.len > 0
+        && !imported.definition.name_span.is_empty()
     {
         changes
             .entry(imported.uri.clone())

@@ -1,14 +1,32 @@
 /// Byte-offset span in source code. Compatible with `miette::SourceSpan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
-    pub offset: usize,
-    pub len: usize,
+    offset: usize,
+    len: usize,
 }
 
 impl Span {
     #[must_use]
     pub const fn new(offset: usize, len: usize) -> Self {
         Self { offset, len }
+    }
+
+    /// Returns the byte offset.
+    #[must_use]
+    pub const fn offset(self) -> usize {
+        self.offset
+    }
+
+    /// Returns the byte length.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` if the span has zero length.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
     }
 
     /// Merge two spans into one that covers both.
@@ -43,8 +61,8 @@ mod tests {
         let a = Span::new(0, 5);
         let b = Span::new(10, 3);
         let merged = a.merge(b);
-        assert_eq!(merged.offset, 0);
-        assert_eq!(merged.len, 13);
+        assert_eq!(merged.offset(), 0);
+        assert_eq!(merged.len(), 13);
     }
 
     #[test]
@@ -52,8 +70,8 @@ mod tests {
         let a = Span::new(2, 5);
         let b = Span::new(4, 6);
         let merged = a.merge(b);
-        assert_eq!(merged.offset, 2);
-        assert_eq!(merged.len, 8);
+        assert_eq!(merged.offset(), 2);
+        assert_eq!(merged.len(), 8);
     }
 
     #[test]
