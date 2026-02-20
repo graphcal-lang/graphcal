@@ -270,112 +270,24 @@ pub fn compile_and_eval_with_overrides(
     name: &str,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
-    let src = NamedSource::new(name, Arc::new(source.to_string()));
-    let file = graphcal_syntax::parser::Parser::with_name(source, name).parse_file()?;
-
-    // Lower AST → IR
-    let mut ir = crate::ir::lower(&file, &src)?;
-
-    // Validate and apply overrides to IR
-    for (override_name, override_expr) in overrides {
-        let name_str = override_name.as_str();
-        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
-            match cat {
-                DeclCategory::Param => {}
-                DeclCategory::Const => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "const".to_string(),
-                    }));
-                }
-                DeclCategory::Node => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "node".to_string(),
-                    }));
-                }
-                DeclCategory::Assert => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "assert".to_string(),
-                    }));
-                }
-            }
-        } else {
-            return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
-                name: override_name.clone(),
-            }));
-        }
-
-        // Replace the expression in ir.params
-        if let Some(entry) = ir.params.iter_mut().find(|(n, _, _, _)| n == name_str) {
-            entry.2 = override_expr.clone();
-        }
-
-        // Re-extract runtime deps for the overridden param
-        let all_runtime: std::collections::HashSet<&str> = ir
-            .params
-            .iter()
-            .chain(ir.nodes.iter())
-            .map(|(n, _, _, _)| n.as_str())
-            .collect();
-        let mut graph_refs = std::collections::HashSet::new();
-        crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
-        ir.runtime_deps.insert(name_str.to_string(), graph_refs);
-    }
-
-    // Type resolve IR → TIR
-    let tir = crate::tir::type_resolve(ir, &src)?;
-
-    // Check
-    crate::fn_check::check_no_recursion_tir(&tir, &src)?;
-    crate::dim_check::check_dimensions_tir(&tir, &src)?;
-
-    // Dimension-check override expressions against their param's declared type
-    let declared_types = tir.build_declared_types(&src)?;
-    for (override_name, override_expr) in overrides {
-        crate::dim_check::check_override_dimension(
-            override_expr,
-            override_name.as_str(),
-            &declared_types,
-            &tir.registry,
-            &tir.resolved_fn_sigs,
-            &src,
-        )?;
-    }
-
-    // Compile TIR → ExecPlan
-    let plan = crate::exec_plan::compile(&tir, &src)?;
-
-    // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, &src);
-    Ok(result)
+    let project = crate::loader::LoadedProject::from_source(source, name)?;
+    compile_and_eval_from_project(&project, overrides)
 }
 
-/// Full pipeline for multi-file projects with parameter overrides.
-///
-/// Loads all files referenced by `use` declarations starting from `root_path`,
-/// collects imported declarations, and evaluates the root file with imports merged.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "multi-file project compilation has many sequential steps"
-)]
-#[expect(
-    clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
-)]
-pub fn compile_and_eval_project(
-    root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
-) -> Result<EvalResult, CompileError> {
-    let project = crate::loader::load_project(root_path)?;
+// ---------------------------------------------------------------------------
+// Project-based compilation: `LoadedProject` → TIR / EvalResult
+// ---------------------------------------------------------------------------
 
+/// Resolve imports from `use` declarations and lower a project's root file to IR.
+///
+/// This is the shared first half of the compilation pipeline for both
+/// `compile_to_tir_from_project` and `compile_and_eval_from_project`.
+fn lower_project_to_ir(
+    project: &crate::loader::LoadedProject,
+) -> Result<(crate::ir::IR, NamedSource<Arc<String>>), CompileError> {
     let root_file = &project.files[&project.root];
     let root_src = &root_file.named_source;
+    let root_dir = project.root.parent().unwrap_or_else(|| Path::new("."));
 
     // Collect imported names from imported files based on `use` statements.
     let mut imported = ImportedNames::default();
@@ -384,10 +296,7 @@ pub fn compile_and_eval_project(
     let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for decl in &root_file.ast.declarations {
         if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = root_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(&use_decl.path);
+            let import_path = root_dir.join(&use_decl.path);
             let import_canonical = import_path.canonicalize().map_err(|_| {
                 CompileError::Eval(GraphcalError::ImportFileNotFound {
                     path: use_decl.path.clone(),
@@ -456,7 +365,14 @@ pub fn compile_and_eval_project(
         }
     }
 
-    // Validate and apply overrides to IR
+    Ok((ir, root_src.clone()))
+}
+
+/// Validate and apply parameter overrides to an IR.
+fn apply_overrides(
+    ir: &mut crate::ir::IR,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
         if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
@@ -501,19 +417,55 @@ pub fn compile_and_eval_project(
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
         ir.runtime_deps.insert(name_str.to_string(), graph_refs);
     }
+    Ok(())
+}
 
-    // Type resolve IR → TIR
-    let tir = crate::tir::type_resolve(ir, root_src)?;
+/// Compile a [`LoadedProject`](crate::loader::LoadedProject) to TIR without evaluating.
+///
+/// Resolves imports from `use` declarations in the root file, lowers to IR,
+/// type-resolves, and runs all checks (recursion, dimensions). The project may
+/// have been loaded from disk, constructed from in-memory source, or a mix of
+/// both (via [`LoadedProject::load_with_overlay`](crate::loader::LoadedProject::load_with_overlay)).
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if lowering, resolution, or checking fails.
+pub fn compile_to_tir_from_project(
+    project: &crate::loader::LoadedProject,
+) -> Result<crate::tir::TIR, CompileError> {
+    let (ir, root_src) = lower_project_to_ir(project)?;
+    let tir = crate::tir::type_resolve(ir, &root_src)?;
+    crate::fn_check::check_no_recursion_tir(&tir, &root_src)?;
+    crate::dim_check::check_dimensions_tir(&tir, &root_src)?;
+    Ok(tir)
+}
 
-    // Check
-    crate::fn_check::check_no_recursion_tir(&tir, root_src)?;
+/// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
+///
+/// Resolves imports, lowers to IR, applies parameter overrides, type-resolves,
+/// checks, builds an execution plan, and evaluates. The project may have been
+/// loaded from disk, in-memory source, or a mix of both.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if any pipeline stage fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
+pub fn compile_and_eval_from_project(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> Result<EvalResult, CompileError> {
+    let (mut ir, root_src) = lower_project_to_ir(project)?;
 
-    // Dimension check — TIR already includes imported declarations with their real types,
-    // so no separate `imported_types` map is needed.
-    crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+    apply_overrides(&mut ir, overrides)?;
 
-    // Dimension-check override expressions
-    let declared_types = tir.build_declared_types(root_src)?;
+    let tir = crate::tir::type_resolve(ir, &root_src)?;
+    crate::fn_check::check_no_recursion_tir(&tir, &root_src)?;
+    crate::dim_check::check_dimensions_tir(&tir, &root_src)?;
+
+    let declared_types = tir.build_declared_types(&root_src)?;
     for (override_name, override_expr) in overrides {
         crate::dim_check::check_override_dimension(
             override_expr,
@@ -521,16 +473,37 @@ pub fn compile_and_eval_project(
             &declared_types,
             &tir.registry,
             &tir.resolved_fn_sigs,
-            root_src,
+            &root_src,
         )?;
     }
 
-    // Compile TIR → ExecPlan
-    let plan = crate::exec_plan::compile(&tir, root_src)?;
-
-    // Evaluate
-    let result = evaluate_plan(&tir, &plan, &declared_types, root_src);
+    let plan = crate::exec_plan::compile(&tir, &root_src)?;
+    let result = evaluate_plan(&tir, &plan, &declared_types, &root_src);
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Convenience wrappers: existing public API, now delegating to project-based core
+// ---------------------------------------------------------------------------
+
+/// Full pipeline for multi-file projects with parameter overrides.
+///
+/// Loads all files referenced by `use` declarations starting from `root_path`,
+/// collects imported declarations, and evaluates the root file with imports merged.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
+pub fn compile_and_eval_project(
+    root_path: &Path,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> Result<EvalResult, CompileError> {
+    let project = crate::loader::load_project(root_path)?;
+    compile_and_eval_from_project(&project, overrides)
 }
 
 /// Compile source to TIR without evaluating.
@@ -543,13 +516,8 @@ pub fn compile_and_eval_project(
 ///
 /// Returns a [`CompileError`] if parsing, lowering, or checking fails.
 pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, CompileError> {
-    let src = NamedSource::new(name, Arc::new(source.to_string()));
-    let file = graphcal_syntax::parser::Parser::with_name(source, name).parse_file()?;
-    let ir = crate::ir::lower(&file, &src)?;
-    let tir = crate::tir::type_resolve(ir, &src)?;
-    crate::fn_check::check_no_recursion_tir(&tir, &src)?;
-    crate::dim_check::check_dimensions_tir(&tir, &src)?;
-    Ok(tir)
+    let project = crate::loader::LoadedProject::from_source(source, name)?;
+    compile_to_tir_from_project(&project)
 }
 
 /// Compile a multi-file project to TIR without evaluating.
@@ -564,87 +532,7 @@ pub fn compile_to_tir_project(
     root_path: &Path,
 ) -> Result<(crate::tir::TIR, crate::loader::LoadedProject), CompileError> {
     let project = crate::loader::load_project(root_path)?;
-
-    let root_file = &project.files[&project.root];
-    let root_src = &root_file.named_source;
-
-    let mut imported = ImportedNames::default();
-    let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
-    for decl in &root_file.ast.declarations {
-        if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = root_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(&use_decl.path);
-            let import_canonical = import_path.canonicalize().map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: use_decl.path.clone(),
-                    src: root_src.clone(),
-                    span: use_decl.path_span.into(),
-                })
-            })?;
-
-            let imported_file = &project.files[&import_canonical];
-
-            for use_item in &use_decl.names {
-                let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
-                let local_name = use_item.local_name().to_string();
-
-                match found {
-                    Some(ImportedDecl::Const(type_ann, expr, span)) => {
-                        imported.consts.push((local_name, type_ann, expr, span));
-                    }
-                    Some(ImportedDecl::Param(type_ann, expr, span)) => {
-                        imported.params.push((local_name, type_ann, expr, span));
-                    }
-                    Some(ImportedDecl::Node(type_ann, expr, span)) => {
-                        imported.nodes.push((local_name, type_ann, expr, span));
-                    }
-                    Some(ImportedDecl::Fn(fn_decl, span)) => {
-                        imported.functions.push((local_name, fn_decl, span));
-                    }
-                    Some(ImportedDecl::Assert(expr, span)) => {
-                        imported.asserts.push((local_name, expr, span));
-                    }
-                    Some(ImportedDecl::TypeSystem) => {
-                        imported_type_system_names
-                            .entry(import_canonical.clone())
-                            .or_default()
-                            .insert(use_item.name.name.clone());
-                    }
-                    None => {
-                        return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                            name: use_item.name.name.clone(),
-                            file_path: use_decl.path.clone(),
-                            src: root_src.clone(),
-                            span: use_item.name.span.into(),
-                        }));
-                    }
-                }
-            }
-        }
-    }
-
-    let mut ir = crate::ir::lower_with_imports(&root_file.ast, root_src, &imported)?;
-
-    for file_path in &project.load_order {
-        if *file_path == project.root {
-            continue;
-        }
-        if let Some(names) = imported_type_system_names.get(file_path) {
-            let loaded = &project.files[file_path];
-            crate::ir::register_selected_declarations(
-                &loaded.ast,
-                &mut ir.registry,
-                &loaded.named_source,
-                names,
-            )?;
-        }
-    }
-
-    let tir = crate::tir::type_resolve(ir, root_src)?;
-    crate::fn_check::check_no_recursion_tir(&tir, root_src)?;
-    crate::dim_check::check_dimensions_tir(&tir, root_src)?;
+    let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))
 }
 

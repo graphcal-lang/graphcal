@@ -33,6 +33,84 @@ pub struct LoadedProject {
     pub load_order: Vec<PathBuf>,
 }
 
+impl LoadedProject {
+    /// Build a single-file project from in-memory source text.
+    ///
+    /// The file is assigned a synthetic path derived from `name` (no disk I/O).
+    /// Use declarations in the source are **not** followed — this is suitable
+    /// for standalone files or untitled editor buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CompileError`] if parsing fails.
+    pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
+        let source = Arc::new(source.to_string());
+        let named_source = NamedSource::new(name, Arc::clone(&source));
+        let ast = graphcal_syntax::parser::Parser::with_name(&source, name).parse_file()?;
+        let path = PathBuf::from(name);
+        let loaded_file = LoadedFile {
+            path: path.clone(),
+            source,
+            ast,
+            named_source,
+        };
+        let mut files = HashMap::new();
+        files.insert(path.clone(), loaded_file);
+        Ok(Self {
+            files,
+            root: path.clone(),
+            load_order: vec![path],
+        })
+    }
+
+    /// Load a multi-file project from disk, substituting one file's content
+    /// with in-memory text.
+    ///
+    /// The `overlay` is a `(path, source)` pair. When the DFS traversal
+    /// encounters the file at `overlay.0` (after canonicalization), it uses
+    /// `overlay.1` as the source text instead of reading from disk.
+    ///
+    /// This is the primary entry point for the LSP, which has one file open
+    /// in-memory while imported files remain on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CompileError`] if a file cannot be read, parsed, or
+    /// if circular imports are detected.
+    pub fn load_with_overlay(
+        root_path: &Path,
+        overlay: (&Path, &str),
+    ) -> Result<Self, CompileError> {
+        let root_canonical = root_path
+            .canonicalize()
+            .map_err(|_| io_not_found(root_path))?;
+        let overlay_canonical = overlay
+            .0
+            .canonicalize()
+            .map_err(|_| io_not_found(overlay.0))?;
+
+        let mut files: HashMap<PathBuf, LoadedFile> = HashMap::new();
+        let mut load_order: Vec<PathBuf> = Vec::new();
+        let mut loading: HashSet<PathBuf> = HashSet::new();
+        let mut stack: Vec<String> = Vec::new();
+
+        load_file_dfs(
+            &root_canonical,
+            &mut files,
+            &mut load_order,
+            &mut loading,
+            &mut stack,
+            Some((&overlay_canonical, overlay.1)),
+        )?;
+
+        Ok(Self {
+            files,
+            root: root_canonical,
+            load_order,
+        })
+    }
+}
+
 /// Load a project starting from `root_path`, recursively loading all
 /// files referenced by `use` declarations. Detects circular imports.
 ///
@@ -56,6 +134,7 @@ pub fn load_project(root_path: &Path) -> Result<LoadedProject, CompileError> {
         &mut load_order,
         &mut loading,
         &mut stack,
+        None,
     )?;
 
     Ok(LoadedProject {
@@ -66,12 +145,16 @@ pub fn load_project(root_path: &Path) -> Result<LoadedProject, CompileError> {
 }
 
 /// DFS helper: load a single file and recurse into its `use` declarations.
+///
+/// When `overlay` is `Some((path, content))`, loading the file at `path` uses
+/// the provided `content` instead of reading from disk.
 fn load_file_dfs(
     canonical_path: &Path,
     files: &mut HashMap<PathBuf, LoadedFile>,
     load_order: &mut Vec<PathBuf>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
+    overlay: Option<(&Path, &str)>,
 ) -> Result<(), CompileError> {
     // Already fully loaded — skip.
     if files.contains_key(canonical_path) {
@@ -90,10 +173,19 @@ fn load_file_dfs(
     }
     stack.push(display_name.clone());
 
-    // Read and parse the file.
-    let source_str =
-        std::fs::read_to_string(canonical_path).map_err(|_| io_not_found(canonical_path))?;
-    let source = Arc::new(source_str);
+    // Read the file: use overlay content if this is the overlay path,
+    // otherwise read from disk.
+    let source = match overlay {
+        Some((overlay_path, overlay_content)) if overlay_path == canonical_path => {
+            Arc::new(overlay_content.to_string())
+        }
+        _ => {
+            let source_str = std::fs::read_to_string(canonical_path)
+                .map_err(|_| io_not_found(canonical_path))?;
+            Arc::new(source_str)
+        }
+    };
+
     let name = canonical_path
         .file_name()
         .map_or_else(|| display_name.clone(), |n| n.to_string_lossy().to_string());
@@ -113,7 +205,14 @@ fn load_file_dfs(
                 })
             })?;
 
-            load_file_dfs(&import_canonical, files, load_order, loading, stack)?;
+            load_file_dfs(
+                &import_canonical,
+                files,
+                load_order,
+                loading,
+                stack,
+                overlay,
+            )?;
         }
     }
 
@@ -214,6 +313,71 @@ mod tests {
     fn load_missing_import_file() {
         let dir = setup_temp_dir(&[("main.gcl", "use \"./nonexistent.gcl\" { x };")]);
         let result = load_project(&dir.path().join("main.gcl"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_source_single_file() {
+        let source = "param x: Dimensionless = 1.0;";
+        let project = LoadedProject::from_source(source, "test.gcl").unwrap();
+        assert_eq!(project.files.len(), 1);
+        assert_eq!(project.load_order.len(), 1);
+        let root_file = &project.files[&project.root];
+        assert_eq!(root_file.source.as_str(), source);
+    }
+
+    #[test]
+    fn from_source_parse_error() {
+        let source = "this is not valid graphcal";
+        let result = LoadedProject::from_source(source, "bad.gcl");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_with_overlay_uses_overlay_for_root() {
+        let dir = setup_temp_dir(&[("main.gcl", "param x: Dimensionless = 1.0;")]);
+        let root_path = dir.path().join("main.gcl");
+
+        let overlay_source = "param x: Dimensionless = 99.0;";
+        let project =
+            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source)).unwrap();
+
+        let root_file = &project.files[&project.root];
+        assert_eq!(root_file.source.as_str(), overlay_source);
+    }
+
+    #[test]
+    fn load_with_overlay_uses_disk_for_imports() {
+        let dir = setup_temp_dir(&[
+            ("helper.gcl", "param y: Dimensionless = 2.0;"),
+            (
+                "main.gcl",
+                "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+            ),
+        ]);
+        let root_path = dir.path().join("main.gcl");
+        let helper_canonical = dir.path().join("helper.gcl").canonicalize().unwrap();
+
+        let overlay_source = "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
+        let project =
+            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source)).unwrap();
+
+        // Root file should use overlay content
+        let root_file = &project.files[&project.root];
+        assert_eq!(root_file.source.as_str(), overlay_source);
+
+        // Helper file should use disk content
+        let helper_file = &project.files[&helper_canonical];
+        assert_eq!(helper_file.source.as_str(), "param y: Dimensionless = 2.0;");
+    }
+
+    #[test]
+    fn load_with_overlay_parse_error_propagates() {
+        let dir = setup_temp_dir(&[("main.gcl", "param x: Dimensionless = 1.0;")]);
+        let root_path = dir.path().join("main.gcl");
+
+        let bad_overlay = "this is not valid graphcal";
+        let result = LoadedProject::load_with_overlay(&root_path, (&root_path, bad_overlay));
         assert!(result.is_err());
     }
 

@@ -22,9 +22,9 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use graphcal_eval::builtins::{DimSignature, builtin_functions};
 use graphcal_eval::eval::{
-    EvalResult, Value, compile_and_eval_named, compile_and_eval_project, compile_to_tir,
-    compile_to_tir_project,
+    CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
+use graphcal_eval::loader::LoadedProject;
 use graphcal_syntax::ast::DeclKind;
 
 use crate::convert::position_to_byte_offset;
@@ -125,143 +125,95 @@ impl Backend {
     }
 }
 
-/// Run the analysis pipeline, producing an `AnalysisResult`.
-fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
+/// Build a `LoadedProject` from a URI and in-memory text.
+///
+/// For file-backed URIs, loads the project from disk with the in-memory text
+/// overlaid on the root file. For untitled/non-file URIs, builds a single-file
+/// project from the in-memory text alone.
+fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
+    match uri.to_file_path() {
+        Ok(path) => LoadedProject::load_with_overlay(&path, (&path, text)).map_err(Box::new),
+        Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
+    }
+}
 
-    // Try to parse and compile to TIR.
-    let tir_result = uri.to_file_path().map_or_else(
-        |()| compile_to_tir(text, name).map(|tir| (tir, None)),
-        |path| compile_to_tir_project(&path).map(|(tir, project)| (tir, Some(project))),
-    );
-
-    // Always parse the in-memory text first for the symbol table.
-    // This may differ from the on-disk version when the user has unsaved edits.
-    let parse_result = graphcal_syntax::parser::Parser::with_name(text, name).parse_file();
-
-    match (tir_result, parse_result) {
-        (Ok((tir, project)), Ok(ast)) => {
-            // Both TIR and in-memory parse succeeded.
-            let mut symbol_table = symbol_table::build_from_ast(&ast);
-            symbol_table::enrich_from_tir(&mut symbol_table, &tir);
-
-            let imported_definitions = project.map_or_else(HashMap::new, |project| {
-                collect_imported_definitions(uri, &ast, &project, Some(&tir))
-            });
-
-            let fn_signatures = build_fn_signatures(Some(&tir));
-            let use_decls = collect_use_decl_info(&ast);
-
-            // Run full evaluation for diagnostics and computed values.
-            let (diagnostics, eval_values) = run_eval(uri, text, name);
-
-            AnalysisResult {
-                source: text.to_string(),
-                symbol_table,
-                imported_definitions,
-                diagnostics,
-                eval_values,
-                fn_signatures,
-                use_decls,
-            }
-        }
-        (Ok((tir, project)), Err(_)) => {
-            // TIR succeeded (from disk) but in-memory text has parse errors.
-            // This happens when the user has unsaved edits that break parsing.
-            // Produce diagnostics from the in-memory text (not disk) so the
-            // user sees the parse error.
-            let diagnostics = match compile_and_eval_named(text, name) {
-                Ok(result) => eval_result_to_diagnostics(&result, text),
-                Err(e) => compile_error_to_diagnostics(&e, text),
-            };
-
-            let fn_signatures = build_fn_signatures(Some(&tir));
-
-            // Use the on-disk AST for a partial symbol table and eval values.
-            let (symbol_table, imported_definitions, eval_values, use_decls) = uri
-                .to_file_path()
-                .ok()
-                .and_then(|path| std::fs::read_to_string(&path).ok())
-                .and_then(|disk_text| {
-                    graphcal_syntax::parser::Parser::with_name(&disk_text, name)
-                        .parse_file()
-                        .ok()
-                        .map(|ast| (disk_text, ast))
-                })
-                .map_or_else(
-                    || {
-                        (
-                            SymbolTable::default(),
-                            HashMap::new(),
-                            HashMap::new(),
-                            Vec::new(),
-                        )
-                    },
-                    |(_, disk_ast)| {
-                        let mut st = symbol_table::build_from_ast(&disk_ast);
-                        symbol_table::enrich_from_tir(&mut st, &tir);
-                        let imports = project.map_or_else(HashMap::new, |p| {
-                            collect_imported_definitions(uri, &disk_ast, &p, Some(&tir))
-                        });
-                        // Keep eval values from the last valid (disk) version.
-                        let (_, vals) = run_eval(uri, text, name);
-                        let udecls = collect_use_decl_info(&disk_ast);
-                        (st, imports, vals, udecls)
-                    },
-                );
-
-            AnalysisResult {
-                source: text.to_string(),
-                symbol_table,
-                imported_definitions,
-                diagnostics,
-                eval_values,
-                fn_signatures,
-                use_decls,
-            }
-        }
-        (Err(e), Ok(ast)) => {
-            // TIR failed but in-memory parse succeeded — use AST for symbol table.
-            let symbol_table = symbol_table::build_from_ast(&ast);
-            let imported_definitions = collect_imported_definitions_from_ast(uri, &ast);
-            let diagnostics = compile_error_to_diagnostics(&e, text);
-            let use_decls = collect_use_decl_info(&ast);
-
-            AnalysisResult {
-                source: text.to_string(),
-                symbol_table,
-                imported_definitions,
-                diagnostics,
-                eval_values: HashMap::new(),
-                fn_signatures: build_fn_signatures(None),
-                use_decls,
-            }
-        }
-        (Err(e), Err(_)) => {
-            // Both failed — minimal result with diagnostics.
-            let diagnostics = compile_error_to_diagnostics(&e, text);
-
-            AnalysisResult {
+/// Run the analysis pipeline, producing an `AnalysisResult`.
+///
+/// The pipeline has two stages:
+/// 1. Build a `LoadedProject` from the in-memory text (+ disk imports).
+/// 2. Compile TIR from the project.
+///
+/// Both stages use the same source text, eliminating data provenance mismatches.
+fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
+    // Stage 1: Build project (parse + load imports).
+    // If this fails, no AST is available — return minimal diagnostics.
+    let project = match build_project(uri, text) {
+        Ok(project) => project,
+        Err(e) => {
+            return AnalysisResult {
                 source: text.to_string(),
                 symbol_table: SymbolTable::default(),
                 imported_definitions: HashMap::new(),
-                diagnostics,
+                diagnostics: compile_error_to_diagnostics(&e, text),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(None),
                 use_decls: Vec::new(),
+            };
+        }
+    };
+
+    let root_ast = &project.files[&project.root].ast;
+
+    // Stage 2: Compile TIR from the project.
+    match compile_to_tir_from_project(&project) {
+        Ok(tir) => {
+            // Full success: symbol table from AST + TIR enrichment.
+            let mut symbol_table = symbol_table::build_from_ast(root_ast);
+            symbol_table::enrich_from_tir(&mut symbol_table, &tir);
+
+            let imported_definitions =
+                collect_imported_definitions(uri, root_ast, &project, Some(&tir));
+            let fn_signatures = build_fn_signatures(Some(&tir));
+            let use_decls = collect_use_decl_info(root_ast);
+            let (diagnostics, eval_values) = run_eval_from_project(&project, text);
+
+            AnalysisResult {
+                source: text.to_string(),
+                symbol_table,
+                imported_definitions,
+                diagnostics,
+                eval_values,
+                fn_signatures,
+                use_decls,
+            }
+        }
+        Err(e) => {
+            // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
+            let symbol_table = symbol_table::build_from_ast(root_ast);
+            let imported_definitions = collect_imported_definitions(uri, root_ast, &project, None);
+            let diagnostics = compile_error_to_diagnostics(&e, text);
+            let use_decls = collect_use_decl_info(root_ast);
+
+            AnalysisResult {
+                source: text.to_string(),
+                symbol_table,
+                imported_definitions,
+                diagnostics,
+                eval_values: HashMap::new(),
+                fn_signatures: build_fn_signatures(None),
+                use_decls,
             }
         }
     }
 }
 
-/// Run evaluation and extract both diagnostics and formatted values.
-fn run_eval(uri: &Url, text: &str, name: &str) -> (Vec<Diagnostic>, HashMap<String, String>) {
-    let eval_result = uri.to_file_path().map_or_else(
-        |()| compile_and_eval_named(text, name),
-        |path| compile_and_eval_project(&path, &HashMap::new()),
-    );
-
-    match eval_result {
+/// Run evaluation from a loaded project and extract diagnostics and formatted values.
+fn run_eval_from_project(
+    project: &LoadedProject,
+    text: &str,
+) -> (Vec<Diagnostic>, HashMap<String, String>) {
+    match compile_and_eval_from_project(project, &HashMap::new()) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text);
             let values = format_eval_values(&result);
@@ -566,62 +518,6 @@ fn collect_imported_definitions(
                     .unwrap_or_else(|_| root_uri.clone())
             });
             let source = loaded_file.source.to_string();
-
-            for use_item in &use_decl.names {
-                if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
-                    result.insert(
-                        use_item.name.name.clone(),
-                        ImportedDefinition {
-                            uri: imported_uri.clone(),
-                            source: source.clone(),
-                            definition: def,
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    result
-}
-
-/// Fallback: collect imported definitions by reading and parsing imported files directly.
-/// Used when `compile_to_tir_project` fails but the root file parses successfully.
-fn collect_imported_definitions_from_ast(
-    root_uri: &Url,
-    root_ast: &graphcal_syntax::ast::File,
-) -> HashMap<String, ImportedDefinition> {
-    let mut result = HashMap::new();
-
-    let Ok(root_path) = root_uri.to_file_path() else {
-        return result;
-    };
-    let root_dir = root_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-
-    for decl in &root_ast.declarations {
-        if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = root_dir.join(&use_decl.path);
-            let Ok(canonical) = import_path.canonicalize() else {
-                continue;
-            };
-            let Ok(source) = std::fs::read_to_string(&canonical) else {
-                continue;
-            };
-            let file_name = canonical.display().to_string();
-            let Ok(ast) =
-                graphcal_syntax::parser::Parser::with_name(&source, &file_name).parse_file()
-            else {
-                continue;
-            };
-
-            let mut imported_table = symbol_table::build_from_ast(&ast);
-
-            let imported_uri = Url::from_file_path(&canonical).unwrap_or_else(|()| {
-                Url::parse(&format!("file://{}", canonical.display()))
-                    .unwrap_or_else(|_| root_uri.clone())
-            });
 
             for use_item in &use_decl.names {
                 if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
