@@ -90,6 +90,7 @@ pub fn eval_expr(
         ExprKind::UnitLiteral { value, unit } => {
             let (_dim, scale) =
                 registry
+                    .units
                     .resolve_unit_expr(unit)
                     .ok_or_else(|| GraphcalError::EvalError {
                         message: "unknown unit in literal".to_string(),
@@ -595,13 +596,14 @@ pub fn eval_expr(
             }
 
             // Try user-defined function
-            let fn_def = registry.get_function(name.value.as_str()).ok_or_else(|| {
-                GraphcalError::EvalError {
+            let fn_def = registry
+                .functions
+                .get_function(name.value.as_str())
+                .ok_or_else(|| GraphcalError::EvalError {
                     message: format!("unknown function `{}`", name.value),
                     src: src.clone(),
                     span: name.span.into(),
-                }
-            })?;
+                })?;
 
             // Evaluate arguments
             let arg_values: Vec<RuntimeValue> = args
@@ -800,14 +802,14 @@ pub fn eval_expr(
             }
             // Resolve owning type and variant names
             let (owning_type, variant_name) =
-                if registry.get_type(type_name.value.as_str()).is_some() {
+                if registry.types.get_type(type_name.value.as_str()).is_some() {
                     // Single-variant: type_name == variant_name
                     (
                         type_name.value.clone(),
                         VariantName::new(type_name.value.as_str()),
                     )
                 } else if let Some((type_def, _)) =
-                    registry.get_type_by_variant(type_name.value.as_str())
+                    registry.types.get_type_by_variant(type_name.value.as_str())
                 {
                     (
                         type_def.name.clone(),
@@ -1091,16 +1093,16 @@ fn eval_map_literal(
     }
 
     // Multi-axis: group by first key, recurse on remaining keys
-    let idx_def =
-        registry
-            .get_index(idx_name.as_str())
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
-                ),
-                src: src.clone(),
-                span: entries[0].keys[0].index.span.into(),
-            })?;
+    let idx_def = registry
+        .indexes
+        .get_index(idx_name.as_str())
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!(
+                "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
+            ),
+            src: src.clone(),
+            span: entries[0].keys[0].index.span.into(),
+        })?;
     let variants = idx_def.variants();
 
     let mut outer = IndexMap::new();
@@ -1148,16 +1150,16 @@ fn eval_for_comp(
 ) -> Result<RuntimeValue, GraphcalError> {
     let binding = &bindings[0];
     let idx_name = binding.index.value.clone();
-    let idx_def =
-        registry
-            .get_index(idx_name.as_str())
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
-                ),
-                src: src.clone(),
-                span: binding.index.span.into(),
-            })?;
+    let idx_def = registry
+        .indexes
+        .get_index(idx_name.as_str())
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!(
+                "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
+            ),
+            src: src.clone(),
+            span: binding.index.span.into(),
+        })?;
     let remaining = &bindings[1..];
 
     let variants = idx_def.variants();

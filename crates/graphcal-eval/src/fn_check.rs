@@ -8,7 +8,7 @@ use petgraph::graph::DiGraph;
 use graphcal_syntax::ast::{Expr, ExprKind, FnBody};
 
 use crate::error::GraphcalError;
-use crate::registry::{FnDef, Registry};
+use crate::registry::{FnDef, FunctionRegistry};
 use graphcal_syntax::names::FnName;
 
 /// Check that user-defined functions do not form recursive call cycles.
@@ -17,11 +17,11 @@ use graphcal_syntax::names::FnName;
 /// cycles using topological sort. Direct recursion (f calls f) and mutual
 /// recursion (f calls g, g calls f) are both detected.
 pub fn check_no_recursion(
-    registry: &Registry,
+    functions: &FunctionRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     // Collect all user-defined function names
-    let fn_names: Vec<&FnDef> = registry.all_functions().collect();
+    let fn_names: Vec<&FnDef> = functions.all_functions().collect();
 
     if fn_names.is_empty() {
         return Ok(());
@@ -46,16 +46,21 @@ pub fn check_no_recursion(
         }
     }
 
+    // Build a span lookup from the collected function definitions.
+    let fn_spans: HashMap<&FnName, graphcal_syntax::span::Span> =
+        fn_names.iter().map(|d| (&d.name, d.span)).collect();
+
     // Check for cycles
     toposort(&graph, None).map_err(|cycle| {
         let cycle_name = &graph[cycle.node_id()];
-        let fn_def = registry
-            .get_function(cycle_name.as_str())
-            .expect("function exists");
+        let span = fn_spans
+            .get(cycle_name)
+            .copied()
+            .unwrap_or_else(|| graphcal_syntax::span::Span::new(0, 0));
         GraphcalError::RecursiveFunction {
             name: cycle_name.clone(),
             src: src.clone(),
-            span: fn_def.span.into(),
+            span: span.into(),
         }
     })?;
 
@@ -64,12 +69,12 @@ pub fn check_no_recursion(
 
 /// Check that user-defined functions do not form recursive call cycles, using TIR.
 ///
-/// Delegates to [`check_no_recursion`] using the registry embedded in the TIR.
+/// Delegates to [`check_no_recursion`] using the function registry from the TIR.
 pub fn check_no_recursion_tir(
     tir: &crate::tir::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    check_no_recursion(&tir.registry, src)
+    check_no_recursion(&tir.registry.functions, src)
 }
 
 /// Collect names of user-defined functions called from a function body.
@@ -180,16 +185,17 @@ mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
     use super::*;
     use crate::prelude::load_prelude;
+    use crate::registry::RegistryBuilder;
     use graphcal_syntax::parser::Parser;
 
     fn check_recursion(source: &str) -> Result<(), GraphcalError> {
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let file = Parser::new(source).parse_file().unwrap();
         let resolved = crate::resolve::resolve(&file, &src).unwrap();
-        let mut registry = Registry::new();
-        load_prelude(&mut registry);
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder);
         for (name, fn_decl, span) in &resolved.functions {
-            registry.register_function(FnDef {
+            builder.register_function(FnDef {
                 name: FnName::new(name),
                 generic_params: fn_decl
                     .generic_params
@@ -224,7 +230,8 @@ mod tests {
                 span: *span,
             });
         }
-        check_no_recursion(&registry, &src)
+        let registry = builder.build();
+        check_no_recursion(&registry.functions, &src)
     }
 
     #[test]

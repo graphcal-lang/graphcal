@@ -346,8 +346,8 @@ fn lower_project_to_ir(
         }
     }
 
-    // Lower root AST → IR (includes root file declarations + functions in registry)
-    let mut ir = crate::ir::lower_with_imports(&root_file.ast, root_src, &imported)?;
+    // Lower root AST → builder + unfrozen IR (includes root file declarations + functions)
+    let (mut builder, unfrozen) = crate::ir::lower_to_builder(&root_file.ast, root_src, &imported)?;
 
     // Register only explicitly imported type-system declarations from imported files.
     for file_path in &project.load_order {
@@ -358,12 +358,15 @@ fn lower_project_to_ir(
             let loaded = &project.files[file_path];
             crate::ir::register_selected_declarations(
                 &loaded.ast,
-                &mut ir.registry,
+                &mut builder,
                 &loaded.named_source,
                 names,
             )?;
         }
     }
+
+    // Freeze the builder into an immutable registry and assemble the IR.
+    let ir = unfrozen.freeze(builder.build());
 
     Ok((ir, root_src.clone()))
 }
@@ -634,6 +637,7 @@ fn resolve_field_declared_type(
     }
     // Non-generic: resolve directly from the registry
     registry
+        .dimensions
         .resolve_type_expr(&field.type_ann)
         .map(DeclaredType::Scalar)
 }
@@ -666,7 +670,7 @@ fn runtime_to_value(
             variant,
             fields,
         } => {
-            let type_def = registry.get_type(type_name.as_str());
+            let type_def = registry.types.get_type(type_name.as_str());
             let variant_def = type_def.and_then(|td| td.get_variant(variant.as_str()));
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
@@ -712,7 +716,7 @@ fn runtime_to_value(
                 _ => None,
             };
             // For range indexes, replace synthetic #N keys with formatted display values.
-            let idx_def = registry.get_index(index_name.as_str());
+            let idx_def = registry.indexes.get_index(index_name.as_str());
             let converted_entries = entries
                 .iter()
                 .enumerate()
@@ -779,14 +783,14 @@ fn eval_unfold(
             });
         }
     };
-    let idx_def =
-        registry
-            .get_index(index_name.as_str())
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!("unknown index `{index_name}`"),
-                src: src.clone(),
-                span: (0, 0).into(),
-            })?;
+    let idx_def = registry
+        .indexes
+        .get_index(index_name.as_str())
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!("unknown index `{index_name}`"),
+            src: src.clone(),
+            span: (0, 0).into(),
+        })?;
 
     let step_count = idx_def.step_count();
     let variants = idx_def.variants();
@@ -1052,7 +1056,7 @@ fn evaluate_plan(
         all,
         assertions,
         assumes_map: plan.assumes_map.clone(),
-        base_dim_symbols: tir.registry.base_dim_symbols().clone(),
+        base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
     }
 }
 
@@ -1306,7 +1310,7 @@ fn resolve_unit_to_display(
     unit: &graphcal_syntax::ast::UnitExpr,
     registry: &Registry,
 ) -> Option<DisplayUnit> {
-    let (_dim, scale) = registry.resolve_unit_expr(unit)?;
+    let (_dim, scale) = registry.units.resolve_unit_expr(unit)?;
     Some(DisplayUnit {
         label: format_unit_expr(unit),
         scale,

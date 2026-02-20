@@ -15,12 +15,10 @@ use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
 
-use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
 use crate::eval::format_unit_expr;
-use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::prelude::load_prelude;
-use crate::registry::{self, Registry};
+use crate::registry::{self, Registry, RegistryBuilder};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve_with_imports};
 
 /// Intermediate Representation produced by [`lower`].
@@ -76,25 +74,45 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
 /// Lower an AST with imported declarations into an [`IR`].
 ///
 /// Same as [`lower`] but accepts imported names from other files.
+/// The registry is frozen (via `build()`) before returning.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
-pub fn lower_with_imports(
+#[cfg(test)]
+fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
 ) -> Result<IR, GraphcalError> {
+    let (builder, resolved_ir) = lower_to_builder(ast, src, imported)?;
+    Ok(resolved_ir.freeze(builder.build()))
+}
+
+/// Lower an AST with imported declarations, returning a `RegistryBuilder`
+/// that can be further mutated (e.g., to register imported type-system
+/// declarations) before freezing.
+///
+/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce an [`IR`].
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+pub fn lower_to_builder(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+    imported: &ImportedNames,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution
     let resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
-    let mut registry = Registry::new();
-    load_prelude(&mut registry);
-    register_file_declarations(ast, &mut registry, src)?;
+    let mut builder = RegistryBuilder::new();
+    load_prelude(&mut builder);
+    register_file_declarations(ast, &mut builder, src)?;
 
     // Step 3: Register user-defined functions
-    register_functions(&resolved, &mut registry);
+    register_functions(&resolved, &mut builder);
 
     // Step 4: Extract type annotations from the AST and pair with resolved declarations.
     // Build a map from declaration name to TypeExpr.
@@ -155,8 +173,7 @@ pub fn lower_with_imports(
         })
         .collect();
 
-    Ok(IR {
-        registry,
+    let unfrozen = UnfrozenIR {
         consts,
         params,
         nodes,
@@ -167,7 +184,43 @@ pub fn lower_with_imports(
         functions: resolved.functions,
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
-    })
+    };
+
+    Ok((builder, unfrozen))
+}
+
+/// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
+pub struct UnfrozenIR {
+    consts: Vec<(String, TypeExpr, Expr, Span)>,
+    params: Vec<(String, TypeExpr, Expr, Span)>,
+    nodes: Vec<(String, TypeExpr, Expr, Span)>,
+    asserts: Vec<(String, graphcal_syntax::ast::AssertBody, Span)>,
+    runtime_deps: HashMap<String, HashSet<String>>,
+    const_deps: HashMap<String, HashSet<String>>,
+    source_order: Vec<(String, DeclCategory)>,
+    functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
+    assert_names: HashSet<String>,
+    assumes_map: HashMap<String, Vec<String>>,
+}
+
+impl UnfrozenIR {
+    /// Freeze into a complete [`IR`] by providing a built [`Registry`].
+    #[must_use]
+    pub fn freeze(self, registry: Registry) -> IR {
+        IR {
+            registry,
+            consts: self.consts,
+            params: self.params,
+            nodes: self.nodes,
+            asserts: self.asserts,
+            runtime_deps: self.runtime_deps,
+            const_deps: self.const_deps,
+            source_order: self.source_order,
+            functions: self.functions,
+            assert_names: self.assert_names,
+            assumes_map: self.assumes_map,
+        }
+    }
 }
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
@@ -178,7 +231,7 @@ pub fn lower_with_imports(
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
 pub fn register_file_declarations(
     file: &File,
-    registry: &mut Registry,
+    registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     register_declarations_impl(file, registry, src, None)
@@ -195,7 +248,7 @@ pub fn register_file_declarations(
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
 pub fn register_selected_declarations(
     file: &File,
-    registry: &mut Registry,
+    registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     names: &std::collections::HashSet<String>,
 ) -> Result<(), GraphcalError> {
@@ -209,7 +262,7 @@ pub fn register_selected_declarations(
 #[expect(clippy::too_many_lines, reason = "sequential declaration registration")]
 fn register_declarations_impl(
     file: &File,
-    registry: &mut Registry,
+    registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     filter: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), GraphcalError> {
@@ -348,48 +401,44 @@ fn register_declarations_impl(
 
 /// Evaluate a range expression (e.g. `0.0 s`) to get its SI value and dimension.
 ///
+/// Range expressions are syntactically restricted to numeric literals and
+/// unit-annotated literals, so we evaluate them directly against the
+/// `RegistryBuilder` instead of going through the full `eval_expr` pipeline.
+///
 /// Returns `(si_value, dimension)`.
 fn eval_range_expr(
     expr: &Expr,
-    registry: &Registry,
+    registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(f64, graphcal_syntax::dimension::Dimension), GraphcalError> {
     use graphcal_syntax::dimension::Dimension;
 
-    let builtin_consts = builtin_constants();
-    let builtin_fns = builtin_functions();
-    let empty_values: HashMap<String, RuntimeValue> = HashMap::new();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-
-    let val = eval_expr(
-        expr,
-        &empty_values,
-        &empty_locals,
-        &builtin_consts,
-        &builtin_fns,
-        registry,
-        src,
-    )?;
-    let si_value = match &val {
-        RuntimeValue::Scalar(v) => *v,
-        _ => {
-            return Err(GraphcalError::EvalError {
-                message: "range expression must evaluate to a scalar value".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
+    match &expr.kind {
+        ExprKind::Number(n) => Ok((*n, Dimension::dimensionless())),
+        ExprKind::UnitLiteral { value, unit } => {
+            let (dim, scale) =
+                registry
+                    .resolve_unit_expr(unit)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: "unknown unit in range expression".to_string(),
+                        src: src.clone(),
+                        span: unit.span.into(),
+                    })?;
+            Ok((*value * scale, dim))
         }
-    };
-
-    // Extract dimension from the expression's unit annotation
-    let dim = match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => registry
-            .resolve_unit_expr(unit)
-            .map_or_else(Dimension::dimensionless, |(dim, _)| dim),
-        _ => Dimension::dimensionless(),
-    };
-
-    Ok((si_value, dim))
+        ExprKind::UnaryOp {
+            op: graphcal_syntax::ast::UnaryOp::Neg,
+            operand,
+        } => {
+            let (val, dim) = eval_range_expr(operand, registry, src)?;
+            Ok((-val, dim))
+        }
+        _ => Err(GraphcalError::EvalError {
+            message: "range expression must be a numeric or unit literal".to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
+    }
 }
 
 /// Lower a range index declaration, evaluating start/end/step and validating dimensions.
@@ -398,7 +447,7 @@ fn lower_range_index(
     start_expr: &Expr,
     end_expr: &Expr,
     step_expr: &Expr,
-    registry: &Registry,
+    registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     decl_span: graphcal_syntax::span::Span,
 ) -> Result<registry::IndexKind, GraphcalError> {
@@ -460,8 +509,8 @@ fn lower_range_index(
     })
 }
 
-/// Register user-defined functions from a [`ResolvedFile`] into the registry.
-fn register_functions(resolved: &ResolvedFile, registry: &mut Registry) {
+/// Register user-defined functions from a [`ResolvedFile`] into the registry builder.
+fn register_functions(resolved: &ResolvedFile, registry: &mut RegistryBuilder) {
     for (name, fn_decl, span) in &resolved.functions {
         registry.register_function(registry::FnDef {
             name: FnName::new(name),
@@ -524,8 +573,8 @@ mod tests {
         assert_eq!(ir.consts.len(), 1); // G0
         assert_eq!(ir.params.len(), 3); // dry_mass, fuel_mass, isp
         assert_eq!(ir.nodes.len(), 3); // v_exhaust, mass_ratio, delta_v
-        assert!(ir.registry.get_dimension("Length").is_some());
-        assert!(ir.registry.get_unit("km").is_some());
+        assert!(ir.registry.dimensions.get_dimension("Length").is_some());
+        assert!(ir.registry.units.get_unit("km").is_some());
     }
 
     #[test]
@@ -543,21 +592,26 @@ mod tests {
         let ir = parse_and_lower(source).unwrap();
         assert!(!ir.functions.is_empty());
         // Functions should be registered in the registry
-        assert!(ir.registry.get_function("orbital_velocity").is_some());
+        assert!(
+            ir.registry
+                .functions
+                .get_function("orbital_velocity")
+                .is_some()
+        );
     }
 
     #[test]
     fn lower_indexed() {
         let source = include_str!("../../../tests/fixtures/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert!(ir.registry.get_index("Maneuver").is_some());
+        assert!(ir.registry.indexes.get_index("Maneuver").is_some());
     }
 
     #[test]
     fn lower_hohmann() {
         let source = include_str!("../../../tests/fixtures/hohmann.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert!(ir.registry.get_type("TransferResult").is_some());
+        assert!(ir.registry.types.get_type("TransferResult").is_some());
     }
 
     #[test]
