@@ -39,33 +39,29 @@ pub enum RuntimeValue {
 }
 
 impl RuntimeValue {
-    /// Extract scalar value, panicking if this is not a scalar.
-    /// (Type mismatches are caught by `dim_check`, so this is safe at runtime.)
-    fn expect_scalar(&self, context: &str) -> f64 {
+    /// Extract scalar value, returning an error message if this is not a scalar.
+    /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
+    fn expect_scalar(&self, context: &str) -> Result<f64, String> {
         match self {
-            Self::Scalar(v) => *v,
-            Self::Bool(_) => {
-                panic!("expected scalar for {context}, got Bool")
-            }
-            Self::Int(i) => {
-                panic!("expected scalar for {context}, got Int({i})")
-            }
-            Self::Struct { type_name, .. } => {
-                panic!("expected scalar for {context}, got struct `{type_name}`")
-            }
-            Self::Indexed { index_name, .. } => {
-                panic!("expected scalar for {context}, got indexed value `{index_name}[...]`")
-            }
-            Self::RangeLabel { value, .. } => *value,
+            Self::Scalar(v) => Ok(*v),
+            Self::Bool(_) => Err(format!("expected scalar for {context}, got Bool")),
+            Self::Int(i) => Err(format!("expected scalar for {context}, got Int({i})")),
+            Self::Struct { type_name, .. } => Err(format!(
+                "expected scalar for {context}, got struct `{type_name}`"
+            )),
+            Self::Indexed { index_name, .. } => Err(format!(
+                "expected scalar for {context}, got indexed value `{index_name}[...]`"
+            )),
+            Self::RangeLabel { value, .. } => Ok(*value),
         }
     }
 
-    /// Extract boolean value, panicking if this is not a Bool.
-    /// (Type mismatches are caught by `dim_check`, so this is safe at runtime.)
-    fn expect_bool(&self, context: &str) -> bool {
+    /// Extract boolean value, returning an error message if this is not a Bool.
+    /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
+    fn expect_bool(&self, context: &str) -> Result<bool, String> {
         match self {
-            Self::Bool(b) => *b,
-            other => panic!("expected Bool for {context}, got {other:?}"),
+            Self::Bool(b) => Ok(*b),
+            other => Err(format!("expected Bool for {context}, got {other:?}")),
         }
     }
 }
@@ -155,7 +151,12 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?
-                .expect_bool("AND operand");
+                .expect_bool("AND operand")
+                .map_err(|msg| GraphcalError::EvalError {
+                    message: msg,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
                 let r = eval_expr(
                     rhs,
                     values,
@@ -165,7 +166,12 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?
-                .expect_bool("AND operand");
+                .expect_bool("AND operand")
+                .map_err(|msg| GraphcalError::EvalError {
+                    message: msg,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
                 Ok(RuntimeValue::Bool(l && r))
             }
             BinOp::Or => {
@@ -178,7 +184,12 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?
-                .expect_bool("OR operand");
+                .expect_bool("OR operand")
+                .map_err(|msg| GraphcalError::EvalError {
+                    message: msg,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
                 let r = eval_expr(
                     rhs,
                     values,
@@ -188,7 +199,12 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?
-                .expect_bool("OR operand");
+                .expect_bool("OR operand")
+                .map_err(|msg| GraphcalError::EvalError {
+                    message: msg,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
                 Ok(RuntimeValue::Bool(l || r))
             }
             // Equality: compare same-typed value-level entities.
@@ -224,8 +240,20 @@ pub fn eval_expr(
                         Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
                     }
                     _ => {
-                        let lv = l.expect_scalar("comparison operand");
-                        let rv = r.expect_scalar("comparison operand");
+                        let lv = l.expect_scalar("comparison operand").map_err(|msg| {
+                            GraphcalError::EvalError {
+                                message: msg,
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            }
+                        })?;
+                        let rv = r.expect_scalar("comparison operand").map_err(|msg| {
+                            GraphcalError::EvalError {
+                                message: msg,
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            }
+                        })?;
                         Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
                     }
                 }
@@ -260,8 +288,20 @@ pub fn eval_expr(
                     };
                     return Ok(RuntimeValue::Bool(result));
                 }
-                let lv = l.expect_scalar("comparison operand");
-                let rv = r.expect_scalar("comparison operand");
+                let lv = l.expect_scalar("comparison operand").map_err(|msg| {
+                    GraphcalError::EvalError {
+                        message: msg,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    }
+                })?;
+                let rv = r.expect_scalar("comparison operand").map_err(|msg| {
+                    GraphcalError::EvalError {
+                        message: msg,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    }
+                })?;
                 Ok(RuntimeValue::Bool(eval_comparison(*op, lv, rv)))
             }
             // Arithmetic operators: Int, Scalar, or derived struct operands
@@ -305,8 +345,20 @@ pub fn eval_expr(
                         *op, type_name, variant, lhs_fields, rhs_fields, src, expr.span,
                     );
                 }
-                let lv = l.expect_scalar("binary operand");
-                let rv = r.expect_scalar("binary operand");
+                let lv =
+                    l.expect_scalar("binary operand")
+                        .map_err(|msg| GraphcalError::EvalError {
+                            message: msg,
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+                let rv =
+                    r.expect_scalar("binary operand")
+                        .map_err(|msg| GraphcalError::EvalError {
+                            message: msg,
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
                 Ok(RuntimeValue::Scalar(eval_binop(
                     *op, lv, rv, src, expr.span,
                 )?))
@@ -337,7 +389,15 @@ pub fn eval_expr(
                         variant,
                         fields,
                     } => eval_struct_neg(&type_name, &variant, &fields, src, expr.span),
-                    _ => Ok(RuntimeValue::Scalar(-v.expect_scalar("unary negation"))),
+                    _ => Ok(RuntimeValue::Scalar(
+                        -v.expect_scalar("unary negation").map_err(|msg| {
+                            GraphcalError::EvalError {
+                                message: msg,
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            }
+                        })?,
+                    )),
                 }
             }
             UnaryOp::Not => {
@@ -350,7 +410,12 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?
-                .expect_bool("logical NOT");
+                .expect_bool("logical NOT")
+                .map_err(|msg| GraphcalError::EvalError {
+                    message: msg,
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?;
                 Ok(RuntimeValue::Bool(!v))
             }
         },
@@ -371,26 +436,31 @@ pub fn eval_expr(
                     src,
                 )?;
                 if let RuntimeValue::Indexed { entries, .. } = arg_val {
+                    let type_err = |msg: String| GraphcalError::EvalError {
+                        message: msg,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    };
                     return Ok(match name.value.as_str() {
                         "sum" => {
-                            let total: f64 = entries
-                                .values()
-                                .map(|v| v.expect_scalar("sum element"))
-                                .sum();
+                            let mut total = 0.0_f64;
+                            for v in entries.values() {
+                                total += v.expect_scalar("sum element").map_err(&type_err)?;
+                            }
                             RuntimeValue::Scalar(total)
                         }
                         "min" => {
-                            let min = entries
-                                .values()
-                                .map(|v| v.expect_scalar("min element"))
-                                .fold(f64::INFINITY, f64::min);
+                            let mut min = f64::INFINITY;
+                            for v in entries.values() {
+                                min = min.min(v.expect_scalar("min element").map_err(&type_err)?);
+                            }
                             RuntimeValue::Scalar(min)
                         }
                         "max" => {
-                            let max = entries
-                                .values()
-                                .map(|v| v.expect_scalar("max element"))
-                                .fold(f64::NEG_INFINITY, f64::max);
+                            let mut max = f64::NEG_INFINITY;
+                            for v in entries.values() {
+                                max = max.max(v.expect_scalar("max element").map_err(&type_err)?);
+                            }
                             RuntimeValue::Scalar(max)
                         }
                         "mean" => {
@@ -399,10 +469,10 @@ pub fn eval_expr(
                                 reason = "indexed collection length fits in f64"
                             )]
                             let n = entries.len() as f64;
-                            let total: f64 = entries
-                                .values()
-                                .map(|v| v.expect_scalar("mean element"))
-                                .sum();
+                            let mut total = 0.0_f64;
+                            for v in entries.values() {
+                                total += v.expect_scalar("mean element").map_err(&type_err)?;
+                            }
                             RuntimeValue::Scalar(total / n)
                         }
                         "count" => {
@@ -431,7 +501,11 @@ pub fn eval_expr(
                     src,
                 )?;
                 let RuntimeValue::Int(i) = arg else {
-                    panic!("to_float expects Int argument (checked by dim_check)");
+                    return Err(GraphcalError::EvalError {
+                        message: "internal: to_float() received non-Int argument (should have been caught by dim_check)".to_string(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
                 };
                 #[expect(
                     clippy::cast_precision_loss,
@@ -449,7 +523,13 @@ pub fn eval_expr(
                     registry,
                     src,
                 )?;
-                let f = arg.expect_scalar("to_int argument");
+                let f = arg.expect_scalar("to_int argument").map_err(|msg| {
+                    GraphcalError::EvalError {
+                        message: msg,
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    }
+                })?;
                 if !f.is_finite() {
                     return Err(GraphcalError::EvalError {
                         message: format!("to_int() requires a finite value, got {f}"),
@@ -489,7 +569,7 @@ pub fn eval_expr(
                 let arg_values: Vec<f64> = args
                     .iter()
                     .map(|a| {
-                        eval_expr(
+                        let rv = eval_expr(
                             a,
                             values,
                             local_values,
@@ -497,8 +577,14 @@ pub fn eval_expr(
                             builtin_fns,
                             registry,
                             src,
-                        )
-                        .map(|rv| rv.expect_scalar("function argument"))
+                        )?;
+                        rv.expect_scalar("function argument").map_err(|msg| {
+                            GraphcalError::EvalError {
+                                message: msg,
+                                src: src.clone(),
+                                span: a.span.into(),
+                            }
+                        })
                     })
                     .collect::<Result<_, _>>()?;
                 let result = (builtin.eval)(&arg_values);
@@ -595,7 +681,12 @@ pub fn eval_expr(
                 registry,
                 src,
             )?
-            .expect_bool("if condition");
+            .expect_bool("if condition")
+            .map_err(|msg| GraphcalError::EvalError {
+                message: msg,
+                src: src.clone(),
+                span: expr.span.into(),
+            })?;
             if cond {
                 eval_expr(
                     then_branch,
@@ -1002,9 +1093,16 @@ fn eval_map_literal(
     }
 
     // Multi-axis: group by first key, recurse on remaining keys
-    let idx_def = registry
-        .get_index(idx_name.as_str())
-        .expect("index validated by dim_check");
+    let idx_def =
+        registry
+            .get_index(idx_name.as_str())
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
+                ),
+                src: src.clone(),
+                span: entries[0].keys[0].index.span.into(),
+            })?;
     let variants = idx_def.variants();
 
     let mut outer = IndexMap::new();
@@ -1052,9 +1150,16 @@ fn eval_for_comp(
 ) -> Result<RuntimeValue, GraphcalError> {
     let binding = &bindings[0];
     let idx_name = binding.index.value.clone();
-    let idx_def = registry
-        .get_index(idx_name.as_str())
-        .expect("index validated by dim_check");
+    let idx_def =
+        registry
+            .get_index(idx_name.as_str())
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
+                ),
+                src: src.clone(),
+                span: binding.index.span.into(),
+            })?;
     let remaining = &bindings[1..];
 
     let variants = idx_def.variants();
@@ -1071,13 +1176,18 @@ fn eval_for_comp(
                 let step_index = variant
                     .as_str()
                     .strip_prefix('#')
-                    .expect("range variants use #<index> format")
-                    .parse::<usize>()
-                    .expect("range variant index must be a valid usize");
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!(
+                            "internal: range variant `{variant}` has unexpected format (expected #N)"
+                        ),
+                        src: src.clone(),
+                        span: binding.index.span.into(),
+                    })?;
                 RuntimeValue::RangeLabel {
                     index_name: idx_name.clone(),
                     step_index,
-                    value: idx_def.step_value(step_index),
+                    value: idx_def.step_value(step_index).expect("inside Range branch"),
                 }
             }
         };
@@ -1171,7 +1281,7 @@ fn eval_comparison(op: BinOp, l: f64, r: f64) -> bool {
         BinOp::Gt => l > r,
         BinOp::Le => l <= r,
         BinOp::Ge => l >= r,
-        _ => panic!("eval_comparison called with non-comparison operator"),
+        _ => unreachable!("eval_comparison called with non-comparison operator"),
     }
 }
 
@@ -1222,7 +1332,7 @@ fn eval_int_binop(
             })?;
             l.checked_pow(exp)
         }
-        _ => panic!("eval_int_binop called with non-arithmetic operator"),
+        _ => unreachable!("eval_int_binop called with non-arithmetic operator"),
     }
     .ok_or_else(|| GraphcalError::EvalError {
         message: "integer arithmetic overflow".to_string(),
@@ -1254,7 +1364,7 @@ fn eval_binop(
             l / r
         }
         BinOp::Pow => l.powf(r),
-        _ => panic!("eval_binop called with non-arithmetic operator"),
+        _ => unreachable!("eval_binop called with non-arithmetic operator"),
     };
 
     // Post-check: if inputs were finite but result is not, report an error.

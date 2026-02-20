@@ -398,7 +398,8 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                     println!("{name:width$} = {}", variant.as_str());
                 }
                 _ => {
-                    let formatted = format_number(value.display_value());
+                    let formatted =
+                        format_number(value.display_value().expect("only Scalar reaches this arm"));
                     if let Some(label) = value.display_label(&result.base_dim_symbols) {
                         println!("{name:width$} = {formatted} {label}");
                     } else {
@@ -473,7 +474,7 @@ fn print_json(result: &EvalResult, no_assert: bool) {
                 if let Some(du) = display_unit {
                     map.insert(
                         "display_value".to_string(),
-                        serde_json::json!(v.display_value()),
+                        serde_json::json!(v.display_value().expect("matched as Scalar")),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {

@@ -434,7 +434,7 @@ fn format_value_inline_with_budget(
 ) -> String {
     match value {
         Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value());
+            let formatted = format_number(value.display_value().expect("matched as Scalar"));
             value.display_label(symbols).map_or_else(
                 || formatted.clone(),
                 |label| format!("{formatted} [{label}]"),
