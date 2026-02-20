@@ -59,7 +59,8 @@ impl<'src> Formatter<'src> {
         // between the end of the node and the next newline.
         if comment.span.offset() > line_end_offset {
             // Check there's no newline between node end and comment start
-            let between = &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
+            let between =
+                &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if !between.contains('\n') {
                 self.next_comment += 1;
                 return RcDoc::text(format!(" {}", comment.text));

@@ -84,9 +84,9 @@ impl SymbolTable {
 
     /// Find the definition whose name span contains the given byte offset, if any.
     pub fn find_definition_at(&self, offset: usize) -> Option<&DefinitionInfo> {
-        self.definitions
-            .values()
-            .find(|d| offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len())
+        self.definitions.values().find(|d| {
+            offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len()
+        })
     }
 
     /// Find all references that point to the given target name.

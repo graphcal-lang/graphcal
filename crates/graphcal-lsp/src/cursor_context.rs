@@ -91,8 +91,9 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                     if i > 0
                         && let (Token::Ident, name_span) = &tokens[i - 1]
                     {
-                        let fn_name =
-                            source[name_span.offset()..name_span.offset() + name_span.len()].to_string();
+                        let fn_name = source
+                            [name_span.offset()..name_span.offset() + name_span.len()]
+                            .to_string();
                         return Some(FnCallContext {
                             fn_name,
                             active_param: comma_count,
