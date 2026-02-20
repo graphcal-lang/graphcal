@@ -23,9 +23,6 @@ use crate::prelude::load_prelude;
 use crate::registry::{self, Registry};
 use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve_with_imports};
 
-/// The kind of a declaration (mirrors [`DeclCategory`] for external use).
-pub use crate::resolve::DeclCategory as IrDeclCategory;
-
 /// Intermediate Representation produced by [`lower`].
 ///
 /// Contains everything downstream stages need:
@@ -195,10 +192,6 @@ pub fn register_file_declarations(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal function accepts HashSet without requiring specific hasher"
-)]
 pub fn register_selected_declarations(
     file: &File,
     registry: &mut Registry,

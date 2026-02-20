@@ -943,7 +943,6 @@ fn eval_unfold(
         scan_locals.insert(
             prev_name.name.clone(),
             RuntimeValue::RangeLabel {
-                index_name: index_name.clone(),
                 step_index: i - 1,
                 value: prev_value,
             },
@@ -951,7 +950,6 @@ fn eval_unfold(
         scan_locals.insert(
             curr_name.name.clone(),
             RuntimeValue::RangeLabel {
-                index_name: index_name.clone(),
                 step_index: i,
                 value: curr_value,
             },

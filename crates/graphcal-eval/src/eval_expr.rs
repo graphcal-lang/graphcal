@@ -30,9 +30,7 @@ pub enum RuntimeValue {
     },
     /// A range index label during `Unfold` iteration.
     /// Carries the step index and SI value (for arithmetic like `t - prev_t`).
-    /// Also carries the index name for index access resolution.
     RangeLabel {
-        index_name: IndexName,
         step_index: usize,
         value: f64,
     },
@@ -1185,7 +1183,6 @@ fn eval_for_comp(
                         span: binding.index.span.into(),
                     })?;
                 RuntimeValue::RangeLabel {
-                    index_name: idx_name.clone(),
                     step_index,
                     value: idx_def.step_value(step_index).expect("inside Range branch"),
                 }

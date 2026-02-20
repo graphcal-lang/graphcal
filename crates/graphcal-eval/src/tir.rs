@@ -59,6 +59,49 @@ pub enum ResolvedTypeExpr {
     },
 }
 
+impl ResolvedTypeExpr {
+    /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
+    #[must_use]
+    pub fn format(&self, registry: &Registry) -> String {
+        match self {
+            Self::Dimensionless => "Dimensionless".to_string(),
+            Self::Bool => "Bool".to_string(),
+            Self::Int => "Int".to_string(),
+            Self::Scalar(dim) => {
+                let formatted = registry.format_dimension(dim);
+                if formatted.is_empty() {
+                    "Dimensionless".to_string()
+                } else {
+                    formatted
+                }
+            }
+            Self::Struct(name, _) => name.to_string(),
+            Self::GenericStruct {
+                name, type_args, ..
+            } => {
+                let args: Vec<String> = type_args.iter().map(|a| a.format(registry)).collect();
+                format!("{}<{}>", name, args.join(", "))
+            }
+            Self::GenericDimParam(name, _) => name.to_string(),
+            Self::GenericDimExpr { terms, .. } => {
+                let parts: Vec<String> = terms.iter().map(|t| t.format(registry)).collect();
+                parts.join(" ")
+            }
+            Self::Indexed { base, indexes } => {
+                let base_str = base.format(registry);
+                let idx_strs: Vec<String> = indexes
+                    .iter()
+                    .map(|i| match i {
+                        ResolvedIndex::Concrete(name, _) => name.to_string(),
+                        ResolvedIndex::GenericParam(name, _) => name.to_string(),
+                    })
+                    .collect();
+                format!("{base_str}[{}]", idx_strs.join(", "))
+            }
+        }
+    }
+}
+
 /// A single term in a resolved dimension expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedDimTerm {
@@ -83,6 +126,26 @@ impl ResolvedDimTerm {
     pub const fn op(&self) -> MulDivOp {
         match self {
             Self::Concrete { op, .. } | Self::GenericParam { op, .. } => *op,
+        }
+    }
+
+    /// Format this term as a human-readable string, e.g. `"Length"`, `"/ Time^2"`, `"D^2"`.
+    #[must_use]
+    pub fn format(&self, registry: &Registry) -> String {
+        let (name, power, op) = match self {
+            Self::Concrete { dim, power, op } => (registry.format_dimension(dim), *power, *op),
+            Self::GenericParam {
+                name, power, op, ..
+            } => (name.to_string(), *power, *op),
+        };
+        let prefix = match op {
+            MulDivOp::Mul => "",
+            MulDivOp::Div => "/ ",
+        };
+        if power == 1 {
+            format!("{prefix}{name}")
+        } else {
+            format!("{prefix}{name}^{power}")
         }
     }
 }
@@ -122,7 +185,7 @@ pub struct ResolvedFnParam {
 
 /// Typed Intermediate Representation — the result of [`type_resolve`].
 ///
-/// Contains everything from [`IR`] plus resolved type annotations for
+/// Contains everything from `IR` plus resolved type annotations for
 /// every declaration and function signature.
 #[derive(Debug)]
 pub struct TIR {
@@ -183,7 +246,7 @@ impl TIR {
     }
 }
 
-/// Resolve all type annotations in an [`IR`], producing a [`TIR`].
+/// Resolve all type annotations in an `IR`, producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic
 /// params in scope. For each function, resolves parameter types and return
