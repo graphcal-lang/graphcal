@@ -16,7 +16,7 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
     "dimension",
     "unit",
     "index",
-    "use",
+    "import",
 ];
 
 /// Built-in type keywords available in type annotation position.

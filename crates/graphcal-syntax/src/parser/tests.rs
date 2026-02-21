@@ -608,7 +608,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Type(t) => t.name.value.as_str(),
             DeclKind::Fn(f) => f.name.value.as_str(),
             DeclKind::Index(i) => i.name.value.as_str(),
-            DeclKind::Use(_) => "<use>",
+            DeclKind::Import(_) => "<import>",
             DeclKind::Assert(a) => a.name.value.as_str(),
         })
         .collect();
@@ -1741,16 +1741,16 @@ fn single_expr_trailing_tokens_error() {
 }
 
 #[test]
-fn parse_use_no_alias() {
-    let file = Parser::new(r#"use "./helper.gcl" { x, Y };"#)
+fn parse_import_no_alias() {
+    let file = Parser::new(r#"import "./helper.gcl" { x, Y };"#)
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
-    let DeclKind::Use(u) = &file.declarations[0].kind else {
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Use");
     };
     assert_eq!(u.path, "./helper.gcl");
-    let crate::ast::UseKind::Selective(names) = &u.kind else {
+    let crate::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 2);
@@ -1763,14 +1763,14 @@ fn parse_use_no_alias() {
 }
 
 #[test]
-fn parse_use_with_alias() {
-    let file = Parser::new(r#"use "./helper.gcl" { x as y };"#)
+fn parse_import_with_alias() {
+    let file = Parser::new(r#"import "./helper.gcl" { x as y };"#)
         .parse_file()
         .unwrap();
-    let DeclKind::Use(u) = &file.declarations[0].kind else {
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Use");
     };
-    let crate::ast::UseKind::Selective(names) = &u.kind else {
+    let crate::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 1);
@@ -1780,14 +1780,14 @@ fn parse_use_with_alias() {
 }
 
 #[test]
-fn parse_use_mixed_alias() {
-    let file = Parser::new(r#"use "./f.gcl" { x, Y as Z, w };"#)
+fn parse_import_mixed_alias() {
+    let file = Parser::new(r#"import "./f.gcl" { x, Y as Z, w };"#)
         .parse_file()
         .unwrap();
-    let DeclKind::Use(u) = &file.declarations[0].kind else {
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Use");
     };
-    let crate::ast::UseKind::Selective(names) = &u.kind else {
+    let crate::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 3);
@@ -1801,45 +1801,45 @@ fn parse_use_mixed_alias() {
 }
 
 #[test]
-fn parse_use_alias_missing_name_error() {
-    let result = Parser::new(r#"use "./f.gcl" { x as };"#).parse_file();
+fn parse_import_alias_missing_name_error() {
+    let result = Parser::new(r#"import "./f.gcl" { x as };"#).parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_use_module_bare() {
-    let file = Parser::new(r#"use "./constants.gcl";"#)
+fn parse_import_module_bare() {
+    let file = Parser::new(r#"import "./constants.gcl";"#)
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
-    let DeclKind::Use(u) = &file.declarations[0].kind else {
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Use");
     };
     assert_eq!(u.path, "./constants.gcl");
-    let crate::ast::UseKind::Module { alias } = &u.kind else {
+    let crate::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
     assert!(alias.is_none());
 }
 
 #[test]
-fn parse_use_module_with_alias() {
-    let file = Parser::new(r#"use "./constants.gcl" as consts;"#)
+fn parse_import_module_with_alias() {
+    let file = Parser::new(r#"import "./constants.gcl" as consts;"#)
         .parse_file()
         .unwrap();
-    let DeclKind::Use(u) = &file.declarations[0].kind else {
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Use");
     };
     assert_eq!(u.path, "./constants.gcl");
-    let crate::ast::UseKind::Module { alias } = &u.kind else {
+    let crate::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().name, "consts");
 }
 
 #[test]
-fn parse_use_module_missing_alias_ident_error() {
-    let result = Parser::new(r#"use "./f.gcl" as;"#).parse_file();
+fn parse_import_module_missing_alias_ident_error() {
+    let result = Parser::new(r#"import "./f.gcl" as;"#).parse_file();
     assert!(result.is_err());
 }
 

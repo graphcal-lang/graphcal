@@ -1,5 +1,5 @@
 // Module import with alias
-use "./constants.gcl" as c;
+import "./constants.gcl" as c;
 
 dimension Acceleration = Length / Time^2;
 

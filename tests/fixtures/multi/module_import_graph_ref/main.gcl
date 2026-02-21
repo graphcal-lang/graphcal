@@ -1,4 +1,4 @@
 // Module import: qualified graph refs with @
-use "./params.gcl";
+import "./params.gcl";
 
 node total_mass: Mass = @params::dry_mass + @params::fuel_mass;

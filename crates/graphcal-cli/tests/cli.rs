@@ -964,7 +964,7 @@ fn eval_imported_node_with_deps() {
 
 #[test]
 fn eval_explicit_index_import() {
-    // Bug 3: `use "./lib.gcl" { Color }` should import the Color index explicitly.
+    // Bug 3: `import "./lib.gcl" { Color }` should import the Color index explicitly.
     let output = graphcal_bin()
         .args(["eval", &fixture("multi/explicit_index/main.gcl")])
         .output()

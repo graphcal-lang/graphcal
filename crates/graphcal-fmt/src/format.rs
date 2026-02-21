@@ -1,9 +1,10 @@
 use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
     DimExpr, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam,
-    ForBinding, GenericConstraint, GenericParam, Ident, IndexArg, IndexDecl, IndexDeclKind,
-    LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl, PatternBinding,
-    TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UseDecl, VariantDecl,
+    ForBinding, GenericConstraint, GenericParam, Ident, ImportDecl, IndexArg, IndexDecl,
+    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
+    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
+    VariantDecl,
 };
 use graphcal_syntax::comments::SourceMetadata;
 use graphcal_syntax::names::{IndexName, Spanned};
@@ -146,7 +147,7 @@ fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static> {
         DeclKind::Type(d) => format_type_decl(fmt, d),
         DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
-        DeclKind::Use(d) => format_use_decl(fmt, d),
+        DeclKind::Import(d) => format_import_decl(fmt, d),
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
     };
 
@@ -464,10 +465,10 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
     }
 }
 
-/// `use "path" { name1, name2 };` or `use "path";` or `use "path" as alias;`
-fn format_use_decl(_fmt: &Formatter<'_>, d: &UseDecl) -> RcDoc<'static> {
+/// `import "path" { name1, name2 };` or `import "path";` or `import "path" as alias;`
+fn format_import_decl(_fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
     match &d.kind {
-        graphcal_syntax::ast::UseKind::Selective(names) => {
+        graphcal_syntax::ast::ImportKind::Selective(names) => {
             let name_docs: Vec<RcDoc<'static>> = names
                 .iter()
                 .map(|item| {
@@ -480,15 +481,15 @@ fn format_use_decl(_fmt: &Formatter<'_>, d: &UseDecl) -> RcDoc<'static> {
                     doc
                 })
                 .collect();
-            RcDoc::text(format!("use \"{}\" {{ ", d.path))
+            RcDoc::text(format!("import \"{}\" {{ ", d.path))
                 .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(" };"))
         }
-        graphcal_syntax::ast::UseKind::Module { alias: None } => {
-            RcDoc::text(format!("use \"{}\";", d.path))
+        graphcal_syntax::ast::ImportKind::Module { alias: None } => {
+            RcDoc::text(format!("import \"{}\";", d.path))
         }
-        graphcal_syntax::ast::UseKind::Module { alias: Some(a) } => {
-            RcDoc::text(format!("use \"{}\" as {};", d.path, a.name))
+        graphcal_syntax::ast::ImportKind::Module { alias: Some(a) } => {
+            RcDoc::text(format!("import \"{}\" as {};", d.path, a.name))
         }
     }
 }

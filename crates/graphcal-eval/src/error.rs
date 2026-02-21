@@ -449,7 +449,7 @@ pub enum GraphcalError {
     #[error("unknown module `{name}`")]
     #[diagnostic(
         code(graphcal::M006),
-        help("check that a `use` declaration imports this module")
+        help("check that an `import` declaration imports this module")
     )]
     UnknownModule {
         name: String,

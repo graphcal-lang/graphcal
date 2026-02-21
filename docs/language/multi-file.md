@@ -4,14 +4,14 @@ icon: material/file-multiple
 
 # Multi-File Projects
 
-Graphcal supports splitting projects across multiple files using `use` imports. There are two import styles: **selective imports** and **module imports**.
+Graphcal supports splitting projects across multiple files using `import` declarations. There are two import styles: **selective imports** and **module imports**.
 
 ## Selective Imports
 
 Selective imports bring specific names into the local scope:
 
 ```
-use "./path/to/file.gcl" { name1, name2 };
+import "./path/to/file.gcl" { name1, name2 };
 ```
 
 - The path is a **string literal** relative to the importing file
@@ -23,8 +23,8 @@ use "./path/to/file.gcl" { name1, name2 };
 Module imports bring an entire file in as a namespace, accessed via `::`:
 
 ```
-use "./constants.gcl";                  // module named "constants"
-use "./constants.gcl" as consts;        // module named "consts"
+import "./constants.gcl";                  // module named "constants"
+import "./constants.gcl" as consts;        // module named "consts"
 ```
 
 When no alias is given, the module name is derived from the filename stem (e.g., `constants.gcl` becomes `constants`). The filename stem must be a valid `lower_snake_case` identifier; otherwise, use `as` to provide an explicit alias.
@@ -32,9 +32,9 @@ When no alias is given, the module name is derived from the filename stem (e.g.,
 Members are accessed with `::`:
 
 ```
-use "./constants.gcl";
-use "./params.gcl";
-use "./lib.gcl";
+import "./constants.gcl";
+import "./params.gcl";
+import "./lib.gcl";
 
 node g: Acceleration = constants::G0;           // qualified const
 node total: Mass = @params::dry_mass;           // qualified graph ref
@@ -45,12 +45,12 @@ Module imports only resolve declarations that are actually referenced via `::` i
 
 ## Path Resolution
 
-Paths are resolved relative to the file containing the `use` statement:
+Paths are resolved relative to the file containing the `import` declaration:
 
 ```
 // In project/main.gcl:
-use "./lib/constants.gcl" { G0 };     // resolves to project/lib/constants.gcl
-use "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
+import "./lib/constants.gcl" { G0 };     // resolves to project/lib/constants.gcl
+import "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
 ```
 
 ## Import Aliasing
@@ -58,8 +58,8 @@ use "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
 Rename imports with `as` to avoid name conflicts:
 
 ```
-use "./file_a.gcl" { velocity as velocity_a };
-use "./file_b.gcl" { velocity as velocity_b };
+import "./file_a.gcl" { velocity as velocity_a };
+import "./file_b.gcl" { velocity as velocity_b };
 
 node diff: Velocity = @velocity_a - @velocity_b;
 ```
@@ -70,14 +70,14 @@ node diff: Velocity = @velocity_a - @velocity_b;
 
 | Declaration | How to Import | How to Reference |
 |-------------|--------------|-----------------|
-| `param` | `use "..." { name }` | `@name` |
-| `node` | `use "..." { name }` | `@name` |
-| `const` | `use "..." { NAME }` | `NAME` |
-| `dimension` | `use "..." { DimName }` | `DimName` |
-| `unit` | `use "..." { unit_name }` | `unit_name` |
-| `type` | `use "..." { TypeName }` | `TypeName` |
-| `index` | `use "..." { IndexName }` | `IndexName` |
-| `fn` | `use "..." { fn_name }` | `fn_name(...)` |
+| `param` | `import "..." { name }` | `@name` |
+| `node` | `import "..." { name }` | `@name` |
+| `const` | `import "..." { NAME }` | `NAME` |
+| `dimension` | `import "..." { DimName }` | `DimName` |
+| `unit` | `import "..." { unit_name }` | `unit_name` |
+| `type` | `import "..." { TypeName }` | `TypeName` |
+| `index` | `import "..." { IndexName }` | `IndexName` |
+| `fn` | `import "..." { fn_name }` | `fn_name(...)` |
 
 Imported `param` and `node` declarations are referenced with `@` just like local ones.
 
@@ -103,10 +103,10 @@ Graphcal detects circular imports at compile time:
 
 ```
 // a.gcl
-use "./b.gcl" { x };
+import "./b.gcl" { x };
 
 // b.gcl
-use "./a.gcl" { y };
+import "./a.gcl" { y };
 // ERROR: circular import detected
 ```
 
@@ -137,7 +137,7 @@ project/
 
 ## Evaluation Entry Point
 
-When running `graphcal eval`, the entry file is the one you pass on the command line. All `use` dependencies are resolved transitively from that file:
+When running `graphcal eval`, the entry file is the one you pass on the command line. All `import` dependencies are resolved transitively from that file:
 
 ```bash
 graphcal eval project/main.gcl
@@ -161,7 +161,7 @@ workspace/
 
 ```bash
 # In main.gcl, this import would FAIL:
-# use "../shared/constants.gcl" { G0 };
+# import "../shared/constants.gcl" { G0 };
 # ERROR: import resolves outside the project root
 ```
 
@@ -178,7 +178,7 @@ workspace/
     main.gcl        ← entry point
 ```
 
-Now `main.gcl` can import from `../shared/constants.gcl` because the project root is `workspace/` (the directory containing `graphcal.toml`), not `project/`.
+Now `main.gcl` can `import` from `../shared/constants.gcl` because the project root is `workspace/` (the directory containing `graphcal.toml`), not `project/`.
 
 Graphcal searches upward from the entry-point file's directory for the nearest `graphcal.toml`. If none is found, the default behavior applies.
 

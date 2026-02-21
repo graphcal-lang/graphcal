@@ -7,7 +7,7 @@ use crate::server::AnalysisResult;
 
 /// Build document links for `use` declarations in the file.
 pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<DocumentLink>> {
-    if analysis.use_decls.is_empty() {
+    if analysis.import_decls.is_empty() {
         return None;
     }
 
@@ -18,8 +18,8 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
 
     let mut links = Vec::new();
 
-    for use_decl in &analysis.use_decls {
-        let import_path = root_dir.join(&use_decl.path);
+    for import_decl in &analysis.import_decls {
+        let import_path = root_dir.join(&import_decl.path);
         let Ok(canonical) = import_path.canonicalize() else {
             continue;
         };
@@ -28,7 +28,7 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
         };
 
         links.push(DocumentLink {
-            range: span_to_range(&analysis.source, use_decl.path_span),
+            range: span_to_range(&analysis.source, import_decl.path_span),
             target: Some(target_uri),
             tooltip: Some("Open imported file".to_string()),
             data: None,

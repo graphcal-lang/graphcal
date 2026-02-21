@@ -174,7 +174,7 @@ UPPER_IDENT   = [A-Z][A-Z0-9_]*
 - Units after literals (`400 km`)
 - Block bodies (`{ let ...; expr }`)
 - `type`, `dimension`, `unit`, `space`, `index`, `table`, `fn`
-- `use`, `private`
+- `import`, `private`
 - Multi-file
 - Doc comments (`///`)
 

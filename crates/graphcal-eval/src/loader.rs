@@ -37,7 +37,7 @@ impl LoadedProject {
     /// Build a single-file project from in-memory source text.
     ///
     /// The file is assigned a synthetic path derived from `name` (no disk I/O).
-    /// Use declarations in the source are **not** followed — this is suitable
+    /// Import declarations in the source are **not** followed — this is suitable
     /// for standalone files or untitled editor buffers.
     ///
     /// # Errors
@@ -117,7 +117,7 @@ impl LoadedProject {
 }
 
 /// Load a project starting from `root_path`, recursively loading all
-/// files referenced by `use` declarations. Detects circular imports.
+/// files referenced by `import` declarations. Detects circular imports.
 ///
 /// # Errors
 ///
@@ -156,7 +156,7 @@ pub fn load_project(
     })
 }
 
-/// DFS helper: load a single file and recurse into its `use` declarations.
+/// DFS helper: load a single file and recurse into its `import` declarations.
 ///
 /// When `overlay` is `Some((path, content))`, loading the file at `path` uses
 /// the provided `content` instead of reading from disk.
@@ -211,22 +211,22 @@ fn load_file_dfs(
     // Find use declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     for decl in &ast.declarations {
-        if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = parent_dir.join(&use_decl.path);
+        if let DeclKind::Import(import_decl) = &decl.kind {
+            let import_path = parent_dir.join(&import_decl.path);
             let import_canonical = import_path.canonicalize().map_err(|_| {
                 CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: use_decl.path.clone(),
+                    path: import_decl.path.clone(),
                     src: named_source.clone(),
-                    span: use_decl.path_span.into(),
+                    span: import_decl.path_span.into(),
                 })
             })?;
 
             // Path sandboxing: reject imports that resolve outside the project root.
             if !import_canonical.starts_with(project_root) {
                 return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
-                    path: use_decl.path.clone(),
+                    path: import_decl.path.clone(),
                     src: named_source,
-                    span: use_decl.path_span.into(),
+                    span: import_decl.path_span.into(),
                 }));
             }
 
@@ -378,7 +378,7 @@ mod tests {
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
-                "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+                "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("main.gcl"), None).unwrap();
@@ -396,11 +396,11 @@ mod tests {
         let dir = setup_temp_dir(&[
             (
                 "a.gcl",
-                "use \"./b.gcl\" { y };\nparam x: Dimensionless = 1.0;",
+                "import \"./b.gcl\" { y };\nparam x: Dimensionless = 1.0;",
             ),
             (
                 "b.gcl",
-                "use \"./a.gcl\" { x };\nparam y: Dimensionless = 2.0;",
+                "import \"./a.gcl\" { x };\nparam y: Dimensionless = 2.0;",
             ),
         ]);
         let result = load_project(&dir.path().join("a.gcl"), None);
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn load_missing_import_file() {
-        let dir = setup_temp_dir(&[("main.gcl", "use \"./nonexistent.gcl\" { x };")]);
+        let dir = setup_temp_dir(&[("main.gcl", "import \"./nonexistent.gcl\" { x };")]);
         let result = load_project(&dir.path().join("main.gcl"), None);
         assert!(result.is_err());
     }
@@ -456,13 +456,13 @@ mod tests {
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
-                "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+                "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let root_path = dir.path().join("main.gcl");
         let helper_canonical = dir.path().join("helper.gcl").canonicalize().unwrap();
 
-        let overlay_source = "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
+        let overlay_source = "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
         let project =
             LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source), None)
                 .unwrap();
@@ -494,15 +494,15 @@ mod tests {
             ("d.gcl", "param w: Dimensionless = 4.0;"),
             (
                 "b.gcl",
-                "use \"./d.gcl\" { w };\nparam x: Dimensionless = @w + 1.0;",
+                "import \"./d.gcl\" { w };\nparam x: Dimensionless = @w + 1.0;",
             ),
             (
                 "c.gcl",
-                "use \"./d.gcl\" { w };\nparam y: Dimensionless = @w + 2.0;",
+                "import \"./d.gcl\" { w };\nparam y: Dimensionless = @w + 2.0;",
             ),
             (
                 "a.gcl",
-                "use \"./b.gcl\" { x };\nuse \"./c.gcl\" { y };\nnode z: Dimensionless = @x + @y;",
+                "import \"./b.gcl\" { x };\nimport \"./c.gcl\" { y };\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
         let project = load_project(&dir.path().join("a.gcl"), None).unwrap();
@@ -570,7 +570,7 @@ mod tests {
         .unwrap();
         fs::write(
             project_dir.join("main.gcl"),
-            "use \"../external/secret.gcl\" { secret };",
+            "import \"../external/secret.gcl\" { secret };",
         )
         .unwrap();
 
@@ -591,7 +591,7 @@ mod tests {
             ("sub/helper.gcl", "param x: Dimensionless = 1.0;"),
             (
                 "main.gcl",
-                "use \"./sub/helper.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
+                "import \"./sub/helper.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("main.gcl"), None).unwrap();
@@ -606,7 +606,7 @@ mod tests {
             ("lib.gcl", "param x: Dimensionless = 1.0;"),
             (
                 "sub/main.gcl",
-                "use \"../lib.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
+                "import \"../lib.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let result = load_project(&dir.path().join("sub/main.gcl"), None);
@@ -645,7 +645,7 @@ mod tests {
             ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
             (
                 "sub/main.gcl",
-                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
             ),
         ]);
         // Place graphcal.toml at the workspace root.
@@ -662,7 +662,7 @@ mod tests {
             ("lib/helpers.gcl", "param h: Dimensionless = 10.0;"),
             (
                 "deep/nested/main.gcl",
-                "use \"../../lib/helpers.gcl\" { h };\nnode z: Dimensionless = @h + 1.0;",
+                "import \"../../lib/helpers.gcl\" { h };\nnode z: Dimensionless = @h + 1.0;",
             ),
         ]);
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
@@ -679,7 +679,7 @@ mod tests {
             ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
             (
                 "sub/main.gcl",
-                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
             ),
         ]);
         // No graphcal.toml — root stays at sub/.
@@ -700,7 +700,7 @@ mod tests {
             ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
             (
                 "sub/main.gcl",
-                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
             ),
         ]);
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
@@ -725,7 +725,7 @@ mod tests {
             ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
             (
                 "sub/main.gcl",
-                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
             ),
         ]);
 

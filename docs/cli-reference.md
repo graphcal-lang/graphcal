@@ -235,4 +235,4 @@ The LSP server provides:
 - **Find references** -- Find all usages of a declaration
 - **Document symbols** -- Outline view of all declarations
 - **Formatting** -- Format the current document
-- **Document links** -- Clickable `use` import paths
+- **Document links** -- Clickable `import` paths

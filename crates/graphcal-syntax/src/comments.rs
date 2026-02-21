@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn no_false_positive_in_string() {
-        let source = r#"use "//not-a-comment.gcl" { x };"#;
+        let source = r#"import "//not-a-comment.gcl" { x };"#;
         let meta = extract_source_metadata(source);
         assert_eq!(meta.comments.len(), 0);
     }

@@ -100,7 +100,7 @@ inferred and rarely written explicitly.
 - Recursion
 - Overloading
 - Functions as values
-- Multi-file (function import via `use`)
+- Multi-file (function import via `import`)
 
 ## Milestone Test
 

@@ -54,7 +54,7 @@ graphcal eval path/to/file.gcl --set 'isp=450.0 s'
 # Override params from a JSON file
 graphcal eval path/to/file.gcl --input params.json
 
-# Multi-file project (use declarations resolved automatically)
+# Multi-file project (import declarations resolved automatically)
 graphcal eval project/main.gcl
 ```
 
@@ -272,11 +272,11 @@ node x: Dimensionless[TimeStep] = unfold(
 
 ### Multi-file projects
 
-Split calculations across files with `use` imports. All declaration kinds can be imported, and circular dependencies are detected at compile time.
+Split calculations across files with `import` declarations. All declaration kinds can be imported, and circular dependencies are detected at compile time.
 
 ```gcl
-use "./constants.gcl" { G0 };
-use "./params.gcl" { dry_mass, fuel_mass, isp };
+import "./constants.gcl" { G0 };
+import "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
 
 ### JSON input for parameter overrides
@@ -598,8 +598,8 @@ param isp: Time = 320 s;
 
 ```gcl
 // main.gcl
-use "./constants.gcl" { G0 };
-use "./params.gcl" { dry_mass, fuel_mass, isp };
+import "./constants.gcl" { G0 };
+import "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dimension Velocity = Length / Time;
 

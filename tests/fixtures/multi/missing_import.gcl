@@ -1,2 +1,2 @@
-use "./nonexistent.gcl" { x };
+import "./nonexistent.gcl" { x };
 param y: Dimensionless = 1.0;

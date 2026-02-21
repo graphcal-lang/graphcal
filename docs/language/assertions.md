@@ -189,7 +189,7 @@ Assertions:
 - Valid on `node` and `param` declarations. Using `#[assumes]` on `const` is an
   error (A006) because constants do not depend on runtime values.
 - Multiple assertions can be listed: `#[assumes(a, b, c)]`.
-- Cross-file: you can import an assert via `use` and reference it in
+- Cross-file: you can import an assert via `import` and reference it in
   `#[assumes]`.
 
 ### `#[lazy]`
@@ -199,7 +199,7 @@ evaluation (computed only when requested, not eagerly during graph evaluation).
 
 ## Assertions in Multi-File Projects
 
-Assertions can be defined in any `.gcl` file and imported via `use`:
+Assertions can be defined in any `.gcl` file and imported via `import`:
 
 ```
 // checks.gcl
@@ -208,7 +208,7 @@ assert pressure_safe = @pressure < 10.0 MPa;
 
 ```
 // main.gcl
-use "./checks.gcl" { pressure_safe };
+import "./checks.gcl" { pressure_safe };
 
 #[assumes(pressure_safe)]
 node safety_factor: Dimensionless = 1.5;

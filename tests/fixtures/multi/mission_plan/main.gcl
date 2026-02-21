@@ -3,19 +3,19 @@
 // Demonstrates importing from child directories (./shared/, ./subsystems/)
 // with many identifiers in a single use statement.
 
-use "./shared/constants.gcl" {
+import "./shared/constants.gcl" {
     G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON,
     GravParam
 };
 
-use "./shared/indexes.gcl" { MissionPhase, Subsystem };
+import "./shared/indexes.gcl" { MissionPhase, Subsystem };
 
-use "./subsystems/propulsion.gcl" {
+import "./subsystems/propulsion.gcl" {
     isp, dry_mass, fuel_mass,
     v_exhaust, total_mass, mass_ratio, total_delta_v
 };
 
-use "./subsystems/power.gcl" {
+import "./subsystems/power.gcl" {
     solar_array_power, battery_capacity_wh, power_margin
 };
 

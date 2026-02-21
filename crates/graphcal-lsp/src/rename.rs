@@ -194,7 +194,7 @@ mod tests {
             diagnostics: Vec::new(),
             eval_values: HashMap::new(),
             fn_signatures: HashMap::new(),
-            use_decls: Vec::new(),
+            import_decls: Vec::new(),
         }
     }
 

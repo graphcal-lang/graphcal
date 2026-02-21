@@ -269,33 +269,33 @@ pub(super) fn lower_project_to_ir(
     // Track which type-system declarations (dims/units/indexes/types) are explicitly
     // imported from each file, so we only register those (not everything in the file).
     let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
-    // Module imports: map module_name → (canonical_path, span_of_use_decl).
+    // Module imports: map module_name → (canonical_path, span_of_import_decl).
     let mut module_map: HashMap<String, (PathBuf, Span)> = HashMap::new();
     for decl in &root_file.ast.declarations {
-        if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = root_dir.join(&use_decl.path);
+        if let DeclKind::Import(import_decl) = &decl.kind {
+            let import_path = root_dir.join(&import_decl.path);
             let import_canonical = import_path.canonicalize().map_err(|_| {
                 CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: use_decl.path.clone(),
+                    path: import_decl.path.clone(),
                     src: root_src.clone(),
-                    span: use_decl.path_span.into(),
+                    span: import_decl.path_span.into(),
                 })
             })?;
 
             let imported_file = &project.files[&import_canonical];
 
-            let names = match &use_decl.kind {
-                graphcal_syntax::ast::UseKind::Selective(names) => names,
-                graphcal_syntax::ast::UseKind::Module { alias } => {
+            let names = match &import_decl.kind {
+                graphcal_syntax::ast::ImportKind::Selective(names) => names,
+                graphcal_syntax::ast::ImportKind::Module { alias } => {
                     // Module imports: derive module name, store mapping for later resolution.
                     let module_name = if let Some(alias_ident) = alias {
                         alias_ident.name.clone()
                     } else {
-                        crate::loader::derive_module_name(&use_decl.path).map_err(|stem| {
+                        crate::loader::derive_module_name(&import_decl.path).map_err(|stem| {
                             CompileError::Eval(GraphcalError::InvalidModuleName {
                                 stem,
                                 src: root_src.clone(),
-                                span: use_decl.path_span.into(),
+                                span: import_decl.path_span.into(),
                             })
                         })?
                     };
@@ -303,17 +303,20 @@ pub(super) fn lower_project_to_ir(
                         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                             name: module_name,
                             src: root_src.clone(),
-                            span: use_decl.path_span.into(),
+                            span: import_decl.path_span.into(),
                             first: (*first_span).into(),
                         }));
                     }
-                    module_map.insert(module_name, (import_canonical.clone(), use_decl.path_span));
+                    module_map.insert(
+                        module_name,
+                        (import_canonical.clone(), import_decl.path_span),
+                    );
                     continue;
                 }
             };
-            for use_item in names {
-                let found = find_declaration_in_file(&imported_file.ast, &use_item.name.name);
-                let local_name = use_item.local_name().to_string();
+            for import_item in names {
+                let found = find_declaration_in_file(&imported_file.ast, &import_item.name.name);
+                let local_name = import_item.local_name().to_string();
 
                 match found {
                     Some(ImportedDecl::Const(type_ann, expr, span)) => {
@@ -335,14 +338,14 @@ pub(super) fn lower_project_to_ir(
                         imported_type_system_names
                             .entry(import_canonical.clone())
                             .or_default()
-                            .insert(use_item.name.name.clone());
+                            .insert(import_item.name.name.clone());
                     }
                     None => {
                         return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                            name: use_item.name.name.clone(),
-                            file_path: use_decl.path.clone(),
+                            name: import_item.name.name.clone(),
+                            file_path: import_decl.path.clone(),
                             src: root_src.clone(),
-                            span: use_item.name.span.into(),
+                            span: import_item.name.span.into(),
                         }));
                     }
                 }
