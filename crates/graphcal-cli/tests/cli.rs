@@ -1256,3 +1256,46 @@ fn eval_parent_directory_import() {
         "expected result = 84 in output: {stdout}"
     );
 }
+
+#[test]
+fn eval_parenthesized_exprs() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("parenthesized_exprs.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Check key outputs
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("absorbed_power") && !l.contains("PASS")),
+        "expected absorbed_power in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("voltage") && l.contains("50")),
+        "expected voltage = 50 in output: {stdout}"
+    );
+
+    // All assertions should pass
+    assert!(
+        stdout.contains("absorbed_power_positive") && stdout.contains("PASS"),
+        "expected absorbed_power_positive PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("voltage_correct") && stdout.contains("PASS"),
+        "expected voltage_correct PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("charge_time_positive") && stdout.contains("PASS"),
+        "expected charge_time_positive PASS: {stdout}"
+    );
+}

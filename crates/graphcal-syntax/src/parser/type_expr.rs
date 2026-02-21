@@ -3,6 +3,7 @@ use crate::ast::{
     UnitExprItem,
 };
 use crate::names::UnitName;
+use crate::span::Span;
 use crate::token::Token;
 
 use super::{ParseError, Parser, is_pascal_case, is_uppercase_starting};
@@ -94,32 +95,33 @@ impl Parser<'_> {
         Ok(base)
     }
 
-    /// Parse a dimension expression: `DimTerm (("*" | "/") DimTerm)*`
+    /// Parse a dimension expression: `DimTermOrGroup (("*" | "/") DimTermOrGroup)*`
+    ///
+    /// A term-or-group is either `IDENT ("^" INTEGER)?` or `"(" DimExpr ")" ("^" INTEGER)?`.
+    /// Parenthesized groups are flattened: `(A * B / C)^2` becomes `A^2 * B^2 / C^2`,
+    /// and `D / (A * B)` becomes `D / A / B`.
     pub(super) fn parse_dim_expr(&mut self) -> Result<DimExpr, ParseError> {
-        let first_term = self.parse_dim_term()?;
-        let start_span = first_term.span;
-        let mut terms = vec![DimExprItem {
-            op: MulDivOp::Mul,
-            term: first_term,
-        }];
+        let first_items = self.parse_dim_term_or_group()?;
+        let start_span = first_items[0].term.span;
+        let mut terms: Vec<DimExprItem> = first_items;
 
         loop {
             match self.lexer.peek() {
                 Some(Token::Star) => {
                     self.lexer.next_token();
-                    let term = self.parse_dim_term()?;
-                    terms.push(DimExprItem {
-                        op: MulDivOp::Mul,
-                        term,
-                    });
+                    let items = self.parse_dim_term_or_group()?;
+                    for mut item in items {
+                        item.op = Self::combine_ops(MulDivOp::Mul, item.op);
+                        terms.push(item);
+                    }
                 }
                 Some(Token::Slash) => {
                     self.lexer.next_token();
-                    let term = self.parse_dim_term()?;
-                    terms.push(DimExprItem {
-                        op: MulDivOp::Div,
-                        term,
-                    });
+                    let items = self.parse_dim_term_or_group()?;
+                    for mut item in items {
+                        item.op = Self::combine_ops(MulDivOp::Div, item.op);
+                        terms.push(item);
+                    }
                 }
                 _ => break,
             }
@@ -134,6 +136,52 @@ impl Parser<'_> {
             terms,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Parse a single dimension term or a parenthesized group, returning flattened items.
+    ///
+    /// - `IDENT ("^" INTEGER)?` → single item with op=Mul
+    /// - `"(" DimExpr ")" ("^" INTEGER)?` → flattened items with powers multiplied
+    fn parse_dim_term_or_group(&mut self) -> Result<Vec<DimExprItem>, ParseError> {
+        if self.lexer.peek() == Some(&Token::LParen) {
+            self.lexer.next_token();
+            let inner = self.parse_dim_expr()?;
+            self.expect(Token::RParen)?;
+
+            // Optional outer exponent: `(A * B)^2`
+            let outer_power = if self.lexer.peek() == Some(&Token::Caret) {
+                self.lexer.next_token();
+                let (neg, value, _span) = self.parse_integer_literal()?;
+                if neg { -value } else { value }
+            } else {
+                1
+            };
+
+            // Flatten: distribute the outer power to each inner term
+            let items = inner
+                .terms
+                .into_iter()
+                .map(|item| {
+                    let inner_power = item.term.power.unwrap_or(1);
+                    let combined = inner_power * outer_power;
+                    DimExprItem {
+                        op: item.op,
+                        term: DimTerm {
+                            name: item.term.name,
+                            power: if combined == 1 { None } else { Some(combined) },
+                            span: item.term.span,
+                        },
+                    }
+                })
+                .collect();
+            Ok(items)
+        } else {
+            let term = self.parse_dim_term()?;
+            Ok(vec![DimExprItem {
+                op: MulDivOp::Mul,
+                term,
+            }])
+        }
     }
 
     /// Parse a single dimension term: `IDENT ("^" INTEGER)?`
@@ -157,78 +205,121 @@ impl Parser<'_> {
         })
     }
 
+    /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
+    const fn combine_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
+        match (outer, inner) {
+            (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div) => MulDivOp::Mul,
+            (MulDivOp::Mul, MulDivOp::Div) | (MulDivOp::Div, MulDivOp::Mul) => MulDivOp::Div,
+        }
+    }
+
     // --- Unit expressions ---
 
-    /// Parse a unit expression: `IDENT (("*" | "/") IDENT ("^" INTEGER)?)*`
+    /// Parse a unit expression:
+    ///   `unit_term (("*" | "/") unit_term)*`
+    /// where `unit_term` is `IDENT ["^" INTEGER]` or `"(" unit_expr ")" ["^" INTEGER]`.
+    ///
+    /// Parenthesized groups are flattened into the term list (operator
+    /// combination and power distribution), so the AST stays flat.
     pub(super) fn parse_unit_expr(&mut self) -> Result<UnitExpr, ParseError> {
-        let first_ident = self.parse_any_ident()?;
-        let start_span = first_ident.span;
-        let mut end_span = first_ident.span;
-        let first_name = first_ident.into_spanned::<UnitName>();
+        let (first_terms, start_span, mut end_span) =
+            self.parse_unit_term_or_group(MulDivOp::Mul)?;
 
-        let first_power = if self.lexer.peek() == Some(&Token::Caret) {
-            self.lexer.next_token();
-            let (neg, value, span) = self.parse_integer_literal()?;
-            end_span = span;
-            Some(if neg { -value } else { value })
-        } else {
-            None
-        };
+        let mut terms: Vec<UnitExprItem> = first_terms;
 
-        let mut terms = vec![UnitExprItem {
-            op: MulDivOp::Mul,
-            name: first_name,
-            power: first_power,
-        }];
+        while let Some(&Token::Star | &Token::Slash) = self.lexer.peek() {
+            // peek() confirmed a token exists, so next_token() will return Some.
+            let Some((op_token, op_span)) = self.lexer.next_token() else {
+                break;
+            };
+            let outer_op = if op_token == Token::Star {
+                MulDivOp::Mul
+            } else {
+                MulDivOp::Div
+            };
 
-        loop {
-            match self.lexer.peek() {
-                Some(Token::Star) => {
-                    self.lexer.next_token();
-                    let ident = self.parse_any_ident()?;
-                    end_span = ident.span;
-                    let name = ident.into_spanned::<UnitName>();
-                    let power = if self.lexer.peek() == Some(&Token::Caret) {
-                        self.lexer.next_token();
-                        let (neg, value, span) = self.parse_integer_literal()?;
-                        end_span = span;
-                        Some(if neg { -value } else { value })
-                    } else {
-                        None
-                    };
-                    terms.push(UnitExprItem {
-                        op: MulDivOp::Mul,
-                        name,
-                        power,
-                    });
-                }
-                Some(Token::Slash) => {
-                    self.lexer.next_token();
-                    let ident = self.parse_any_ident()?;
-                    end_span = ident.span;
-                    let name = ident.into_spanned::<UnitName>();
-                    let power = if self.lexer.peek() == Some(&Token::Caret) {
-                        self.lexer.next_token();
-                        let (neg, value, span) = self.parse_integer_literal()?;
-                        end_span = span;
-                        Some(if neg { -value } else { value })
-                    } else {
-                        None
-                    };
-                    terms.push(UnitExprItem {
-                        op: MulDivOp::Div,
-                        name,
-                        power,
-                    });
-                }
-                _ => break,
+            // Only continue the unit expression if next token is an identifier
+            // or `(` (parenthesized group). Otherwise, put the operator back
+            // and let the expression parser handle it as arithmetic
+            // (e.g., `459.3 W / (1.0 m^2)`).
+            if !matches!(self.lexer.peek(), Some(&Token::Ident | &Token::LParen)) {
+                self.lexer.put_back(op_token, op_span);
+                break;
             }
+
+            let (new_terms, _, new_end) = self.parse_unit_term_or_group(outer_op)?;
+            end_span = new_end;
+            terms.extend(new_terms);
         }
 
         Ok(UnitExpr {
             terms,
             span: start_span.merge(end_span),
         })
+    }
+
+    /// Parse a single unit term or a parenthesized unit group.
+    ///
+    /// Returns `(items, start_span, end_span)`. For a parenthesized group the
+    /// items are flattened with the given `outer_op` distributed across them.
+    fn parse_unit_term_or_group(
+        &mut self,
+        outer_op: MulDivOp,
+    ) -> Result<(Vec<UnitExprItem>, Span, Span), ParseError> {
+        if self.lexer.peek() == Some(&Token::LParen) {
+            let (_, lparen_span) = self.expect(Token::LParen)?;
+            let inner = self.parse_unit_expr()?;
+            let (_, rparen_span) = self.expect(Token::RParen)?;
+
+            let outer_power = if self.lexer.peek() == Some(&Token::Caret) {
+                self.lexer.next_token();
+                let (neg, value, _span) = self.parse_integer_literal()?;
+                if neg { -value } else { value }
+            } else {
+                1
+            };
+
+            let end_span = rparen_span;
+            let items = inner
+                .terms
+                .into_iter()
+                .map(|item| {
+                    let combined_power = item.power.unwrap_or(1) * outer_power;
+                    UnitExprItem {
+                        op: Self::combine_ops(outer_op, item.op),
+                        name: item.name,
+                        power: if combined_power == 1 {
+                            None
+                        } else {
+                            Some(combined_power)
+                        },
+                    }
+                })
+                .collect();
+            Ok((items, lparen_span, end_span))
+        } else {
+            let ident = self.parse_any_ident()?;
+            let start_span = ident.span;
+            let mut end_span = ident.span;
+            let name = ident.into_spanned::<UnitName>();
+            let power = if self.lexer.peek() == Some(&Token::Caret) {
+                self.lexer.next_token();
+                let (neg, value, span) = self.parse_integer_literal()?;
+                end_span = span;
+                Some(if neg { -value } else { value })
+            } else {
+                None
+            };
+            Ok((
+                vec![UnitExprItem {
+                    op: outer_op,
+                    name,
+                    power,
+                }],
+                start_span,
+                end_span,
+            ))
+        }
     }
 
     /// Parse an integer literal, possibly preceded by `-`.

@@ -1,0 +1,46 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// parenthesized_exprs.gcl -- Test parenthesized dimension and unit expressions
+//
+// Exercises:
+// 1. Parenthesized grouping in dimension expressions
+// 2. Parenthesized sub-expressions in unit literals (arithmetic context)
+// --- Parenthesized dimension expressions ---
+// Voltage = kg * m^2 / (A * s^3)
+dimension Voltage = Mass * Length^2 / ElectricCurrent / Time^3;
+
+// Resistance = kg * m^2 / (A^2 * s^3)
+dimension Resistance = Voltage / ElectricCurrent;
+
+// HeatFlux = Power / Area = kg / s^3
+dimension HeatFlux = Mass / Time^3;
+
+// Capacitance uses nested grouping: A^2 * s^4 / (kg * m^2)
+dimension Capacitance = ElectricCurrent^2 * Time^4 / Mass / Length^2;
+
+unit V: Voltage = 1.0 kg * m^2/A/s^3;
+unit ohm: Resistance = 1.0 V/A;
+unit F: Capacitance = 1.0 A^2 * s^4/kg/m^2;
+
+// --- Parenthesized unit expressions in arithmetic ---
+param panel_area: Area = 2.5 m^2;
+param solar_flux: HeatFlux = 459.3 kg/s^3;
+
+// The parenthesized unit expression `(1.0 m^2)` stops unit parsing before `)`
+node absorbed_power: Power = @panel_area * @solar_flux;
+
+// Verify with a voltage calculation
+param current: ElectricCurrent = 5.0 A;
+param resistance: Resistance = 10.0 ohm;
+node voltage: Voltage = @current * @resistance;
+
+// Capacitance calculation
+param capacitance: Capacitance = 0.001 F;
+node charge_time: Time = @capacitance * @resistance;
+
+// --- Assertions ---
+assert absorbed_power_positive = @absorbed_power > 0.0 W;
+assert voltage_correct = @voltage == 50.0 V;
+assert charge_time_positive = @charge_time > 0.0 s;

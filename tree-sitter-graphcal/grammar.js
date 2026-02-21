@@ -368,9 +368,9 @@ module.exports = grammar({
       repeat(seq(choice("*", "/"), $.dim_term)),
     )),
 
-    dim_term: $ => prec.right(PREC.POWER + 1, seq(
-      $.identifier,
-      optional(seq("^", $.number)),
+    dim_term: $ => prec.right(PREC.POWER + 1, choice(
+      seq($.identifier, optional(seq("^", $.number))),
+      seq("(", $.dim_expr, ")", optional(seq("^", $.number))),
     )),
 
     // ---------------------------------------------------------------
@@ -382,9 +382,9 @@ module.exports = grammar({
       repeat(seq(choice("*", "/"), $.unit_term)),
     )),
 
-    unit_term: $ => prec.right(PREC.POWER + 1, seq(
-      $.identifier,
-      optional(seq("^", $.number)),
+    unit_term: $ => prec.right(PREC.POWER + 1, choice(
+      seq($.identifier, optional(seq("^", $.number))),
+      seq("(", $.unit_expr, ")", optional(seq("^", $.number))),
     )),
 
     // Unit definition in unit declaration: 1000 m, 1 kg * m / s^2
