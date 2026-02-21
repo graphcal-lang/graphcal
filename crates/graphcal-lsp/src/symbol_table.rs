@@ -590,7 +590,16 @@ fn collect_expr_refs(
                 }
             }
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            // For TableLiteral, also add references for the index names in table[...].
+            if let ExprKind::TableLiteral { indexes, .. } = &expr.kind {
+                for idx in indexes {
+                    table.references.push(ReferenceInfo {
+                        span: idx.span,
+                        target: idx.value.to_string(),
+                    });
+                }
+            }
             for entry in entries {
                 for key in &entry.keys {
                     table.references.push(ReferenceInfo {

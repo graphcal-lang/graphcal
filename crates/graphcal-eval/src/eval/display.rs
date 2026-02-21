@@ -29,11 +29,15 @@ pub(super) fn attach_display_units(
                 }
             }
         }
-        // Map literal: recurse into each entry
+        // Map/table literal: recurse into each entry
         (
             Value::Indexed { entries, .. },
             ExprKind::MapLiteral {
                 entries: map_entries,
+            }
+            | ExprKind::TableLiteral {
+                entries: map_entries,
+                ..
             },
         ) => {
             for map_entry in map_entries {
@@ -87,7 +91,7 @@ pub(super) fn extract_flat_display_unit(
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, registry),
         ExprKind::Convert { target, .. } => resolve_unit_to_display(target, registry),
-        ExprKind::MapLiteral { entries } => entries
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => entries
             .first()
             .and_then(|e| extract_flat_display_unit(&e.value, registry)),
         ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, registry),

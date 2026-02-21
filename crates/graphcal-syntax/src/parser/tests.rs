@@ -1542,7 +1542,9 @@ fn parse_table_1d() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Param(p) => match &p.value.kind {
-            ExprKind::MapLiteral { entries } => {
+            ExprKind::TableLiteral { indexes, entries } => {
+                assert_eq!(indexes.len(), 1);
+                assert_eq!(indexes[0].value.as_str(), "Maneuver");
                 assert_eq!(entries.len(), 3);
                 assert_eq!(entries[0].keys.len(), 1);
                 assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
@@ -1550,7 +1552,7 @@ fn parse_table_1d() {
                 assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
                 assert_eq!(entries[2].keys[0].variant.value.as_str(), "Insertion");
             }
-            other => panic!("expected MapLiteral, got {other:?}"),
+            other => panic!("expected TableLiteral, got {other:?}"),
         },
         _ => panic!("expected param"),
     }
@@ -1567,7 +1569,10 @@ fn parse_table_2d() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Param(p) => match &p.value.kind {
-            ExprKind::MapLiteral { entries } => {
+            ExprKind::TableLiteral { indexes, entries } => {
+                assert_eq!(indexes.len(), 2);
+                assert_eq!(indexes[0].value.as_str(), "Phase");
+                assert_eq!(indexes[1].value.as_str(), "Maneuver");
                 assert_eq!(entries.len(), 9);
                 assert_eq!(entries[0].keys.len(), 2);
                 assert_eq!(entries[0].keys[0].index.value.as_str(), "Phase");
@@ -1578,7 +1583,7 @@ fn parse_table_2d() {
                 assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
                 assert_eq!(entries[8].keys[1].variant.value.as_str(), "Insertion");
             }
-            other => panic!("expected MapLiteral, got {other:?}"),
+            other => panic!("expected TableLiteral, got {other:?}"),
         },
         _ => panic!("expected param"),
     }
@@ -1600,7 +1605,11 @@ fn parse_table_3d() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Param(p) => match &p.value.kind {
-            ExprKind::MapLiteral { entries } => {
+            ExprKind::TableLiteral { indexes, entries } => {
+                assert_eq!(indexes.len(), 3);
+                assert_eq!(indexes[0].value.as_str(), "Time");
+                assert_eq!(indexes[1].value.as_str(), "Phase");
+                assert_eq!(indexes[2].value.as_str(), "Maneuver");
                 assert_eq!(entries.len(), 8);
                 assert_eq!(entries[0].keys.len(), 3);
                 assert_eq!(entries[0].keys[0].index.value.as_str(), "Time");
@@ -1613,7 +1622,7 @@ fn parse_table_3d() {
                 assert_eq!(entries[4].keys[1].variant.value.as_str(), "Launch");
                 assert_eq!(entries[4].keys[2].variant.value.as_str(), "Departure");
             }
-            other => panic!("expected MapLiteral, got {other:?}"),
+            other => panic!("expected TableLiteral, got {other:?}"),
         },
         _ => panic!("expected param"),
     }

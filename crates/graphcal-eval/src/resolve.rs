@@ -565,7 +565,7 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             }
             Ok(())
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 check_no_graph_refs(&entry.value, src)?;
             }
@@ -674,7 +674,7 @@ fn check_no_graph_refs_in_fn_expr(
             }
             Ok(())
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 check_no_graph_refs_in_fn_expr(&entry.value, fn_name, src)?;
             }
@@ -769,7 +769,7 @@ fn check_no_assert_graph_refs(
             }
             Ok(())
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 check_no_assert_graph_refs(&entry.value, assert_names, src)?;
             }
@@ -1025,7 +1025,7 @@ fn collect_const_refs(
             }
             Ok(())
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 collect_const_refs(
                     &entry.value,
@@ -1387,7 +1387,7 @@ fn collect_all_refs(
             }
             Ok(())
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 collect_all_refs(
                     &entry.value,
@@ -1561,7 +1561,7 @@ pub fn collect_graph_refs(
                 }
             }
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 collect_graph_refs(&entry.value, all_runtime_names, refs);
             }
