@@ -1235,25 +1235,22 @@ fn eval_mission_plan_multi_file() {
 }
 
 #[test]
-fn eval_parent_directory_import() {
+fn eval_parent_directory_import_rejected() {
+    // The entry point is child/main.gcl, so the project root is child/.
+    // Importing "../lib.gcl" escapes that boundary and should be rejected.
     let output = graphcal_bin()
         .args(["eval", &fixture("multi/parent_import/child/main.gcl")])
         .output()
         .expect("failed to run graphcal");
 
     assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "expected failure for parent directory import, but got success"
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    // result = base_value * SCALE = 42 * 2 = 84
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("result") && l.contains("84")),
-        "expected result = 84 in output: {stdout}"
+        stderr.contains("outside") || stderr.contains("M008"),
+        "expected ImportOutsideRoot error: {stderr}"
     );
 }
 

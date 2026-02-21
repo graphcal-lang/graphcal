@@ -1,8 +1,8 @@
-// child/main.gcl -- Imports from parent directory using "../"
+// child/main.gcl -- Attempts to import from parent directory using "../"
 //
-// This demonstrates that Graphcal allows traversing up the directory tree
-// via use statements. A file can import from arbitrary locations reachable
-// by relative paths, including parent directories.
+// This is expected to FAIL because the project root is the entry-point
+// file's directory (child/). The import "../lib.gcl" resolves outside
+// this boundary and is rejected by the path sandboxing check.
 
 use "../lib.gcl" { base_value, SCALE };
 
