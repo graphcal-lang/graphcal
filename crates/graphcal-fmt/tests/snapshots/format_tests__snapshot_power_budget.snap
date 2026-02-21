@@ -1,0 +1,98 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// power_budget.gcl -- Spacecraft power subsystem budget
+//
+// A realistic power budget with many subsystems, operating modes,
+// and multi-dimensional tables with computed (non-literal) cell expressions.
+unit Wh: Energy = 3600 J;
+
+// --- Subsystems (12 variants) ---
+index Subsystem = { CommandAndData,
+AttitudeControl,
+Propulsion,
+Thermal,
+Telecom,
+Payload1,
+Payload2,
+Payload3,
+PowerElectronics,
+Harness,
+Mechanisms,
+Software }
+
+// --- Operating modes (8 variants) ---
+index OpMode = { Safe,
+Detumble,
+NominalSunlit,
+NominalEclipse,
+Comms,
+ScienceObs,
+OrbitManeuver,
+Standby }
+
+// --- Power draw per subsystem per mode (12x8 = 96 cells) ---
+param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
+                       Safe, Detumble, NominalSunlit, NominalEclipse,  Comms, ScienceObs, OrbitManeuver, Standby;
+    CommandAndData:   5.0 W,    5.0 W,         8.0 W,          8.0 W,  8.0 W,      8.0 W,         8.0 W,   3.0 W;
+    AttitudeControl:  0.0 W,   15.0 W,        12.0 W,         12.0 W, 12.0 W,     12.0 W,        20.0 W,   0.0 W;
+    Propulsion:       0.0 W,    0.0 W,         0.0 W,          0.0 W,  0.0 W,      0.0 W,        45.0 W,   0.0 W;
+    Thermal:          8.0 W,    8.0 W,         5.0 W,         15.0 W,  5.0 W,      5.0 W,        10.0 W,   8.0 W;
+    Telecom:          0.0 W,    2.0 W,         3.0 W,          3.0 W, 25.0 W,      3.0 W,         3.0 W,   0.0 W;
+    Payload1:         0.0 W,    0.0 W,         0.0 W,          0.0 W,  0.0 W,     35.0 W,         0.0 W,   0.0 W;
+    Payload2:         0.0 W,    0.0 W,         0.0 W,          0.0 W,  0.0 W,     22.0 W,         0.0 W,   0.0 W;
+    Payload3:         0.0 W,    0.0 W,         0.0 W,          0.0 W,  0.0 W,     18.0 W,         0.0 W,   0.0 W;
+    PowerElectronics: 2.0 W,    2.0 W,         2.0 W,          2.0 W,  2.0 W,      2.0 W,         2.0 W,   2.0 W;
+    Harness:          0.5 W,    0.5 W,         0.5 W,          0.5 W,  0.5 W,      0.5 W,         0.5 W,   0.5 W;
+    Mechanisms:       0.0 W,    0.0 W,         1.0 W,          1.0 W,  1.0 W,      1.0 W,         3.0 W,   0.0 W;
+    Software:         1.0 W,    1.0 W,         2.0 W,          2.0 W,  2.0 W,      2.0 W,         2.0 W,   1.0 W;
+};
+
+// --- System-level parameters ---
+param harness_efficiency: Dimensionless = 0.97;
+param converter_efficiency: Dimensionless = 0.92;
+param solar_array_power: Power = 160.0 W;
+param battery_capacity: Energy = 480.0 Wh;
+param eclipse_duration: Time = 35.0 min;
+
+// --- Design margin per subsystem (1D table) ---
+param design_margin: Dimensionless[Subsystem] = table[Subsystem] {
+    CommandAndData:    0.10;
+    AttitudeControl:   0.15;
+    Propulsion:        0.20;
+    Thermal:           0.10;
+    Telecom:           0.10;
+    Payload1:          0.05;
+    Payload2:          0.05;
+    Payload3:          0.05;
+    PowerElectronics:  0.10;
+    Harness:           0.05;
+    Mechanisms:        0.15;
+    Software:          0.10;
+};
+
+// --- Computed: power with margin per subsystem per mode ---
+node power_with_margin: Power[Subsystem, OpMode] = for s: Subsystem, m: OpMode { @power_draw[s, m] * (1.0 + @design_margin[s]) };
+
+// --- Computed: total power per mode (summed across subsystems) ---
+node total_power: Power[OpMode] = for m: OpMode { sum(for s: Subsystem { @power_with_margin[s, m] }) };
+
+// --- Computed: wall-plug power accounting for losses ---
+node wall_plug_power: Power[OpMode] = for m: OpMode { @total_power[m] / (@harness_efficiency * @converter_efficiency) };
+
+// --- Peak power mode ---
+node peak_power: Power = max(for m: OpMode { @wall_plug_power[m] });
+
+// --- Solar array margin ---
+node sa_margin: Power = @solar_array_power - @peak_power;
+
+// --- Eclipse energy requirement (worst-case eclipse mode) ---
+node eclipse_energy: Energy = @wall_plug_power[OpMode::NominalEclipse] * @eclipse_duration;
+
+// --- Battery depth-of-discharge ---
+node battery_dod: Dimensionless = @eclipse_energy / @battery_capacity;
+
+// --- Assertions ---
+assert sa_positive_margin = @sa_margin > 0.0 W;
+assert battery_dod_safe = @battery_dod < 0.8;

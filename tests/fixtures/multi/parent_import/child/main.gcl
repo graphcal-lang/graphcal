@@ -1,0 +1,9 @@
+// child/main.gcl -- Imports from parent directory using "../"
+//
+// This demonstrates that Graphcal allows traversing up the directory tree
+// via use statements. A file can import from arbitrary locations reachable
+// by relative paths, including parent directories.
+
+use "../lib.gcl" { base_value, SCALE };
+
+node result: Dimensionless = @base_value * SCALE;

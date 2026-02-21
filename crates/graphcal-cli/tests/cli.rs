@@ -1076,3 +1076,183 @@ fn eval_variant_match() {
         "expected adjusted_cost[Departure][Coast] = 0 in output: {stdout}"
     );
 }
+
+// --- Large / realistic fixture tests ---
+
+#[test]
+fn eval_power_budget() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("power_budget.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Check key computed nodes exist
+    assert!(
+        stdout.lines().any(|l| l.contains("peak_power")),
+        "expected peak_power in output: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains("battery_dod")),
+        "expected battery_dod in output: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains("sa_margin")),
+        "expected sa_margin in output: {stdout}"
+    );
+
+    // Check assertions
+    assert!(
+        stdout.contains("sa_positive_margin") && stdout.contains("PASS"),
+        "expected sa_positive_margin PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("battery_dod_safe") && stdout.contains("PASS"),
+        "expected battery_dod_safe PASS: {stdout}"
+    );
+}
+
+#[test]
+fn eval_power_budget_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("power_budget.gcl"), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
+
+    // power_draw is a 2D indexed param
+    let pd = &json["param"]["power_draw"];
+    assert!(
+        pd["entries"].is_object(),
+        "expected power_draw entries: {pd}"
+    );
+
+    // peak_power is a scalar node
+    assert!(
+        json["node"]["peak_power"]["si_value"].as_f64().is_some(),
+        "expected peak_power scalar value"
+    );
+
+    // assertions
+    assert_eq!(
+        json["assert"]["sa_positive_margin"]["status"].as_str(),
+        Some("pass")
+    );
+    assert_eq!(
+        json["assert"]["battery_dod_safe"]["status"].as_str(),
+        Some("pass")
+    );
+}
+
+#[test]
+fn eval_thermal_analysis() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("thermal_analysis.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Check key outputs
+    assert!(
+        stdout.lines().any(|l| l.contains("total_heater_power")),
+        "expected total_heater_power in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("total_radiative_capacity")),
+        "expected total_radiative_capacity in output: {stdout}"
+    );
+
+    // Check assertions
+    assert!(
+        stdout.contains("heater_budget_reasonable") && stdout.contains("PASS"),
+        "expected heater_budget_reasonable PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("has_radiative_capacity") && stdout.contains("PASS"),
+        "expected has_radiative_capacity PASS: {stdout}"
+    );
+}
+
+#[test]
+fn eval_mission_plan_multi_file() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/mission_plan/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Imported propulsion nodes
+    assert!(
+        stdout.lines().any(|l| l.contains("total_delta_v")),
+        "expected total_delta_v in output: {stdout}"
+    );
+    // Locally computed nodes
+    assert!(
+        stdout.lines().any(|l| l.contains("required_dv")),
+        "expected required_dv in output: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains("dv_margin_pct")),
+        "expected dv_margin_pct in output: {stdout}"
+    );
+
+    // Assertions should pass
+    assert!(
+        stdout.contains("positive_dv_margin") && stdout.contains("PASS"),
+        "expected positive_dv_margin PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("margin_at_least_5pct") && stdout.contains("PASS"),
+        "expected margin_at_least_5pct PASS: {stdout}"
+    );
+}
+
+#[test]
+fn eval_parent_directory_import() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/parent_import/child/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // result = base_value * SCALE = 42 * 2 = 84
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("result") && l.contains("84")),
+        "expected result = 84 in output: {stdout}"
+    );
+}
