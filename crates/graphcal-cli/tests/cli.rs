@@ -1255,6 +1255,25 @@ fn eval_parent_directory_import_rejected() {
 }
 
 #[test]
+fn eval_parent_import_allowed_with_graphcal_toml() {
+    // Same layout as parent_import, but with a graphcal.toml at the top.
+    // The manifest widens the project root so "../lib.gcl" is now within bounds.
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("multi/parent_import_with_manifest/child/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected success with graphcal.toml widening root, but got failure.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn eval_parenthesized_exprs() {
     let output = graphcal_bin()
         .args(["eval", &fixture("parenthesized_exprs.gcl")])

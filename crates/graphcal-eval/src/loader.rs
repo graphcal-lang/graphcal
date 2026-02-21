@@ -289,14 +289,24 @@ fn is_valid_module_name(s: &str) -> bool {
 
 /// Determine the project root directory for import path sandboxing.
 ///
-/// The project root is the parent directory of the root (entry-point) file.
-/// All `use` imports must resolve to paths within this directory tree.
-///
-/// This is the simplest predictable default: a file can import siblings and
-/// descendants but not files above its own directory. When a manifest file
-/// (e.g. `graphcal.toml`) is introduced in the future, it can widen this
-/// boundary without breaking existing projects.
+/// Walks from the entry-point file's parent directory upward, looking for a
+/// `graphcal.toml` manifest file. If found, the directory containing the
+/// manifest becomes the project root, widening the import boundary to that
+/// entire directory tree. If no manifest is found, the project root defaults
+/// to the entry-point file's parent directory (the simplest predictable
+/// default: a file can import siblings and descendants but not files above
+/// its own directory).
 fn project_root_for(root_file_dir: &Path) -> PathBuf {
+    let mut dir = root_file_dir;
+    loop {
+        if dir.join("graphcal.toml").is_file() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
     root_file_dir.to_path_buf()
 }
 
@@ -590,5 +600,72 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = project_root_for(dir.path());
         assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn project_root_for_with_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
+
+        // From the subdirectory, the manifest in the parent should be found.
+        let result = project_root_for(&sub);
+        assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn graphcal_toml_widens_project_root() {
+        // Without graphcal.toml, importing a sibling from a subdirectory
+        // would be rejected. With graphcal.toml at the top, it succeeds.
+        let dir = setup_temp_dir(&[
+            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
+            (
+                "sub/main.gcl",
+                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+            ),
+        ]);
+        // Place graphcal.toml at the workspace root.
+        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
+
+        let project = load_project(&dir.path().join("sub/main.gcl")).unwrap();
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn graphcal_toml_in_ancestor_directory() {
+        // Manifest is two levels above the entry point.
+        let dir = setup_temp_dir(&[
+            ("lib/helpers.gcl", "param h: Dimensionless = 10.0;"),
+            (
+                "deep/nested/main.gcl",
+                "use \"../../lib/helpers.gcl\" { h };\nnode z: Dimensionless = @h + 1.0;",
+            ),
+        ]);
+        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
+
+        let project = load_project(&dir.path().join("deep/nested/main.gcl")).unwrap();
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn no_graphcal_toml_fallback() {
+        // Without graphcal.toml, importing from a sibling directory
+        // is rejected when the entry point is in a subdirectory.
+        let dir = setup_temp_dir(&[
+            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
+            (
+                "sub/main.gcl",
+                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+            ),
+        ]);
+        // No graphcal.toml — root stays at sub/.
+        let result = load_project(&dir.path().join("sub/main.gcl"));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("outside") || err.contains("ImportOutsideRoot"),
+            "error should mention outside project root: {err}"
+        );
     }
 }

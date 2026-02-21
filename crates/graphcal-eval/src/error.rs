@@ -582,7 +582,9 @@ pub enum GraphcalError {
     #[error("import path `{path}` resolves outside the project root")]
     #[diagnostic(
         code(graphcal::M008),
-        help("imports must reference files within the project directory tree")
+        help(
+            "imports must reference files within the project directory tree; place a `graphcal.toml` in an ancestor directory to widen the project root"
+        )
     )]
     ImportOutsideRoot {
         path: String,

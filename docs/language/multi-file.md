@@ -142,3 +142,42 @@ When running `graphcal eval`, the entry file is the one you pass on the command 
 ```bash
 graphcal eval project/main.gcl
 ```
+
+## Project Root and Import Sandboxing
+
+Graphcal restricts imports to files within the **project root** directory tree. This prevents accidental or malicious access to files outside your project.
+
+### Default behavior
+
+By default, the project root is the **parent directory of the entry-point file**. A file can import siblings and descendants, but not files above its own directory:
+
+```
+workspace/
+  shared/
+    constants.gcl
+  project/
+    main.gcl        ← entry point; project root = project/
+```
+
+```bash
+# In main.gcl, this import would FAIL:
+# use "../shared/constants.gcl" { G0 };
+# ERROR: import resolves outside the project root
+```
+
+### Widening the root with `graphcal.toml`
+
+Place an empty `graphcal.toml` file in an ancestor directory to widen the project root to that directory:
+
+```
+workspace/
+  graphcal.toml     ← project root marker
+  shared/
+    constants.gcl
+  project/
+    main.gcl        ← entry point
+```
+
+Now `main.gcl` can import from `../shared/constants.gcl` because the project root is `workspace/` (the directory containing `graphcal.toml`), not `project/`.
+
+Graphcal searches upward from the entry-point file's directory for the nearest `graphcal.toml`. If none is found, the default behavior applies.
