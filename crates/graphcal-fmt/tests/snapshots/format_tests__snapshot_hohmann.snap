@@ -1,0 +1,34 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// hohmann.gcl -- Hohmann transfer orbit with structs and block bodies
+dimension Velocity = Length / Time;
+dimension GravParam = Length^3 / Time^2;
+
+type TransferResult {
+    dv1: Velocity,
+    dv2: Velocity,
+    total_dv: Velocity,
+    tof: Time,
+}
+
+const R_EARTH: Length = 6371.0 km;
+const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
+
+node transfer: TransferResult = {
+    let r1 = R_EARTH + @parking_alt;
+    let r2 = R_EARTH + @target_alt;
+    let a = (r1 + r2) / 2.0;
+    let v1 = sqrt(GM_EARTH / r1);
+    let v2 = sqrt(GM_EARTH / r2);
+    let dv1 = sqrt(2.0 * GM_EARTH * r2 / (r1 * (r1 + r2))) - v1;
+    let dv2 = v2 - sqrt(2.0 * GM_EARTH * r1 / (r2 * (r1 + r2)));
+    TransferResult { dv1, dv2, total_dv: dv1 + dv2, tof: PI * sqrt(a ^ 3.0 / GM_EARTH)}
+};
+
+node total_dv: Velocity = @transfer.total_dv;
+node tof_hours: Time = @transfer.tof -> hour;

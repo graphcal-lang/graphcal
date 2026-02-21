@@ -1,0 +1,41 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// variant_match.gcl -- Match expressions on loop variables (index variants)
+dimension Velocity = Length / Time;
+
+index Maneuver = { Departure, Correction, Insertion }
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s,
+    Maneuver::Correction: 0.12 km/s,
+    Maneuver::Insertion: 1.83 km/s,
+};
+
+// Match on loop variable with qualified patterns
+node scale_factor: Dimensionless[Maneuver] = for m: Maneuver { match m {
+    Maneuver::Departure => 2.0,
+    Maneuver::Correction => 0.5,
+    Maneuver::Insertion => 1.5,
+} };
+
+// Use match result in computation
+node scaled_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
+
+// Match with multi-binding for comprehension
+index Phase = { Coast, Burn }
+
+param base_cost: Velocity[Maneuver, Phase] = {
+    (Maneuver::Departure, Phase::Coast): 0.0 m/s,
+    (Maneuver::Departure, Phase::Burn): 2.46 km/s,
+    (Maneuver::Correction, Phase::Coast): 0.0 m/s,
+    (Maneuver::Correction, Phase::Burn): 0.12 km/s,
+    (Maneuver::Insertion, Phase::Coast): 0.0 m/s,
+    (Maneuver::Insertion, Phase::Burn): 1.83 km/s,
+};
+
+node adjusted_cost: Velocity[Maneuver, Phase] = for m: Maneuver, p: Phase { match p {
+    Phase::Coast => 0.0 m/s,
+    Phase::Burn => @base_cost[m, p] * 1.1,
+} };

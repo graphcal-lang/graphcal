@@ -1,0 +1,21 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// assertions_indexed.gcl -- Indexed Bool assertion test
+index Mode = { Normal, Eco, Boost }
+
+param power_gen: Dimensionless[Mode] = {
+    Mode::Normal: 100.0,
+    Mode::Eco: 50.0,
+    Mode::Boost: 200.0,
+};
+
+param power_use: Dimensionless[Mode] = {
+    Mode::Normal: 80.0,
+    Mode::Eco: 30.0,
+    Mode::Boost: 250.0,
+};
+
+// Per-variant check: Boost will fail because 250 > 200
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };

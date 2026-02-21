@@ -51,6 +51,8 @@ idempotency_test!(
 );
 idempotency_test!(idempotent_assertions_assumes, "assertions_assumes.gcl");
 idempotency_test!(idempotent_assertions_indexed, "assertions_indexed.gcl");
+idempotency_test!(idempotent_variant_comparison, "variant_comparison.gcl");
+idempotency_test!(idempotent_variant_match, "variant_match.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -95,6 +97,8 @@ roundtrip_test!(
 );
 roundtrip_test!(roundtrip_assertions_assumes, "assertions_assumes.gcl");
 roundtrip_test!(roundtrip_assertions_indexed, "assertions_indexed.gcl");
+roundtrip_test!(roundtrip_variant_comparison, "variant_comparison.gcl");
+roundtrip_test!(roundtrip_variant_match, "variant_match.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -375,3 +379,43 @@ param dv: Dimensionless[Maneuver] = {
         "Map literal should use qualified syntax: {formatted}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Snapshots: capture exact formatted output for each fixture
+// ---------------------------------------------------------------------------
+
+macro_rules! snapshot_test {
+    ($name:ident, $fixture:expr) => {
+        #[test]
+        fn $name() {
+            let source = include_str!(concat!("../../../tests/fixtures/", $fixture));
+            let formatted = format_source(source).expect("format_source should succeed");
+            insta::assert_snapshot!(formatted);
+        }
+    };
+}
+
+snapshot_test!(snapshot_constants, "constants.gcl");
+snapshot_test!(snapshot_functions, "functions.gcl");
+snapshot_test!(snapshot_generics, "generics.gcl");
+snapshot_test!(snapshot_hohmann, "hohmann.gcl");
+snapshot_test!(snapshot_indexed, "indexed.gcl");
+snapshot_test!(snapshot_integers, "integers.gcl");
+snapshot_test!(snapshot_orbital, "orbital.gcl");
+snapshot_test!(snapshot_range_index, "range_index.gcl");
+snapshot_test!(snapshot_rocket, "rocket.gcl");
+snapshot_test!(snapshot_tagged_union, "tagged_union.gcl");
+snapshot_test!(snapshot_tagged_union_param, "tagged_union_param.gcl");
+snapshot_test!(snapshot_table_literal, "table_literal.gcl");
+snapshot_test!(snapshot_time_scan, "time_scan.gcl");
+snapshot_test!(snapshot_user_dimensions, "user_dimensions.gcl");
+snapshot_test!(snapshot_assertions, "assertions.gcl");
+snapshot_test!(snapshot_assertions_fail, "assertions_fail.gcl");
+snapshot_test!(
+    snapshot_assertions_tolerance_fail,
+    "assertions_tolerance_fail.gcl"
+);
+snapshot_test!(snapshot_assertions_assumes, "assertions_assumes.gcl");
+snapshot_test!(snapshot_assertions_indexed, "assertions_indexed.gcl");
+snapshot_test!(snapshot_variant_comparison, "variant_comparison.gcl");
+snapshot_test!(snapshot_variant_match, "variant_match.gcl");

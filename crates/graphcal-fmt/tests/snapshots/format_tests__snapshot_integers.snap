@@ -1,0 +1,33 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// integers.gcl -- Integer type tests
+// Basic integer params and arithmetic
+param a: Int = 10;
+param b: Int = 3;
+
+node sum: Int = @a + @b;
+node diff: Int = @a - @b;
+node prod: Int = @a * @b;
+node quot: Int = @a / @b;
+node rem: Int = @a % @b;
+node power: Int = @b ^ 2;
+
+// Negation
+node neg_a: Int = -@a;
+
+// Comparisons returning Bool
+node a_gt_b: Bool = @a > @b;
+node a_eq_b: Bool = @a == @b;
+node a_le_b: Bool = @a <= @b;
+
+// Integer constant
+const SEVEN: Int = 7;
+
+// If-else with integers
+node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
+
+// Conversions
+node a_float: Dimensionless = to_float(@a);
+node back_to_int: Int = to_int(3.7);
