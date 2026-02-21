@@ -388,6 +388,10 @@ fn format_value_inline_with_budget(
         }
         Value::Bool(b) => format!("{b}"),
         Value::Int(i) => format!("{i}"),
+        Value::Label {
+            index_name,
+            variant,
+        } => format!("{index_name}::{variant}"),
         Value::Struct {
             variant, fields, ..
         } => {

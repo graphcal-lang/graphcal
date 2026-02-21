@@ -36,6 +36,13 @@ pub enum Value {
     },
     Bool(bool),
     Int(i64),
+    /// A label value from a named index (e.g., `Maneuver::Departure`).
+    Label {
+        /// The index name (e.g., `Maneuver`).
+        index_name: IndexName,
+        /// The variant name (e.g., `Departure`).
+        variant: VariantName,
+    },
     Struct {
         /// The struct type name.
         type_name: StructTypeName,
@@ -68,6 +75,10 @@ impl Value {
             Self::Scalar { .. } => "Scalar".to_string(),
             Self::Bool(_) => "Bool".to_string(),
             Self::Int(_) => "Int".to_string(),
+            Self::Label {
+                index_name,
+                variant,
+            } => format!("{index_name}::{variant}"),
             Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
         }
@@ -139,7 +150,11 @@ impl Value {
                 || dimension.si_unit_string(symbols),
                 |du| Some(du.label.clone()),
             ),
-            Self::Bool(_) | Self::Int(_) | Self::Struct { .. } | Self::Indexed { .. } => None,
+            Self::Bool(_)
+            | Self::Int(_)
+            | Self::Label { .. }
+            | Self::Struct { .. }
+            | Self::Indexed { .. } => None,
         }
     }
 }

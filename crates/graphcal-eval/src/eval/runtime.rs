@@ -42,6 +42,13 @@ pub(super) fn runtime_to_value(
         }
         RuntimeValue::Bool(b) => Value::Bool(*b),
         RuntimeValue::Int(i) => Value::Int(*i),
+        RuntimeValue::Label {
+            index_name,
+            variant,
+        } => Value::Label {
+            index_name: index_name.clone(),
+            variant: variant.clone(),
+        },
         RuntimeValue::Struct {
             type_name,
             variant,

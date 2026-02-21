@@ -18,6 +18,11 @@ pub enum RuntimeValue {
     Scalar(f64),
     Bool(bool),
     Int(i64),
+    /// A label of a named index (e.g., `Maneuver::Departure`).
+    Label {
+        index_name: IndexName,
+        variant: VariantName,
+    },
     Struct {
         type_name: StructTypeName,
         variant: VariantName,
@@ -44,6 +49,12 @@ impl RuntimeValue {
             Self::Scalar(v) => Ok(*v),
             Self::Bool(_) => Err(format!("expected scalar for {context}, got Bool")),
             Self::Int(i) => Err(format!("expected scalar for {context}, got Int({i})")),
+            Self::Label {
+                index_name,
+                variant,
+            } => Err(format!(
+                "expected scalar for {context}, got label `{index_name}::{variant}`"
+            )),
             Self::Struct { type_name, .. } => Err(format!(
                 "expected scalar for {context}, got struct `{type_name}`"
             )),
@@ -100,10 +111,9 @@ pub fn eval_expr(
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Struct {
-            type_name: StructTypeName::new(index.value.as_str()),
+        ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Label {
+            index_name: index.value.clone(),
             variant: variant.value.clone(),
-            fields: IndexMap::new(),
         }),
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => values
             .get(ident.value.as_str())
@@ -231,6 +241,19 @@ pub fn eval_expr(
                     }
                     (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
                         Ok(RuntimeValue::Bool(if is_eq { li == ri } else { li != ri }))
+                    }
+                    (
+                        RuntimeValue::Label {
+                            index_name: li,
+                            variant: lv,
+                        },
+                        RuntimeValue::Label {
+                            index_name: ri,
+                            variant: rv,
+                        },
+                    ) => {
+                        let eq = li == ri && lv == rv;
+                        Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
                     }
                     (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => {
                         let eq = runtime_value_equals(&l, &r);
@@ -905,7 +928,8 @@ pub fn eval_expr(
                             }
                         })?;
                         match var_val {
-                            RuntimeValue::Struct { variant, .. } => variant.clone(),
+                            RuntimeValue::Label { variant, .. }
+                            | RuntimeValue::Struct { variant, .. } => variant.clone(),
                             RuntimeValue::RangeLabel { step_index, .. } => {
                                 VariantName::new(format!("#{step_index}"))
                             }
@@ -1014,6 +1038,28 @@ pub fn eval_expr(
             )?;
 
             match &scrutinee_val {
+                RuntimeValue::Label { variant, .. } => {
+                    // Label match (index label pattern matching)
+                    let matched_arm = arms
+                        .iter()
+                        .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!("no match arm for label `{variant}`"),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        })?;
+
+                    // Labels have no fields — no bindings to process
+                    eval_expr(
+                        &matched_arm.body,
+                        values,
+                        local_values,
+                        builtin_consts,
+                        builtin_fns,
+                        registry,
+                        src,
+                    )
+                }
                 RuntimeValue::Struct {
                     variant,
                     fields: scrutinee_fields,
@@ -1061,7 +1107,7 @@ pub fn eval_expr(
                     )
                 }
                 _ => Err(GraphcalError::EvalError {
-                    message: "match scrutinee must be a struct/tagged union".to_string(),
+                    message: "match scrutinee must be a label or tagged union".to_string(),
                     src: src.clone(),
                     span: scrutinee.span.into(),
                 }),
@@ -1188,10 +1234,9 @@ fn eval_for_comp(
     for variant in &variants {
         let mut inner_locals = local_values.clone();
         let binding_value = match &idx_def.kind {
-            crate::registry::IndexKind::Named { .. } => RuntimeValue::Struct {
-                type_name: StructTypeName::new(idx_name.as_str()),
+            crate::registry::IndexKind::Named { .. } => RuntimeValue::Label {
+                index_name: idx_name.clone(),
                 variant: variant.clone(),
-                fields: IndexMap::new(),
             },
             crate::registry::IndexKind::Range { .. } => {
                 let step_index = variant

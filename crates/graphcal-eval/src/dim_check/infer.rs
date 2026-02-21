@@ -67,10 +67,7 @@ pub(super) fn infer_type(
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Struct(
-                StructTypeName::new(index.value.as_str()),
-                vec![],
-            ))
+            Ok(InferredType::Label(index.value.clone()))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
@@ -1109,10 +1106,9 @@ pub(super) fn infer_type(
                 inner_locals.insert(
                     binding.var.name.clone(),
                     match &idx_def.kind {
-                        crate::registry::IndexKind::Named { .. } => InferredType::Struct(
-                            StructTypeName::new(binding.index.value.as_str()),
-                            vec![],
-                        ),
+                        crate::registry::IndexKind::Named { .. } => {
+                            InferredType::Label(binding.index.value.clone())
+                        }
                         crate::registry::IndexKind::Range { dimension, .. } => {
                             InferredType::Scalar(dimension.clone())
                         }
@@ -1428,6 +1424,16 @@ pub(super) fn infer_type(
                             }
                         })?;
                         match var_type {
+                            InferredType::Label(label_index) => {
+                                if label_index.as_str() != idx_name.as_str() {
+                                    return Err(GraphcalError::IndexMismatch {
+                                        expected: idx_name,
+                                        found: label_index.clone(),
+                                        src: src.clone(),
+                                        span: ident.span.into(),
+                                    });
+                                }
+                            }
                             InferredType::Struct(type_name, args) => {
                                 if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
                                     return Err(GraphcalError::IndexMismatch {
@@ -1653,6 +1659,110 @@ pub(super) fn infer_type(
             )?;
 
             Ok(match &scrutinee_type {
+                InferredType::Label(index_name) => {
+                    // Label scrutinee: match on index variants (fieldless, qualified syntax)
+                    let index_def =
+                        registry
+                            .indexes
+                            .get_index(index_name.as_str())
+                            .ok_or_else(|| GraphcalError::UnknownIndex {
+                                name: index_name.clone(),
+                                src: src.clone(),
+                                span: scrutinee.span.into(),
+                            })?;
+
+                    let crate::registry::IndexKind::Named { variants } = &index_def.kind else {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "cannot match on range index `{index_name}`; only named indexes can be matched"
+                            ),
+                            src: src.clone(),
+                            span: scrutinee.span.into(),
+                        });
+                    };
+
+                    let mut covered: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut arm_types: Vec<InferredType> = Vec::new();
+
+                    for arm in arms {
+                        let variant_name_str = arm.pattern.variant_name.value.as_str();
+
+                        // For label patterns, qualified_index must match the index name
+                        if let Some(qualified) = &arm.pattern.qualified_index
+                            && qualified.value.as_str() != index_name.as_str()
+                        {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: index_name.clone(),
+                                found: qualified.value.clone(),
+                                src: src.clone(),
+                                span: qualified.span.into(),
+                            });
+                        }
+
+                        // Check variant belongs to this index
+                        if !variants.iter().any(|v| v.as_str() == variant_name_str) {
+                            return Err(GraphcalError::UnknownField {
+                                type_name: StructTypeName::new(index_name.as_str()),
+                                field_name: FieldName::new(variant_name_str),
+                                src: src.clone(),
+                                span: arm.pattern.variant_name.span.into(),
+                            });
+                        }
+
+                        // Check for duplicate arms
+                        if !covered.insert(variant_name_str.to_string()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "duplicate match arm for variant `{variant_name_str}`"
+                                ),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            });
+                        }
+
+                        // Labels are fieldless — no bindings allowed
+                        if !arm.pattern.bindings.is_empty() {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "index label variant `{index_name}::{variant_name_str}` has no fields to bind"
+                                ),
+                                src: src.clone(),
+                                span: arm.pattern.span.into(),
+                            });
+                        }
+
+                        // Infer arm body type
+                        let arm_type = infer_type(
+                            &arm.body,
+                            declared_types,
+                            local_types,
+                            registry,
+                            builtin_fns,
+                            resolved_fn_sigs,
+                            src,
+                        )?;
+                        arm_types.push(arm_type);
+                    }
+
+                    // Check exhaustiveness: all variants must be covered
+                    for variant in variants {
+                        if !covered.contains(variant.as_str()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "non-exhaustive match: variant `{index_name}::{}` not covered",
+                                    variant.as_str()
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
+                    }
+
+                    // All arm types must match
+                    check_arm_types_match(&arm_types, arms, registry, src, expr)?
+                }
+
                 InferredType::Struct(type_name, scrutinee_type_args) => {
                     let type_def =
                         registry.types.get_type(type_name.as_str()).ok_or_else(|| {
@@ -1747,15 +1857,10 @@ pub(super) fn infer_type(
                     // Check exhaustiveness: all variants must be covered
                     for variant in &type_def.variants {
                         if !covered.contains(variant.name.as_str()) {
-                            let variant_display =
-                                if registry.indexes.get_index(type_name.as_str()).is_some() {
-                                    format!("{}::{}", type_name.as_str(), variant.name.as_str())
-                                } else {
-                                    variant.name.as_str().to_string()
-                                };
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "non-exhaustive match: variant `{variant_display}` not covered",
+                                    "non-exhaustive match: variant `{}` not covered",
+                                    variant.name.as_str()
                                 ),
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -1770,7 +1875,7 @@ pub(super) fn infer_type(
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "cannot match on type `{}`; expected a tagged union value",
+                            "cannot match on type `{}`; expected a tagged union or label value",
                             format_inferred_type(&scrutinee_type, registry)
                         ),
                         src: src.clone(),

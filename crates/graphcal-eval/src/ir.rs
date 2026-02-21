@@ -337,20 +337,6 @@ fn register_declarations_impl(
             DeclKind::Index(idx) if should_register(idx.name.value.as_str()) => {
                 let kind = match &idx.kind {
                     graphcal_syntax::ast::IndexDeclKind::Named { variants } => {
-                        registry.register_type(registry::TypeDef {
-                            name: graphcal_syntax::names::StructTypeName::new(
-                                idx.name.value.as_str(),
-                            ),
-                            generic_params: vec![],
-                            derives: vec![],
-                            variants: variants
-                                .iter()
-                                .map(|v| registry::VariantDef {
-                                    name: v.value.clone(),
-                                    fields: vec![],
-                                })
-                                .collect(),
-                        });
                         registry::IndexKind::Named {
                             variants: variants.iter().map(|v| v.value.clone()).collect(),
                         }
