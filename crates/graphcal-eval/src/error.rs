@@ -579,6 +579,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("import path `{path}` resolves outside the project root")]
+    #[diagnostic(
+        code(graphcal::M008),
+        help("imports must reference files within the project directory tree")
+    )]
+    ImportOutsideRoot {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("resolves outside project root")]
+        span: SourceSpan,
+    },
+
     #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),
