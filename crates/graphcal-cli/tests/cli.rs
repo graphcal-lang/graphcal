@@ -885,6 +885,15 @@ fn eval_assertions_indexed_fail() {
         stderr.contains("Boost"),
         "expected Boost variant in failure message: {stderr}"
     );
+    // Multi-index assertion: within_limits should fail with parenthesized paths
+    assert!(
+        stderr.contains("within_limits") && stderr.contains("FAIL"),
+        "expected within_limits FAIL: {stderr}"
+    );
+    assert!(
+        stderr.contains("(Mode::Normal, Phase::Cruise)"),
+        "expected parenthesized multi-index path in failure message: {stderr}"
+    );
 }
 
 #[test]

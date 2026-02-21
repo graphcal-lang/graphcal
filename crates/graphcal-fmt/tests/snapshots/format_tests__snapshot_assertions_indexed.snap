@@ -19,3 +19,34 @@ param power_use: Dimensionless[Mode] = {
 
 // Per-variant check: Boost will fail because 250 > 200
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
+
+// Multi-dimensional indexed assertion
+index Phase = { Launch, Cruise, Arrival }
+
+param threshold: Dimensionless[Mode, Phase] = {
+    (Mode::Normal, Phase::Launch): 10.0,
+    (Mode::Normal, Phase::Cruise): 20.0,
+    (Mode::Normal, Phase::Arrival): 30.0,
+    (Mode::Eco, Phase::Launch): 5.0,
+    (Mode::Eco, Phase::Cruise): 15.0,
+    (Mode::Eco, Phase::Arrival): 25.0,
+    (Mode::Boost, Phase::Launch): 50.0,
+    (Mode::Boost, Phase::Cruise): 60.0,
+    (Mode::Boost, Phase::Arrival): 70.0,
+};
+
+param actual: Dimensionless[Mode, Phase] = {
+    (Mode::Normal, Phase::Launch): 8.0,
+    (Mode::Normal, Phase::Cruise): 25.0,
+    (Mode::Normal, Phase::Arrival): 28.0,
+    (Mode::Eco, Phase::Launch): 3.0,
+    (Mode::Eco, Phase::Cruise): 10.0,
+    (Mode::Eco, Phase::Arrival): 30.0,
+    (Mode::Boost, Phase::Launch): 55.0,
+    (Mode::Boost, Phase::Cruise): 58.0,
+    (Mode::Boost, Phase::Arrival): 75.0,
+};
+
+// Multi-index check: fails where actual >= threshold
+// Failures: (Normal, Cruise), (Eco, Arrival), (Boost, Launch), (Boost, Arrival)
+assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
