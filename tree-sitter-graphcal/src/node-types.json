@@ -1047,6 +1047,10 @@
       "required": true,
       "types": [
         {
+          "type": "dim_expr",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1995,6 +1999,68 @@
         "types": [
           {
             "type": "brace_body",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "import_declaration",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "import_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_item",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
             "named": true
           }
         ]
@@ -4098,6 +4164,10 @@
           "named": true
         },
         {
+          "type": "import_declaration",
+          "named": true
+        },
+        {
           "type": "index_declaration",
           "named": true
         },
@@ -4115,10 +4185,6 @@
         },
         {
           "type": "unit_declaration",
-          "named": true
-        },
-        {
-          "type": "use_declaration",
           "named": true
         }
       ]
@@ -5729,70 +5795,12 @@
         {
           "type": "number",
           "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "use_declaration",
-    "named": true,
-    "fields": {
-      "alias": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "path": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "string_literal",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
+        },
         {
-          "type": "use_item",
+          "type": "unit_expr",
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "use_item",
-    "named": true,
-    "fields": {
-      "alias": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -6038,6 +6046,10 @@
     "named": false
   },
   {
+    "type": "import",
+    "named": false
+  },
+  {
     "type": "index",
     "named": false
   },
@@ -6104,10 +6116,6 @@
   },
   {
     "type": "unit",
-    "named": false
-  },
-  {
-    "type": "use",
     "named": false
   },
   {

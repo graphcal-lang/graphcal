@@ -1,2 +1,2 @@
-use "./circular_a.gcl" { x };
+import "./circular_a.gcl" { x };
 param y: Dimensionless = 2.0;

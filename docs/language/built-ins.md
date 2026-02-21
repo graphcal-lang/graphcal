@@ -4,7 +4,7 @@ icon: material/package-variant
 
 # Built-in Reference
 
-This page lists all dimensions, units, constants, and functions provided by the Graphcal prelude. These are available in every `.gcl` file without any `use` imports.
+This page lists all dimensions, units, constants, and functions provided by the Graphcal prelude. These are available in every `.gcl` file without any `import` declarations.
 
 ## Built-in Constants
 

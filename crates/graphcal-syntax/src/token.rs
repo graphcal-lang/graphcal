@@ -33,8 +33,8 @@ pub enum Token {
     Index,
     #[token("for")]
     For,
-    #[token("use")]
-    Use,
+    #[token("import")]
+    Import,
     #[token("match")]
     Match,
     #[token("as")]
@@ -152,7 +152,7 @@ impl std::fmt::Display for Token {
             Self::Fn => write!(f, "fn"),
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
-            Self::Use => write!(f, "use"),
+            Self::Import => write!(f, "import"),
             Self::Match => write!(f, "match"),
             Self::As => write!(f, "as"),
             Self::Assert => write!(f, "assert"),
@@ -420,7 +420,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn index for use match as assert table",
+            "param node const if else dimension unit type let fn index for import match as assert table",
         );
         assert_eq!(
             tokens,
@@ -437,7 +437,7 @@ mod tests {
                 Token::Fn,
                 Token::Index,
                 Token::For,
-                Token::Use,
+                Token::Import,
                 Token::Match,
                 Token::As,
                 Token::Assert,
@@ -699,12 +699,12 @@ mod tests {
     // Phase 4 specific tests
 
     #[test]
-    fn lex_use_statement() {
-        let tokens = lex_tokens(r#"use "./helper.gcl" { G0, isp };"#);
+    fn lex_import_statement() {
+        let tokens = lex_tokens(r#"import "./helper.gcl" { G0, isp };"#);
         assert_eq!(
             tokens,
             vec![
-                Token::Use,
+                Token::Import,
                 Token::StringLiteral,
                 Token::LBrace,
                 Token::Ident, // G0
@@ -725,11 +725,11 @@ mod tests {
 
     #[test]
     fn lex_use_statement_with_alias() {
-        let tokens = lex_tokens(r#"use "./f.gcl" { x as y };"#);
+        let tokens = lex_tokens(r#"import "./f.gcl" { x as y };"#);
         assert_eq!(
             tokens,
             vec![
-                Token::Use,
+                Token::Import,
                 Token::StringLiteral,
                 Token::LBrace,
                 Token::Ident, // x
@@ -742,10 +742,10 @@ mod tests {
     }
 
     #[test]
-    fn lex_identifier_starting_with_use() {
-        // "useful" should be Ident, not Use + "full"
-        let mut lexer = Token::lexer("useful");
+    fn lex_identifier_starting_with_import() {
+        // "importable" should be Ident, not Use + "full"
+        let mut lexer = Token::lexer("importable");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "useful");
+        assert_eq!(lexer.slice(), "importable");
     }
 }

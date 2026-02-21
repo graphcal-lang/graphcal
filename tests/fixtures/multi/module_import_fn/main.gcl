@@ -1,5 +1,5 @@
 // Module import: qualified function call
-use "./lib.gcl";
+import "./lib.gcl";
 
 param x: Dimensionless = 21.0;
 

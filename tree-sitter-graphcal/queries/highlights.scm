@@ -20,7 +20,7 @@
   "type"
   "fn"
   "index"
-  "use"
+  "import"
   "as"
   "let"
   "if"
@@ -103,10 +103,10 @@
 ; fn orbital_velocity
 (fn_declaration name: (identifier) @function)
 
-; use "./path.gcl" { name1, name2 as alias2 }
-(use_declaration path: (string_literal) @string)
-(use_item name: (identifier) @variable)
-(use_item alias: (identifier) @variable)
+; import "./path.gcl" { name1, name2 as alias2 }
+(import_declaration path: (string_literal) @string)
+(import_item name: (identifier) @variable)
+(import_item alias: (identifier) @variable)
 
 ; ---------------------------------------------------------------
 ; Types in annotations
@@ -154,8 +154,8 @@
 ; Module imports
 ; ---------------------------------------------------------------
 
-; use "./path.gcl" as alias;
-(use_declaration alias: (identifier) @module)
+; import "./path.gcl" as alias;
+(import_declaration alias: (identifier) @module)
 
 ; ---------------------------------------------------------------
 ; Struct and index usage

@@ -19,7 +19,7 @@ The Graphcal LSP server (`graphcal lsp`) provides:
 | **Find references** | Locate all usages of a declaration |
 | **Document symbols** | Outline view of all declarations in the file |
 | **Formatting** | Format the current document (same as `graphcal format`) |
-| **Document links** | Clickable links for `use` import paths |
+| **Document links** | Clickable links for `import` paths |
 
 !!! tip "Inlay hints: live calculation view"
     The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As you edit your `.gcl` file, the LSP evaluates the computation graph and shows the resulting values next to each `param` and `node` declaration. Change an input and watch all dependent values update.

@@ -26,7 +26,7 @@ Cellgraph uses a Rust-inspired DSL as its surface syntax. The `.graph` file is t
 | `as` | Explicit type cast (tag strip) | `@p_O2 as Pressure` |
 | `index` | Finite label set (table axis) | `index Region { LEO, GTO }` |
 | `table` | Table schema declaration | `table maneuvers { name: Str, dv: Velocity }` |
-| `use` | Import from another module | `use orbit.transfer.{ transfer };` |
+| `import` | Import from another module | `import orbit.transfer.{ transfer };` |
 | `private` | Restrict visibility to current file | `private node _helper = ...;` |
 | `project` | Project root declaration | `project mission_design { ... }` |
 

@@ -114,4 +114,4 @@ node midpoint_alt: Length = lerp(@parking_alt, @target_alt, 0.5);
 
 ## Next Step
 
-In [Step 5](step5-multi-file-projects.md), you'll split your project across multiple files with `use` imports.
+In [Step 5](step5-multi-file-projects.md), you'll split your project across multiple files with `import` declarations.

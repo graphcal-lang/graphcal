@@ -41,7 +41,7 @@ KEYWORD
    | "fn"
    | "index"
    | "for"
-   | "use"
+   | "import"
    | "match"
    | "as"
    | "assert";
@@ -270,7 +270,7 @@ declaration_kind
    | type_decl
    | fn_decl
    | index_decl
-   | use_decl
+   | import_decl
    | assert_decl;
 
 (* --- param, node, const --- *)
@@ -395,24 +395,24 @@ range_index
 
 (* "range" and "step" are contextual keywords here.
    Note: named index has no trailing semicolon; range index does. *)
-(* --- use --- *)
+(* --- import --- *)
 (* Three forms:
-   1. Selective import:   use "./file.gcl" { name1, name2 };
-   2. Module import:      use "./file.gcl";
-   3. Module with alias:  use "./file.gcl" as alias;
+   1. Selective import:   import "./file.gcl" { name1, name2 };
+   2. Module import:      import "./file.gcl";
+   3. Module with alias:  import "./file.gcl" as alias;
    Module imports bring the entire file in as a namespace. Members are
    accessed via "::" (e.g., constants::G0, @params::dry_mass).
    The module name defaults to the filename stem, which must be a
    valid lower_snake_case identifier; use "as" to override. *)
-use_decl
-   = "use", STRING_LITERAL, use_body;
+import_decl
+   = "import", STRING_LITERAL, import_body;
 
-use_body
-   = "{", use_item, { ",", use_item }, [ "," ], "}", ";"   (* selective *)
-   | "as", lower_snake_case_ident, ";"                       (* module with alias *)
-   | ";";                                                    (* module, name from filename *)
+import_body
+   = "{", import_item, { ",", import_item }, [ "," ], "}", ";"   (* selective *)
+   | "as", lower_snake_case_ident, ";"                             (* module with alias *)
+   | ";";                                                          (* module, name from filename *)
 
-use_item
+import_item
    = IDENT, [ "as", IDENT ];
 
 (* --- assert --- *)

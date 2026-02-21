@@ -16,7 +16,7 @@ Phase 2: Structs & Multi-Line Nodes
     |
 Phase 3: Pure Functions (fn, generics)
     |
-Phase 4: Multi-File & Namespaces (use, private, prelude)
+Phase 4: Multi-File & Namespaces (import, private, prelude)
     |
 Phase 5: Indexed Values (index, T[I], for, sum/reduce/scan)
     |
@@ -43,7 +43,7 @@ Phase 6: Scenarios & CLI Workflow
 | [1](./phase-1-dimensions-and-units.md) | Dimensions & Units | `dimension`, `unit`, `->`, type annotations |
 | [2](./phase-2-structs.md) | Structs & Multi-Line Nodes | `type` (single-variant), block bodies, `let` |
 | [3](./phase-3-pure-functions.md) | Pure Functions | `fn`, `<D: Dim>`, stdlib math |
-| [4](./phase-4-multi-file.md) | Multi-File & Namespaces | `use`, `private`, `project.graph`, prelude |
+| [4](./phase-4-multi-file.md) | Multi-File & Namespaces | `import`, `private`, `project.graph`, prelude |
 | [5](./phase-5-tables.md) | Indexed Values | `index`, `T[I]`, `for`, sum/reduce/scan |
 | [6](./phase-6-scenarios.md) | Scenarios & CLI | `.scenario`, `cellgraph check`, assertions |
 

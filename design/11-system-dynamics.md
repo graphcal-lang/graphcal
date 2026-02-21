@@ -153,7 +153,7 @@ node supply: SupplyState[TimeStep] = scan(
 
 Two dynamic nodes can only interact (e.g., `@other[t]`) if they share the same time index. This is enforced by the type system — `Mass[T1]` and `Mass[T2]` are distinct types. Since evolution closures commonly access other dynamic nodes at the current time step (e.g., flow variables, coupled quantities), sharing the time index across files is crucial for multi-file dynamic models.
 
-To share a time index across files, use the standard `use` import:
+To share a time index across files, use the standard `import` declaration:
 
 ```gcl
 // time.gcl
@@ -162,13 +162,13 @@ index T = range(0.0 s, 100.0 s, step: 0.1 s);
 
 ```gcl
 // epidemic.gcl
-use "./time.gcl" { T };
+import "./time.gcl" { T };
 node sir: SIRState[T] = scan(...);
 ```
 
 ```gcl
 // logistics.gcl
-use "./time.gcl" { T };
+import "./time.gcl" { T };
 node supply: SupplyState[T] = scan(...);
 // Can access @sir[t] because both use the same T
 ```
@@ -276,7 +276,7 @@ This is an accepted limitation: graphcal's cycle detection operates at the `(nod
 
 ## Settled Design Decisions
 
-- **Numeric index syntax:** The proposed `index TimeStep = range(...)` reuses the existing `index` keyword. Nodes indexed by different time indexes cannot interact directly (consistent with how `index` already works). This is mitigated by sharing time indexes via `use` imports and factoring evolution logic into pure `fn` functions.
+- **Numeric index syntax:** The proposed `index TimeStep = range(...)` reuses the existing `index` keyword. Nodes indexed by different time indexes cannot interact directly (consistent with how `index` already works). This is mitigated by sharing time indexes via `import` declarations and factoring evolution logic into pure `fn` functions.
 - **Step size access (`dt`):** The closure takes `(prev_t, t)`, so `dt = t - prev_t`. The previous state is accessed via `@node_name[prev_t]`. For fixed-step indexes `dt` is constant, but the formulation naturally supports variable step sizes.
 - **Units on time axis:** The time axis must carry a dimension (e.g., `range(0.0 s, 200.0 s, step: 0.1 s)`). This makes `dt = t - prev_t` dimensionally typed, ensuring that expressions like `rate * dt` are dimension-checked. Consistent with graphcal's "no implicit dimensionless" philosophy.
 - **`integrate` API:** The `integrate` function takes a closure that returns derivatives, not next state. This is the right abstraction — the solver handles the stepping.

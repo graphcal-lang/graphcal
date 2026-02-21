@@ -15,7 +15,7 @@
     { "include": "#node-declaration" },
     { "include": "#const-declaration" },
     { "include": "#assert-declaration" },
-    { "include": "#use-declaration" },
+    { "include": "#import-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
     { "include": "#as-keyword" },
@@ -151,9 +151,9 @@
       }
     },
 
-    "use-declaration": {
-      "match": "\\b(use)\\b",
-      "name": "keyword.declaration.use.graphcal"
+    "import-declaration": {
+      "match": "\\b(import)\\b",
+      "name": "keyword.declaration.import.graphcal"
     },
 
     "as-keyword": {

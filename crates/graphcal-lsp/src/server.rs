@@ -41,8 +41,8 @@ pub struct ImportedDefinition {
     pub definition: DefinitionInfo,
 }
 
-/// Info about a `use` declaration for Document Links.
-pub struct UseDeclInfo {
+/// Info about an `import` declaration for Document Links.
+pub struct ImportDeclInfo {
     /// The raw path string (e.g., `"./constants.gcl"`).
     pub path: String,
     /// Span of the path literal in the source.
@@ -73,7 +73,7 @@ pub struct AnalysisResult {
     /// Structured function signatures, keyed by function name.
     pub fn_signatures: HashMap<String, FnSignatureInfo>,
     /// Use declarations in this file (for Document Links).
-    pub use_decls: Vec<UseDeclInfo>,
+    pub import_decls: Vec<ImportDeclInfo>,
 }
 
 /// The LSP server backend.
@@ -93,7 +93,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("diagnostics_count", &self.diagnostics.len())
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
-            .field("use_decls_count", &self.use_decls.len())
+            .field("import_decls_count", &self.import_decls.len())
             .finish()
     }
 }
@@ -158,7 +158,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics: compile_error_to_diagnostics(&e, text),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(None),
-                use_decls: Vec::new(),
+                import_decls: Vec::new(),
             };
         }
     };
@@ -175,7 +175,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let imported_definitions =
                 collect_imported_definitions(uri, root_ast, &project, Some(&tir));
             let fn_signatures = build_fn_signatures(Some(&tir));
-            let use_decls = collect_use_decl_info(root_ast);
+            let import_decls = collect_import_decl_info(root_ast);
             let (diagnostics, eval_values) = run_eval_from_project(&project, text);
 
             AnalysisResult {
@@ -185,7 +185,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values,
                 fn_signatures,
-                use_decls,
+                import_decls,
             }
         }
         Err(e) => {
@@ -193,7 +193,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let symbol_table = symbol_table::build_from_ast(root_ast);
             let imported_definitions = collect_imported_definitions(uri, root_ast, &project, None);
             let diagnostics = compile_error_to_diagnostics(&e, text);
-            let use_decls = collect_use_decl_info(root_ast);
+            let import_decls = collect_import_decl_info(root_ast);
 
             AnalysisResult {
                 source: text.to_string(),
@@ -202,7 +202,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(None),
-                use_decls,
+                import_decls,
             }
         }
     }
@@ -226,13 +226,13 @@ fn run_eval_from_project(
     }
 }
 
-/// Extract use-declaration info from an AST for Document Links.
-fn collect_use_decl_info(ast: &graphcal_syntax::ast::File) -> Vec<UseDeclInfo> {
+/// Extract import-declaration info from an AST for Document Links.
+fn collect_import_decl_info(ast: &graphcal_syntax::ast::File) -> Vec<ImportDeclInfo> {
     ast.declarations
         .iter()
         .filter_map(|decl| {
-            if let DeclKind::Use(u) = &decl.kind {
-                Some(UseDeclInfo {
+            if let DeclKind::Import(u) = &decl.kind {
+                Some(ImportDeclInfo {
                     path: u.path.clone(),
                     path_span: u.path_span,
                 })
@@ -484,7 +484,7 @@ fn format_number(value: f64) -> String {
 
 /// Collect imported definitions from a loaded project.
 ///
-/// For each `use` declaration in the root file, resolves the import path,
+/// For each `import` declaration in the root file, resolves the import path,
 /// looks up the imported file in the project, and builds a symbol table
 /// from the imported file's AST to extract the definition info.
 fn collect_imported_definitions(
@@ -503,8 +503,8 @@ fn collect_imported_definitions(
         .unwrap_or_else(|| std::path::Path::new("."));
 
     for decl in &root_ast.declarations {
-        if let DeclKind::Use(use_decl) = &decl.kind {
-            let import_path = root_dir.join(&use_decl.path);
+        if let DeclKind::Import(import_decl) = &decl.kind {
+            let import_path = root_dir.join(&import_decl.path);
             let Ok(canonical) = import_path.canonicalize() else {
                 continue;
             };
@@ -523,12 +523,13 @@ fn collect_imported_definitions(
             });
             let source = loaded_file.source.to_string();
 
-            match &use_decl.kind {
-                graphcal_syntax::ast::UseKind::Selective(names) => {
-                    for use_item in names {
-                        if let Some(def) = imported_table.definitions.remove(&use_item.name.name) {
+            match &import_decl.kind {
+                graphcal_syntax::ast::ImportKind::Selective(names) => {
+                    for import_item in names {
+                        if let Some(def) = imported_table.definitions.remove(&import_item.name.name)
+                        {
                             result.insert(
-                                use_item.name.name.clone(),
+                                import_item.name.name.clone(),
                                 ImportedDefinition {
                                     uri: imported_uri.clone(),
                                     source: source.clone(),
@@ -538,7 +539,7 @@ fn collect_imported_definitions(
                         }
                     }
                 }
-                graphcal_syntax::ast::UseKind::Module { .. } => {
+                graphcal_syntax::ast::ImportKind::Module { .. } => {
                     for (name, def) in imported_table.definitions {
                         result.insert(
                             name,

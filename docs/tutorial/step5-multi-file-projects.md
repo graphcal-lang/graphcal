@@ -4,7 +4,7 @@ icon: material/numeric-5-circle
 
 # Step 5: Multi-File Projects
 
-In this step, you'll learn to split your project across multiple files using `use` imports.
+In this step, you'll learn to split your project across multiple files using `import` declarations.
 
 ## Why Multiple Files?
 
@@ -41,8 +41,8 @@ param isp: Time = 320.0 s;
 ### `main.gcl`
 
 ```
-use "./constants.gcl" { G0 };
-use "./params.gcl" { dry_mass, fuel_mass, isp };
+import "./constants.gcl" { G0 };
+import "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dimension Velocity = Length / Time;
 
@@ -66,15 +66,15 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-Graphcal resolves `use` paths relative to the importing file.
+Graphcal resolves `import` paths relative to the importing file.
 
-## The `use` Statement
+## The `import` Statement
 
 ```
-use "./path/to/file.gcl" { name1, name2 };
+import "./path/to/file.gcl" { name1, name2 };
 ```
 
-- The path is **relative** to the file containing the `use` statement
+- The path is **relative** to the file containing the `import` declaration
 - The braces list the names to import (constants, params, nodes, types, dimensions, units, indexes, functions)
 - Imported params and nodes are referenced with `@` just like local ones
 
@@ -83,8 +83,8 @@ use "./path/to/file.gcl" { name1, name2 };
 If two files export the same name, use `as` to rename:
 
 ```
-use "./file_a.gcl" { velocity as velocity_a };
-use "./file_b.gcl" { velocity as velocity_b };
+import "./file_a.gcl" { velocity as velocity_a };
+import "./file_b.gcl" { velocity as velocity_b };
 ```
 
 ## What Gets Imported
@@ -93,14 +93,14 @@ You can import any top-level declaration:
 
 | Declaration | Import | Reference |
 |-------------|--------|-----------|
-| `param` | `use "..." { name }` | `@name` |
-| `node` | `use "..." { name }` | `@name` |
-| `const` | `use "..." { NAME }` | `NAME` |
-| `dimension` | `use "..." { DimName }` | `DimName` |
-| `unit` | `use "..." { unit_name }` | `unit_name` |
-| `type` | `use "..." { TypeName }` | `TypeName` |
-| `index` | `use "..." { IndexName }` | `IndexName` |
-| `fn` | `use "..." { fn_name }` | `fn_name(...)` |
+| `param` | `import "..." { name }` | `@name` |
+| `node` | `import "..." { name }` | `@name` |
+| `const` | `import "..." { NAME }` | `NAME` |
+| `dimension` | `import "..." { DimName }` | `DimName` |
+| `unit` | `import "..." { unit_name }` | `unit_name` |
+| `type` | `import "..." { TypeName }` | `TypeName` |
+| `index` | `import "..." { IndexName }` | `IndexName` |
+| `fn` | `import "..." { fn_name }` | `fn_name(...)` |
 
 ## Circular Import Detection
 
@@ -108,14 +108,14 @@ Graphcal detects circular imports at compile time:
 
 ```
 // a.gcl
-use "./b.gcl" { x };
+import "./b.gcl" { x };
 // b.gcl
-use "./a.gcl" { y };  // ERROR: circular import
+import "./a.gcl" { y };  // ERROR: circular import
 ```
 
 ## What You Learned
 
-- **`use`** statements to import declarations from other files
+- **`import`** declarations to import declarations from other files
 - **Relative paths** for file references
 - **Import aliasing** with `as`
 - **Circular import detection** at compile time

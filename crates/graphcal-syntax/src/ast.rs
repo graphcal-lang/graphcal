@@ -36,7 +36,7 @@ pub enum DeclKind {
     Type(TypeDecl),
     Fn(FnDecl),
     Index(IndexDecl),
-    Use(UseDecl),
+    Import(ImportDecl),
     Assert(AssertDecl),
 }
 
@@ -68,40 +68,40 @@ pub enum AssertBody {
     },
 }
 
-/// The kind of a `use` declaration.
+/// The kind of an `import` declaration.
 #[derive(Debug, Clone)]
-pub enum UseKind {
-    /// Selective import: `use "path" { name1, name2 as alias };`
-    Selective(Vec<UseItem>),
-    /// Module import: `use "path";` or `use "path" as alias;`
+pub enum ImportKind {
+    /// Selective import: `import "path" { name1, name2 as alias };`
+    Selective(Vec<ImportItem>),
+    /// Module import: `import "path";` or `use "path" as alias;`
     Module { alias: Option<Ident> },
 }
 
-/// Import declaration: `use "./path/to/file.gcl" { name1, name2 as alias };`
-/// or module import: `use "./path/to/file.gcl";` / `use "./path/to/file.gcl" as mod;`
+/// Import declaration: `import "./path/to/file.gcl" { name1, name2 as alias };`
+/// or module import: `import "./path/to/file.gcl";` / `use "./path/to/file.gcl" as mod;`
 #[derive(Debug, Clone)]
-pub struct UseDecl {
+pub struct ImportDecl {
     /// The file path (quotes stripped, relative to the importing file).
     pub path: String,
     /// The path literal's span (for diagnostics).
     pub path_span: Span,
     /// The kind of import (selective or module).
-    pub kind: UseKind,
+    pub kind: ImportKind,
 }
 
-/// A single item in a `use` declaration, optionally aliased.
+/// A single item in an `import` declaration, optionally aliased.
 ///
-/// Example: `name1 as local_name` → `UseItem { name: "name1", alias: Some("local_name") }`
-/// Example: `name1` → `UseItem { name: "name1", alias: None }`
+/// Example: `name1 as local_name` → `ImportItem { name: "name1", alias: Some("local_name") }`
+/// Example: `name1` → `ImportItem { name: "name1", alias: None }`
 #[derive(Debug, Clone)]
-pub struct UseItem {
+pub struct ImportItem {
     /// The original name from the imported file.
     pub name: Ident,
     /// Optional local alias (introduced by `as`).
     pub alias: Option<Ident>,
 }
 
-impl UseItem {
+impl ImportItem {
     /// The name that this import introduces into the local scope.
     /// Returns the alias if present, otherwise the original name.
     #[must_use]

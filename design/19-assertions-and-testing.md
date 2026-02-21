@@ -76,7 +76,7 @@ The engineering practice is to assume a value, compute forward, then verify the 
 
 - [ ] **Assertions in any file:** Assertions can appear in any `.gcl` file — the main computation file, a dedicated test file, or spread across multiple files. The convention of `test.gcl` as an entry point for tests is encouraged but not enforced.
 
-- [ ] **Assertions cannot be imported:** Assert declarations are local to the file graph that contains them. `use` cannot import assertions from other files. This prevents assertions from leaking across project boundaries. (Open question: revisit if needed.)
+- [ ] **Assertions cannot be imported:** Assert declarations are local to the file graph that contains them. `import` cannot import assertions from other files. This prevents assertions from leaking across project boundaries. (Open question: revisit if needed.)
 
 ### Attribute System
 

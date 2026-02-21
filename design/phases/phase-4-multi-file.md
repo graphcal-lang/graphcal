@@ -1,12 +1,12 @@
 # Phase 4: Multi-File and Namespaces
 
-> Split a project across multiple `.graph` files with `use` imports.
+> Split a project across multiple `.graph` files with `import` declarations.
 
 ## Goal
 
 Prove that projects can scale beyond a single file. A `project.graph`
 root file defines the project. Files are modules. Cross-file references
-use explicit `use` imports. A prelude provides shared vocabulary.
+use explicit `import` declarations. A prelude provides shared vocabulary.
 
 ## Prerequisites
 
@@ -37,21 +37,21 @@ structs, functions) work. Phase 4 adds the organizational layer.
 - [ ] **User prelude vs built-in prelude:** Phase 1 had built-in dimensions/units.
       Phase 4 should allow users to define their own prelude that extends
       the built-in one. How do they compose?
-- [ ] **Import syntax:** `use orbit.transfer.{ transfer, parking_alt };`
+- [ ] **Import syntax:** `import orbit.transfer.{ transfer, parking_alt };`
       Confirm selective import with `{ }`.
-- [ ] **Glob imports:** `use module.*;` -- allowed but discouraged?
+- [ ] **Glob imports:** `import module.*;` -- allowed but discouraged?
       Or lint-warned? Or forbidden entirely?
-- [ ] **No import aliasing:** `use orbit.transfer as ot;` is NOT supported.
+- [ ] **No import aliasing:** `import orbit.transfer as ot;` is NOT supported.
       Confirm this per the "Language for Agents" insight.
 - [ ] **No re-exports:** A module cannot re-export names from another module.
       Confirm this.
 - [ ] **Circular imports:** Compile error. Not just circular node dependencies
       (already caught by DAG acyclicity), but circular file-level imports.
 - [ ] **Qualified references:** Can you write `@orbit.transfer.total_dv` without
-      a `use` statement? Or must all cross-module references go through `use`?
-      Recommendation: require `use` for clarity, but allow qualified `@mod.name`
+      an `import` statement? Or must all cross-module references go through `import`?
+      Recommendation: require `import` for clarity, but allow qualified `@mod.name`
       as well.
-- [ ] **Resolution order:** Current file -> `use` imports -> prelude -> ambiguity error.
+- [ ] **Resolution order:** Current file -> `import` imports -> prelude -> ambiguity error.
       Confirm.
 
 ### From [08-scoping](../08-scoping.md) (multi-file)
@@ -93,8 +93,8 @@ ProjectDecl  = "project" IDENT "{" ProjectField* "}"
 ProjectField = IDENT ":" Literal ","
 
 // Import
-UseDecl      = "use" ModulePath "." "{" ImportList "}" ";"
-             | "use" ModulePath "." "*" ";"
+ImportDecl   = "import" ModulePath "." "{" ImportList "}" ";"
+             | "import" ModulePath "." "*" ";"
 ModulePath   = IDENT ("." IDENT)*
 ImportList   = IDENT ("," IDENT)* ","?
 
@@ -113,7 +113,7 @@ GRAPH_REF    = "@" IDENT ("." IDENT)*
 | **Module namer** | Map file paths to module names |
 | **Project root parser** | Parse `project.graph` for metadata and prelude path |
 | **Prelude loader** | Parse prelude, inject into every file's scope |
-| **Import resolver** | Parse `use` statements, resolve to target declarations |
+| **Import resolver** | Parse `import` statements, resolve to target declarations |
 | **Cross-file `@` resolution** | Resolve qualified `@mod.name` references |
 | **Visibility checker** | Enforce `private` -- reject imports of private names |
 | **Circular import detector** | Detect and report circular file-level dependencies |
@@ -166,7 +166,7 @@ node transfer: TransferResult = {
 
 ```gcl
 // propulsion/fuel_budget.graph
-use orbit.transfer.{ transfer };
+import orbit.transfer.{ transfer };
 
 param dry_mass: Mass = 1200 kg;
 param isp: SpecificImpulse = 320 s;
@@ -187,13 +187,13 @@ fuel_mass = 2847 kg
 // error: missing import
 node x = @transfer.total_dv;
 //  error[N002]: unknown graph reference `@transfer`
-//  help: add `use orbit.transfer.{ transfer };`
+//  help: add `import orbit.transfer.{ transfer };`
 
 // error: ambiguous reference
 //  (when two imports bring the same name)
 
 // error: importing private name
-use orbit.transfer.{ _debug_helper };
+import orbit.transfer.{ _debug_helper };
 //  error: `_debug_helper` is private
 ```
 

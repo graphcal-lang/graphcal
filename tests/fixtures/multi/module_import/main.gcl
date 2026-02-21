@@ -1,5 +1,5 @@
 // Module import: import entire file as a module namespace
-use "./constants.gcl";
+import "./constants.gcl";
 
 dimension Acceleration = Length / Time^2;
 

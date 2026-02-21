@@ -152,7 +152,7 @@ pub fn resolve_with_imports(
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::Index(_)
-            | DeclKind::Use(_) => {
+            | DeclKind::Import(_) => {
                 continue;
             }
         };
@@ -182,7 +182,7 @@ pub fn resolve_with_imports(
             | DeclKind::Type(_)
             | DeclKind::Fn(_)
             | DeclKind::Index(_)
-            | DeclKind::Use(_) => {
+            | DeclKind::Import(_) => {
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
@@ -243,7 +243,7 @@ pub fn resolve_with_imports(
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::Index(_)
-            | DeclKind::Use(_) => {}
+            | DeclKind::Import(_) => {}
             DeclKind::Assert(a) => {
                 // Collect all expressions from the assert body for validation
                 let body_exprs: Vec<&Expr> = match &a.body {
@@ -438,7 +438,7 @@ pub fn resolve_with_imports(
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) => Some("type"),
                         DeclKind::Index(_) => Some("index"),
-                        DeclKind::Use(_) => Some("use"),
+                        DeclKind::Import(_) => Some("import"),
                     };
                     if let Some(kind) = kind {
                         return Err(GraphcalError::InvalidAssumesTarget {
@@ -1952,9 +1952,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_use_decl_skipped() {
-        // use declarations should not be treated as param/node/const
-        let source = r#"use "./helper.gcl" { something };"#;
+    fn resolve_import_decl_skipped() {
+        // import declarations should not be treated as param/node/const
+        let source = r#"import "./helper.gcl" { something };"#;
         let file = Parser::new(source).parse_file().unwrap();
         let resolved = resolve(&file, &make_src(source)).unwrap();
         assert!(resolved.params.is_empty());

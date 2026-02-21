@@ -25,7 +25,7 @@ By the end of this tutorial, you'll have built engineering calculations that:
 | [Step 2](step2-dimensions-and-units.md) | Dimensions & Units | Physical dimensions, units, dimension annotations, unit conversion |
 | [Step 3](step3-structs-and-blocks.md) | Structs & Blocks | Struct types, block expressions, let bindings, field access |
 | [Step 4](step4-functions.md) | Functions | Pure functions, dimension generics, function composition |
-| [Step 5](step5-multi-file-projects.md) | Multi-File Projects | `use` imports, project organization |
+| [Step 5](step5-multi-file-projects.md) | Multi-File Projects | `import` declarations, project organization |
 | [Step 6](step6-indexed-values.md) | Indexed Values | Finite indexes, `for` comprehensions, aggregations, `scan` |
 
 ## Running the Examples

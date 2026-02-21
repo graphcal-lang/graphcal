@@ -268,7 +268,7 @@ The pipeline has two important **stopping points**:
 - **`compile_and_eval_*()`** runs the full pipeline through evaluation.
 
 For **multi-file projects**, the pipeline begins with `loader.rs` which performs a DFS over
-`use` declarations to load and parse all files in dependency order. Then the pipeline runs for
+`import` declarations to load and parse all files in dependency order. Then the pipeline runs for
 each file, with imported declarations propagated via `ImportedNames`.
 
 The pipeline is also **decoupled from I/O**: `compile_and_eval_project()` reads from disk, while
@@ -297,7 +297,7 @@ Start with these fixture files to get an intuitive sense of the language:
 5. **`tests/fixtures/tagged_union.gcl`** -- Adds tagged union types and `match` expressions.
 6. **`tests/fixtures/assertions.gcl`** -- Shows `assert` declarations for self-checking
    calculations.
-7. **`tests/fixtures/multi/rocket_split/`** -- Shows multi-file imports with `use`.
+7. **`tests/fixtures/multi/rocket_split/`** -- Shows multi-file imports with `import`.
 
 ### Step 2: Understand the AST (what the parser produces)
 
@@ -470,7 +470,7 @@ Read these files:
 
 Read **`crates/graphcal-eval/src/loader.rs`**. It performs a DFS from the root `.gcl` file:
 
-- For each `use` declaration, resolves the file path, loads and parses it.
+- For each `import` declaration, resolves the file path, loads and parses it.
 - Detects circular imports via a loading stack.
 - Returns files in topological (post-order) so dependencies are processed before dependents.
 - `LoadedProject` can mix disk files and in-memory overrides (for the LSP).
@@ -726,7 +726,7 @@ Key features:
 | `inlay_hints.rs` | ~67 | Inline type hints showing computed values. |
 | `formatting.rs` | ~64 | Document formatting using `graphcal-fmt`. |
 | `signature_help.rs` | ~43 | Function signature help while typing arguments. |
-| `document_links.rs` | ~39 | Clickable links for `use` import paths. |
+| `document_links.rs` | ~39 | Clickable links for `import` declaration paths. |
 
 ### Architecture
 

@@ -603,10 +603,10 @@ index Maneuver = {
 }
 ```
 
-#### `use` Declarations
+#### `import` Declarations
 
 ```gcl
-use "./helper.gcl" { G0, isp };
+import "./helper.gcl" { G0, isp };
 ```
 
 #### Expressions

@@ -17,7 +17,7 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `use`, or `assert`";
+        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, or `assert`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -27,7 +27,7 @@ impl Parser<'_> {
             Some(Token::Type) => self.parse_type_decl(),
             Some(Token::Fn) => self.parse_fn_decl(),
             Some(Token::Index) => self.parse_index_decl(),
-            Some(Token::Use) => self.parse_use_decl(),
+            Some(Token::Import) => self.parse_import_decl(),
             Some(Token::Assert) => self.parse_assert(),
             Some(_) => {
                 let (tok, span) = self.advance()?;
@@ -385,12 +385,12 @@ impl Parser<'_> {
         }
     }
 
-    // --- use declaration ---
+    // --- import declaration ---
 
-    /// Parse a use declaration:
-    /// `use "./path/to/file.gcl" { name1, name2 };`
-    fn parse_use_decl(&mut self) -> Result<Declaration, ParseError> {
-        let (_, start_span) = self.expect(Token::Use)?;
+    /// Parse an import declaration:
+    /// `import "./path/to/file.gcl" { name1, name2 };`
+    fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Import)?;
 
         // Expect a string literal for the file path
         let (path, path_span) = match self.lexer.next_token() {
@@ -414,19 +414,22 @@ impl Parser<'_> {
         //   `;`  → module import with name derived from filename
         let (kind, end_span) = match self.lexer.peek() {
             Some(Token::LBrace) => {
-                let names = self.parse_use_selective_body()?;
+                let names = self.parse_import_selective_body()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (crate::ast::UseKind::Selective(names), end_span)
+                (crate::ast::ImportKind::Selective(names), end_span)
             }
             Some(Token::As) => {
                 self.lexer.next_token(); // consume `as`
                 let alias = self.parse_any_ident()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (crate::ast::UseKind::Module { alias: Some(alias) }, end_span)
+                (
+                    crate::ast::ImportKind::Module { alias: Some(alias) },
+                    end_span,
+                )
             }
             Some(Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (crate::ast::UseKind::Module { alias: None }, end_span)
+                (crate::ast::ImportKind::Module { alias: None }, end_span)
             }
             Some(tok) => {
                 let tok_str = tok.to_string();
@@ -442,7 +445,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            kind: DeclKind::Use(crate::ast::UseDecl {
+            kind: DeclKind::Import(crate::ast::ImportDecl {
                 path,
                 path_span,
                 kind,
@@ -452,7 +455,7 @@ impl Parser<'_> {
     }
 
     /// Parse the `{ name1, name2 as alias, ... }` body of a selective import.
-    fn parse_use_selective_body(&mut self) -> Result<Vec<crate::ast::UseItem>, ParseError> {
+    fn parse_import_selective_body(&mut self) -> Result<Vec<crate::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
         let mut names = Vec::new();
@@ -497,7 +500,7 @@ impl Parser<'_> {
                 None
             };
 
-            names.push(crate::ast::UseItem {
+            names.push(crate::ast::ImportItem {
                 name: crate::ast::Ident {
                     name: name_str,
                     span: name_span,
