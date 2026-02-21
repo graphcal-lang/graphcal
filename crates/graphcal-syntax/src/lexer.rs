@@ -28,6 +28,9 @@ use logos::Logos;
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, Token>,
     peeked: Option<Option<(Token, Span)>>,
+    /// Second peek slot for 2-token lookahead. When set, `next_token()` drains
+    /// this slot before consuming `peeked`.
+    peeked2: Option<(Token, Span)>,
     source: &'src str,
 }
 
@@ -37,6 +40,7 @@ impl<'src> Lexer<'src> {
         Self {
             inner: Token::lexer(source),
             peeked: None,
+            peeked2: None,
             source,
         }
     }
@@ -53,16 +57,20 @@ impl<'src> Lexer<'src> {
     /// state mutation.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         if self.peeked.is_none() {
-            // Advance the inner lexer, skipping unrecognized tokens.
-            // Error reporting for those will be handled by the parser.
-            self.peeked = Some(loop {
-                let result = self.inner.next()?;
-                let slice_span = self.inner.span();
-                let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-                if let Ok(token) = result {
-                    break Some((token, span));
-                }
-            });
+            if let Some(second) = self.peeked2.take() {
+                self.peeked = Some(Some(second));
+            } else {
+                // Advance the inner lexer, skipping unrecognized tokens.
+                // Error reporting for those will be handled by the parser.
+                self.peeked = Some(loop {
+                    let result = self.inner.next()?;
+                    let slice_span = self.inner.span();
+                    let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
+                    if let Ok(token) = result {
+                        break Some((token, span));
+                    }
+                });
+            }
         }
         self.peeked
             .as_ref()
@@ -76,6 +84,25 @@ impl<'src> Lexer<'src> {
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
         self.peek_with_span(); // ensure peeked is Some
         self.peeked.take().flatten()
+    }
+
+    /// Put back a consumed token so the next `peek`/`next_token` returns it.
+    ///
+    /// If a token is already peeked, the currently peeked token is moved to
+    /// the second peek slot. Only one level of put-back is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if both peek slots are occupied.
+    pub fn put_back(&mut self, token: Token, span: Span) {
+        if let Some(Some(existing)) = self.peeked.take() {
+            assert!(
+                self.peeked2.is_none(),
+                "cannot put_back: both peek slots are occupied"
+            );
+            self.peeked2 = Some(existing);
+        }
+        self.peeked = Some(Some((token, span)));
     }
 
     /// Get the source text corresponding to a span.

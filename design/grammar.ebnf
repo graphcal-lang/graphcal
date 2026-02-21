@@ -465,7 +465,8 @@ dim_expr
    | "/" ), dim_term };
 
 dim_term
-   = IDENT, [ "^", signed_integer ];
+   = IDENT, [ "^", signed_integer ]
+   | "(", dim_expr, ")", [ "^", signed_integer ];
 
 signed_integer
    = [ "-" ], NUMBER;
@@ -478,7 +479,8 @@ unit_expr
    | "/" ), unit_term };
 
 unit_term
-   = IDENT, [ "^", signed_integer ];
+   = IDENT, [ "^", signed_integer ]
+   | "(", unit_expr, ")", [ "^", signed_integer ];
 
 (* ================================================================== *)
 (* 6. Expressions                                                     *)
