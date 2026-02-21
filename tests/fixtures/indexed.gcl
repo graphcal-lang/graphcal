@@ -21,8 +21,6 @@ param spacecraft_mass2: Mass[Phase, Maneuver] = {
     (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
 };
 
-
-
 // default for non-applicable combinations
 // Indexed param: delta-v per maneuver
 param delta_v: Velocity[Maneuver] = {

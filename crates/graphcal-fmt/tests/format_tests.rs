@@ -53,6 +53,8 @@ idempotency_test!(idempotent_assertions_assumes, "assertions_assumes.gcl");
 idempotency_test!(idempotent_assertions_indexed, "assertions_indexed.gcl");
 idempotency_test!(idempotent_variant_comparison, "variant_comparison.gcl");
 idempotency_test!(idempotent_variant_match, "variant_match.gcl");
+idempotency_test!(idempotent_power_budget, "power_budget.gcl");
+idempotency_test!(idempotent_thermal_analysis, "thermal_analysis.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -99,6 +101,8 @@ roundtrip_test!(roundtrip_assertions_assumes, "assertions_assumes.gcl");
 roundtrip_test!(roundtrip_assertions_indexed, "assertions_indexed.gcl");
 roundtrip_test!(roundtrip_variant_comparison, "variant_comparison.gcl");
 roundtrip_test!(roundtrip_variant_match, "variant_match.gcl");
+roundtrip_test!(roundtrip_power_budget, "power_budget.gcl");
+roundtrip_test!(roundtrip_thermal_analysis, "thermal_analysis.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -419,3 +423,5 @@ snapshot_test!(snapshot_assertions_assumes, "assertions_assumes.gcl");
 snapshot_test!(snapshot_assertions_indexed, "assertions_indexed.gcl");
 snapshot_test!(snapshot_variant_comparison, "variant_comparison.gcl");
 snapshot_test!(snapshot_variant_match, "variant_match.gcl");
+snapshot_test!(snapshot_power_budget, "power_budget.gcl");
+snapshot_test!(snapshot_thermal_analysis, "thermal_analysis.gcl");
