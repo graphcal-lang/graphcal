@@ -2,7 +2,6 @@
 //
 // A medium-size thermal model with many thermal nodes,
 // temperature-dependent heat flows, and multi-dimensional indexed values.
-
 // --- Thermal nodes representing spacecraft components (22 variants) ---
 index ThermalNode = {
     SolarPanelPosX,
@@ -26,7 +25,7 @@ index ThermalNode = {
     PayloadDetector,
     PayloadOptics,
     AntennaHga,
-    AntennaLga
+    AntennaLga,
 }
 
 // --- Orbit condition for different thermal scenarios (7 variants) ---
@@ -37,115 +36,115 @@ index OrbitCondition = {
     NominalEclipse,
     SafeMode,
     TransientEntry,
-    TransientExit
+    TransientExit,
 }
 
 // --- Temperature limits (min, max) per node (22x2 = 44 cells) ---
 index Limit = { Min, Max }
 
 param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
-                       Min,     Max;
-    SolarPanelPosX: -150.0 K, 120.0 K;
-    SolarPanelNegX: -150.0 K, 120.0 K;
-    RadiatorPosY:   -100.0 K,  60.0 K;
-    RadiatorNegY:   -100.0 K,  60.0 K;
-    StructureTop:    -40.0 K,  70.0 K;
-    StructureBottom: -40.0 K,  70.0 K;
-    StructureNorth:  -40.0 K,  70.0 K;
-    StructureSouth:  -40.0 K,  70.0 K;
-    BatteryPack:       0.0 K,  45.0 K;
-    ReactionWheel1:  -20.0 K,  60.0 K;
-    ReactionWheel2:  -20.0 K,  60.0 K;
-    ReactionWheel3:  -20.0 K,  60.0 K;
-    StarTracker:     -30.0 K,  50.0 K;
-    Magnetometer:    -40.0 K,  70.0 K;
-    PropellantTank:    5.0 K,  50.0 K;
-    Thruster1:       -10.0 K,  80.0 K;
-    Thruster2:       -10.0 K,  80.0 K;
-    MainComputer:    -10.0 K,  55.0 K;
-    PayloadDetector: -20.0 K,  40.0 K;
-    PayloadOptics:   -15.0 K,  45.0 K;
-    AntennaHga:      -80.0 K,  90.0 K;
-    AntennaLga:      -80.0 K,  90.0 K;
+                          Min,     Max;
+    SolarPanelPosX:  -150.0 K, 120.0 K;
+    SolarPanelNegX:  -150.0 K, 120.0 K;
+    RadiatorPosY:    -100.0 K,  60.0 K;
+    RadiatorNegY:    -100.0 K,  60.0 K;
+    StructureTop:     -40.0 K,  70.0 K;
+    StructureBottom:  -40.0 K,  70.0 K;
+    StructureNorth:   -40.0 K,  70.0 K;
+    StructureSouth:   -40.0 K,  70.0 K;
+    BatteryPack:        0.0 K,  45.0 K;
+    ReactionWheel1:   -20.0 K,  60.0 K;
+    ReactionWheel2:   -20.0 K,  60.0 K;
+    ReactionWheel3:   -20.0 K,  60.0 K;
+    StarTracker:      -30.0 K,  50.0 K;
+    Magnetometer:     -40.0 K,  70.0 K;
+    PropellantTank:     5.0 K,  50.0 K;
+    Thruster1:        -10.0 K,  80.0 K;
+    Thruster2:        -10.0 K,  80.0 K;
+    MainComputer:     -10.0 K,  55.0 K;
+    PayloadDetector:  -20.0 K,  40.0 K;
+    PayloadOptics:    -15.0 K,  45.0 K;
+    AntennaHga:       -80.0 K,  90.0 K;
+    AntennaLga:       -80.0 K,  90.0 K;
 };
 
 // --- Internal heat dissipation per node per orbit condition (22x7 = 154 cells) ---
 param heat_dissipation: Power[ThermalNode, OrbitCondition] = table[ThermalNode, OrbitCondition] {
-                        HotCase, ColdCase, NominalSunlit, NominalEclipse, SafeMode, TransientEntry, TransientExit;
-    SolarPanelPosX:     0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    SolarPanelNegX:     0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    RadiatorPosY:       0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    RadiatorNegY:       0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    StructureTop:       0.5 W,    0.2 W,         0.3 W,          0.3 W,    0.1 W,          0.3 W,         0.3 W;
-    StructureBottom:    0.5 W,    0.2 W,         0.3 W,          0.3 W,    0.1 W,          0.3 W,         0.3 W;
-    StructureNorth:     0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    StructureSouth:     0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    BatteryPack:        3.0 W,    1.0 W,         2.0 W,          2.5 W,    0.5 W,          2.0 W,         2.0 W;
-    ReactionWheel1:     4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
-    ReactionWheel2:     4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
-    ReactionWheel3:     4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
-    StarTracker:        2.0 W,    1.0 W,         1.5 W,          1.5 W,    0.0 W,          1.5 W,         1.5 W;
-    Magnetometer:       0.5 W,    0.3 W,         0.4 W,          0.4 W,    0.2 W,          0.4 W,         0.4 W;
-    PropellantTank:     0.0 W,    5.0 W,         0.0 W,          3.0 W,    5.0 W,          1.0 W,         1.0 W;
-    Thruster1:          0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    Thruster2:          0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
-    MainComputer:       8.0 W,    5.0 W,         6.0 W,          6.0 W,    3.0 W,          6.0 W,         6.0 W;
-    PayloadDetector:   35.0 W,    0.0 W,        20.0 W,          0.0 W,    0.0 W,         20.0 W,        20.0 W;
-    PayloadOptics:     10.0 W,    0.0 W,         5.0 W,          0.0 W,    0.0 W,          5.0 W,         5.0 W;
-    AntennaHga:         5.0 W,    1.0 W,         3.0 W,          3.0 W,    1.0 W,          3.0 W,         3.0 W;
-    AntennaLga:         1.0 W,    0.5 W,         0.8 W,          0.8 W,    0.5 W,          0.8 W,         0.8 W;
+                     HotCase, ColdCase, NominalSunlit, NominalEclipse, SafeMode, TransientEntry, TransientExit;
+    SolarPanelPosX:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    SolarPanelNegX:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    RadiatorPosY:      0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    RadiatorNegY:      0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    StructureTop:      0.5 W,    0.2 W,         0.3 W,          0.3 W,    0.1 W,          0.3 W,         0.3 W;
+    StructureBottom:   0.5 W,    0.2 W,         0.3 W,          0.3 W,    0.1 W,          0.3 W,         0.3 W;
+    StructureNorth:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    StructureSouth:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    BatteryPack:       3.0 W,    1.0 W,         2.0 W,          2.5 W,    0.5 W,          2.0 W,         2.0 W;
+    ReactionWheel1:    4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
+    ReactionWheel2:    4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
+    ReactionWheel3:    4.0 W,    2.0 W,         3.0 W,          3.0 W,    0.0 W,          3.0 W,         3.0 W;
+    StarTracker:       2.0 W,    1.0 W,         1.5 W,          1.5 W,    0.0 W,          1.5 W,         1.5 W;
+    Magnetometer:      0.5 W,    0.3 W,         0.4 W,          0.4 W,    0.2 W,          0.4 W,         0.4 W;
+    PropellantTank:    0.0 W,    5.0 W,         0.0 W,          3.0 W,    5.0 W,          1.0 W,         1.0 W;
+    Thruster1:         0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    Thruster2:         0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
+    MainComputer:      8.0 W,    5.0 W,         6.0 W,          6.0 W,    3.0 W,          6.0 W,         6.0 W;
+    PayloadDetector:  35.0 W,    0.0 W,        20.0 W,          0.0 W,    0.0 W,         20.0 W,        20.0 W;
+    PayloadOptics:    10.0 W,    0.0 W,         5.0 W,          0.0 W,    0.0 W,          5.0 W,         5.0 W;
+    AntennaHga:        5.0 W,    1.0 W,         3.0 W,          3.0 W,    1.0 W,          3.0 W,         3.0 W;
+    AntennaLga:        1.0 W,    0.5 W,         0.8 W,          0.8 W,    0.5 W,          0.8 W,         0.8 W;
 };
 
 // --- Radiator area per node (only radiators have nonzero area) ---
 param radiator_area: Area[ThermalNode] = table[ThermalNode] {
-    SolarPanelPosX:  0.0 m^2;
-    SolarPanelNegX:  0.0 m^2;
-    RadiatorPosY:    0.25 m^2;
-    RadiatorNegY:    0.25 m^2;
-    StructureTop:    0.0 m^2;
-    StructureBottom: 0.0 m^2;
-    StructureNorth:  0.0 m^2;
-    StructureSouth:  0.0 m^2;
-    BatteryPack:     0.0 m^2;
-    ReactionWheel1:  0.0 m^2;
-    ReactionWheel2:  0.0 m^2;
-    ReactionWheel3:  0.0 m^2;
-    StarTracker:     0.0 m^2;
-    Magnetometer:    0.0 m^2;
-    PropellantTank:  0.0 m^2;
-    Thruster1:       0.0 m^2;
-    Thruster2:       0.0 m^2;
-    MainComputer:    0.0 m^2;
-    PayloadDetector: 0.02 m^2;
-    PayloadOptics:   0.01 m^2;
-    AntennaHga:      0.0 m^2;
-    AntennaLga:      0.0 m^2;
+    SolarPanelPosX:    0.0 m^2;
+    SolarPanelNegX:    0.0 m^2;
+    RadiatorPosY:     0.25 m^2;
+    RadiatorNegY:     0.25 m^2;
+    StructureTop:      0.0 m^2;
+    StructureBottom:   0.0 m^2;
+    StructureNorth:    0.0 m^2;
+    StructureSouth:    0.0 m^2;
+    BatteryPack:       0.0 m^2;
+    ReactionWheel1:    0.0 m^2;
+    ReactionWheel2:    0.0 m^2;
+    ReactionWheel3:    0.0 m^2;
+    StarTracker:       0.0 m^2;
+    Magnetometer:      0.0 m^2;
+    PropellantTank:    0.0 m^2;
+    Thruster1:         0.0 m^2;
+    Thruster2:         0.0 m^2;
+    MainComputer:      0.0 m^2;
+    PayloadDetector:  0.02 m^2;
+    PayloadOptics:    0.01 m^2;
+    AntennaHga:        0.0 m^2;
+    AntennaLga:        0.0 m^2;
 };
 
 // --- Heater power needed when temperature would fall below minimum ---
 param heater_power_budget: Power[ThermalNode] = table[ThermalNode] {
-    SolarPanelPosX:  0.0 W;
-    SolarPanelNegX:  0.0 W;
-    RadiatorPosY:    0.0 W;
-    RadiatorNegY:    0.0 W;
-    StructureTop:    0.0 W;
-    StructureBottom: 0.0 W;
-    StructureNorth:  0.0 W;
-    StructureSouth:  0.0 W;
-    BatteryPack:    10.0 W;
-    ReactionWheel1:  2.0 W;
-    ReactionWheel2:  2.0 W;
-    ReactionWheel3:  2.0 W;
-    StarTracker:     1.5 W;
-    Magnetometer:    0.0 W;
-    PropellantTank: 15.0 W;
-    Thruster1:       3.0 W;
-    Thruster2:       3.0 W;
-    MainComputer:    0.0 W;
-    PayloadDetector: 5.0 W;
-    PayloadOptics:   3.0 W;
-    AntennaHga:      0.0 W;
-    AntennaLga:      0.0 W;
+    SolarPanelPosX:    0.0 W;
+    SolarPanelNegX:    0.0 W;
+    RadiatorPosY:      0.0 W;
+    RadiatorNegY:      0.0 W;
+    StructureTop:      0.0 W;
+    StructureBottom:   0.0 W;
+    StructureNorth:    0.0 W;
+    StructureSouth:    0.0 W;
+    BatteryPack:      10.0 W;
+    ReactionWheel1:    2.0 W;
+    ReactionWheel2:    2.0 W;
+    ReactionWheel3:    2.0 W;
+    StarTracker:       1.5 W;
+    Magnetometer:      0.0 W;
+    PropellantTank:   15.0 W;
+    Thruster1:         3.0 W;
+    Thruster2:         3.0 W;
+    MainComputer:      0.0 W;
+    PayloadDetector:   5.0 W;
+    PayloadOptics:     3.0 W;
+    AntennaHga:        0.0 W;
+    AntennaLga:        0.0 W;
 };
 
 // --- Total heat dissipation per orbit condition ---

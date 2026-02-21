@@ -9,28 +9,32 @@ expression: formatted
 unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
-index Subsystem = { CommandAndData,
-AttitudeControl,
-Propulsion,
-Thermal,
-Telecom,
-Payload1,
-Payload2,
-Payload3,
-PowerElectronics,
-Harness,
-Mechanisms,
-Software }
+index Subsystem = {
+    CommandAndData,
+    AttitudeControl,
+    Propulsion,
+    Thermal,
+    Telecom,
+    Payload1,
+    Payload2,
+    Payload3,
+    PowerElectronics,
+    Harness,
+    Mechanisms,
+    Software,
+}
 
 // --- Operating modes (8 variants) ---
-index OpMode = { Safe,
-Detumble,
-NominalSunlit,
-NominalEclipse,
-Comms,
-ScienceObs,
-OrbitManeuver,
-Standby }
+index OpMode = {
+    Safe,
+    Detumble,
+    NominalSunlit,
+    NominalEclipse,
+    Comms,
+    ScienceObs,
+    OrbitManeuver,
+    Standby,
+}
 
 // --- Power draw per subsystem per mode (12x8 = 96 cells) ---
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
@@ -73,13 +77,19 @@ param design_margin: Dimensionless[Subsystem] = table[Subsystem] {
 };
 
 // --- Computed: power with margin per subsystem per mode ---
-node power_with_margin: Power[Subsystem, OpMode] = for s: Subsystem, m: OpMode { @power_draw[s, m] * (1.0 + @design_margin[s]) };
+node power_with_margin: Power[Subsystem, OpMode] = for s: Subsystem, m: OpMode {
+    @power_draw[s, m] * (1.0 + @design_margin[s])
+};
 
 // --- Computed: total power per mode (summed across subsystems) ---
-node total_power: Power[OpMode] = for m: OpMode { sum(for s: Subsystem { @power_with_margin[s, m] }) };
+node total_power: Power[OpMode] = for m: OpMode {
+    sum(for s: Subsystem { @power_with_margin[s, m] })
+};
 
 // --- Computed: wall-plug power accounting for losses ---
-node wall_plug_power: Power[OpMode] = for m: OpMode { @total_power[m] / (@harness_efficiency * @converter_efficiency) };
+node wall_plug_power: Power[OpMode] = for m: OpMode {
+    @total_power[m] / (@harness_efficiency * @converter_efficiency)
+};
 
 // --- Peak power mode ---
 node peak_power: Power = max(for m: OpMode { @wall_plug_power[m] });

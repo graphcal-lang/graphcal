@@ -7,37 +7,41 @@ expression: formatted
 // A medium-size thermal model with many thermal nodes,
 // temperature-dependent heat flows, and multi-dimensional indexed values.
 // --- Thermal nodes representing spacecraft components (22 variants) ---
-index ThermalNode = { SolarPanelPosX,
-SolarPanelNegX,
-RadiatorPosY,
-RadiatorNegY,
-StructureTop,
-StructureBottom,
-StructureNorth,
-StructureSouth,
-BatteryPack,
-ReactionWheel1,
-ReactionWheel2,
-ReactionWheel3,
-StarTracker,
-Magnetometer,
-PropellantTank,
-Thruster1,
-Thruster2,
-MainComputer,
-PayloadDetector,
-PayloadOptics,
-AntennaHga,
-AntennaLga }
+index ThermalNode = {
+    SolarPanelPosX,
+    SolarPanelNegX,
+    RadiatorPosY,
+    RadiatorNegY,
+    StructureTop,
+    StructureBottom,
+    StructureNorth,
+    StructureSouth,
+    BatteryPack,
+    ReactionWheel1,
+    ReactionWheel2,
+    ReactionWheel3,
+    StarTracker,
+    Magnetometer,
+    PropellantTank,
+    Thruster1,
+    Thruster2,
+    MainComputer,
+    PayloadDetector,
+    PayloadOptics,
+    AntennaHga,
+    AntennaLga,
+}
 
 // --- Orbit condition for different thermal scenarios (7 variants) ---
-index OrbitCondition = { HotCase,
-ColdCase,
-NominalSunlit,
-NominalEclipse,
-SafeMode,
-TransientEntry,
-TransientExit }
+index OrbitCondition = {
+    HotCase,
+    ColdCase,
+    NominalSunlit,
+    NominalEclipse,
+    SafeMode,
+    TransientEntry,
+    TransientExit,
+}
 
 // --- Temperature limits (min, max) per node (22x2 = 44 cells) ---
 index Limit = { Min, Max }
@@ -148,13 +152,17 @@ param heater_power_budget: Power[ThermalNode] = table[ThermalNode] {
 };
 
 // --- Total heat dissipation per orbit condition ---
-node total_dissipation: Power[OrbitCondition] = for oc: OrbitCondition { sum(for n: ThermalNode { @heat_dissipation[n, oc] }) };
+node total_dissipation: Power[OrbitCondition] = for oc: OrbitCondition {
+    sum(for n: ThermalNode { @heat_dissipation[n, oc] })
+};
 
 // --- Total heater power budget ---
 node total_heater_power: Power = sum(for n: ThermalNode { @heater_power_budget[n] });
 
 // --- Temperature range per node ---
-node temp_range: Temperature[ThermalNode] = for n: ThermalNode { @temp_limits[n, Limit::Max] - @temp_limits[n, Limit::Min] };
+node temp_range: Temperature[ThermalNode] = for n: ThermalNode {
+    @temp_limits[n, Limit::Max] - @temp_limits[n, Limit::Min]
+};
 
 // --- Per-node radiative capacity (simplified) ---
 param emissivity: Dimensionless = 0.85;
@@ -164,7 +172,9 @@ param emissivity: Dimensionless = 0.85;
 dimension HeatFlux = Mass / Time^3;
 const FLUX_AT_300K: HeatFlux = 459.3 kg/s^3;
 
-node radiative_power_capacity: Power[ThermalNode] = for n: ThermalNode { @emissivity * @radiator_area[n] * FLUX_AT_300K };
+node radiative_power_capacity: Power[ThermalNode] = for n: ThermalNode {
+    @emissivity * @radiator_area[n] * FLUX_AT_300K
+};
 
 // --- Total radiative capacity ---
 node total_radiative_capacity: Power = sum(for n: ThermalNode { @radiative_power_capacity[n] });

@@ -19,9 +19,7 @@ node scale_factor: Dimensionless[Maneuver] = for m: Maneuver {
 };
 
 // Use match result in computation
-node scaled_dv: Velocity[Maneuver] = for m: Maneuver {
-    @delta_v[m] * @scale_factor[m]
-};
+node scaled_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
 
 // Match with multi-binding for comprehension
 index Phase = { Coast, Burn }

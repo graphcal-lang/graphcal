@@ -14,11 +14,13 @@ param delta_v: Velocity[Maneuver] = {
 };
 
 // Match on loop variable with qualified patterns
-node scale_factor: Dimensionless[Maneuver] = for m: Maneuver { match m {
-    Maneuver::Departure => 2.0,
-    Maneuver::Correction => 0.5,
-    Maneuver::Insertion => 1.5,
-} };
+node scale_factor: Dimensionless[Maneuver] = for m: Maneuver {
+    match m {
+        Maneuver::Departure => 2.0,
+        Maneuver::Correction => 0.5,
+        Maneuver::Insertion => 1.5,
+    }
+};
 
 // Use match result in computation
 node scaled_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
@@ -35,7 +37,9 @@ param base_cost: Velocity[Maneuver, Phase] = {
     (Maneuver::Insertion, Phase::Burn): 1.83 km/s,
 };
 
-node adjusted_cost: Velocity[Maneuver, Phase] = for m: Maneuver, p: Phase { match p {
-    Phase::Coast => 0.0 m/s,
-    Phase::Burn => @base_cost[m, p] * 1.1,
-} };
+node adjusted_cost: Velocity[Maneuver, Phase] = for m: Maneuver, p: Phase {
+    match p {
+        Phase::Coast => 0.0 m/s,
+        Phase::Burn => @base_cost[m, p] * 1.1,
+    }
+};
