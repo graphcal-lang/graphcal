@@ -181,3 +181,15 @@ workspace/
 Now `main.gcl` can import from `../shared/constants.gcl` because the project root is `workspace/` (the directory containing `graphcal.toml`), not `project/`.
 
 Graphcal searches upward from the entry-point file's directory for the nearest `graphcal.toml`. If none is found, the default behavior applies.
+
+### Explicit root with `--root`
+
+You can also set the project root explicitly on the command line:
+
+```bash
+graphcal eval --root ./workspace project/main.gcl
+```
+
+When `--root` is provided, automatic `graphcal.toml` discovery is skipped — the given directory is used directly. This is useful in CI/scripts or when placing a `graphcal.toml` file is inconvenient.
+
+The `--root` flag is available for both `eval` and `typecheck` subcommands.

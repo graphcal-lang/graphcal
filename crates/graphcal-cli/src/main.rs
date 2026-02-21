@@ -2,7 +2,7 @@ mod json_input;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use graphcal_eval::eval::{EvalResult, compile_and_eval_project, compile_to_tir_project};
@@ -33,6 +33,9 @@ enum Commands {
         /// Skip assertion checking
         #[arg(long)]
         no_assert: bool,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
     /// Format .gcl files
     Format {
@@ -46,6 +49,9 @@ enum Commands {
     Typecheck {
         /// Files or directories to check (default: current directory)
         paths: Vec<PathBuf>,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
@@ -79,8 +85,8 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Typecheck { paths } => {
-            run_check(&paths);
+        Commands::Typecheck { paths, root } => {
+            run_check(&paths, root.as_deref());
         }
         Commands::Format { paths, check } => {
             run_format(&paths, check);
@@ -102,6 +108,7 @@ fn main() {
             set,
             input,
             no_assert,
+            root,
         } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
@@ -157,7 +164,7 @@ fn main() {
                 }
             }
 
-            match compile_and_eval_project(&file, &overrides) {
+            match compile_and_eval_project(&file, &overrides, root.as_deref()) {
                 Ok(result) => {
                     match format {
                         OutputFormat::Text => print_text(&result, no_assert),
@@ -191,7 +198,7 @@ fn main() {
     reason = "CLI binary, stderr output is expected for errors"
 )]
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
-fn run_check(paths: &[PathBuf]) {
+fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let targets = if paths.is_empty() {
         collect_gcl_files(&PathBuf::from("."))
     } else {
@@ -213,7 +220,7 @@ fn run_check(paths: &[PathBuf]) {
 
     let mut error_count = 0;
     for file in &targets {
-        match compile_to_tir_project(file) {
+        match compile_to_tir_project(file, project_root) {
             Ok(_) => {
                 println!("ok: {}", file.display());
             }

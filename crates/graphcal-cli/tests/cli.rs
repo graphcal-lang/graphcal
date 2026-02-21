@@ -1274,6 +1274,27 @@ fn eval_parent_import_allowed_with_graphcal_toml() {
 }
 
 #[test]
+fn eval_parent_import_allowed_with_root_flag() {
+    // The parent_import fixture has no graphcal.toml and normally fails.
+    // Using --root to point at the parent directory should allow the import.
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            "--root",
+            &fixture("multi/parent_import"),
+            &fixture("multi/parent_import/child/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected success with --root widening boundary, but got failure.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn eval_parenthesized_exprs() {
     let output = graphcal_bin()
         .args(["eval", &fixture("parenthesized_exprs.gcl")])

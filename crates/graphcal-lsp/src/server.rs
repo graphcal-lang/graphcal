@@ -133,7 +133,7 @@ impl Backend {
 fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
-        Ok(path) => LoadedProject::load_with_overlay(&path, (&path, text)).map_err(Box::new),
+        Ok(path) => LoadedProject::load_with_overlay(&path, (&path, text), None).map_err(Box::new),
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
     }
 }
