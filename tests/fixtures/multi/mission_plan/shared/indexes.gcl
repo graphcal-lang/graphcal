@@ -1,19 +1,23 @@
 // shared/indexes.gcl -- Mission phase and subsystem indexes
-index MissionPhase = { Launch,
-LeoParking,
-TransLunarInjection,
-TransLunarCoast,
-LunarOrbitInsertion,
-LunarOps,
-TransEarthInjection,
-TransEarthCoast,
-EarthReturn }
+index MissionPhase = {
+    Launch,
+    LeoParking,
+    TransLunarInjection,
+    TransLunarCoast,
+    LunarOrbitInsertion,
+    LunarOps,
+    TransEarthInjection,
+    TransEarthCoast,
+    EarthReturn,
+}
 
-index Subsystem = { Propulsion,
-AttitudeControl,
-CommandAndData,
-Telecom,
-Thermal,
-Power,
-Structure,
-Payload }
+index Subsystem = {
+    Propulsion,
+    AttitudeControl,
+    CommandAndData,
+    Telecom,
+    Thermal,
+    Power,
+    Structure,
+    Payload,
+}

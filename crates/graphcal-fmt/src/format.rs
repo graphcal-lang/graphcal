@@ -431,12 +431,27 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
                 .iter()
                 .map(|v| RcDoc::text(v.value.as_str().to_string()))
                 .collect();
-            let sep = RcDoc::text(",").append(RcDoc::line());
-            let inner = RcDoc::intersperse(variant_docs, sep);
-            header
+
+            let single_sep = RcDoc::text(", ");
+            let single_line = header
+                .clone()
                 .append(RcDoc::text(" = { "))
-                .append(inner.group())
-                .append(RcDoc::text(" }"))
+                .append(RcDoc::intersperse(variant_docs.clone(), single_sep))
+                .append(RcDoc::text(" }"));
+
+            let multi_sep = RcDoc::text(",").append(RcDoc::hardline());
+            let multi_line = header
+                .append(RcDoc::text(" = {"))
+                .append(
+                    RcDoc::hardline()
+                        .append(RcDoc::intersperse(variant_docs, multi_sep))
+                        .append(RcDoc::text(","))
+                        .nest(INDENT),
+                )
+                .append(RcDoc::hardline())
+                .append(RcDoc::text("}"));
+
+            multi_line.flat_alt(single_line).group()
         }
         IndexDeclKind::Range { start, end, step } => header
             .append(RcDoc::text(" = range("))
@@ -814,7 +829,7 @@ fn format_if(
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"));
 
-    single_line.flat_alt(multi_line).group()
+    multi_line.flat_alt(single_line).group()
 }
 
 fn format_block_body(fmt: &mut Formatter<'_>, stmts: &[LetBinding], tail: &Expr) -> RcDoc<'static> {
@@ -1177,11 +1192,23 @@ fn format_for_comp(
                 .append(RcDoc::text(b.index.value.as_str().to_string()))
         })
         .collect();
-    RcDoc::text("for ")
-        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+    let bindings_doc = RcDoc::intersperse(binding_docs, RcDoc::text(", "));
+    let body_doc = format_expr(fmt, body);
+
+    let single_line = RcDoc::text("for ")
+        .append(bindings_doc.clone())
         .append(RcDoc::text(" { "))
-        .append(format_expr(fmt, body))
-        .append(RcDoc::text(" }"))
+        .append(body_doc.clone())
+        .append(RcDoc::text(" }"));
+
+    let multi_line = RcDoc::text("for ")
+        .append(bindings_doc)
+        .append(RcDoc::text(" {"))
+        .append(RcDoc::hardline().append(body_doc).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"));
+
+    multi_line.flat_alt(single_line).group()
 }
 
 fn format_scan(
