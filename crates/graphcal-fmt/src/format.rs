@@ -6,6 +6,7 @@ use graphcal_syntax::ast::{
     TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr, UseDecl, VariantDecl,
 };
 use graphcal_syntax::comments::SourceMetadata;
+use graphcal_syntax::names::{IndexName, Spanned};
 use graphcal_syntax::span::Span;
 use pretty::RcDoc;
 
@@ -680,6 +681,7 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             fields,
         } => format_struct_construction(fmt, type_name, type_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
+        ExprKind::TableLiteral { indexes, entries } => format_table_literal(fmt, indexes, entries),
         ExprKind::ForComp { bindings, body } => format_for_comp(fmt, bindings, body),
         ExprKind::IndexAccess { expr: inner, args } => {
             let arg_docs: Vec<RcDoc<'static>> = args
@@ -909,6 +911,255 @@ fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDoc<'s
                 .append(RcDoc::text(","))
                 .nest(INDENT),
         )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
+}
+
+/// Render an `RcDoc` to a string (for measuring column widths).
+fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
+    let mut buf = Vec::new();
+    // Use a large width so we get single-line rendering for cell values.
+    let _ = doc.render(1000, &mut buf);
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// Format a table literal expression: `table[Index1, Index2] { ... }`
+///
+/// Handles 1D, 2D, and 3D+ tables with column-aligned output.
+fn format_table_literal(
+    fmt: &mut Formatter<'_>,
+    indexes: &[Spanned<IndexName>],
+    entries: &[MapEntry],
+) -> RcDoc<'static> {
+    let ndim = indexes.len();
+
+    // Build the `table[Index1, Index2]` header
+    let idx_names: Vec<String> = indexes
+        .iter()
+        .map(|i| i.value.as_str().to_string())
+        .collect();
+    let header = format!("table[{}]", idx_names.join(", "));
+
+    if ndim == 1 {
+        format_table_1d(fmt, &header, entries)
+    } else if ndim == 2 {
+        format_table_2d(fmt, &header, indexes, entries)
+    } else {
+        format_table_sliced(fmt, &header, indexes, entries)
+    }
+}
+
+/// Format a 1D table: `table[Maneuver] { Label: expr; ... }`
+fn format_table_1d(fmt: &mut Formatter<'_>, header: &str, entries: &[MapEntry]) -> RcDoc<'static> {
+    // Compute max label width for alignment
+    let max_label_width = entries
+        .iter()
+        .map(|e| e.keys[0].variant.value.as_str().len())
+        .max()
+        .unwrap_or(0);
+
+    // Render each cell value to a string for width computation
+    let rendered_values: Vec<String> = entries
+        .iter()
+        .map(|e| render_doc_to_string(&format_expr(fmt, &e.value)))
+        .collect();
+
+    // Compute max value width for right-alignment
+    let max_value_width = rendered_values
+        .iter()
+        .map(std::string::String::len)
+        .max()
+        .unwrap_or(0);
+
+    let mut rows: Vec<RcDoc<'static>> = Vec::new();
+    for (e, rendered) in entries.iter().zip(&rendered_values) {
+        let label = e.keys[0].variant.value.as_str();
+        let padding = max_label_width - label.len();
+        let value_padding = max_value_width - rendered.len();
+        let row = format!(
+            "{}:{} {};",
+            label,
+            " ".repeat(padding + 1 + value_padding),
+            rendered
+        );
+        rows.push(RcDoc::text(row));
+    }
+
+    RcDoc::text(format!("{header} {{"))
+        .append(
+            RcDoc::hardline()
+                .append(RcDoc::intersperse(rows, RcDoc::hardline()))
+                .nest(INDENT),
+        )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
+}
+
+/// Format a 2D table: `table[Phase, Maneuver] { ColLabel, ...; RowLabel: val, ...; ... }`
+fn format_table_2d(
+    fmt: &mut Formatter<'_>,
+    header: &str,
+    indexes: &[Spanned<IndexName>],
+    entries: &[MapEntry],
+) -> RcDoc<'static> {
+    let body = format_table_2d_body(fmt, indexes, entries);
+
+    RcDoc::text(format!("{header} {{"))
+        .append(RcDoc::hardline().append(body).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
+}
+
+/// Format the inner body of a 2D table (header row + data rows).
+/// Shared between 2D tables and 3D+ slice sections.
+fn format_table_2d_body(
+    fmt: &mut Formatter<'_>,
+    indexes: &[Spanned<IndexName>],
+    entries: &[MapEntry],
+) -> RcDoc<'static> {
+    let ndim = indexes.len();
+    // Row index is second-to-last, column index is last
+    let col_idx = ndim - 1;
+
+    // Extract unique column labels (from the last key, preserving order)
+    let mut col_labels: Vec<String> = Vec::new();
+    for e in entries {
+        let col_label = e.keys[col_idx].variant.value.as_str().to_string();
+        if !col_labels.contains(&col_label) {
+            col_labels.push(col_label);
+        }
+    }
+    let num_cols = col_labels.len();
+
+    // Extract unique row labels (from the second-to-last key, preserving order)
+    let row_idx = ndim - 2;
+    let mut row_labels: Vec<String> = Vec::new();
+    for e in entries {
+        let row_label = e.keys[row_idx].variant.value.as_str().to_string();
+        if !row_labels.contains(&row_label) {
+            row_labels.push(row_label);
+        }
+    }
+
+    // Build 2D grid of rendered values
+    let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
+    for e in entries {
+        let row_label = e.keys[row_idx].variant.value.as_str();
+        let col_label = e.keys[col_idx].variant.value.as_str();
+        let ri = row_labels.iter().position(|r| r == row_label).unwrap_or(0);
+        let ci = col_labels.iter().position(|c| c == col_label).unwrap_or(0);
+        grid[ri][ci] = render_doc_to_string(&format_expr(fmt, &e.value));
+    }
+
+    // Compute column widths: max of (column label width, max cell width in that column)
+    let col_widths: Vec<usize> = (0..num_cols)
+        .map(|ci| {
+            let label_width = col_labels[ci].len();
+            let max_cell = grid.iter().map(|row| row[ci].len()).max().unwrap_or(0);
+            label_width.max(max_cell)
+        })
+        .collect();
+
+    // Compute max row label width
+    let max_row_label_width = row_labels
+        .iter()
+        .map(std::string::String::len)
+        .max()
+        .unwrap_or(0);
+
+    // Build header row: right-aligned column labels, indented to account for row label column
+    let row_label_prefix_width = max_row_label_width + 2; // "Label: " minus the space that is part of the value
+    let header_cells: Vec<String> = col_labels
+        .iter()
+        .enumerate()
+        .map(|(ci, label)| format!("{:>width$}", label, width = col_widths[ci]))
+        .collect();
+    let header_line = format!(
+        "{}{};",
+        " ".repeat(row_label_prefix_width),
+        header_cells.join(", ")
+    );
+
+    // Build data rows
+    let mut all_rows: Vec<RcDoc<'static>> = Vec::new();
+    all_rows.push(RcDoc::text(header_line));
+
+    for (ri, row_label) in row_labels.iter().enumerate() {
+        let label_padding = max_row_label_width - row_label.len();
+        let cells: Vec<String> = (0..num_cols)
+            .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
+            .collect();
+        let row_line = format!(
+            "{}:{} {};",
+            row_label,
+            " ".repeat(label_padding),
+            cells.join(", ")
+        );
+        all_rows.push(RcDoc::text(row_line));
+    }
+
+    RcDoc::intersperse(all_rows, RcDoc::hardline())
+}
+
+/// Format a 3D+ table with slice sections.
+fn format_table_sliced(
+    fmt: &mut Formatter<'_>,
+    header: &str,
+    indexes: &[Spanned<IndexName>],
+    entries: &[MapEntry],
+) -> RcDoc<'static> {
+    let ndim = indexes.len();
+    let slice_dims = ndim - 2;
+
+    // Group entries by their slice keys (first N-2 keys)
+    let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    for (idx, e) in entries.iter().enumerate() {
+        let slice_key: Vec<String> = (0..slice_dims)
+            .map(|i| {
+                format!(
+                    "{}::{}",
+                    e.keys[i].index.value.as_str(),
+                    e.keys[i].variant.value.as_str()
+                )
+            })
+            .collect();
+
+        if let Some(last) = slices.last_mut()
+            && last.1 == slice_key
+        {
+            last.0.push(idx);
+            continue;
+        }
+        slices.push((vec![idx], slice_key));
+    }
+
+    // Build each slice doc and nest it for indentation.
+    let mut slice_docs: Vec<RcDoc<'static>> = Vec::new();
+    for (entry_indices, slice_key) in &slices {
+        let slice_header = format!("[{}]", slice_key.join(", "));
+        let slice_entries: Vec<MapEntry> = entry_indices
+            .iter()
+            .map(|&idx| entries[idx].clone())
+            .collect();
+        slice_docs.push(
+            RcDoc::text(slice_header)
+                .append(RcDoc::hardline())
+                .append(format_table_2d_body(fmt, indexes, &slice_entries)),
+        );
+    }
+
+    // Join slices: each slice is indented, separated by a blank line (no trailing whitespace).
+    let mut body = RcDoc::nil();
+    for (i, slice_doc) in slice_docs.into_iter().enumerate() {
+        if i > 0 {
+            // End previous slice's indentation, emit un-nested blank line, start new indented slice
+            body = body.append(RcDoc::hardline());
+        }
+        body = body.append(RcDoc::hardline().append(slice_doc).nest(INDENT));
+    }
+
+    RcDoc::text(format!("{header} {{"))
+        .append(body)
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"))
 }

@@ -1139,7 +1139,7 @@ pub(super) fn infer_type(
             Ok(result)
         }
 
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             if entries.is_empty() {
                 return Err(GraphcalError::EvalError {
                     message: "empty map literal".to_string(),

@@ -40,6 +40,7 @@ idempotency_test!(idempotent_range_index, "range_index.gcl");
 idempotency_test!(idempotent_rocket, "rocket.gcl");
 idempotency_test!(idempotent_tagged_union, "tagged_union.gcl");
 idempotency_test!(idempotent_tagged_union_param, "tagged_union_param.gcl");
+idempotency_test!(idempotent_table_literal, "table_literal.gcl");
 idempotency_test!(idempotent_time_scan, "time_scan.gcl");
 idempotency_test!(idempotent_user_dimensions, "user_dimensions.gcl");
 idempotency_test!(idempotent_assertions, "assertions.gcl");
@@ -83,6 +84,7 @@ roundtrip_test!(roundtrip_range_index, "range_index.gcl");
 roundtrip_test!(roundtrip_rocket, "rocket.gcl");
 roundtrip_test!(roundtrip_tagged_union, "tagged_union.gcl");
 roundtrip_test!(roundtrip_tagged_union_param, "tagged_union_param.gcl");
+roundtrip_test!(roundtrip_table_literal, "table_literal.gcl");
 roundtrip_test!(roundtrip_time_scan, "time_scan.gcl");
 roundtrip_test!(roundtrip_user_dimensions, "user_dimensions.gcl");
 roundtrip_test!(roundtrip_assertions, "assertions.gcl");
@@ -268,5 +270,108 @@ fn format_assert_tolerance_relative() {
     assert!(
         formatted.contains("assert check = @x ~= 1.0 +/- 5%;"),
         "Assert relative tolerance formatting incorrect: {formatted}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Table literal formatting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_table_1d_preserves_syntax() {
+    let source = r"
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Dimensionless[Maneuver] = table[Maneuver] {
+    Departure: 2.46;
+    Correction: 0.12;
+    Insertion: 1.83;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("table[Maneuver]"),
+        "1D table syntax not preserved: {formatted}"
+    );
+    assert!(
+        !formatted.contains("Maneuver::"),
+        "1D table should not use qualified syntax: {formatted}"
+    );
+    assert!(
+        formatted.contains("Departure:"),
+        "1D table row labels missing: {formatted}"
+    );
+}
+
+#[test]
+fn format_table_1d_aligns_values() {
+    let source = r"
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Dimensionless[Maneuver] = table[Maneuver] {
+    Departure: 2.46;
+    Correction: 0.12;
+    Insertion: 1.83;
+};
+";
+    let formatted = format_source(source).unwrap();
+    // Values should be right-aligned (semicolons at the same column)
+    let lines: Vec<&str> = formatted.lines().collect();
+    let semicolon_positions: Vec<usize> = lines
+        .iter()
+        .filter(|l| l.trim_start().starts_with(|c: char| c.is_uppercase()) && l.ends_with(';'))
+        .filter_map(|l| l.rfind(';'))
+        .collect();
+    assert!(
+        !semicolon_positions.is_empty(),
+        "No table rows found: {formatted}"
+    );
+    assert!(
+        semicolon_positions.windows(2).all(|w| w[0] == w[1]),
+        "Values not aligned in 1D table: positions={semicolon_positions:?}\n{formatted}"
+    );
+}
+
+#[test]
+fn format_table_2d_preserves_syntax() {
+    let source = r"
+index Phase = { Launch, Cruise }
+index Maneuver = { Departure, Correction }
+param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
+    Departure, Correction;
+    Launch: 5000.0, 0.0;
+    Cruise: 0.0, 4500.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("table[Phase, Maneuver]"),
+        "2D table syntax not preserved: {formatted}"
+    );
+    assert!(
+        formatted.contains("Departure,"),
+        "2D table header row missing: {formatted}"
+    );
+    assert!(
+        !formatted.contains("Phase::"),
+        "2D table should not use qualified syntax: {formatted}"
+    );
+}
+
+#[test]
+fn format_map_literal_not_converted_to_table() {
+    let source = r"
+index Maneuver = { Departure, Correction }
+param dv: Dimensionless[Maneuver] = {
+    Maneuver::Departure: 2.46,
+    Maneuver::Correction: 0.12,
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        !formatted.contains("table["),
+        "Map literal should not be converted to table: {formatted}"
+    );
+    assert!(
+        formatted.contains("Maneuver::Departure"),
+        "Map literal should use qualified syntax: {formatted}"
     );
 }

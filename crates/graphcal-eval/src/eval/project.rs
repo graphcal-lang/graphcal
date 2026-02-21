@@ -93,7 +93,7 @@ pub(super) fn collect_qualified_refs(expr: &Expr, refs: &mut Vec<QualifiedRef>) 
                 }
             }
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 collect_qualified_refs(&entry.value, refs);
             }
@@ -176,7 +176,7 @@ pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
                 }
             }
         }
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 rewrite_qualified_refs(&mut entry.value);
             }

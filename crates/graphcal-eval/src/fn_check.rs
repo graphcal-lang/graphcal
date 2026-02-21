@@ -154,7 +154,7 @@ fn collect_fn_calls_in_expr(
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => {}
-        ExprKind::MapLiteral { entries } => {
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
             for entry in entries {
                 collect_fn_calls_in_expr(&entry.value, user_fns, calls);
             }

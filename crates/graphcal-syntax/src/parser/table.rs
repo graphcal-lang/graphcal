@@ -46,7 +46,7 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
 
         Ok(Expr {
-            kind: ExprKind::MapLiteral { entries },
+            kind: ExprKind::TableLiteral { indexes, entries },
             span,
         })
     }

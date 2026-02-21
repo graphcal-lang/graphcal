@@ -848,15 +848,17 @@ pub fn eval_expr(
             })
         }
 
-        ExprKind::MapLiteral { entries } => eval_map_literal(
-            entries,
-            values,
-            local_values,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        ),
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            eval_map_literal(
+                entries,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            )
+        }
 
         ExprKind::ForComp { bindings, body } => {
             // Evaluate body for each combination of index variants

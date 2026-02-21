@@ -497,6 +497,12 @@ pub enum ExprKind {
     },
     /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
     MapLiteral { entries: Vec<MapEntry> },
+    /// Table literal: `table[Phase, Maneuver] { ... }`
+    /// Semantically equivalent to `MapLiteral` but preserves tabular structure for formatting.
+    TableLiteral {
+        indexes: Vec<Spanned<IndexName>>,
+        entries: Vec<MapEntry>,
+    },
     /// For comprehension: `for m: Maneuver { @delta_v[m] + 1.0 }`
     ForComp {
         bindings: Vec<ForBinding>,
