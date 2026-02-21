@@ -642,8 +642,9 @@ pub fn compile_and_eval_from_project(
 pub fn compile_and_eval_project(
     root_path: &Path,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    project_root: Option<&Path>,
 ) -> Result<EvalResult, CompileError> {
-    let project = crate::loader::load_project(root_path)?;
+    let project = crate::loader::load_project(root_path, project_root)?;
     compile_and_eval_from_project(&project, overrides)
 }
 
@@ -671,8 +672,9 @@ pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, Compi
 /// Returns a [`CompileError`] if loading, parsing, resolution, or checking fails.
 pub fn compile_to_tir_project(
     root_path: &Path,
+    project_root: Option<&Path>,
 ) -> Result<(crate::tir::TIR, crate::loader::LoadedProject), CompileError> {
-    let project = crate::loader::load_project(root_path)?;
+    let project = crate::loader::load_project(root_path, project_root)?;
     let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))
 }

@@ -80,6 +80,7 @@ impl LoadedProject {
     pub fn load_with_overlay(
         root_path: &Path,
         overlay: (&Path, &str),
+        project_root_override: Option<&Path>,
     ) -> Result<Self, CompileError> {
         let root_canonical = root_path
             .canonicalize()
@@ -95,7 +96,7 @@ impl LoadedProject {
         let mut stack: Vec<String> = Vec::new();
 
         let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
-        let project_root = project_root_for(root_dir);
+        let project_root = resolve_project_root(root_dir, project_root_override)?;
 
         load_file_dfs(
             &root_canonical,
@@ -122,13 +123,16 @@ impl LoadedProject {
 ///
 /// Returns a [`CompileError`] if a file cannot be read, parsed, or
 /// if circular imports are detected.
-pub fn load_project(root_path: &Path) -> Result<LoadedProject, CompileError> {
+pub fn load_project(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+) -> Result<LoadedProject, CompileError> {
     let root_canonical = root_path
         .canonicalize()
         .map_err(|_| io_not_found(root_path))?;
 
     let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
-    let project_root = project_root_for(root_dir);
+    let project_root = resolve_project_root(root_dir, project_root_override)?;
 
     let mut files: HashMap<PathBuf, LoadedFile> = HashMap::new();
     let mut load_order: Vec<PathBuf> = Vec::new();
@@ -310,6 +314,23 @@ fn project_root_for(root_file_dir: &Path) -> PathBuf {
     root_file_dir.to_path_buf()
 }
 
+/// Resolve the project root, using an explicit override if provided,
+/// otherwise falling back to automatic `graphcal.toml` discovery.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if the override path does not exist or
+/// cannot be canonicalized.
+fn resolve_project_root(
+    root_file_dir: &Path,
+    project_root_override: Option<&Path>,
+) -> Result<PathBuf, CompileError> {
+    project_root_override.map_or_else(
+        || Ok(project_root_for(root_file_dir)),
+        |explicit| explicit.canonicalize().map_err(|_| io_not_found(explicit)),
+    )
+}
+
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 fn io_not_found(path: &Path) -> CompileError {
     CompileError::Eval(GraphcalError::FileNotFound {
@@ -346,7 +367,7 @@ mod tests {
     #[test]
     fn load_standalone_file() {
         let dir = setup_temp_dir(&[("standalone.gcl", "param x: Dimensionless = 1.0;")]);
-        let project = load_project(&dir.path().join("standalone.gcl")).unwrap();
+        let project = load_project(&dir.path().join("standalone.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 1);
         assert_eq!(project.load_order.len(), 1);
     }
@@ -360,7 +381,7 @@ mod tests {
                 "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("main.gcl")).unwrap();
+        let project = load_project(&dir.path().join("main.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper should be loaded before main (topological order)
@@ -382,7 +403,7 @@ mod tests {
                 "use \"./a.gcl\" { x };\nparam y: Dimensionless = 2.0;",
             ),
         ]);
-        let result = load_project(&dir.path().join("a.gcl"));
+        let result = load_project(&dir.path().join("a.gcl"), None);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -394,7 +415,7 @@ mod tests {
     #[test]
     fn load_missing_import_file() {
         let dir = setup_temp_dir(&[("main.gcl", "use \"./nonexistent.gcl\" { x };")]);
-        let result = load_project(&dir.path().join("main.gcl"));
+        let result = load_project(&dir.path().join("main.gcl"), None);
         assert!(result.is_err());
     }
 
@@ -422,7 +443,8 @@ mod tests {
 
         let overlay_source = "param x: Dimensionless = 99.0;";
         let project =
-            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source)).unwrap();
+            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source), None)
+                .unwrap();
 
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), overlay_source);
@@ -442,7 +464,8 @@ mod tests {
 
         let overlay_source = "use \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
         let project =
-            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source)).unwrap();
+            LoadedProject::load_with_overlay(&root_path, (&root_path, overlay_source), None)
+                .unwrap();
 
         // Root file should use overlay content
         let root_file = &project.files[&project.root];
@@ -459,7 +482,7 @@ mod tests {
         let root_path = dir.path().join("main.gcl");
 
         let bad_overlay = "this is not valid graphcal";
-        let result = LoadedProject::load_with_overlay(&root_path, (&root_path, bad_overlay));
+        let result = LoadedProject::load_with_overlay(&root_path, (&root_path, bad_overlay), None);
         assert!(result.is_err());
     }
 
@@ -482,7 +505,7 @@ mod tests {
                 "use \"./b.gcl\" { x };\nuse \"./c.gcl\" { y };\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
-        let project = load_project(&dir.path().join("a.gcl")).unwrap();
+        let project = load_project(&dir.path().join("a.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
         let d_canonical = dir.path().join("d.gcl").canonicalize().unwrap();
@@ -551,7 +574,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_project(&project_dir.join("main.gcl"));
+        let result = load_project(&project_dir.join("main.gcl"), None);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -571,7 +594,7 @@ mod tests {
                 "use \"./sub/helper.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("main.gcl")).unwrap();
+        let project = load_project(&dir.path().join("main.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -586,7 +609,7 @@ mod tests {
                 "use \"../lib.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let result = load_project(&dir.path().join("sub/main.gcl"));
+        let result = load_project(&dir.path().join("sub/main.gcl"), None);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -628,7 +651,7 @@ mod tests {
         // Place graphcal.toml at the workspace root.
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
-        let project = load_project(&dir.path().join("sub/main.gcl")).unwrap();
+        let project = load_project(&dir.path().join("sub/main.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -644,7 +667,7 @@ mod tests {
         ]);
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
-        let project = load_project(&dir.path().join("deep/nested/main.gcl")).unwrap();
+        let project = load_project(&dir.path().join("deep/nested/main.gcl"), None).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -660,12 +683,53 @@ mod tests {
             ),
         ]);
         // No graphcal.toml — root stays at sub/.
-        let result = load_project(&dir.path().join("sub/main.gcl"));
+        let result = load_project(&dir.path().join("sub/main.gcl"), None);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
             err.contains("outside") || err.contains("ImportOutsideRoot"),
             "error should mention outside project root: {err}"
         );
+    }
+
+    #[test]
+    fn explicit_root_overrides_graphcal_toml() {
+        // Even though graphcal.toml exists at the top, an explicit root
+        // narrower than that takes precedence.
+        let dir = setup_temp_dir(&[
+            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
+            (
+                "sub/main.gcl",
+                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+            ),
+        ]);
+        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
+
+        // With graphcal.toml auto-discovery this would succeed,
+        // but an explicit root at sub/ should restrict the boundary.
+        let sub_dir = dir.path().join("sub");
+        let result = load_project(&dir.path().join("sub/main.gcl"), Some(&sub_dir));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("outside") || err.contains("ImportOutsideRoot"),
+            "explicit root should restrict boundary: {err}"
+        );
+    }
+
+    #[test]
+    fn explicit_root_widens_boundary() {
+        // Without graphcal.toml, an explicit root at the parent
+        // should widen the boundary to allow sibling imports.
+        let dir = setup_temp_dir(&[
+            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
+            (
+                "sub/main.gcl",
+                "use \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
+            ),
+        ]);
+
+        let project = load_project(&dir.path().join("sub/main.gcl"), Some(dir.path())).unwrap();
+        assert_eq!(project.files.len(), 2);
     }
 }

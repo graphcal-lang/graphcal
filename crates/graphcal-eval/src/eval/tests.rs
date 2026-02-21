@@ -685,7 +685,7 @@ fn override_unknown_param_errors() {
 fn project_multi_file_rocket() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/rocket_split/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
@@ -698,7 +698,7 @@ fn project_multi_file_rocket() {
 fn project_import_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -707,7 +707,7 @@ fn project_import_alias() {
 fn project_import_alias_conflict_resolution() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias_conflict/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let sum = find_value(&result, "sum");
     assert!(
         (sum - 3.0).abs() < f64::EPSILON,
@@ -721,7 +721,7 @@ fn project_import_alias_conflict_resolution() {
 fn project_module_import_const() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -730,7 +730,7 @@ fn project_module_import_const() {
 fn project_module_import_const_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -739,7 +739,7 @@ fn project_module_import_const_alias() {
 fn project_module_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let total = find_value(&result, "total_mass");
     assert!(
         (total - 4000.0).abs() < f64::EPSILON,
@@ -751,7 +751,7 @@ fn project_module_import_graph_ref() {
 fn project_module_import_fn_call() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
 }
@@ -760,7 +760,7 @@ fn project_module_import_fn_call() {
 fn project_module_import_mixed() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_mixed/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
