@@ -124,18 +124,37 @@ fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
-/// A unique identifier for a base dimension, assigned at registration time.
+/// A unique identifier for a base dimension.
 ///
-/// The prelude registers the 8 standard base dimensions (Length, Time, Mass, etc.)
-/// as IDs 0–7. User-defined base dimensions get subsequent IDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BaseDimId(pub u32);
+/// Identity is name-based rather than auto-incremented, ensuring consistency
+/// across per-file compilation units (important for diamond imports).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BaseDimId {
+    /// Built-in prelude dimension (e.g., "Length", "Time", "Mass").
+    Prelude(String),
+    /// User-defined dimension, identified by defining file path + name.
+    /// The file path is relative to the project root for cross-machine consistency.
+    UserDefined {
+        file: std::path::PathBuf,
+        name: String,
+    },
+}
+
+impl BaseDimId {
+    /// A human-readable fallback name when no symbol/name map is available.
+    #[must_use]
+    pub fn fallback_symbol(&self) -> String {
+        match self {
+            Self::Prelude(name) | Self::UserDefined { name, .. } => name.clone(),
+        }
+    }
+}
 
 /// A physical dimension represented as a sparse vector of rational exponents
 /// over base dimensions.
 ///
 /// For example, Velocity = Length^1 * Time^-1 is represented as
-/// `{BaseDimId(0): 1, BaseDimId(1): -1}`.
+/// `{BaseDimId::Prelude("Length"): 1, BaseDimId::Prelude("Time"): -1}`.
 ///
 /// Only non-zero exponents are stored. An empty map represents the dimensionless
 /// dimension.
@@ -169,7 +188,11 @@ impl fmt::Debug for Dimension {
                     write!(f, " * ")?;
                 }
                 first = false;
-                write!(f, "D{}", id.0)?;
+                match id {
+                    BaseDimId::Prelude(name) | BaseDimId::UserDefined { name, .. } => {
+                        write!(f, "{name}")?;
+                    }
+                }
                 if *exp != Rational::ONE {
                     write!(f, "^{exp}")?;
                 }
@@ -203,8 +226,8 @@ impl Dimension {
 
     /// Get the exponent for a specific base dimension (zero if absent).
     #[must_use]
-    pub fn get_exponent(&self, id: BaseDimId) -> Rational {
-        self.exponents.get(&id).copied().unwrap_or(Rational::ZERO)
+    pub fn get_exponent(&self, id: &BaseDimId) -> Rational {
+        self.exponents.get(id).copied().unwrap_or(Rational::ZERO)
     }
 
     /// Returns an iterator over the non-zero `(BaseDimId, Rational)` pairs.
@@ -221,7 +244,7 @@ impl Dimension {
         let exponents = self
             .exponents
             .iter()
-            .map(|(&id, &e)| (id, e * exp))
+            .map(|(id, &e)| (id.clone(), e * exp))
             .filter(|(_, e)| !e.is_zero())
             .collect();
         Self { exponents }
@@ -259,7 +282,7 @@ impl Dimension {
         let mut first = true;
 
         // Positive exponents (numerator)
-        for (&id, &exp) in &self.exponents {
+        for (id, &exp) in &self.exponents {
             if exp.num() <= 0 {
                 continue;
             }
@@ -268,8 +291,8 @@ impl Dimension {
             }
             first = false;
             let symbol = symbols
-                .get(&id)
-                .map_or_else(|| format!("D{}", id.0), String::clone);
+                .get(id)
+                .map_or_else(|| id.fallback_symbol(), String::clone);
             result.push_str(&symbol);
             if exp != Rational::ONE {
                 result.push('^');
@@ -278,13 +301,13 @@ impl Dimension {
         }
 
         // Negative exponents (denominator)
-        for (&id, &exp) in &self.exponents {
+        for (id, &exp) in &self.exponents {
             if exp.num() >= 0 {
                 continue;
             }
             let symbol = symbols
-                .get(&id)
-                .map_or_else(|| format!("D{}", id.0), String::clone);
+                .get(id)
+                .map_or_else(|| id.fallback_symbol(), String::clone);
             if first {
                 // Only negative exponents (e.g., Frequency = s^-1)
                 result.push_str(&symbol);
@@ -321,7 +344,7 @@ impl fmt::Display for DimensionDisplay<'_> {
         let mut first = true;
 
         // Positive exponents first (numerator part)
-        for (&id, &exp) in &self.dim.exponents {
+        for (id, &exp) in &self.dim.exponents {
             if exp.num() <= 0 {
                 continue;
             }
@@ -331,8 +354,8 @@ impl fmt::Display for DimensionDisplay<'_> {
             first = false;
             let name = self
                 .names
-                .get(&id)
-                .map_or_else(|| format!("D{}", id.0), String::clone);
+                .get(id)
+                .map_or_else(|| id.fallback_symbol(), String::clone);
             write!(f, "{name}")?;
             if exp != Rational::ONE {
                 write!(f, "^{exp}")?;
@@ -340,14 +363,14 @@ impl fmt::Display for DimensionDisplay<'_> {
         }
 
         // Negative exponents (denominator part)
-        for (&id, &exp) in &self.dim.exponents {
+        for (id, &exp) in &self.dim.exponents {
             if exp.num() >= 0 {
                 continue;
             }
             let name = self
                 .names
-                .get(&id)
-                .map_or_else(|| format!("D{}", id.0), String::clone);
+                .get(id)
+                .map_or_else(|| id.fallback_symbol(), String::clone);
             if first {
                 // Only negative exponents exist (e.g., Frequency = Time^-1)
                 write!(f, "{name}")?;
@@ -376,7 +399,7 @@ impl std::ops::Mul for Dimension {
     fn mul(self, other: Self) -> Self {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
-            let entry = exponents.entry(*id).or_insert(Rational::ZERO);
+            let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
             *entry = *entry + *exp;
             if entry.is_zero() {
                 exponents.remove(id);
@@ -396,7 +419,7 @@ impl std::ops::Div for Dimension {
     fn div(self, other: Self) -> Self {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
-            let entry = exponents.entry(*id).or_insert(Rational::ZERO);
+            let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
             *entry = *entry - *exp;
             if entry.is_zero() {
                 exponents.remove(id);
@@ -432,22 +455,43 @@ mod tests {
 
     use super::*;
 
-    // Helper: well-known base dimension IDs matching prelude registration order.
-    const LENGTH: BaseDimId = BaseDimId(0);
-    const TIME: BaseDimId = BaseDimId(1);
-    const MASS: BaseDimId = BaseDimId(2);
+    // Helper: well-known base dimension IDs matching prelude dimensions.
+    fn length() -> BaseDimId {
+        BaseDimId::Prelude("Length".to_string())
+    }
+    fn time() -> BaseDimId {
+        BaseDimId::Prelude("Time".to_string())
+    }
+    fn mass() -> BaseDimId {
+        BaseDimId::Prelude("Mass".to_string())
+    }
 
     /// Build a names map for display tests.
     fn test_names() -> BTreeMap<BaseDimId, String> {
         let mut m = BTreeMap::new();
-        m.insert(BaseDimId(0), "Length".to_string());
-        m.insert(BaseDimId(1), "Time".to_string());
-        m.insert(BaseDimId(2), "Mass".to_string());
-        m.insert(BaseDimId(3), "Temperature".to_string());
-        m.insert(BaseDimId(4), "ElectricCurrent".to_string());
-        m.insert(BaseDimId(5), "Amount".to_string());
-        m.insert(BaseDimId(6), "LuminousIntensity".to_string());
-        m.insert(BaseDimId(7), "Angle".to_string());
+        m.insert(
+            BaseDimId::Prelude("Length".to_string()),
+            "Length".to_string(),
+        );
+        m.insert(BaseDimId::Prelude("Time".to_string()), "Time".to_string());
+        m.insert(BaseDimId::Prelude("Mass".to_string()), "Mass".to_string());
+        m.insert(
+            BaseDimId::Prelude("Temperature".to_string()),
+            "Temperature".to_string(),
+        );
+        m.insert(
+            BaseDimId::Prelude("ElectricCurrent".to_string()),
+            "ElectricCurrent".to_string(),
+        );
+        m.insert(
+            BaseDimId::Prelude("Amount".to_string()),
+            "Amount".to_string(),
+        );
+        m.insert(
+            BaseDimId::Prelude("LuminousIntensity".to_string()),
+            "LuminousIntensity".to_string(),
+        );
+        m.insert(BaseDimId::Prelude("Angle".to_string()), "Angle".to_string());
         m
     }
 
@@ -489,79 +533,79 @@ mod tests {
 
     #[test]
     fn dimension_base() {
-        let length = Dimension::base(LENGTH);
-        assert_eq!(length.get_exponent(LENGTH), Rational::ONE);
-        assert!(length.get_exponent(TIME).is_zero());
-        assert!(length.get_exponent(MASS).is_zero());
+        let len = Dimension::base(length());
+        assert_eq!(len.get_exponent(&length()), Rational::ONE);
+        assert!(len.get_exponent(&time()).is_zero());
+        assert!(len.get_exponent(&mass()).is_zero());
     }
 
     #[test]
     fn dimension_dimensionless() {
         assert!(Dimension::dimensionless().is_dimensionless());
-        assert!(!Dimension::base(LENGTH).is_dimensionless());
+        assert!(!Dimension::base(length()).is_dimensionless());
     }
 
     #[test]
     fn dimension_velocity() {
         // Velocity = Length / Time
-        let length = Dimension::base(LENGTH);
-        let time = Dimension::base(TIME);
-        let velocity = length / time;
+        let l = Dimension::base(length());
+        let t = Dimension::base(time());
+        let velocity = l / t;
 
-        assert_eq!(velocity.get_exponent(LENGTH), Rational::ONE);
-        assert_eq!(velocity.get_exponent(TIME), Rational::from_int(-1));
+        assert_eq!(velocity.get_exponent(&length()), Rational::ONE);
+        assert_eq!(velocity.get_exponent(&time()), Rational::from_int(-1));
     }
 
     #[test]
     fn dimension_acceleration() {
         // Acceleration = Length / Time^2
-        let length = Dimension::base(LENGTH);
-        let time = Dimension::base(TIME);
-        let accel = length / time.pow_int(2);
+        let l = Dimension::base(length());
+        let t = Dimension::base(time());
+        let accel = l / t.pow_int(2);
 
-        assert_eq!(accel.get_exponent(LENGTH), Rational::ONE);
-        assert_eq!(accel.get_exponent(TIME), Rational::from_int(-2));
+        assert_eq!(accel.get_exponent(&length()), Rational::ONE);
+        assert_eq!(accel.get_exponent(&time()), Rational::from_int(-2));
     }
 
     #[test]
     fn dimension_force() {
         // Force = Mass * Length / Time^2
-        let mass = Dimension::base(MASS);
-        let length = Dimension::base(LENGTH);
-        let time = Dimension::base(TIME);
-        let force = mass * length / time.pow_int(2);
+        let m = Dimension::base(mass());
+        let l = Dimension::base(length());
+        let t = Dimension::base(time());
+        let force = m * l / t.pow_int(2);
 
-        assert_eq!(force.get_exponent(MASS), Rational::ONE);
-        assert_eq!(force.get_exponent(LENGTH), Rational::ONE);
-        assert_eq!(force.get_exponent(TIME), Rational::from_int(-2));
+        assert_eq!(force.get_exponent(&mass()), Rational::ONE);
+        assert_eq!(force.get_exponent(&length()), Rational::ONE);
+        assert_eq!(force.get_exponent(&time()), Rational::from_int(-2));
     }
 
     #[test]
     fn dimension_sqrt() {
         // sqrt(Area) = sqrt(Length^2) = Length
-        let area = Dimension::base(LENGTH).pow_int(2);
+        let area = Dimension::base(length()).pow_int(2);
         let sqrt_area = area.pow(Rational::new(1, 2));
-        assert_eq!(sqrt_area, Dimension::base(LENGTH));
+        assert_eq!(sqrt_area, Dimension::base(length()));
     }
 
     #[test]
     fn dimension_mul_div_inverse() {
-        let length = Dimension::base(LENGTH);
-        let time = Dimension::base(TIME);
-        let velocity = length.clone() / time.clone();
+        let l = Dimension::base(length());
+        let t = Dimension::base(time());
+        let velocity = l.clone() / t.clone();
 
         // velocity * time = length
-        assert_eq!(velocity.clone() * time.clone(), length);
+        assert_eq!(velocity.clone() * t.clone(), l);
 
         // length / velocity = time
-        assert_eq!(length / velocity, time);
+        assert_eq!(l / velocity, t);
     }
 
     #[test]
     fn dimension_dimensionless_mul() {
-        let length = Dimension::base(LENGTH);
-        assert_eq!(Dimension::dimensionless() * length.clone(), length);
-        assert_eq!(length.clone() * Dimension::dimensionless(), length);
+        let l = Dimension::base(length());
+        assert_eq!(Dimension::dimensionless() * l.clone(), l);
+        assert_eq!(l.clone() * Dimension::dimensionless(), l);
     }
 
     #[test]
@@ -572,7 +616,7 @@ mod tests {
             "Dimensionless"
         );
         assert_eq!(
-            format!("{}", Dimension::base(LENGTH).display_with(&names)),
+            format!("{}", Dimension::base(length()).display_with(&names)),
             "Length"
         );
     }
@@ -580,7 +624,7 @@ mod tests {
     #[test]
     fn dimension_display_velocity() {
         let names = test_names();
-        let velocity = Dimension::base(LENGTH) / Dimension::base(TIME);
+        let velocity = Dimension::base(length()) / Dimension::base(time());
         assert_eq!(
             format!("{}", velocity.display_with(&names)),
             "Length / Time"
@@ -590,8 +634,8 @@ mod tests {
     #[test]
     fn dimension_display_force() {
         let names = test_names();
-        let force =
-            Dimension::base(MASS) * Dimension::base(LENGTH) / Dimension::base(TIME).pow_int(2);
+        let force = Dimension::base(mass()) * Dimension::base(length())
+            / Dimension::base(time()).pow_int(2);
         assert_eq!(
             format!("{}", force.display_with(&names)),
             "Length * Mass / Time^2"
@@ -601,7 +645,7 @@ mod tests {
     #[test]
     fn dimension_display_area() {
         let names = test_names();
-        let area = Dimension::base(LENGTH).pow_int(2);
+        let area = Dimension::base(length()).pow_int(2);
         assert_eq!(format!("{}", area.display_with(&names)), "Length^2");
     }
 
@@ -609,23 +653,27 @@ mod tests {
     fn dimension_display_frequency() {
         let names = test_names();
         // Frequency = Time^-1 (only negative exponent)
-        let freq = Dimension::dimensionless() / Dimension::base(TIME);
+        let freq = Dimension::dimensionless() / Dimension::base(time());
         assert_eq!(format!("{}", freq.display_with(&names)), "Time^-1");
     }
 
     #[test]
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
-        let information = Dimension::base(BaseDimId(8));
-        let time = Dimension::base(TIME);
-        let bandwidth = information / time;
+        let info_id = BaseDimId::UserDefined {
+            file: std::path::PathBuf::from("test.gcl"),
+            name: "Information".to_string(),
+        };
+        let information = Dimension::base(info_id.clone());
+        let t = Dimension::base(time());
+        let bandwidth = information / t;
 
-        assert_eq!(bandwidth.get_exponent(BaseDimId(8)), Rational::ONE);
-        assert_eq!(bandwidth.get_exponent(TIME), Rational::from_int(-1));
+        assert_eq!(bandwidth.get_exponent(&info_id), Rational::ONE);
+        assert_eq!(bandwidth.get_exponent(&time()), Rational::from_int(-1));
 
         // Display with names
         let mut names = test_names();
-        names.insert(BaseDimId(8), "Information".to_string());
+        names.insert(info_id, "Information".to_string());
         assert_eq!(
             format!("{}", bandwidth.display_with(&names)),
             "Information / Time"
@@ -636,8 +684,8 @@ mod tests {
     fn dimension_hash_consistency() {
         use std::collections::hash_map::DefaultHasher;
 
-        let a = Dimension::base(LENGTH) / Dimension::base(TIME);
-        let b = Dimension::base(LENGTH) / Dimension::base(TIME);
+        let a = Dimension::base(length()) / Dimension::base(time());
+        let b = Dimension::base(length()) / Dimension::base(time());
         assert_eq!(a, b);
 
         let mut ha = DefaultHasher::new();
@@ -659,14 +707,26 @@ mod tests {
                 .prop_map(|(n, d)| Rational::new(n, d))
         }
 
+        /// The 8 prelude dimension names for property testing.
+        const PRELUDE_DIMS: [&str; 8] = [
+            "Length",
+            "Time",
+            "Mass",
+            "Temperature",
+            "ElectricCurrent",
+            "Amount",
+            "LuminousIntensity",
+            "Angle",
+        ];
+
         /// Strategy for generating Dimension values with small exponents.
-        /// Uses a fixed set of base dimension IDs (0..8) to match prelude layout.
+        /// Uses a fixed set of prelude base dimension IDs.
         fn arb_dimension() -> impl Strategy<Value = Dimension> {
-            proptest::collection::btree_map(0u32..8, arb_rational(), 0..=8).prop_map(|map| {
+            proptest::collection::btree_map(0usize..8, arb_rational(), 0..=8).prop_map(|map| {
                 let exponents = map
                     .into_iter()
                     .filter(|(_, r)| !r.is_zero())
-                    .map(|(id, r)| (BaseDimId(id), r))
+                    .map(|(idx, r)| (BaseDimId::Prelude(PRELUDE_DIMS[idx].to_string()), r))
                     .collect();
                 Dimension { exponents }
             })

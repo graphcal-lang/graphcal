@@ -288,6 +288,11 @@ pub(super) fn evaluate_plan(
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
     let mut errors: HashMap<String, NodeError> = HashMap::new();
 
+    // Insert imported values into the lookup table (pre-evaluated by dependency files)
+    for (name, val) in &plan.imported_values {
+        values.insert(name.clone(), val.clone());
+    }
+
     // Insert const values into the lookup table
     for (name, val) in &plan.const_values {
         values.insert(name.clone(), val.clone());

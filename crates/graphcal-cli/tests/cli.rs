@@ -1345,3 +1345,93 @@ fn eval_parenthesized_exprs() {
         "expected charge_time_positive PASS: {stdout}"
     );
 }
+
+#[test]
+fn eval_auto_assert_selective_import() {
+    // Decision 1: importing a file evaluates ALL its assertions, even when
+    // the assertion is not explicitly listed in the import braces.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/auto_assert/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Assertions:"),
+        "expected Assertions section in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("limit_positive") && stdout.contains("PASS"),
+        "expected limit_positive PASS even though not explicitly imported: {stdout}"
+    );
+}
+
+#[test]
+fn eval_auto_assert_module_import() {
+    // Decision 1: module import also evaluates all assertions in the imported file.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/auto_assert_module/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Assertions:"),
+        "expected Assertions section in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("limit_positive") && stdout.contains("PASS"),
+        "expected limit_positive PASS from module import: {stdout}"
+    );
+}
+
+#[test]
+fn eval_diamond_import_assertions() {
+    // Diamond import: shared.gcl is imported by both left.gcl and right.gcl,
+    // and main.gcl imports both. All assertions should be evaluated and
+    // base_positive (from shared) should appear only once.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/diamond_assert/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Assertions:"),
+        "expected Assertions section: {stdout}"
+    );
+    // All three assertions from the dependency tree should pass.
+    assert!(
+        stdout.contains("base_positive") && stdout.contains("PASS"),
+        "expected base_positive PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("doubled_positive") && stdout.contains("PASS"),
+        "expected doubled_positive PASS: {stdout}"
+    );
+    assert!(
+        stdout.contains("tripled_positive") && stdout.contains("PASS"),
+        "expected tripled_positive PASS: {stdout}"
+    );
+    // base_positive should appear exactly once (not duplicated from diamond).
+    let base_count = stdout.matches("base_positive").count();
+    assert_eq!(
+        base_count, 1,
+        "expected base_positive exactly once, found {base_count}: {stdout}"
+    );
+}

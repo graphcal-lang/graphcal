@@ -13,11 +13,12 @@ use graphcal_syntax::span::Span;
 
 use crate::dim_check::DeclaredType;
 use crate::error::GraphcalError;
-use crate::registry::Registry;
-use crate::resolve::{DeclCategory, ImportedNames};
+use crate::eval_expr::RuntimeValue;
+use crate::registry::{Registry, RegistryBuilder};
+use crate::resolve::{DeclCategory, ImportedNames, ImportedValueNames};
 
 use super::runtime::evaluate_plan;
-use super::types::{CompileError, EvalResult};
+use super::types::{AssertResult, CompileError, EvalResult};
 
 // ---------------------------------------------------------------------------
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
@@ -248,6 +249,650 @@ pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
         other => other,
     };
 }
+
+// ---------------------------------------------------------------------------
+// Per-file evaluation types and pipeline
+// ---------------------------------------------------------------------------
+
+/// The result of evaluating a single file in the per-file pipeline.
+struct EvaluatedFile {
+    /// Evaluated runtime values (params + nodes): name → `RuntimeValue`.
+    values: HashMap<String, RuntimeValue>,
+    /// Evaluated const values: name → `RuntimeValue`.
+    const_values: HashMap<String, RuntimeValue>,
+    /// Declared types for all consts/params/nodes in this file.
+    declared_types: HashMap<String, DeclaredType>,
+    /// Assertion results from this file.
+    assertions: Vec<(DeclName, AssertResult, Span)>,
+    /// The file's frozen registry (for type-system import by downstream files).
+    registry: Registry,
+    /// Functions declared in this file: (name, decl, span).
+    functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
+    /// Assert names declared in this file.
+    assert_names: HashSet<String>,
+}
+
+/// Evaluate a project using per-file evaluation.
+///
+/// Each file is compiled and evaluated as an independent unit, in topological
+/// order (dependencies first). Import declarations bind pre-evaluated values
+/// from dependency files into the importing file's scope.
+///
+/// All assertions in all files are evaluated and aggregated.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-file evaluation orchestration is a single logical pipeline"
+)]
+fn evaluate_project_perfile(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> Result<EvalResult, CompileError> {
+    // Pre-compute override routing: map each override name to the file that owns
+    // the param. Walk root file's imports to find the owning file for each override.
+    let override_targets = route_overrides_to_files(project, overrides)?;
+
+    let mut evaluated_files: HashMap<PathBuf, EvaluatedFile> = HashMap::new();
+
+    for file_path in &project.load_order {
+        let loaded_file = &project.files[file_path];
+        let file_src = &loaded_file.named_source;
+        let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
+
+        // Build ImportedValueNames and imported_values from this file's import declarations.
+        let mut imported_names = ImportedValueNames::default();
+        let mut imported_values: HashMap<String, (RuntimeValue, DeclaredType)> = HashMap::new();
+        // Track imported value categories for output (source order).
+        let mut imported_source_order: Vec<(String, DeclCategory)> = Vec::new();
+        // Track type-system declarations to import from dependency registries.
+        let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+        // Module imports: module_name → (canonical_path, span).
+        let mut module_map: HashMap<String, (PathBuf, Span)> = HashMap::new();
+        // Track extra RegistryBuilder entries to merge from dependencies.
+        let mut extra_registry_builders: Vec<&Registry> = Vec::new();
+
+        for decl in &loaded_file.ast.declarations {
+            if let DeclKind::Import(import_decl) = &decl.kind {
+                let import_path = file_dir.join(&import_decl.path);
+                let import_canonical = import_path.canonicalize().map_err(|_| {
+                    CompileError::Eval(GraphcalError::ImportFileNotFound {
+                        path: import_decl.path.clone(),
+                        src: file_src.clone(),
+                        span: import_decl.path_span.into(),
+                    })
+                })?;
+
+                let dep = evaluated_files.get(&import_canonical).ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::EvalError {
+                        message: format!(
+                            "internal: dependency {} not yet evaluated",
+                            import_canonical.display()
+                        ),
+                        src: file_src.clone(),
+                        span: import_decl.path_span.into(),
+                    })
+                })?;
+
+                match &import_decl.kind {
+                    graphcal_syntax::ast::ImportKind::Selective(names) => {
+                        for import_item in names {
+                            let orig_name = &import_item.name.name;
+                            let local_name = import_item.local_name().to_string();
+
+                            // Check if it's a value (const/param/node) or type-system decl.
+                            if let Some(rv) = dep.const_values.get(orig_name) {
+                                imported_names
+                                    .const_names
+                                    .push((local_name.clone(), import_item.name.span));
+                                let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
+                                    DeclaredType::Scalar(
+                                        graphcal_syntax::dimension::Dimension::dimensionless(),
+                                    ),
+                                );
+                                imported_source_order
+                                    .push((local_name.clone(), DeclCategory::Const));
+                                imported_values.insert(local_name, (rv.clone(), dt));
+                            } else if let Some(rv) = dep.values.get(orig_name) {
+                                let span = import_item.name.span;
+                                imported_names.param_names.push((local_name.clone(), span));
+                                let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
+                                    DeclaredType::Scalar(
+                                        graphcal_syntax::dimension::Dimension::dimensionless(),
+                                    ),
+                                );
+                                imported_source_order
+                                    .push((local_name.clone(), DeclCategory::Param));
+                                imported_values.insert(local_name, (rv.clone(), dt));
+                            } else if let Some((_, fn_decl, fn_span)) =
+                                dep.functions.iter().find(|(n, _, _)| n == orig_name)
+                            {
+                                imported_names.functions.push((
+                                    local_name,
+                                    fn_decl.clone(),
+                                    *fn_span,
+                                ));
+                            } else if dep.assert_names.contains(orig_name) {
+                                // Assert is already evaluated in the dep file.
+                                // We just need to make the name visible for #[assumes].
+                                imported_names
+                                    .assert_names
+                                    .push((local_name, import_item.name.span));
+                            } else {
+                                // Check if it's a type-system declaration in the dep's file.
+                                let dep_loaded = &project.files[&import_canonical];
+                                let found = find_declaration_in_file(&dep_loaded.ast, orig_name);
+                                if found.is_some() {
+                                    // Type-system declaration (dim/unit/index/type).
+                                    imported_type_system_names
+                                        .entry(import_canonical.clone())
+                                        .or_default()
+                                        .insert(orig_name.clone());
+                                } else {
+                                    return Err(CompileError::Eval(
+                                        GraphcalError::ImportNameNotFound {
+                                            name: orig_name.clone(),
+                                            file_path: import_decl.path.clone(),
+                                            src: file_src.clone(),
+                                            span: import_item.name.span.into(),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    graphcal_syntax::ast::ImportKind::Module { alias } => {
+                        let module_name = if let Some(alias_ident) = alias {
+                            alias_ident.name.clone()
+                        } else {
+                            crate::loader::derive_module_name(&import_decl.path).map_err(
+                                |stem| {
+                                    CompileError::Eval(GraphcalError::InvalidModuleName {
+                                        stem,
+                                        src: file_src.clone(),
+                                        span: import_decl.path_span.into(),
+                                    })
+                                },
+                            )?
+                        };
+                        if let Some((_, first_span)) = module_map.get(&module_name) {
+                            return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+                                name: module_name,
+                                src: file_src.clone(),
+                                span: import_decl.path_span.into(),
+                                first: (*first_span).into(),
+                            }));
+                        }
+                        module_map.insert(
+                            module_name.clone(),
+                            (import_canonical.clone(), import_decl.path_span),
+                        );
+
+                        // Import all values under module::name prefix.
+                        for (name, rv) in &dep.const_values {
+                            let flat = format!("{module_name}::{name}");
+                            imported_names
+                                .const_names
+                                .push((flat.clone(), import_decl.path_span));
+                            let dt = dep.declared_types.get(name).cloned().unwrap_or(
+                                DeclaredType::Scalar(
+                                    graphcal_syntax::dimension::Dimension::dimensionless(),
+                                ),
+                            );
+                            imported_source_order.push((flat.clone(), DeclCategory::Const));
+                            imported_values.insert(flat, (rv.clone(), dt));
+                        }
+                        for (name, rv) in &dep.values {
+                            let flat = format!("{module_name}::{name}");
+                            imported_names
+                                .param_names
+                                .push((flat.clone(), import_decl.path_span));
+                            let dt = dep.declared_types.get(name).cloned().unwrap_or(
+                                DeclaredType::Scalar(
+                                    graphcal_syntax::dimension::Dimension::dimensionless(),
+                                ),
+                            );
+                            imported_source_order.push((flat.clone(), DeclCategory::Param));
+                            imported_values.insert(flat, (rv.clone(), dt));
+                        }
+                        for (name, fn_decl, fn_span) in &dep.functions {
+                            let flat = format!("{module_name}::{name}");
+                            imported_names
+                                .functions
+                                .push((flat, fn_decl.clone(), *fn_span));
+                        }
+                        // Import all type-system declarations from dep's registry.
+                        extra_registry_builders.push(&dep.registry);
+                    }
+                }
+            }
+        }
+
+        // For module imports, resolve qualified references in expressions.
+        let file_ast = if module_map.is_empty() {
+            std::borrow::Cow::Borrowed(&loaded_file.ast)
+        } else {
+            let mut ast = loaded_file.ast.clone();
+            for decl in &mut ast.declarations {
+                match &mut decl.kind {
+                    DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
+                    DeclKind::Param(p) => rewrite_qualified_refs(&mut p.value),
+                    DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
+                    DeclKind::Assert(a) => match &mut a.body {
+                        graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
+                        graphcal_syntax::ast::AssertBody::Tolerance {
+                            actual,
+                            expected,
+                            tolerance,
+                            ..
+                        } => {
+                            rewrite_qualified_refs(actual);
+                            rewrite_qualified_refs(expected);
+                            rewrite_qualified_refs(tolerance);
+                        }
+                    },
+                    DeclKind::Fn(f) => match &mut f.body {
+                        graphcal_syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
+                        graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                            for stmt in stmts {
+                                rewrite_qualified_refs(&mut stmt.value);
+                            }
+                            rewrite_qualified_refs(expr);
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            std::borrow::Cow::Owned(ast)
+        };
+
+        // Lower to IR using per-file evaluation path.
+        // For root files, we need the imported_values later for output enrichment.
+        let is_root = *file_path == project.root;
+        let imported_values_for_output = if is_root {
+            Some(imported_values.clone())
+        } else {
+            None
+        };
+
+        let (mut builder, unfrozen) = crate::ir::lower_to_builder_with_imported_values(
+            &file_ast,
+            file_src,
+            &imported_names,
+            imported_values,
+        )?;
+
+        // Register type-system declarations from selectively imported files.
+        for (dep_path, names) in &imported_type_system_names {
+            let dep_loaded = &project.files[dep_path];
+            crate::ir::register_selected_declarations(
+                &dep_loaded.ast,
+                &mut builder,
+                &dep_loaded.named_source,
+                names,
+            )?;
+        }
+
+        // Merge type-system declarations from module-imported registries.
+        for dep_registry in &extra_registry_builders {
+            merge_registry_into_builder(&mut builder, dep_registry);
+        }
+
+        let ir = unfrozen.freeze(builder.build());
+
+        // Apply overrides routed to this file (using original param names).
+        let mut ir = ir;
+        let file_overrides: HashMap<DeclName, graphcal_syntax::ast::Expr> = override_targets
+            .iter()
+            .filter(|(_, (target_path, _))| target_path == file_path)
+            .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
+            .collect();
+        if !file_overrides.is_empty() {
+            apply_overrides(&mut ir, &file_overrides)?;
+        }
+
+        // Type-resolve, check, build exec plan, evaluate.
+        let tir = crate::tir::type_resolve(ir, file_src)?;
+        crate::fn_check::check_no_recursion_tir(&tir, file_src)?;
+        crate::dim_check::check_dimensions_tir(&tir, file_src)?;
+
+        let declared_types = tir.build_declared_types(file_src)?;
+
+        for (override_name, override_expr) in &file_overrides {
+            crate::dim_check::check_override_dimension(
+                override_expr,
+                override_name.as_str(),
+                &declared_types,
+                &tir.registry,
+                &tir.resolved_fn_sigs,
+                file_src,
+            )?;
+        }
+
+        let plan = crate::exec_plan::compile(&tir, file_src)?;
+        let eval_result = evaluate_plan(&tir, &plan, &declared_types, file_src);
+
+        if is_root {
+            // Aggregate assertions from all dependency files.
+            let mut all_assertions: Vec<(DeclName, AssertResult, Span)> = Vec::new();
+            for dep_path in &project.load_order {
+                if *dep_path == project.root {
+                    continue;
+                }
+                if let Some(dep_eval) = evaluated_files.get(dep_path) {
+                    all_assertions.extend(dep_eval.assertions.iter().cloned());
+                }
+            }
+            all_assertions.extend(eval_result.assertions);
+
+            // Prepend imported values to the output so they appear in the
+            // result just like in the old single-IR approach.
+            let mut all_consts = Vec::new();
+            let mut all_params = Vec::new();
+            let mut all_all = Vec::new();
+
+            let root_imported_values = imported_values_for_output.unwrap_or_default();
+            for (name, cat) in &imported_source_order {
+                if let Some((rv, dt)) = root_imported_values.get(name) {
+                    let value = super::runtime::runtime_to_value(rv, Some(dt), &tir.registry);
+                    let decl_name = DeclName::new(name);
+                    match cat {
+                        DeclCategory::Const => {
+                            all_consts.push((decl_name.clone(), value.clone()));
+                            all_all.push((decl_name, Ok(value), super::types::DeclType::Const));
+                        }
+                        DeclCategory::Param => {
+                            all_params.push((decl_name.clone(), Ok(value.clone())));
+                            all_all.push((decl_name, Ok(value), super::types::DeclType::Param));
+                        }
+                        DeclCategory::Node => {
+                            // Imported nodes appear as params in the output.
+                            all_params.push((decl_name.clone(), Ok(value.clone())));
+                            all_all.push((decl_name, Ok(value), super::types::DeclType::Node));
+                        }
+                        DeclCategory::Assert => {}
+                    }
+                }
+            }
+
+            all_consts.extend(eval_result.consts);
+            all_params.extend(eval_result.params);
+            let all_nodes = eval_result.nodes;
+            all_all.extend(eval_result.all);
+
+            return Ok(EvalResult {
+                consts: all_consts,
+                params: all_params,
+                nodes: all_nodes,
+                all: all_all,
+                assertions: all_assertions,
+                assumes_map: eval_result.assumes_map,
+                base_dim_symbols: eval_result.base_dim_symbols,
+            });
+        }
+
+        // For non-root files, we need RuntimeValues to pass to downstream files.
+        // Re-run the const evaluation and runtime evaluation to get the values map.
+        let file_runtime_values = extract_runtime_values(&tir, &plan, &declared_types, file_src);
+
+        // Store the evaluated file.
+        evaluated_files.insert(
+            file_path.clone(),
+            EvaluatedFile {
+                values: file_runtime_values,
+                const_values: plan.const_values,
+                declared_types,
+                assertions: eval_result.assertions,
+                registry: tir.registry,
+                functions: tir.functions,
+                assert_names: tir.assert_names,
+            },
+        );
+    }
+
+    // Should not reach here — root file should have returned above.
+    Err(CompileError::Eval(GraphcalError::EvalError {
+        message: "internal: root file not found in load_order".to_string(),
+        src: NamedSource::new("internal", Arc::new(String::new())),
+        span: (0, 0).into(),
+    }))
+}
+
+/// Route `--set` / `--input` overrides to the files that own the targeted params.
+///
+/// Returns a map: `override_name` → (`owning_file_path`, `original_param_name`).
+/// The `original_param_name` may differ from `override_name` when an alias is used.
+fn route_overrides_to_files(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+) -> Result<HashMap<DeclName, (PathBuf, DeclName)>, CompileError> {
+    if overrides.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let root_file = &project.files[&project.root];
+    let root_dir = project.root.parent().unwrap_or_else(|| Path::new("."));
+    let root_src = &root_file.named_source;
+
+    let mut result: HashMap<DeclName, (PathBuf, DeclName)> = HashMap::new();
+
+    for override_name in overrides.keys() {
+        let name_str = override_name.as_str();
+
+        // Check if the root file itself declares this param.
+        let found_in_root =
+            root_file.ast.declarations.iter().any(
+                |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == name_str),
+            );
+        if found_in_root {
+            result.insert(
+                override_name.clone(),
+                (project.root.clone(), override_name.clone()),
+            );
+            continue;
+        }
+
+        // Check if the root file imports this param from a dependency.
+        let mut found = false;
+        for decl in &root_file.ast.declarations {
+            if let DeclKind::Import(import_decl) = &decl.kind {
+                if let graphcal_syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                    for item in names {
+                        let local_name = item.local_name().to_string();
+                        if local_name == name_str {
+                            let orig_name = &item.name.name;
+                            let import_path = root_dir.join(&import_decl.path);
+                            let import_canonical = import_path.canonicalize().map_err(|_| {
+                                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                                    path: import_decl.path.clone(),
+                                    src: root_src.clone(),
+                                    span: import_decl.path_span.into(),
+                                })
+                            })?;
+
+                            // Verify it's actually a param in the source file.
+                            let dep_file = &project.files[&import_canonical];
+                            let is_param = dep_file.ast.declarations.iter().any(|d| {
+                                matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
+                            });
+                            if is_param {
+                                result.insert(
+                                    override_name.clone(),
+                                    (import_canonical, DeclName::new(orig_name.clone())),
+                                );
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            // Check if the name matches a non-param declaration (node, const, assert)
+            // in the root file to provide a better error message.
+            for decl in &root_file.ast.declarations {
+                let kind = match &decl.kind {
+                    DeclKind::Node(n) if n.name.value.as_str() == name_str => Some("node"),
+                    DeclKind::Const(c) if c.name.value.as_str() == name_str => Some("const"),
+                    DeclKind::Assert(a) if a.name.value.as_str() == name_str => Some("assert"),
+                    _ => None,
+                };
+                if let Some(actual_kind) = kind {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: actual_kind.to_string(),
+                    }));
+                }
+            }
+            return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
+                name: override_name.clone(),
+            }));
+        }
+    }
+
+    Ok(result)
+}
+
+/// Extract `RuntimeValue`s from a plan evaluation for passing to downstream files.
+fn extract_runtime_values(
+    tir: &crate::tir::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    declared_types: &HashMap<String, DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+) -> HashMap<String, RuntimeValue> {
+    let builtin_consts = crate::builtins::builtin_constants();
+    let builtin_fns = crate::builtins::builtin_functions();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
+
+    // Insert imported values.
+    for (name, val) in &plan.imported_values {
+        values.insert(name.clone(), val.clone());
+    }
+
+    // Insert const values.
+    for (name, val) in &plan.const_values {
+        values.insert(name.clone(), val.clone());
+    }
+
+    // Evaluate in topological order.
+    for name in &plan.topo_order {
+        if values.contains_key(name) {
+            continue;
+        }
+
+        // Check if any dependency has failed — skip if so.
+        let has_failed_dep = tir
+            .runtime_deps
+            .get(name)
+            .is_some_and(|deps| deps.iter().any(|dep| !values.contains_key(dep)));
+
+        if has_failed_dep {
+            continue;
+        }
+
+        let expr = &plan.expressions[name];
+
+        let result = if let graphcal_syntax::ast::ExprKind::Unfold {
+            init,
+            prev_name,
+            curr_name,
+            body,
+        } = &expr.kind
+        {
+            super::runtime::eval_unfold(
+                name,
+                init,
+                prev_name,
+                curr_name,
+                body,
+                &mut values,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                declared_types,
+                src,
+            )
+        } else {
+            crate::eval_expr::eval_expr(
+                expr,
+                &values,
+                &empty_locals,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                src,
+            )
+        };
+
+        if let Ok(val) = result {
+            values.insert(name.clone(), val);
+        }
+    }
+
+    // Return only locally-defined param/node values (not imported, not consts).
+    let local_runtime_names: HashSet<&str> = tir
+        .params
+        .iter()
+        .chain(tir.nodes.iter())
+        .map(|(n, _, _, _)| n.as_str())
+        .collect();
+
+    values
+        .into_iter()
+        .filter(|(name, _)| local_runtime_names.contains(name.as_str()))
+        .collect()
+}
+
+/// Merge type-system declarations from a dependency's frozen Registry into a builder.
+///
+/// This imports dimensions, units, indexes, and struct types so that the
+/// importing file can reference them.
+fn merge_registry_into_builder(builder: &mut RegistryBuilder, dep_registry: &Registry) {
+    // Import base dimension names (for display formatting).
+    for (id, name) in dep_registry.dimensions.base_dim_names() {
+        builder.register_base_dimension(graphcal_syntax::names::DimName::new(name), id.clone());
+    }
+
+    // Import named dimensions (derived dimensions like Velocity = Length/Time).
+    for (name, dim) in dep_registry.dimensions.all_dimensions() {
+        builder.register_dimension(name.clone(), dim.clone());
+    }
+
+    // Import base dimension symbols (for SI unit string display).
+    for (id, symbol) in dep_registry.dimensions.base_dim_symbols() {
+        builder.set_base_dim_symbol(id.clone(), symbol.clone());
+    }
+
+    // Import units.
+    for (name, dim, scale) in dep_registry.units.all_units() {
+        builder.register_unit((*name).clone(), dim.clone(), *scale);
+    }
+
+    // Import indexes.
+    for idx_def in dep_registry.indexes.all_indexes() {
+        builder.register_index(idx_def.clone());
+    }
+
+    // Import struct types.
+    for type_def in dep_registry.types.all_types() {
+        builder.register_type(type_def.clone());
+    }
+
+    // Import functions.
+    for fn_def in dep_registry.functions.all_functions() {
+        builder.register_function(fn_def.clone());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy project-based compilation (AST inlining) — still used for single-file
+// and for compile_to_tir paths that don't need evaluation.
+// ---------------------------------------------------------------------------
 
 /// Resolve imports from `use` declarations and lower a project's root file to IR.
 ///
@@ -586,9 +1231,9 @@ pub fn compile_to_tir_from_project(
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
 ///
-/// Resolves imports, lowers to IR, applies parameter overrides, type-resolves,
-/// checks, builds an execution plan, and evaluates. The project may have been
-/// loaded from disk, in-memory source, or a mix of both.
+/// Uses per-file evaluation: each file is compiled and evaluated independently
+/// in topological order. Import declarations bind pre-evaluated values from
+/// dependency files. All assertions in all files are evaluated and aggregated.
 ///
 /// # Errors
 ///
@@ -601,29 +1246,7 @@ pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
-    let (mut ir, root_src) = lower_project_to_ir(project)?;
-
-    apply_overrides(&mut ir, overrides)?;
-
-    let tir = crate::tir::type_resolve(ir, &root_src)?;
-    crate::fn_check::check_no_recursion_tir(&tir, &root_src)?;
-    crate::dim_check::check_dimensions_tir(&tir, &root_src)?;
-
-    let declared_types = tir.build_declared_types(&root_src)?;
-    for (override_name, override_expr) in overrides {
-        crate::dim_check::check_override_dimension(
-            override_expr,
-            override_name.as_str(),
-            &declared_types,
-            &tir.registry,
-            &tir.resolved_fn_sigs,
-            &root_src,
-        )?;
-    }
-
-    let plan = crate::exec_plan::compile(&tir, &root_src)?;
-    let result = evaluate_plan(&tir, &plan, &declared_types, &root_src);
-    Ok(result)
+    evaluate_project_perfile(project, overrides)
 }
 
 // ---------------------------------------------------------------------------
