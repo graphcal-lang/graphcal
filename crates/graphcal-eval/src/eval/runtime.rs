@@ -461,45 +461,70 @@ pub(super) fn evaluate_plan(
 /// Recursively check an indexed assertion value (possibly multi-dimensional).
 ///
 /// For single-index: `Bool[Mode]` — entries are `Bool` values.
-/// For multi-index: `Bool[Col][Row]` — entries are nested `Indexed` values.
+/// For multi-index: `Bool[Phase, Maneuver]` — entries are nested `Indexed` values.
+///
+/// Single-index failure message example:
+///   `failed at Mode::Boost`
+/// Multi-index failure message example:
+///   `failed at (Phase::Launch, Maneuver::Correction), (Phase::Cruise, Maneuver::Insertion)`
 pub(super) fn check_indexed_assert(
     index_name: &IndexName,
     entries: &IndexMap<VariantName, RuntimeValue>,
 ) -> AssertResult {
-    let mut failing_labels = Vec::new();
+    match collect_failing_paths(index_name, entries) {
+        Ok(paths) if paths.is_empty() => AssertResult::Pass,
+        Ok(paths) => {
+            let is_multi_index = paths.iter().any(|p| p.len() > 1);
+            let formatted: Vec<String> = if is_multi_index {
+                paths
+                    .iter()
+                    .map(|p| format!("({})", p.join(", ")))
+                    .collect()
+            } else {
+                paths.iter().map(|p| p[0].clone()).collect()
+            };
+            AssertResult::Fail {
+                message: format!("failed at {}", formatted.join(", ")),
+            }
+        }
+        Err(msg) => AssertResult::Error { message: msg },
+    }
+}
+
+/// Recursively collect failing variant paths from an indexed assertion value.
+///
+/// Each path is a `Vec<String>` of variant labels from outermost to innermost index.
+/// For example, `vec!["Phase::Launch", "Maneuver::Correction"]` for a 2D failure.
+fn collect_failing_paths(
+    index_name: &IndexName,
+    entries: &IndexMap<VariantName, RuntimeValue>,
+) -> Result<Vec<Vec<String>>, String> {
+    let mut paths = Vec::new();
     for (variant, value) in entries {
+        let label = format!("{index_name}::{variant}");
         match value {
             RuntimeValue::Bool(true) => {}
             RuntimeValue::Bool(false) => {
-                failing_labels.push(format!("{index_name}::{variant}"));
+                paths.push(vec![label]);
             }
             RuntimeValue::Indexed {
                 index_name: inner_index,
                 entries: inner_entries,
             } => {
-                // Recurse into nested dimension
-                match check_indexed_assert(inner_index, inner_entries) {
-                    AssertResult::Pass => {}
-                    AssertResult::Fail { message } => {
-                        failing_labels.push(format!("{index_name}::{variant} > {message}"));
-                    }
-                    err @ AssertResult::Error { .. } => return err,
+                // Recurse into nested dimension, prepending current variant to each path
+                for mut inner_path in collect_failing_paths(inner_index, inner_entries)? {
+                    inner_path.insert(0, label.clone());
+                    paths.push(inner_path);
                 }
             }
             other => {
-                return AssertResult::Error {
-                    message: format!("expected Bool for {index_name}::{variant}, got {other:?}"),
-                };
+                return Err(format!(
+                    "expected Bool for {index_name}::{variant}, got {other:?}"
+                ));
             }
         }
     }
-    if failing_labels.is_empty() {
-        AssertResult::Pass
-    } else {
-        AssertResult::Fail {
-            message: format!("failed at {}", failing_labels.join(", ")),
-        }
-    }
+    Ok(paths)
 }
 
 /// Evaluate a single assert body and return an `AssertResult`.
