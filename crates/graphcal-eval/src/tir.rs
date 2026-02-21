@@ -35,6 +35,8 @@ pub enum ResolvedTypeExpr {
     Bool,
     /// `Int`
     Int,
+    /// A label of a named index (e.g., `Maneuver` in `m: Maneuver`).
+    Label(IndexName, Span),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`
@@ -67,6 +69,7 @@ impl ResolvedTypeExpr {
             Self::Dimensionless => "Dimensionless".to_string(),
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
+            Self::Label(index, _) => format!("Label({index})"),
             Self::Scalar(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
@@ -361,6 +364,7 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
+        ResolvedTypeExpr::Label(index, _) => Ok(DeclaredType::Label(index.clone())),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
         ResolvedTypeExpr::GenericStruct {
@@ -510,6 +514,27 @@ pub fn unify_resolved_type(
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Int argument".to_string(),
+                });
+            }
+            Ok(())
+        }
+
+        ResolvedTypeExpr::Label(expected_index, _) => {
+            let InferredType::Label(actual_index) = actual else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format!("Label({expected_index})"),
+                    found: format_inferred(actual, registry),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: format!("expected a label of index `{expected_index}`"),
+                });
+            };
+            if *expected_index != *actual_index {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: expected_index.clone(),
+                    found: actual_index.clone(),
+                    src: src.clone(),
+                    span: span.into(),
                 });
             }
             Ok(())
@@ -695,6 +720,7 @@ pub fn substitute_resolved_type(
         ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
+        ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(index.clone())),
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone(), vec![])),
         ResolvedTypeExpr::GenericStruct {
@@ -801,6 +827,7 @@ fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> 
         InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
+        InferredType::Label(index) => format!("Label({index})"),
         InferredType::Struct(name, args) => {
             if args.is_empty() {
                 name.to_string()
@@ -874,6 +901,13 @@ pub fn resolve_type_expr(
             if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
                 let name = &dim_expr.terms[0].term.name.name;
                 let span = dim_expr.terms[0].term.span;
+
+                // Check named index → Label type
+                if let Some(idx_def) = registry.indexes.get_index(name)
+                    && matches!(idx_def.kind, crate::registry::IndexKind::Named { .. })
+                {
+                    return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
+                }
 
                 // Check type (struct sugar or tagged union) first
                 if registry.types.get_type(name).is_some() {

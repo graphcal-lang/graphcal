@@ -25,6 +25,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
     match (declared, inferred) {
         (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
         (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
+        (DeclaredType::Label(d), InferredType::Label(i)) => d == i,
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
             d == i
                 && d_args.len() == i_args.len()
@@ -53,6 +54,7 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
         DeclaredType::Scalar(d) => registry.dimensions.format_dimension(d),
         DeclaredType::Bool => "Bool".to_string(),
         DeclaredType::Int => "Int".to_string(),
+        DeclaredType::Label(index) => format!("Label({index})"),
         DeclaredType::Struct(name, args) => {
             if args.is_empty() {
                 name.to_string()
@@ -76,6 +78,7 @@ pub(super) fn format_inferred_type(it: &InferredType, registry: &Registry) -> St
         InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
         InferredType::Bool => "Bool".to_string(),
         InferredType::Int => "Int".to_string(),
+        InferredType::Label(index) => format!("Label({index})"),
         InferredType::Struct(name, args) => {
             if args.is_empty() {
                 name.to_string()
@@ -99,6 +102,7 @@ pub(super) fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
         DeclaredType::Scalar(d) => InferredType::Scalar(d.clone()),
         DeclaredType::Bool => InferredType::Bool,
         DeclaredType::Int => InferredType::Int,
+        DeclaredType::Label(index) => InferredType::Label(index.clone()),
         DeclaredType::Struct(n, args) => {
             InferredType::Struct(n.clone(), args.iter().map(declared_to_inferred).collect())
         }

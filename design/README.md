@@ -35,6 +35,7 @@ Each aspect of the language design is documented in a separate file for independ
 | # | Aspect | Status | Description |
 | --- | --- | --- | --- |
 | [20](./20-type-system-stratification.md) | **Type System Stratification** | Proposal | Three-level model: Primitive → ValueType → DeclType. Unifies docs 03-07. |
+| [21](./21-separate-label-indexes-from-tagged-unions.md) | **Separate Label Indexes from Tagged Unions** | Draft | Revert index/tagged-union unification. Dedicated `Label(IndexName)` type kind. |
 | [03](./03-primitives.md) | Primitives (Level 1) | Mostly settled | `f64`, `i64`, `bool`, `Str`, `Datetime`, `Option<T>` |
 | [04](./04-dimensions-and-units.md) | Dimensions & Units | Mostly settled | Dimensions as types, units as values (Numbat-inspired) |
 | [05](./05-algebraic-data-types.md) | Algebraic Data Types (Level 2) | Mostly settled | Unified `type` for structs and tagged unions (Gleam-style) |

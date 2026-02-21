@@ -29,6 +29,8 @@ pub enum DeclaredType {
     Scalar(Dimension),
     Bool,
     Int,
+    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
+    Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),
     Indexed {
@@ -43,6 +45,8 @@ pub enum InferredType {
     Scalar(Dimension),
     Bool,
     Int,
+    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
+    Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),
     Indexed {

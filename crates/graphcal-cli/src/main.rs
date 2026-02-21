@@ -327,7 +327,7 @@ fn print_text(result: &EvalResult, no_assert: bool) {
     // indexed values expand to `name[Variant]` lines
     fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<DisplayEntry<'a>>) {
         match value {
-            Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) => {
+            Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) | Value::Label { .. } => {
                 entries.push(DisplayEntry::Value(prefix.to_string(), value));
             }
             Value::Struct {
@@ -397,6 +397,12 @@ fn print_text(result: &EvalResult, no_assert: bool) {
             DisplayEntry::Value(name, value) => match value {
                 Value::Bool(b) => println!("{name:width$} = {b}"),
                 Value::Int(i) => println!("{name:width$} = {i}"),
+                Value::Label {
+                    index_name,
+                    variant,
+                } => {
+                    println!("{name:width$} = {index_name}::{variant}");
+                }
                 Value::Struct { variant, .. } => {
                     // Bare variant (no fields) — display the variant name
                     println!("{name:width$} = {}", variant.as_str());
@@ -489,6 +495,15 @@ fn print_json(result: &EvalResult, no_assert: bool) {
             }
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(i) => serde_json::Value::Number((*i).into()),
+            Value::Label {
+                index_name,
+                variant,
+            } => {
+                serde_json::json!({
+                    "index": index_name.as_str(),
+                    "variant": variant.as_str()
+                })
+            }
             Value::Struct {
                 type_name,
                 variant,

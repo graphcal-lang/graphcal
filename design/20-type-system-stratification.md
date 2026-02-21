@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Accepted. Supersedes the ad-hoc layering in docs 03-07 with a single coherent model. All open questions resolved.
+**Decision level:** Accepted. Supersedes the ad-hoc layering in docs 03-07 with a single coherent model. All open questions resolved. **Partially amended by [doc 21](./21-separate-label-indexes-from-tagged-unions.md):** named index labels are no longer modeled as fieldless tagged union variants; they have a dedicated `Label(IndexName)` type kind.
 
 ## Motivation
 
@@ -26,6 +26,9 @@ Level 2: ValueType   = Primitive
                      | TaggedUnion(name, variants: [Variant(fields: [ValueType])])
 Level 3: DeclType    = ValueType
                      | Indexed(ValueType, [Index])   -- written T[I] or T[I, J, ...]
+
+Expression-level:
+  Label(IndexName)   -- see doc 21; not a ValueType or DeclType
 ```
 
 ### Level 1: Primitive
@@ -112,27 +115,29 @@ This also explains why arithmetic on indexed values requires explicit `for`: you
 
 An index declares a finite, ordered set of labels usable as collection axes in `T[I]`. Two flavors exist.
 
-### Named Index — A Fieldless Tagged Union
+### Named Index
 
 ```gcl
 index Maneuver = { Departure, Correction, Insertion }
 ```
 
-A named index is a **fieldless tagged union** that is additionally registered as a collection axis. The `index` keyword declares two things at once:
+A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
 
-1. A **ValueType**: `Maneuver` is a tagged union whose variants (`Departure`, `Correction`, `Insertion`) carry no fields. `Maneuver::Departure` has type `Maneuver`.
+1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind distinct from tagged unions, existing only within expressions (not in declaration annotations). See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
 2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
 
-Because named index labels are proper ValueType values, they follow all ValueType rules uniformly — no special cases:
+Named index labels are referred to with qualified syntax (`Maneuver::Departure`), distinguishing them from tagged union variants which use bare syntax (`Nominal`). This syntactic difference reflects a genuine semantic difference: labels identify positions within a collection axis, while tagged union variants are constructors of a sum type.
+
+Named index labels are proper runtime values within expressions:
 
 - **Pass to functions:** `fn f(m: Maneuver) -> Velocity` works.
 - **Return from functions:** `fn pick() -> Maneuver` works.
-- **Store in variables:** `let x = Maneuver::Departure` works.
+- **Store in local variables:** `let x = Maneuver::Departure` works.
 - **Compare:** `m == Maneuver::Departure` works.
-- **Pattern match:** `match m { Maneuver::Departure => ..., _ => ... }` works.
+- **Pattern match:** `match m { Maneuver::Departure => ..., ... }` works.
 - **Use in struct fields:** `type Config { phase: Phase, maneuver: Maneuver }` works.
 
-This eliminates the need for a separate "where can labels appear" rule. Named index labels are values. Period.
+However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
 
 **Why not just use `type`?** A regular fieldless tagged union (`type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`. This prevents accidentally using marker types (like `type ECI {}`) as collection axes. If you just need a fieldless enum without collection semantics, use `type`.
 
@@ -152,21 +157,21 @@ Both flavors support the same type constructor `T[I]` and the same operations (`
 
 | Capability | Named index (`Maneuver`) | Range index (`TimeStep`) |
 | --- | --- | --- |
-| Loop variable type | `Maneuver` (ValueType) | `Scalar(Dim)` (Primitive) |
+| Loop variable type | `Label(Maneuver)` (ValueType) | `Scalar(Dim)` (Primitive) |
 | Indexing: `@x[m]` | Yes | Yes |
 | Map literal key | Yes | No (range labels are implicit) |
-| Equality comparison | Yes (as ValueType) | Yes (as Scalar) |
-| Pattern matching | Yes (as tagged union) | No (not a tagged union) |
+| Equality comparison | Yes (as Label) | Yes (as Scalar) |
+| Pattern matching | Yes (qualified: `Maneuver::X => ...`) | No |
 | Arithmetic | No (not a scalar) | Yes |
 | Pass to function | Yes | Yes (as scalar) |
 | Store in variable | Yes | Yes (as scalar) |
 
-Note that both loop variable types are ValueTypes — named index labels are tagged union values, range index labels are scalar values. There are no second-class citizens.
+Note that both loop variable types are runtime values — named index labels are `Label` values (expression-level), range index labels are scalar values (Primitive). There are no second-class citizens.
 
 ### Examples
 
 ```gcl
-// Per-label logic with match (named index labels are tagged union values)
+// Per-label logic with match (named index labels are Label values)
 node delta_v_budget: Velocity[Phase, Maneuver] = for p: Phase, m: Maneuver {
     match (p, m) {
         (Phase::Launch, Maneuver::Departure) => 2.46 km/s,
@@ -324,7 +329,7 @@ fn normalize<I: Index>(v: Dimensionless[I]) -> Dimensionless[I] = for i: I {
 - **Functions:** No higher-order functions. No `fn apply(f: (A) -> B, x: A) -> B`.
 - **Dimensions/units as values:** Dimensions appear as generic params (`<D: Dim>`), not as runtime values.
 
-Note: Named index labels ARE passable to functions because they are ValueTypes (fieldless tagged union values). `fn f(m: Maneuver) -> Velocity` is valid.
+Note: Named index labels ARE passable to functions as `Label` values. `fn f(m: Maneuver) -> Velocity` is valid.
 
 ### Scan and other special forms
 
@@ -341,7 +346,7 @@ If higher-order functions are ever added (deferred per design doc 12), they woul
 | Bool value | ValueType | Yes | Yes | Yes | Yes |
 | Struct instance | ValueType | Yes | Yes | Yes | Yes |
 | Tagged union variant | ValueType | Yes | Yes | Yes | Yes |
-| Named index label | ValueType | Yes | Yes | Yes | Yes |
+| Named index label | Label(IndexName) (expression-level) | Yes | Yes | Yes | Yes |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
 | Range index label | Scalar(Dim) | Yes | Yes (as scalar) | Yes (as scalar) | Indexing, arithmetic |
 | Function | No | No | No | No | Calling only |
@@ -349,7 +354,7 @@ If higher-order functions are ever added (deferred per design doc 12), they woul
 | Unit | No (compile-time) | No | No | No | In literals only |
 | Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
 
-Note: Named index labels and tagged union variants share the same row conceptually — a named index IS a fieldless tagged union. They are listed separately only to highlight that index labels are full ValueType citizens.
+Note: Named index labels have a dedicated `Label(IndexName)` type kind, distinct from tagged union variants (see [doc 21](./21-separate-label-indexes-from-tagged-unions.md)). Labels use qualified syntax (`Maneuver::Departure`) while tagged union variants use bare syntax (`Nominal`).
 
 ## Implications for Existing Design Documents
 
@@ -357,23 +362,23 @@ This document unifies concepts spread across multiple existing docs:
 
 - **03-primitives.md**: Level 1 of this stratification.
 - **04-dimensions-and-units.md**: Compile-time metadata on `Scalar` types. Unchanged.
-- **05-algebraic-data-types.md**: Level 2. Struct fields must be ValueTypes. Named indexes are fieldless tagged unions within this framework.
+- **05-algebraic-data-types.md**: Level 2. Struct fields must be ValueTypes. Tagged unions are separate from index labels.
 - **06-spaces.md**: Orthogonal — spaces are phantom type parameters on structs. Unchanged.
-- **07-indexes.md**: Named indexes are now defined as fieldless tagged unions + axis marker. The separate "index labels vs tagged union variants" distinction is collapsed — they are the same thing.
+- **07-indexes.md**: Named indexes have a dedicated `Label(IndexName)` type kind, separate from tagged unions. See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
 - **10-tables-and-autofill.md**: Superseded. The `table` keyword is replaced by co-indexed declarations. `T[I]` is the table type.
 - **12-pure-functions.md**: Clarifies that functions are declarations, not types. `scan` lambda is special syntax. Functions CAN accept named index labels since they are ValueTypes.
 
 ### Implications for Implementation
 
-- **`LoopVar` hack eliminated:** In the current codebase, `InferredType::LoopVar(IndexName)` is a special type for `for` loop variables marked "not a real value type." With named index labels as ValueTypes, the loop variable `m: Maneuver` has inferred type `Struct(Maneuver, [])` (a fieldless tagged union) — a normal ValueType. No special case needed.
-- **`VariantLabel` runtime value unified:** The current `RuntimeValue::VariantLabel { variant }` can be represented as a `RuntimeValue::Struct { type_name, variant, fields: {} }` — a struct with no fields. Or a dedicated `Tag` variant if performance matters.
-- **Index registry shares with type registry:** An `index Maneuver = { ... }` declaration creates entries in BOTH the index registry (for `T[I]` semantics) and the type registry (for ValueType semantics).
+- **`LoopVar` hack eliminated:** In the current codebase, `InferredType::LoopVar(IndexName)` is a special type for `for` loop variables marked "not a real value type." With named index labels as ValueTypes, the loop variable `m: Maneuver` has inferred type `Label(Maneuver)` — a normal ValueType. No special case needed.
+- **Dedicated `Label` runtime value:** `RuntimeValue::Label { index_name, variant }` is a distinct runtime representation for index labels, separate from `RuntimeValue::Struct`. Labels carry no fields.
+- **Separate registries:** An `index Maneuver = { ... }` declaration creates an entry in the index registry only. It does NOT register a `TypeDef` in the type registry. Type resolution checks the index registry first and resolves index names to `Label(IndexName)`. See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
 
 ## Resolved Questions
 
 - **Option type:** `Option<T>` is just a tagged union — a normal ValueType. Nothing special about it. `Option<Velocity>` is a ValueType. `Option<Velocity>[Maneuver]` is a DeclType. No special-casing needed.
-- **Exhaustiveness in `match`:** Yes, require exhaustive cases. Since named indexes ARE tagged unions, the same exhaustiveness rules apply uniformly.
-- **Cross-index label equality:** Type error. `m == p` where `m: Maneuver` and `p: Phase` is a compile-time error. They are different tagged union types.
+- **Exhaustiveness in `match`:** Yes, require exhaustive cases. Both tagged union matches and label matches require all variants/labels to be covered.
+- **Cross-index label equality:** Type error. `m == p` where `m: Maneuver` and `p: Phase` is a compile-time error. They are different `Label` types.
 - **Axis order significance:** `T[I, J]` and `T[J, I]` are different types. Axis order determines `for` binding order, `scan` direction, and display order. No transpose operation — use explicit `for` to construct the transposed value.
 - **`type` vs `index` for fieldless tagged unions:** Require explicit `index` declaration. A regular `type Foo { A, B }` is NOT usable as a collection axis. The `index` keyword communicates intent and prevents accidental use of marker types as axes.
 - **Can `index` types also carry fields?** No. Indexes are fieldless. If you need data-carrying variants as an axis, compose: use an `index` for the axis and a separate `type` for the per-variant data. Too complex for too little value.
