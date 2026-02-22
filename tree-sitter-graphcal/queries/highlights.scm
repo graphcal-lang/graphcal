@@ -105,8 +105,22 @@
 
 ; import "./path.gcl" { name1, name2 as alias2 }
 (import_declaration path: (string_literal) @string)
-(import_item name: (identifier) @variable)
-(import_item alias: (identifier) @variable)
+
+; Casing heuristics for import items:
+; ALL_CAPS → constant, PascalCase → type, else → variable
+(import_item name: (identifier) @constant
+  (#match? @constant "^[A-Z][A-Z0-9_]*$"))
+(import_item name: (identifier) @type
+  (#match? @type "^[A-Z][a-z]"))
+(import_item name: (identifier) @variable
+  (#match? @variable "^[a-z]"))
+
+(import_item alias: (identifier) @constant
+  (#match? @constant "^[A-Z][A-Z0-9_]*$"))
+(import_item alias: (identifier) @type
+  (#match? @type "^[A-Z][a-z]"))
+(import_item alias: (identifier) @variable
+  (#match? @variable "^[a-z]"))
 
 ; ---------------------------------------------------------------
 ; Types in annotations
