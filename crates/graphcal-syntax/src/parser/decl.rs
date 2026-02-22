@@ -610,3 +610,762 @@ impl Parser<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{
+        DeclKind, ExprKind, GenericConstraint, IndexDeclKind, MulDivOp, TypeExprKind,
+    };
+
+    fn dim_expr_name(te: &crate::ast::TypeExpr) -> &str {
+        match &te.kind {
+            TypeExprKind::DimExpr(dim) => {
+                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
+                dim.terms[0].term.name.name.as_str()
+            }
+            other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_param_with_type() {
+        let file = Parser::new("param x: Dimensionless = 42.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.name.value.as_str(), "x");
+                assert!(matches!(p.type_ann.kind, TypeExprKind::Dimensionless));
+                assert!(
+                    matches!(p.value.kind, ExprKind::Number(n) if (n - 42.0).abs() < f64::EPSILON)
+                );
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_param_with_dim_type() {
+        let file = Parser::new("param alt: Length = 400.0 km;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.name.value.as_str(), "alt");
+                match &p.type_ann.kind {
+                    TypeExprKind::DimExpr(d) => {
+                        assert_eq!(d.terms.len(), 1);
+                        assert_eq!(d.terms[0].term.name.name, "Length");
+                    }
+                    other => panic!("expected DimExpr, got {other:?}"),
+                }
+                assert!(matches!(p.value.kind, ExprKind::UnitLiteral { .. }));
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_node_with_compound_dim_type() {
+        let file = Parser::new("node gm: Length^3 / Time^2 = 3.98e14 m^3/s^2;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => {
+                assert_eq!(n.name.value.as_str(), "gm");
+                match &n.type_ann.kind {
+                    TypeExprKind::DimExpr(d) => {
+                        assert_eq!(d.terms.len(), 2);
+                        assert_eq!(d.terms[0].term.name.name, "Length");
+                        assert_eq!(d.terms[0].term.power, Some(3));
+                        assert_eq!(d.terms[1].op, MulDivOp::Div);
+                        assert_eq!(d.terms[1].term.name.name, "Time");
+                        assert_eq!(d.terms[1].term.power, Some(2));
+                    }
+                    other => panic!("expected DimExpr, got {other:?}"),
+                }
+            }
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_const_with_type() {
+        let file = Parser::new("const G0: Dimensionless = 9.80665;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Const(c) => {
+                assert_eq!(c.name.value.as_str(), "G0");
+                assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
+            }
+            _ => panic!("expected const"),
+        }
+    }
+
+    #[test]
+    fn parse_base_dimension() {
+        let file = Parser::new("dimension Length;").parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Dimension(d) => {
+                assert_eq!(d.name.value.as_str(), "Length");
+                assert!(d.definition.is_none());
+            }
+            _ => panic!("expected dimension"),
+        }
+    }
+
+    #[test]
+    fn parse_derived_dimension() {
+        let file = Parser::new("dimension Velocity = Length / Time;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Dimension(d) => {
+                assert_eq!(d.name.value.as_str(), "Velocity");
+                let def = d.definition.as_ref().unwrap();
+                assert_eq!(def.terms.len(), 2);
+                assert_eq!(def.terms[0].term.name.name, "Length");
+                assert_eq!(def.terms[1].op, MulDivOp::Div);
+                assert_eq!(def.terms[1].term.name.name, "Time");
+            }
+            _ => panic!("expected dimension"),
+        }
+    }
+
+    #[test]
+    fn parse_base_unit() {
+        let file = Parser::new("unit m: Length;").parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Unit(u) => {
+                assert_eq!(u.name.value.as_str(), "m");
+                assert_eq!(u.dim_type.terms[0].term.name.name, "Length");
+                assert!(u.definition.is_none());
+            }
+            _ => panic!("expected unit"),
+        }
+    }
+
+    #[test]
+    fn parse_derived_unit() {
+        let file = Parser::new("unit km: Length = 1000.0 m;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Unit(u) => {
+                assert_eq!(u.name.value.as_str(), "km");
+                let def = u.definition.as_ref().unwrap();
+                assert!((def.scale - 1000.0).abs() < f64::EPSILON);
+                assert_eq!(def.unit_expr.terms.len(), 1);
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "m");
+            }
+            _ => panic!("expected unit"),
+        }
+    }
+
+    #[test]
+    fn parse_compound_unit_decl() {
+        let file = Parser::new("unit N: Force = 1.0 kg * m / s^2;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Unit(u) => {
+                assert_eq!(u.name.value.as_str(), "N");
+                let def = u.definition.as_ref().unwrap();
+                assert!((def.scale - 1.0).abs() < f64::EPSILON);
+                assert_eq!(def.unit_expr.terms.len(), 3);
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "kg");
+                assert_eq!(def.unit_expr.terms[1].op, MulDivOp::Mul);
+                assert_eq!(def.unit_expr.terms[1].name.value.as_str(), "m");
+                assert_eq!(def.unit_expr.terms[2].op, MulDivOp::Div);
+                assert_eq!(def.unit_expr.terms[2].name.value.as_str(), "s");
+                assert_eq!(def.unit_expr.terms[2].power, Some(2));
+            }
+            _ => panic!("expected unit"),
+        }
+    }
+
+    #[test]
+    fn parse_unit_decl_with_paren_expr() {
+        let file = Parser::new("unit deg: Angle = (PI / 180) rad;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Unit(u) => {
+                assert_eq!(u.name.value.as_str(), "deg");
+                let def = u.definition.as_ref().unwrap();
+                assert!(
+                    (def.scale - std::f64::consts::PI / 180.0).abs() < 1e-10,
+                    "scale = {}",
+                    def.scale
+                );
+                assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "rad");
+            }
+            _ => panic!("expected unit"),
+        }
+    }
+
+    #[test]
+    fn parse_error_missing_semicolon() {
+        let result = Parser::new("param x: Dimensionless = 1.0").parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_error_unexpected_token() {
+        let result = Parser::new("+ 1.0;").parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_with_comments() {
+        let input = "// this is a comment\nparam x: Dimensionless = 1.0;\n// another comment";
+        let file = Parser::new(input).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+    }
+
+    #[test]
+    fn parse_error_bad_param_casing() {
+        let result = Parser::new("param BadName: Dimensionless = 1.0;").parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_error_bad_const_casing() {
+        let result = Parser::new("const bad_name: Dimensionless = 42.0;").parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_orbital_milestone_syntax() {
+        let source = r"
+dimension Velocity = Length / Time;
+
+param alt: Length = 400.0 km;
+param period: Time = 90.0 min;
+const R_EARTH: Length = 6371.0 km;
+
+node circumference: Length = 2.0 * PI * (R_EARTH + @alt);
+node speed: Velocity = @circumference / @period;
+node speed_kmh: Velocity = @speed -> km/hour;
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 7);
+
+        let names: Vec<&str> = file
+            .declarations
+            .iter()
+            .map(|d| match &d.kind {
+                DeclKind::Param(p) => p.name.value.as_str(),
+                DeclKind::Node(n) => n.name.value.as_str(),
+                DeclKind::Const(c) => c.name.value.as_str(),
+                DeclKind::Dimension(d) => d.name.value.as_str(),
+                DeclKind::Unit(u) => u.name.value.as_str(),
+                DeclKind::Type(t) => t.name.value.as_str(),
+                DeclKind::Fn(f) => f.name.value.as_str(),
+                DeclKind::Index(i) => i.name.value.as_str(),
+                DeclKind::Import(_) => "<import>",
+                DeclKind::Assert(a) => a.name.value.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "Velocity",
+                "alt",
+                "period",
+                "R_EARTH",
+                "circumference",
+                "speed",
+                "speed_kmh"
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_type_decl_single_field() {
+        let source = "type Orbit { sma: Length }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Orbit");
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].name.value.as_str(), "Orbit");
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "sma");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_multiple_fields() {
+        let source = "type TransferResult { dv1: Velocity, dv2: Velocity }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "TransferResult");
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 2);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv1");
+                assert_eq!(t.variants[0].fields[1].name.value.as_str(), "dv2");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_trailing_comma() {
+        let source = "type TransferResult { dv1: Velocity, dv2: Velocity, }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 2);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_empty_type() {
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Eci");
+                assert_eq!(t.variants.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_uppercase_name_error() {
+        let source = "type ORBIT { sma: Length }";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_type_decl_lowercase_name_error() {
+        let source = "type orbit { sma: Length }";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_type_decl_with_dim_expr_field() {
+        let source = "type TransferResult { dv: Length / Time }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv");
+                match &t.variants[0].fields[0].type_ann.kind {
+                    TypeExprKind::DimExpr(_) => {}
+                    other => {
+                        panic!("expected DimExpr, got {other:?}")
+                    }
+                }
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_mixed_with_other_decls() {
+        let source = r"
+dimension Velocity = Length / Time;
+type TransferResult { dv1: Velocity, dv2: Velocity }
+param alt: Length = 400.0 km;
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 3);
+        assert!(matches!(&file.declarations[0].kind, DeclKind::Dimension(_)));
+        assert!(matches!(&file.declarations[1].kind, DeclKind::Type(_)));
+        assert!(matches!(&file.declarations[2].kind, DeclKind::Param(_)));
+    }
+
+    #[test]
+    fn parse_type_decl_generic_params() {
+        let source = "type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 3);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_generics_empty() {
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Eci");
+                assert!(t.generic_params.is_empty());
+                assert_eq!(t.variants.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_single_type_param() {
+        let source = "type Timestamp<TZ: Type> { epoch_seconds: Time }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Timestamp");
+                assert_eq!(t.generic_params.len(), 1);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
+                assert_eq!(t.variants.len(), 1);
+                assert_eq!(t.variants[0].fields.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_tagged_union() {
+        let source = "type Result<D: Dim, E: Type> { Ok { value: D } Err }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Result");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.variants.len(), 2);
+                assert_eq!(t.variants[0].name.value.as_str(), "Ok");
+                assert_eq!(t.variants[0].fields.len(), 1);
+                assert_eq!(t.variants[1].name.value.as_str(), "Err");
+                assert_eq!(t.variants[1].fields.len(), 0);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_default_type_param() {
+        let source = "type Vec3<D: Dim, F: Type = Unframed> { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
+                assert!(t.generic_params[0].default.is_none());
+                assert_eq!(t.generic_params[1].name.value.as_str(), "F");
+                assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
+                let default = t.generic_params[1].default.as_ref().unwrap();
+                assert_eq!(dim_expr_name(default), "Unframed");
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_generic_no_default() {
+        let source = "type Pair<A: Dim, B: Dim> { a: A, b: B }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.generic_params.len(), 2);
+                assert!(t.generic_params[0].default.is_none());
+                assert!(t.generic_params[1].default.is_none());
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_derive_clause() {
+        let source = "type Vec3<D: Dim, F: Type> derive(Add, Sub, Neg) { x: D, y: D, z: D }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert_eq!(t.name.value.as_str(), "Vec3");
+                assert_eq!(t.generic_params.len(), 2);
+                assert_eq!(t.derives.len(), 3);
+                assert_eq!(t.derives[0].value, crate::ast::DeriveOp::Add);
+                assert_eq!(t.derives[1].value, crate::ast::DeriveOp::Sub);
+                assert_eq!(t.derives[2].value, crate::ast::DeriveOp::Neg);
+                assert_eq!(t.variants.len(), 1);
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_type_decl_no_derive() {
+        let source = "type Eci {}";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Type(t) => {
+                assert!(t.derives.is_empty());
+            }
+            _ => panic!("expected type declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_index_decl() {
+        let source = "index Maneuver = { Departure, Correction, Insertion }";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.value.as_str(), "Maneuver");
+                match &idx.kind {
+                    IndexDeclKind::Named { variants } => {
+                        assert_eq!(variants.len(), 3);
+                        assert_eq!(variants[0].value.as_str(), "Departure");
+                        assert_eq!(variants[1].value.as_str(), "Correction");
+                        assert_eq!(variants[2].value.as_str(), "Insertion");
+                    }
+                    IndexDeclKind::Range { .. } => panic!("expected named index"),
+                }
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_index_decl_trailing_comma() {
+        let source = "index Phase = { Boost, Coast, }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.value.as_str(), "Phase");
+                match &idx.kind {
+                    IndexDeclKind::Named { variants } => {
+                        assert_eq!(variants.len(), 2);
+                    }
+                    IndexDeclKind::Range { .. } => panic!("expected named index"),
+                }
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_range_index_decl() {
+        let source = "index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Index(idx) => {
+                assert_eq!(idx.name.value.as_str(), "TimeStep");
+                assert!(matches!(idx.kind, IndexDeclKind::Range { .. }));
+            }
+            _ => panic!("expected index declaration"),
+        }
+    }
+
+    #[test]
+    fn parse_import_no_alias() {
+        let file = Parser::new(r#"import "./helper.gcl" { x, Y };"#)
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./helper.gcl");
+        let crate::ast::ImportKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].name.name, "x");
+        assert!(names[0].alias.is_none());
+        assert_eq!(names[0].local_name(), "x");
+        assert_eq!(names[1].name.name, "Y");
+        assert!(names[1].alias.is_none());
+        assert_eq!(names[1].local_name(), "Y");
+    }
+
+    #[test]
+    fn parse_import_with_alias() {
+        let file = Parser::new(r#"import "./helper.gcl" { x as y };"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        let crate::ast::ImportKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name.name, "x");
+        assert_eq!(names[0].alias.as_ref().unwrap().name, "y");
+        assert_eq!(names[0].local_name(), "y");
+    }
+
+    #[test]
+    fn parse_import_mixed_alias() {
+        let file = Parser::new(r#"import "./f.gcl" { x, Y as Z, w };"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        let crate::ast::ImportKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0].name.name, "x");
+        assert!(names[0].alias.is_none());
+        assert_eq!(names[1].name.name, "Y");
+        assert_eq!(names[1].alias.as_ref().unwrap().name, "Z");
+        assert_eq!(names[1].local_name(), "Z");
+        assert_eq!(names[2].name.name, "w");
+        assert!(names[2].alias.is_none());
+    }
+
+    #[test]
+    fn parse_import_alias_missing_name_error() {
+        let result = Parser::new(r#"import "./f.gcl" { x as };"#).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_import_module_bare() {
+        let file = Parser::new(r#"import "./constants.gcl";"#)
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./constants.gcl");
+        let crate::ast::ImportKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert!(alias.is_none());
+    }
+
+    #[test]
+    fn parse_import_module_with_alias() {
+        let file = Parser::new(r#"import "./constants.gcl" as consts;"#)
+            .parse_file()
+            .unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Use");
+        };
+        assert_eq!(u.path, "./constants.gcl");
+        let crate::ast::ImportKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert_eq!(alias.as_ref().unwrap().name, "consts");
+    }
+
+    #[test]
+    fn parse_import_module_missing_alias_ident_error() {
+        let result = Parser::new(r#"import "./f.gcl" as;"#).parse_file();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_attribute_no_args() {
+        let file = Parser::new("#[lazy]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
+        assert!(file.declarations[0].attributes[0].args.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_with_one_arg() {
+        let file = Parser::new("#[assumes(pressure_safe)]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.name.name, "assumes");
+        assert_eq!(attr.args.len(), 1);
+        assert_eq!(attr.args[0].name, "pressure_safe");
+    }
+
+    #[test]
+    fn parse_attribute_with_multiple_args() {
+        let file =
+            Parser::new("#[assumes(pressure_safe, temp_bounded)]\nnode x: Dimensionless = 1.0;")
+                .parse_file()
+                .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.name.name, "assumes");
+        assert_eq!(attr.args.len(), 2);
+        assert_eq!(attr.args[0].name, "pressure_safe");
+        assert_eq!(attr.args[1].name, "temp_bounded");
+    }
+
+    #[test]
+    fn parse_attribute_trailing_comma() {
+        let file = Parser::new("#[assumes(pressure_safe,)]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_attributes() {
+        let file = Parser::new("#[lazy]\n#[assumes(x)]\nnode y: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 2);
+        assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
+        assert_eq!(file.declarations[0].attributes[1].name.name, "assumes");
+    }
+
+    #[test]
+    fn parse_attribute_on_param() {
+        let file = Parser::new("#[assumes(x)]\nparam y: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        assert!(matches!(file.declarations[0].kind, DeclKind::Param(_)));
+    }
+
+    #[test]
+    fn parse_no_attributes_still_works() {
+        let file = Parser::new("param x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert!(file.declarations[0].attributes.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_span_covers_hash_to_bracket() {
+        let file = Parser::new("#[lazy]\nnode x: Dimensionless = 1.0;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].span.offset(), 0);
+    }
+}

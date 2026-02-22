@@ -289,3 +289,149 @@ impl Parser<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{DeclKind, ExprKind};
+
+    #[test]
+    fn parse_map_literal() {
+        let source = "param dv: Velocity[Maneuver] = { Maneuver::Departure: 2.0 km/s, Maneuver::Correction: 0.05 km/s };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::MapLiteral { entries } => {
+                    assert_eq!(entries.len(), 2);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
+                }
+                other => panic!("expected MapLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_1d() {
+        let source = r"param v: Velocity[Maneuver] = table[Maneuver] {
+        Departure: 2.46 km/s;
+        Correction: 0.12 km/s;
+        Insertion: 1.83 km/s;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::TableLiteral { indexes, entries } => {
+                    assert_eq!(indexes.len(), 1);
+                    assert_eq!(indexes[0].value.as_str(), "Maneuver");
+                    assert_eq!(entries.len(), 3);
+                    assert_eq!(entries[0].keys.len(), 1);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[2].keys[0].variant.value.as_str(), "Insertion");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_2d() {
+        let source = r"param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+        Departure, Correction, Insertion;
+        Launch:  5000.0 kg, 0.0 kg, 0.0 kg;
+        Cruise:  0.0 kg, 4500.0 kg, 0.0 kg;
+        Arrival: 0.0 kg, 0.0 kg, 4000.0 kg;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::TableLiteral { indexes, entries } => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(indexes[0].value.as_str(), "Phase");
+                    assert_eq!(indexes[1].value.as_str(), "Maneuver");
+                    assert_eq!(entries.len(), 9);
+                    assert_eq!(entries[0].keys.len(), 2);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[1].keys[1].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
+                    assert_eq!(entries[8].keys[1].variant.value.as_str(), "Insertion");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_3d() {
+        let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
+        [Time::T1]
+        Departure, Correction;
+        Launch: 5000.0 kg, 0.0 kg;
+        Cruise: 0.0 kg, 4500.0 kg;
+
+        [Time::T2]
+        Departure, Correction;
+        Launch: 4800.0 kg, 0.0 kg;
+        Cruise: 0.0 kg, 4300.0 kg;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::TableLiteral { indexes, entries } => {
+                    assert_eq!(indexes.len(), 3);
+                    assert_eq!(indexes[0].value.as_str(), "Time");
+                    assert_eq!(indexes[1].value.as_str(), "Phase");
+                    assert_eq!(indexes[2].value.as_str(), "Maneuver");
+                    assert_eq!(entries.len(), 8);
+                    assert_eq!(entries[0].keys.len(), 3);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Time");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
+                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[2].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[4].keys[0].variant.value.as_str(), "T2");
+                    assert_eq!(entries[4].keys[1].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[4].keys[2].variant.value.as_str(), "Departure");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_row_length_mismatch() {
+        let source = r"param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+        Departure, Correction, Insertion;
+        Launch: 5000.0 kg, 0.0 kg;
+    };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::TableRowLengthMismatch {
+                expected: 3,
+                got: 2,
+                ..
+            }
+        ));
+    }
+}

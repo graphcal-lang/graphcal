@@ -674,3 +674,519 @@ impl Parser<'_> {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{BinOp, DeclKind, ExprKind, TypeExprKind, UnaryOp};
+
+    fn parse_node_expr(input: &str) -> crate::ast::Expr {
+        let full = format!("node x: Dimensionless = {input};");
+        let file = Parser::new(&full).parse_file().unwrap();
+        match file.declarations.into_iter().next().unwrap().kind {
+            DeclKind::Node(n) => n.value,
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_unit_literal() {
+        let file = Parser::new("param alt: Length = 400.0 km;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.kind {
+                ExprKind::UnitLiteral { value, unit } => {
+                    assert!((value - 400.0).abs() < f64::EPSILON);
+                    assert_eq!(unit.terms.len(), 1);
+                    assert_eq!(unit.terms[0].name.value.as_str(), "km");
+                }
+                _ => panic!("expected UnitLiteral"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_compound_unit_literal() {
+        let file = Parser::new("const G0: Acceleration = 9.80665 m/s^2;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Const(c) => match &c.value.kind {
+                ExprKind::UnitLiteral { value, unit } => {
+                    assert!((value - 9.80665).abs() < f64::EPSILON);
+                    assert_eq!(unit.terms.len(), 2);
+                    assert_eq!(unit.terms[0].name.value.as_str(), "m");
+                    assert_eq!(unit.terms[1].op, crate::ast::MulDivOp::Div);
+                    assert_eq!(unit.terms[1].name.value.as_str(), "s");
+                    assert_eq!(unit.terms[1].power, Some(2));
+                }
+                _ => panic!("expected UnitLiteral"),
+            },
+            _ => panic!("expected const"),
+        }
+    }
+
+    #[test]
+    fn parse_conversion() {
+        let file = Parser::new("node speed_kmh: Velocity = @speed -> km/hour;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Convert { expr, target } => {
+                    assert!(
+                        matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.as_str() == "speed")
+                    );
+                    assert_eq!(target.terms.len(), 2);
+                    assert_eq!(target.terms[0].name.value.as_str(), "km");
+                    assert_eq!(target.terms[1].op, crate::ast::MulDivOp::Div);
+                    assert_eq!(target.terms[1].name.value.as_str(), "hour");
+                }
+                _ => panic!("expected Convert"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_convert_binds_loosely() {
+        let file = Parser::new("node x: Length = @a + @b -> km;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Convert { expr, target } => {
+                    assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+                    assert_eq!(target.terms[0].name.value.as_str(), "km");
+                }
+                _ => panic!("expected Convert"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_as_cast() {
+        let source = r"
+        type Eci {}
+        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
+    ";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, type_args } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                            assert_eq!(type_args.len(), 2);
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_as_cast_binds_loosely() {
+        let source = r"
+        type Eci {}
+        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
+    ";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[2].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::AsCast { expr, target_type } => {
+                    assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+                    match &target_type.kind {
+                        TypeExprKind::TypeApplication { name, .. } => {
+                            assert_eq!(name.name.as_str(), "Vec3");
+                        }
+                        other => panic!("expected TypeApplication, got {other:?}"),
+                    }
+                }
+                other => panic!("expected AsCast, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_arithmetic_precedence() {
+        let expr = parse_node_expr("1.0 + 2.0 * 3.0");
+        assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+        if let ExprKind::BinOp { rhs, .. } = &expr.kind {
+            assert!(matches!(rhs.kind, ExprKind::BinOp { op: BinOp::Mul, .. }));
+        }
+    }
+
+    #[test]
+    fn parse_left_associative_add() {
+        let expr = parse_node_expr("1.0 - 2.0 - 3.0");
+        if let ExprKind::BinOp { op, lhs, .. } = &expr.kind {
+            assert_eq!(*op, BinOp::Sub);
+            assert!(matches!(lhs.kind, ExprKind::BinOp { op: BinOp::Sub, .. }));
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn parse_power_right_assoc() {
+        let expr = parse_node_expr("2.0 ^ 3.0 ^ 2.0");
+        if let ExprKind::BinOp { op, rhs, .. } = &expr.kind {
+            assert_eq!(*op, BinOp::Pow);
+            assert!(matches!(rhs.kind, ExprKind::BinOp { op: BinOp::Pow, .. }));
+        } else {
+            panic!("expected Pow");
+        }
+    }
+
+    #[test]
+    fn parse_neg_power_precedence() {
+        let expr = parse_node_expr("-@x ^ 2.0");
+        if let ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } = &expr.kind
+        {
+            assert!(matches!(
+                operand.kind,
+                ExprKind::BinOp { op: BinOp::Pow, .. }
+            ));
+        } else {
+            panic!("expected Neg(Pow(...))");
+        }
+    }
+
+    #[test]
+    fn parse_graph_ref() {
+        let expr = parse_node_expr("@x + 1.0");
+        if let ExprKind::BinOp { lhs, .. } = &expr.kind {
+            assert!(matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.as_str() == "x"));
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn parse_const_ref() {
+        let expr = parse_node_expr("PI * 2.0");
+        if let ExprKind::BinOp { lhs, .. } = &expr.kind {
+            assert!(matches!(&lhs.kind, ExprKind::ConstRef(id) if id.value.as_str() == "PI"));
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn parse_function_call_one_arg() {
+        let expr = parse_node_expr("sqrt(@x)");
+        if let ExprKind::FnCall { name, args } = &expr.kind {
+            assert_eq!(name.value.as_str(), "sqrt");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.as_str() == "x"));
+        } else {
+            panic!("expected FnCall");
+        }
+    }
+
+    #[test]
+    fn parse_function_call_two_args() {
+        let expr = parse_node_expr("atan2(@a, @b)");
+        if let ExprKind::FnCall { name, args } = &expr.kind {
+            assert_eq!(name.value.as_str(), "atan2");
+            assert_eq!(args.len(), 2);
+        } else {
+            panic!("expected FnCall");
+        }
+    }
+
+    #[test]
+    fn parse_function_call_zero_args() {
+        let expr = parse_node_expr("foo()");
+        if let ExprKind::FnCall { name, args } = &expr.kind {
+            assert_eq!(name.value.as_str(), "foo");
+            assert_eq!(args.len(), 0);
+        } else {
+            panic!("expected FnCall");
+        }
+    }
+
+    #[test]
+    fn parse_if_else() {
+        let expr = parse_node_expr("if @x > 0.0 { @x } else { 0.0 }");
+        if let ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = &expr.kind
+        {
+            assert!(matches!(
+                condition.kind,
+                ExprKind::BinOp { op: BinOp::Gt, .. }
+            ));
+            assert!(matches!(
+                &then_branch.kind,
+                ExprKind::GraphRef(id) if id.value.as_str() == "x"
+            ));
+            assert!(matches!(else_branch.kind, ExprKind::Number(_)));
+        } else {
+            panic!("expected If");
+        }
+    }
+
+    #[test]
+    fn parse_nested_parens() {
+        let expr = parse_node_expr("(1.0 + 2.0) * 3.0");
+        if let ExprKind::BinOp { op, lhs, .. } = &expr.kind {
+            assert_eq!(*op, BinOp::Mul);
+            assert!(matches!(lhs.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+        } else {
+            panic!("expected Mul");
+        }
+    }
+
+    #[test]
+    fn parse_boolean_and() {
+        let expr = parse_node_expr("@a > 0.0 && @b > 0.0");
+        if let ExprKind::BinOp { op, lhs, rhs } = &expr.kind {
+            assert_eq!(*op, BinOp::And);
+            assert!(matches!(lhs.kind, ExprKind::BinOp { op: BinOp::Gt, .. }));
+            assert!(matches!(rhs.kind, ExprKind::BinOp { op: BinOp::Gt, .. }));
+        } else {
+            panic!("expected And");
+        }
+    }
+
+    #[test]
+    fn parse_boolean_or() {
+        let expr = parse_node_expr("@a > 0.0 || @b > 0.0");
+        assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Or, .. }));
+    }
+
+    #[test]
+    fn parse_unary_neg() {
+        let expr = parse_node_expr("-1.0");
+        assert!(matches!(
+            expr.kind,
+            ExprKind::UnaryOp {
+                op: UnaryOp::Neg,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_unary_not() {
+        let expr = parse_node_expr("!true");
+        assert!(matches!(
+            expr.kind,
+            ExprKind::UnaryOp {
+                op: UnaryOp::Not,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_complex_expression() {
+        let expr = parse_node_expr("@v_exhaust * ln(@mass_ratio)");
+        if let ExprKind::BinOp { op, lhs, rhs } = &expr.kind {
+            assert_eq!(*op, BinOp::Mul);
+            assert!(
+                matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.as_str() == "v_exhaust")
+            );
+            assert!(
+                matches!(&rhs.kind, ExprKind::FnCall { name, .. } if name.value.as_str() == "ln")
+            );
+        } else {
+            panic!("expected Mul");
+        }
+    }
+
+    #[test]
+    fn parse_comparison_eq() {
+        let expr = parse_node_expr("@x == 1.0");
+        assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Eq, .. }));
+    }
+
+    #[test]
+    fn parse_comparison_ne() {
+        let expr = parse_node_expr("@x != 1.0");
+        assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Ne, .. }));
+    }
+
+    #[test]
+    fn parse_field_access() {
+        let source = "node x: Dimensionless = @transfer.dv1;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::FieldAccess { expr, field } => {
+                    assert!(
+                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.value.as_str() == "transfer")
+                    );
+                    assert_eq!(field.value.as_str(), "dv1");
+                }
+                other => panic!("expected FieldAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_chained_field_access() {
+        let source = "node x: Dimensionless = @mission.transfer.dv1;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::FieldAccess { expr, field } => {
+                    assert_eq!(field.value.as_str(), "dv1");
+                    match &expr.kind {
+                        ExprKind::FieldAccess {
+                            expr: inner,
+                            field: mid_field,
+                        } => {
+                            assert_eq!(mid_field.value.as_str(), "transfer");
+                            assert!(
+                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.value.as_str() == "mission")
+                            );
+                        }
+                        other => panic!("expected inner FieldAccess, got {other:?}"),
+                    }
+                }
+                other => panic!("expected FieldAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_graph_ref() {
+        let file = Parser::new("node x: Dimensionless = @params::dry_mass;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedGraphRef { module, name } => {
+                assert_eq!(module.name, "params");
+                assert_eq!(name.value.as_str(), "dry_mass");
+            }
+            other => panic!("expected QualifiedGraphRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_const_ref() {
+        let file = Parser::new("node x: Dimensionless = constants::G0;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedConstRef { module, name } => {
+                assert_eq!(module.name, "constants");
+                assert_eq!(name.value.as_str(), "G0");
+            }
+            other => panic!("expected QualifiedConstRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_fn_call() {
+        let file = Parser::new("node x: Dimensionless = lib::compute(1.0, 2.0);")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedFnCall { module, name, args } => {
+                assert_eq!(module.name, "lib");
+                assert_eq!(name.value.as_str(), "compute");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected QualifiedFnCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_fn_call_no_args() {
+        let file = Parser::new("node x: Dimensionless = lib::get_value();")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::QualifiedFnCall { module, name, args } => {
+                assert_eq!(module.name, "lib");
+                assert_eq!(name.value.as_str(), "get_value");
+                assert_eq!(args.len(), 0);
+            }
+            other => panic!("expected QualifiedFnCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_expr_unit_literal() {
+        let expr = Parser::new("450.0 s").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn single_expr_integer_with_unit_errors() {
+        let result = Parser::new("450 s").parse_single_expr();
+        assert!(
+            result.is_err(),
+            "integer literal with unit should be an error"
+        );
+    }
+
+    #[test]
+    fn single_expr_number() {
+        let expr = Parser::new("3.0").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Number(n) if (n - 3.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn single_expr_compound_unit() {
+        let expr = Parser::new("9.80665 m/s^2").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn single_expr_arithmetic_with_const() {
+        let expr = Parser::new("2.0 * PI").parse_single_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+    }
+
+    #[test]
+    fn single_expr_trailing_tokens_error() {
+        let result = Parser::new("450.0 s; extra").parse_single_expr();
+        assert!(result.is_err());
+    }
+}

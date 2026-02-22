@@ -425,3 +425,111 @@ impl Parser<'_> {
         pos < bytes.len() && bytes[pos] == b'<'
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{DeclKind, TypeExprKind};
+
+    fn dim_expr_name(te: &crate::ast::TypeExpr) -> &str {
+        match &te.kind {
+            TypeExprKind::DimExpr(dim) => {
+                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
+                dim.terms[0].term.name.name.as_str()
+            }
+            other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_in_annotation() {
+        let source = "param v: Vec3<Length, ECI> = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_single_arg() {
+        let source = "param t: Timestamp<UTC> = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.name.as_str(), "Timestamp");
+                    assert_eq!(type_args.len(), 1);
+                    assert_eq!(dim_expr_name(&type_args[0]), "UTC");
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_type_still_works() {
+        let source = "param v: Length = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_indexed_type() {
+        let source = "param dv: Velocity[Maneuver] = 1.0 m/s;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.name.value.as_str(), "dv");
+                match &p.type_ann.kind {
+                    TypeExprKind::Indexed { base, indexes } => {
+                        assert!(matches!(base.kind, TypeExprKind::DimExpr(_)));
+                        assert_eq!(indexes.len(), 1);
+                        assert_eq!(indexes[0].name, "Maneuver");
+                    }
+                    other => panic!("expected Indexed type, got {other:?}"),
+                }
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_multi_indexed_type() {
+        let source = "param matrix: Dimensionless[Row, Col] = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::Indexed { indexes, .. } => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(indexes[0].name, "Row");
+                    assert_eq!(indexes[1].name, "Col");
+                }
+                other => panic!("expected Indexed type, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+}
