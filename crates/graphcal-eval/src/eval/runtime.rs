@@ -441,8 +441,10 @@ pub(super) fn evaluate_plan(
         .assert_bodies
         .iter()
         .map(|(name, body, span)| {
-            let assert_result = evaluate_assert_body(
+            let ef = plan.expected_fail.get(name);
+            let assert_result = evaluate_assert_with_expected_fail(
                 body,
+                ef,
                 &values,
                 &empty_locals,
                 &builtin_consts,
@@ -450,10 +452,6 @@ pub(super) fn evaluate_plan(
                 &tir.registry,
                 src,
             );
-            let assert_result = match plan.expected_fail.get(name) {
-                Some(ef) => apply_expected_fail(assert_result, ef),
-                None => assert_result,
-            };
             (DeclName::new(name), assert_result, *span)
         })
         .collect();
@@ -469,33 +467,240 @@ pub(super) fn evaluate_plan(
     }
 }
 
-/// Apply `#[expected_fail]` inversion to an assertion result.
+/// Evaluate an assertion body with optional `#[expected_fail]` handling.
 ///
-/// - `ExpectedFail::All`: a blanket inversion — `Pass` becomes an unexpected-pass
-///   failure, `Fail` becomes an expected-fail pass, `Error` is unchanged.
-/// - `ExpectedFail::Variants(keys)`: per-variant inversion is not yet implemented
-///   for indexed assertions; for now it falls back to `All` semantics.
-fn apply_expected_fail(result: AssertResult, ef: &ExpectedFail) -> AssertResult {
+/// For `None` (no `expected_fail`): evaluate and return the result as-is.
+/// For `Some(ExpectedFail::All)`: invert the final result (Pass↔Fail).
+/// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
+/// the raw indexed `RuntimeValue`, invert only the matching variant entries,
+/// then aggregate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "evaluation context requires many parameters"
+)]
+fn evaluate_assert_with_expected_fail(
+    body: &graphcal_syntax::ast::AssertBody,
+    ef: Option<&ExpectedFail>,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> AssertResult {
     match ef {
-        ExpectedFail::All => match result {
-            AssertResult::Pass => AssertResult::Fail {
-                message: "assertion passed but was marked #[expected_fail]".to_string(),
-            },
-            AssertResult::Fail { .. } => AssertResult::Pass,
-            AssertResult::Error { .. } => result,
-        },
-        ExpectedFail::Variants(_keys) => {
-            // Per-variant inversion: for now, treat the same as All.
-            // A full implementation would walk indexed entries and invert
-            // only the specified keys.
+        None => evaluate_assert_body(
+            body,
+            values,
+            local_values,
+            builtin_consts,
+            builtin_fns,
+            registry,
+            src,
+        ),
+        Some(ExpectedFail::All) => {
+            let result = evaluate_assert_body(
+                body,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            );
             match result {
                 AssertResult::Pass => AssertResult::Fail {
-                    message: "assertion passed but was marked #[expected_fail(...)]".to_string(),
+                    message: "assertion passed but was marked #[expected_fail]".to_string(),
                 },
                 AssertResult::Fail { .. } => AssertResult::Pass,
                 AssertResult::Error { .. } => result,
             }
         }
+        Some(ExpectedFail::Variants(keys)) => {
+            // Per-variant: we need the raw RuntimeValue to invert specific entries.
+            // Only Expr-based assertions can be indexed; Tolerance assertions are scalar.
+            let graphcal_syntax::ast::AssertBody::Expr(body_expr) = body else {
+                // Tolerance assertions cannot be indexed, so Variants makes no sense.
+                // The resolver should have caught this, but be safe.
+                return AssertResult::Error {
+                    message: "per-variant #[expected_fail] on a tolerance assertion".to_string(),
+                };
+            };
+            match eval_expr(
+                body_expr,
+                values,
+                local_values,
+                builtin_consts,
+                builtin_fns,
+                registry,
+                src,
+            ) {
+                Ok(RuntimeValue::Indexed {
+                    index_name,
+                    entries,
+                }) => {
+                    let inverted = invert_indexed_variants(&index_name, entries, keys);
+                    check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys)
+                }
+                Ok(RuntimeValue::Bool(b)) => {
+                    // Non-indexed assertion with Variants — shouldn't happen after resolver,
+                    // but handle gracefully by treating as All.
+                    if b {
+                        AssertResult::Fail {
+                            message: "assertion passed but was marked #[expected_fail(...)]"
+                                .to_string(),
+                        }
+                    } else {
+                        AssertResult::Pass
+                    }
+                }
+                Ok(other) => AssertResult::Error {
+                    message: format!("expected Bool or Indexed, got {other:?}"),
+                },
+                Err(e) => AssertResult::Error {
+                    message: format!("{e}"),
+                },
+            }
+        }
+    }
+}
+
+/// Invert specific variant entries in an indexed `RuntimeValue`.
+///
+/// For each entry in the indexed value, if the variant key matches one of the
+/// expected-fail keys, flip `Bool(true)` → `Bool(false)` and vice versa.
+/// For nested indexed values (multi-index), recurse.
+fn invert_indexed_variants(
+    index_name: &IndexName,
+    entries: IndexMap<VariantName, RuntimeValue>,
+    keys: &[Vec<(IndexName, VariantName)>],
+) -> (IndexName, IndexMap<VariantName, RuntimeValue>) {
+    let inverted_entries = entries
+        .into_iter()
+        .map(|(variant, value)| {
+            let new_value = match value {
+                RuntimeValue::Bool(b) => {
+                    // Single-index: check if this variant is in any key
+                    let should_invert = keys.iter().any(|key| {
+                        key.len() == 1 && key[0].0 == *index_name && key[0].1 == variant
+                    });
+                    if should_invert {
+                        RuntimeValue::Bool(!b)
+                    } else {
+                        RuntimeValue::Bool(b)
+                    }
+                }
+                RuntimeValue::Indexed {
+                    index_name: inner_index,
+                    entries: inner_entries,
+                } => {
+                    // Multi-index: filter keys that match the current variant at position 0,
+                    // then strip the first element and recurse.
+                    let sub_keys: Vec<Vec<(IndexName, VariantName)>> = keys
+                        .iter()
+                        .filter(|key| {
+                            key.len() >= 2 && key[0].0 == *index_name && key[0].1 == variant
+                        })
+                        .map(|key| key[1..].to_vec())
+                        .collect();
+                    if sub_keys.is_empty() {
+                        // No expected-fail keys apply to this subtree — leave as-is
+                        RuntimeValue::Indexed {
+                            index_name: inner_index,
+                            entries: inner_entries,
+                        }
+                    } else {
+                        let (idx, ents) =
+                            invert_indexed_variants(&inner_index, inner_entries, &sub_keys);
+                        RuntimeValue::Indexed {
+                            index_name: idx,
+                            entries: ents,
+                        }
+                    }
+                }
+                other => other,
+            };
+            (variant, new_value)
+        })
+        .collect();
+    (index_name.clone(), inverted_entries)
+}
+
+/// Check an indexed assertion with expected-fail variant awareness.
+///
+/// After inversion, the semantics are:
+/// - A variant matching an expected-fail key that is `true` (was `false` before inversion)
+///   means "expected failure occurred" → good.
+/// - A variant matching an expected-fail key that is `false` (was `true` before inversion)
+///   means "unexpected pass" → report as failure.
+/// - A variant NOT matching any key behaves normally (`true` = pass, `false` = fail).
+///
+/// We reuse `collect_failing_paths` on the inverted entries, then classify each
+/// failing path as either "unexpected pass" or "unexpected fail".
+fn check_indexed_assert_with_expected_fail(
+    index_name: &IndexName,
+    entries: &IndexMap<VariantName, RuntimeValue>,
+    keys: &[Vec<(IndexName, VariantName)>],
+) -> AssertResult {
+    match collect_failing_paths(index_name, entries) {
+        Ok(paths) if paths.is_empty() => AssertResult::Pass,
+        Ok(paths) => {
+            // Classify each failing path
+            let mut unexpected_passes = Vec::new();
+            let mut unexpected_fails = Vec::new();
+
+            for path in &paths {
+                // Convert the string path back to (IndexName, VariantName) pairs
+                let key: Vec<(IndexName, VariantName)> = path
+                    .iter()
+                    .filter_map(|label| {
+                        let (idx, var) = label.split_once("::")?;
+                        Some((IndexName::new(idx), VariantName::new(var)))
+                    })
+                    .collect();
+
+                let is_expected_fail_key = keys.contains(&key);
+                if is_expected_fail_key {
+                    // This was an expected-fail key but the value is false after inversion,
+                    // meaning the original was true → unexpected pass
+                    unexpected_passes.push(path);
+                } else {
+                    unexpected_fails.push(path);
+                }
+            }
+
+            let is_multi_index = paths.iter().any(|p| p.len() > 1);
+            let mut parts = Vec::new();
+
+            if !unexpected_passes.is_empty() {
+                let formatted: Vec<String> = if is_multi_index {
+                    unexpected_passes
+                        .iter()
+                        .map(|p| format!("({})", p.join(", ")))
+                        .collect()
+                } else {
+                    unexpected_passes.iter().map(|p| p[0].clone()).collect()
+                };
+                parts.push(format!("unexpected pass at {}", formatted.join(", ")));
+            }
+
+            if !unexpected_fails.is_empty() {
+                let formatted: Vec<String> = if is_multi_index {
+                    unexpected_fails
+                        .iter()
+                        .map(|p| format!("({})", p.join(", ")))
+                        .collect()
+                } else {
+                    unexpected_fails.iter().map(|p| p[0].clone()).collect()
+                };
+                parts.push(format!("failed at {}", formatted.join(", ")));
+            }
+
+            AssertResult::Fail {
+                message: parts.join("; "),
+            }
+        }
+        Err(msg) => AssertResult::Error { message: msg },
     }
 }
 

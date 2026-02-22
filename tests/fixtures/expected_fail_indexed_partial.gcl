@@ -1,0 +1,24 @@
+// expected_fail_indexed_partial.gcl -- Bug reproducer: per-variant expected_fail
+// suppresses ALL failures, not just the specified variant.
+//
+// Setup: Boost and Eco both fail, but only Boost is marked expected_fail.
+// Expected: Eco's failure should still be reported.
+// Actual (bug): The entire assertion passes because Variants falls back to All.
+index Mode = { Normal, Eco, Boost }
+
+param power_gen: Dimensionless[Mode] = {
+    Mode::Normal: 100.0,
+    Mode::Eco: 50.0,
+    Mode::Boost: 200.0,
+};
+
+param power_use: Dimensionless[Mode] = {
+    Mode::Normal: 80.0,
+    Mode::Eco: 60.0,
+    Mode::Boost: 250.0,
+};
+
+// Only Boost (250 > 200) is expected to fail.
+// Eco also fails (60 > 50) but is NOT expected -- should report failure.
+#[expected_fail(Mode::Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };

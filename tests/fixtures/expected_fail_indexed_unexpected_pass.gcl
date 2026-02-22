@@ -1,0 +1,20 @@
+// expected_fail_indexed_unexpected_pass.gcl -- Per-variant expected_fail where
+// the expected-fail variant actually passes → "unexpected pass" error.
+index Mode = { Normal, Eco, Boost }
+
+param power_gen: Dimensionless[Mode] = {
+    Mode::Normal: 100.0,
+    Mode::Eco: 50.0,
+    Mode::Boost: 200.0,
+};
+
+param power_use: Dimensionless[Mode] = {
+    Mode::Normal: 80.0,
+    Mode::Eco: 30.0,
+    Mode::Boost: 150.0,
+};
+
+// All variants pass (80<100, 30<50, 150<200), but Boost is marked expected_fail.
+// Boost should report "unexpected pass".
+#[expected_fail(Mode::Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };

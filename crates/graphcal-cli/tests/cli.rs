@@ -1496,3 +1496,71 @@ fn eval_expected_fail_on_node_error() {
         "expected exit code 2 for compile error"
     );
 }
+
+#[test]
+fn eval_expected_fail_indexed_partial() {
+    // Per-variant expected_fail should only suppress the specified variant;
+    // other failing variants should still be reported.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("expected_fail_indexed_partial.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1: Eco fails but is not expected_fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("power_ok") && stderr.contains("FAIL") && stderr.contains("Mode::Eco"),
+        "expected power_ok FAIL with Mode::Eco: {stderr}"
+    );
+}
+
+#[test]
+fn eval_expected_fail_indexed_unexpected_pass() {
+    // Per-variant expected_fail where the expected-fail variant actually passes
+    // should report "unexpected pass".
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("expected_fail_indexed_unexpected_pass.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1: Boost passes but is marked expected_fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("power_ok")
+            && stderr.contains("FAIL")
+            && stderr.contains("unexpected pass"),
+        "expected power_ok FAIL with unexpected pass: {stderr}"
+    );
+}
+
+#[test]
+fn eval_expected_fail_multi_indexed_partial() {
+    // Per-tuple-key expected_fail should only suppress specified tuple keys;
+    // other failing keys should still be reported.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("expected_fail_multi_indexed_partial.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1: (Eco, Cruise) fails but is not expected_fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("within_limits") && stderr.contains("FAIL") && stderr.contains("Eco"),
+        "expected within_limits FAIL with Eco: {stderr}"
+    );
+}
