@@ -1,5 +1,8 @@
 # Cellgraph Language Design -- Decomposed Aspects
 
+> [!WARNING]
+> This directory may contain outdated design documents.
+
 Each aspect of the language design is documented in a separate file for independent discussion. Files are numbered for reference but can be read in any order.
 
 ## Dependency Map

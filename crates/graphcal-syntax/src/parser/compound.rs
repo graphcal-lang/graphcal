@@ -632,3 +632,357 @@ impl Parser<'_> {
         Ok(expr)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{BinOp, DeclKind, ExprKind};
+
+    fn dim_expr_name(te: &crate::ast::TypeExpr) -> &str {
+        match &te.kind {
+            crate::ast::TypeExprKind::DimExpr(dim) => {
+                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
+                dim.terms[0].term.name.name.as_str()
+            }
+            other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_block_simple() {
+        let source = "node x: Dimensionless = { let a = 1.0; a + 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, expr } => {
+                    assert_eq!(stmts.len(), 1);
+                    assert_eq!(stmts[0].name.name, "a");
+                    assert!(stmts[0].type_ann.is_none());
+                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_multiple_lets() {
+        let source = "node x: Dimensionless = { let r1 = @a + @b; let r2 = @c; r1 + r2 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, expr } => {
+                    assert_eq!(stmts.len(), 2);
+                    assert_eq!(stmts[0].name.name, "r1");
+                    assert_eq!(stmts[1].name.name, "r2");
+                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_let_with_type_ann() {
+        let source = "node x: Dimensionless = { let a: Dimensionless = 1.0; a };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, .. } => {
+                    assert_eq!(stmts.len(), 1);
+                    assert!(stmts[0].type_ann.is_some());
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_block_no_lets() {
+        let source = "node x: Dimensionless = { 1.0 + 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { stmts, .. } => {
+                    assert_eq!(stmts.len(), 0);
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_local_ref() {
+        let source = "node x: Dimensionless = { let a = 1.0; a };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { expr, .. } => {
+                    assert!(matches!(&expr.kind, ExprKind::LocalRef(ident) if ident.name == "a"));
+                }
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_construction_explicit_fields() {
+        let source = "node t: Dimensionless = TransferResult { dv1: @a + @b, dv2: @c };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name, fields, ..
+                } => {
+                    assert_eq!(type_name.value.as_str(), "TransferResult");
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(fields[0].name.value.as_str(), "dv1");
+                    assert!(fields[0].value.is_some());
+                    assert_eq!(fields[1].name.value.as_str(), "dv2");
+                    assert!(fields[1].value.is_some());
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_construction_shorthand() {
+        let source =
+            "node t: Dimensionless = { let dv1 = @a; let dv2 = @b; TransferResult { dv1, dv2 } };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Block { expr, .. } => match &expr.kind {
+                    ExprKind::StructConstruction {
+                        type_name, fields, ..
+                    } => {
+                        assert_eq!(type_name.value.as_str(), "TransferResult");
+                        assert_eq!(fields.len(), 2);
+                        assert!(fields[0].value.is_none());
+                        assert!(fields[1].value.is_none());
+                    }
+                    other => panic!("expected StructConstruction, got {other:?}"),
+                },
+                other => panic!("expected Block, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_construction_trailing_comma() {
+        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0, };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction { fields, .. } => {
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_generic_struct_construction() {
+        let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI> { x: 1.0, y: 2.0, z: 3.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "Vec3");
+                    assert_eq!(type_args.len(), 2);
+                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
+                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                    assert_eq!(fields.len(), 3);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_non_generic_struct_construction_still_works() {
+        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::StructConstruction {
+                    type_name,
+                    type_args,
+                    fields,
+                } => {
+                    assert_eq!(type_name.value.as_str(), "TransferResult");
+                    assert!(type_args.is_empty());
+                    assert_eq!(fields.len(), 2);
+                }
+                other => panic!("expected StructConstruction, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_for_comprehension() {
+        let source = "node fuel: Mass[Maneuver] = for m: Maneuver { 1.0 kg };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { bindings, body } => {
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(bindings[0].var.name, "m");
+                    assert_eq!(bindings[0].index.value.as_str(), "Maneuver");
+                    assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
+                }
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_for_multi_binding() {
+        let source = "node x: Dimensionless[Row, Col] = for r: Row, c: Col { 0.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { bindings, .. } => {
+                    assert_eq!(bindings.len(), 2);
+                    assert_eq!(bindings[0].var.name, "r");
+                    assert_eq!(bindings[0].index.value.as_str(), "Row");
+                    assert_eq!(bindings[1].var.name, "c");
+                    assert_eq!(bindings[1].index.value.as_str(), "Col");
+                }
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_index_access_with_variant() {
+        let source = "node x: Velocity = @dv[Maneuver::Departure];";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::IndexAccess { expr, args } => {
+                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
+                    assert_eq!(args.len(), 1);
+                    match &args[0] {
+                        crate::ast::IndexArg::Variant { index, variant } => {
+                            assert_eq!(index.value.as_str(), "Maneuver");
+                            assert_eq!(variant.value.as_str(), "Departure");
+                        }
+                        other @ crate::ast::IndexArg::Var(_) => {
+                            panic!("expected Variant, got {other:?}")
+                        }
+                    }
+                }
+                other => panic!("expected IndexAccess, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_index_access_with_loop_var() {
+        let source = "node y: Velocity[Maneuver] = for m: Maneuver { @dv[m] };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ForComp { body, .. } => match &body.kind {
+                    ExprKind::IndexAccess { args, .. } => {
+                        assert_eq!(args.len(), 1);
+                        match &args[0] {
+                            crate::ast::IndexArg::Var(ident) => assert_eq!(ident.name, "m"),
+                            other @ crate::ast::IndexArg::Variant { .. } => {
+                                panic!("expected Var, got {other:?}")
+                            }
+                        }
+                    }
+                    other => panic!("expected IndexAccess, got {other:?}"),
+                },
+                other => panic!("expected ForComp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_scan_expression() {
+        let source = "node cum: Velocity[Maneuver] = scan(@dv, 0.0 m/s, |acc, val| acc + val);";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Scan {
+                    acc_name, val_name, ..
+                } => {
+                    assert_eq!(acc_name.name, "acc");
+                    assert_eq!(val_name.name, "val");
+                }
+                other => panic!("expected Scan, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_unfold_expression() {
+        let source =
+            "node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Unfold {
+                    prev_name,
+                    curr_name,
+                    ..
+                } => {
+                    assert_eq!(prev_name.name, "prev_t");
+                    assert_eq!(curr_name.name, "t");
+                }
+                other => panic!("expected Unfold, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_field_access_in_arithmetic() {
+        let source = "node x: Dimensionless = @t.dv1 + @t.dv2;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::BinOp { op, lhs, rhs } => {
+                    assert!(matches!(op, BinOp::Add));
+                    assert!(matches!(&lhs.kind, ExprKind::FieldAccess { .. }));
+                    assert!(matches!(&rhs.kind, ExprKind::FieldAccess { .. }));
+                }
+                other => panic!("expected BinOp, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+}

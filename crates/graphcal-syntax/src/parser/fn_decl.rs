@@ -178,3 +178,170 @@ impl Parser<'_> {
         Ok((stmts, expr))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::*;
+    use crate::ast::{DeclKind, ExprKind, FnBody, GenericConstraint, TypeExprKind};
+
+    #[test]
+    fn parse_fn_short_form() {
+        let source = "fn double(x: Dimensionless) -> Dimensionless = x * 2.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.value.as_str(), "double");
+                assert!(f.generic_params.is_empty());
+                assert_eq!(f.params.len(), 1);
+                assert_eq!(f.params[0].name.name, "x");
+                assert!(matches!(f.body, FnBody::Short(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_block_form() {
+        let source = "fn add_one(x: Dimensionless) -> Dimensionless { let one = 1.0; x + one }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.value.as_str(), "add_one");
+                match &f.body {
+                    FnBody::Block { stmts, expr } => {
+                        assert_eq!(stmts.len(), 1);
+                        assert_eq!(stmts[0].name.name, "one");
+                        assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+                    }
+                    FnBody::Short(_) => panic!("expected block body"),
+                }
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_with_generics() {
+        let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.value.as_str(), "lerp");
+                assert_eq!(f.generic_params.len(), 1);
+                assert_eq!(f.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(f.params.len(), 3);
+                assert_eq!(f.params[0].name.name, "a");
+                assert_eq!(f.params[1].name.name, "b");
+                assert_eq!(f.params[2].name.name, "t");
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_multiple_generics() {
+        let source = "fn convert<A: Dim, B: Dim>(x: A, y: B) -> A = x;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.generic_params.len(), 2);
+                assert_eq!(f.generic_params[0].name.value.as_str(), "A");
+                assert_eq!(f.generic_params[1].name.value.as_str(), "B");
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_zero_args() {
+        let source = "fn pi_val() -> Dimensionless = PI;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.name.value.as_str(), "pi_val");
+                assert!(f.params.is_empty());
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_trailing_comma() {
+        let source = "fn add(x: Dimensionless, y: Dimensionless,) -> Dimensionless = x + y;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.params.len(), 2);
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_dim_expr_type() {
+        let source = "fn speed(d: Length, t: Time) -> Length / Time = d / t;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.params.len(), 2);
+                assert!(matches!(f.return_type.kind, TypeExprKind::DimExpr(_)));
+            }
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_block_no_lets() {
+        let source = "fn identity(x: Dimensionless) -> Dimensionless { x }";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => match &f.body {
+                FnBody::Block { stmts, .. } => assert!(stmts.is_empty()),
+                FnBody::Short(_) => panic!("expected block body"),
+            },
+            other => panic!("expected Fn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_mixed_with_other_decls() {
+        let source = r"
+        const TWO: Dimensionless = 2.0;
+        fn double(x: Dimensionless) -> Dimensionless = x * TWO;
+        param val: Dimensionless = 5.0;
+        node result: Dimensionless = double(@val);
+    ";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 4);
+        assert!(matches!(file.declarations[0].kind, DeclKind::Const(_)));
+        assert!(matches!(file.declarations[1].kind, DeclKind::Fn(_)));
+        assert!(matches!(file.declarations[2].kind, DeclKind::Param(_)));
+        assert!(matches!(file.declarations[3].kind, DeclKind::Node(_)));
+    }
+
+    #[test]
+    fn parse_generic_fn_with_index_constraint() {
+        let source = "fn total<D: Dim, I: Index>(values: D) -> D = values;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Fn(f) => {
+                assert_eq!(f.generic_params.len(), 2);
+                assert_eq!(f.generic_params[0].name.value.as_str(), "D");
+                assert_eq!(f.generic_params[0].constraint, GenericConstraint::Dim);
+                assert_eq!(f.generic_params[1].name.value.as_str(), "I");
+                assert_eq!(f.generic_params[1].constraint, GenericConstraint::Index);
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+}

@@ -15,9 +15,6 @@ mod fn_decl;
 mod table;
 mod type_expr;
 
-#[cfg(test)]
-mod tests;
-
 /// Rich parse error with miette diagnostics.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum ParseError {
@@ -274,4 +271,29 @@ pub(super) fn is_pascal_case(s: &str) -> bool {
 /// Used where both concrete index names (`Maneuver`) and generic params (`I`) are valid.
 pub(super) fn is_uppercase_starting(s: &str) -> bool {
     !s.is_empty() && s.starts_with(|c: char| c.is_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        reason = "test code"
+    )]
+
+    use super::is_pascal_case;
+
+    #[test]
+    fn is_pascal_case_examples() {
+        assert!(is_pascal_case("TransferResult"));
+        assert!(is_pascal_case("Orbit"));
+        assert!(is_pascal_case("Ab"));
+        assert!(!is_pascal_case("ORBIT"));
+        assert!(!is_pascal_case("UPPER_SNAKE"));
+        assert!(!is_pascal_case("orbit"));
+        assert!(!is_pascal_case("lower_snake"));
+        assert!(!is_pascal_case(""));
+    }
 }
