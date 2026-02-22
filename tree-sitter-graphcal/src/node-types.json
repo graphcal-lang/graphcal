@@ -300,6 +300,44 @@
       "required": false,
       "types": [
         {
+          "type": "attribute_group",
+          "named": true
+        },
+        {
+          "type": "attribute_path",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "attribute_group",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "attribute_group",
+          "named": true
+        },
+        {
+          "type": "attribute_path",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "attribute_path",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
           "type": "identifier",
           "named": true
         }
@@ -1002,26 +1040,6 @@
         ]
       }
     }
-  },
-  {
-    "type": "derive_clause",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "derive_op",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "derive_op",
-    "named": true,
-    "fields": {}
   },
   {
     "type": "dim_expr",
@@ -5251,16 +5269,6 @@
     "type": "type_declaration",
     "named": true,
     "fields": {
-      "derives": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "derive_clause",
-            "named": true
-          }
-        ]
-      },
       "generics": {
         "multiple": false,
         "required": false,
@@ -5286,6 +5294,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "attribute",
+          "named": true
+        },
         {
           "type": "field_declaration",
           "named": true
@@ -5954,23 +5966,11 @@
     "named": false
   },
   {
-    "type": "Add",
-    "named": false
-  },
-  {
     "type": "Dim",
     "named": false
   },
   {
     "type": "Index",
-    "named": false
-  },
-  {
-    "type": "Neg",
-    "named": false
-  },
-  {
-    "type": "Sub",
     "named": false
   },
   {
@@ -6007,10 +6007,6 @@
   },
   {
     "type": "const",
-    "named": false
-  },
-  {
-    "type": "derive",
     "named": false
   },
   {

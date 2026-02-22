@@ -161,10 +161,38 @@ fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static> {
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
     };
 
-    if decl.attributes.is_empty() {
+    // Collect attribute lines: real attributes + synthetic #[derive(...)] for type decls
+    let has_attrs = !decl.attributes.is_empty();
+    let has_derives = matches!(&decl.kind, DeclKind::Type(t) if !t.derives.is_empty());
+
+    if !has_attrs && !has_derives {
         body
     } else {
         let mut parts: Vec<RcDoc<'static>> = Vec::new();
+
+        // Emit #[derive(...)] first if present
+        if let DeclKind::Type(t) = &decl.kind
+            && !t.derives.is_empty()
+        {
+            let derives: Vec<RcDoc<'static>> = t
+                .derives
+                .iter()
+                .map(|d| {
+                    RcDoc::text(match d.value {
+                        DeriveOp::Add => "Add",
+                        DeriveOp::Sub => "Sub",
+                        DeriveOp::Neg => "Neg",
+                    })
+                })
+                .collect();
+            parts.push(
+                RcDoc::text("#[derive(")
+                    .append(RcDoc::intersperse(derives, RcDoc::text(", ")))
+                    .append(RcDoc::text(")]")),
+            );
+            parts.push(RcDoc::hardline());
+        }
+
         for attr in &decl.attributes {
             parts.push(format_attribute(attr));
             parts.push(RcDoc::hardline());
@@ -281,30 +309,12 @@ fn format_unit_def(fmt: &Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `type Name<...> derive(...) { ... }`
+/// `type Name { ... }` or `#[derive(...)] type Name<...> { ... }`
 fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
     if !d.generic_params.is_empty() {
         header = header.append(format_generic_params(&d.generic_params));
-    }
-
-    if !d.derives.is_empty() {
-        let derives: Vec<RcDoc<'static>> = d
-            .derives
-            .iter()
-            .map(|d| {
-                RcDoc::text(match d.value {
-                    DeriveOp::Add => "Add",
-                    DeriveOp::Sub => "Sub",
-                    DeriveOp::Neg => "Neg",
-                })
-            })
-            .collect();
-        header = header
-            .append(RcDoc::text(" derive("))
-            .append(RcDoc::intersperse(derives, RcDoc::text(", ")))
-            .append(RcDoc::text(")"));
     }
 
     if d.variants.is_empty() {

@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssertBody, AssertDecl, Attribute, AttributeArg, ConstDecl, DeclKind, Declaration, DimDecl,
-    FieldDecl, IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, TypeDecl, VariantDecl,
+    AssertBody, AssertDecl, Attribute, AttributeArg, ConstDecl, DeclKind, Declaration, DeriveOp,
+    DimDecl, FieldDecl, IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, TypeDecl, VariantDecl,
 };
 use crate::names::{
     DeclName, DimName, FieldName, IndexName, Spanned, StructTypeName, UnitName, VariantName,
@@ -40,7 +40,52 @@ impl Parser<'_> {
         if let Some(first_attr) = attributes.first() {
             decl.span = first_attr.span.merge(decl.span);
         }
-        decl.attributes = attributes;
+
+        // Extract #[derive(...)] attribute for type declarations
+        if let DeclKind::Type(ref mut type_decl) = decl.kind {
+            let mut remaining_attrs = Vec::new();
+            for attr in attributes {
+                if attr.name.name == "derive" {
+                    for arg in &attr.args {
+                        let ident = arg.as_single_ident().ok_or_else(|| {
+                            self.unexpected_token(
+                                "`Add`, `Sub`, or `Neg`",
+                                "<complex argument>",
+                                arg.span(),
+                            )
+                        })?;
+                        let op = match ident.name.as_str() {
+                            "Add" => DeriveOp::Add,
+                            "Sub" => DeriveOp::Sub,
+                            "Neg" => DeriveOp::Neg,
+                            _ => {
+                                return Err(self.unexpected_token(
+                                    "`Add`, `Sub`, or `Neg`",
+                                    &ident.name,
+                                    ident.span,
+                                ));
+                            }
+                        };
+                        type_decl.derives.push(Spanned::new(op, ident.span));
+                    }
+                } else {
+                    remaining_attrs.push(attr);
+                }
+            }
+            decl.attributes = remaining_attrs;
+        } else {
+            // For non-type declarations, check that no #[derive] attribute was used
+            let derive_attr = attributes.iter().find(|a| a.name.name == "derive");
+            if let Some(attr) = derive_attr {
+                return Err(self.unexpected_token(
+                    "a valid attribute for this declaration",
+                    "derive",
+                    attr.span,
+                ));
+            }
+            decl.attributes = attributes;
+        }
+
         Ok(decl)
     }
 
@@ -282,22 +327,6 @@ impl Parser<'_> {
             Vec::new()
         };
 
-        // Optional derive clause: derive(Add, Sub, Neg)
-        let derives = if self.lexer.peek() == Some(&Token::Ident) {
-            let peeked = self.lexer.peek_with_span();
-            if let Some((&Token::Ident, span)) = peeked {
-                if self.lexer.slice_at(span) == "derive" {
-                    self.parse_derive_clause()?
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
         let (_, lbrace_span) = self.expect(Token::LBrace)?;
 
         // Disambiguate: empty type, struct sugar, or multi-variant
@@ -327,7 +356,7 @@ impl Parser<'_> {
             kind: DeclKind::Type(TypeDecl {
                 name,
                 generic_params,
-                derives,
+                derives: vec![],
                 variants,
             }),
             span,
@@ -1140,9 +1169,12 @@ param alt: Length = 400.0 km;
     }
 
     #[test]
-    fn parse_type_decl_derive_clause() {
-        let source = "type Vec3<D: Dim, F: Type> derive(Add, Sub, Neg) { x: D, y: D, z: D }";
+    fn parse_type_decl_derive_attribute() {
+        let source = "#[derive(Add, Sub, Neg)]\ntype Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
         let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        // #[derive(...)] should be extracted, not left in attributes
+        assert!(file.declarations[0].attributes.is_empty());
         match &file.declarations[0].kind {
             DeclKind::Type(t) => {
                 assert_eq!(t.name.value.as_str(), "Vec3");
@@ -1155,6 +1187,13 @@ param alt: Length = 400.0 km;
             }
             _ => panic!("expected type declaration"),
         }
+    }
+
+    #[test]
+    fn parse_derive_attribute_on_non_type_is_error() {
+        let source = "#[derive(Add)]\nparam x: Dimensionless = 1.0;";
+        let result = Parser::new(source).parse_file();
+        assert!(result.is_err());
     }
 
     #[test]

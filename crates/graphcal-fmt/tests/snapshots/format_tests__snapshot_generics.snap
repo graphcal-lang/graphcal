@@ -45,9 +45,10 @@ param pos3_default: Pos3<Length> = Pos3<Length> { x: 10.0 km, y: 20.0 km, z: 30.
 node pos3_eci_x: Length = @pos3_eci.x;
 node pos3_default_y: Length = @pos3_default.y;
 
-// --- derive(Add, Sub, Neg) ---
+// --- #[derive(Add, Sub, Neg)] ---
 // DeriveVec3 has component-wise +, -, and unary -
-type DeriveVec3<D: Dim, F: Type> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type DeriveVec3<D: Dim, F: Type> {
     x: D,
     y: D,
     z: D,
