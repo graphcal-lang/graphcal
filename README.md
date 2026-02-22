@@ -312,23 +312,45 @@ When both `--set` and `--input` are provided, `--set` takes precedence for the s
 | --- | --- | --- |
 | `PI` | 3.141592653589793... | `Dimensionless` |
 | `E` | 2.718281828459045... | `Dimensionless` |
+| `TAU` | 6.283185307179586... | `Dimensionless` |
+| `SQRT2` | 1.414213562373095... | `Dimensionless` |
+| `LN2` | 0.693147180559945... | `Dimensionless` |
+| `LN10` | 2.302585092994045... | `Dimensionless` |
 
 ### Mathematical functions
 
 | Function | Signature | Description |
 | --- | --- | --- |
-| `sqrt(x)` | `D -> D^(1/2)` | Square root (dimension exponents halved) |
+| `sqrt(x)` | `D^2 -> D` | Square root (dimension exponents halved) |
+| `cbrt(x)` | `D^3 -> D` | Cube root (dimension exponents divided by 3) |
 | `abs(x)` | `D -> D` | Absolute value |
+| `sign(x)` | `D -> Dimensionless` | Sign of value (1.0, -1.0, or NaN) |
+| `round(x)` | `D -> D` | Round to nearest integer |
+| `trunc(x)` | `D -> D` | Truncate toward zero |
 | `floor(x)` | `D -> D` | Floor |
 | `ceil(x)` | `D -> D` | Ceiling |
+| `clamp(x, min, max)` | `(D, D, D) -> D` | Clamp value to range |
+| `hypot(a, b)` | `(D, D) -> D` | Hypotenuse (sqrt(a^2 + b^2)) |
 | `exp(x)` | `Dimensionless -> Dimensionless` | Exponential |
+| `expm1(x)` | `Dimensionless -> Dimensionless` | exp(x) - 1, numerically stable |
 | `ln(x)` | `Dimensionless -> Dimensionless` | Natural logarithm |
+| `log1p(x)` | `Dimensionless -> Dimensionless` | ln(1 + x), numerically stable |
+| `log(x, base)` | `(Dimensionless, Dimensionless) -> Dimensionless` | Logarithm with arbitrary base |
+| `log2(x)` | `Dimensionless -> Dimensionless` | Base-2 logarithm |
+| `log10(x)` | `Dimensionless -> Dimensionless` | Base-10 logarithm |
 | `sin(x)` | `Angle -> Dimensionless` | Sine |
 | `cos(x)` | `Angle -> Dimensionless` | Cosine |
 | `tan(x)` | `Angle -> Dimensionless` | Tangent |
 | `asin(x)` | `Dimensionless -> Angle` | Inverse sine |
 | `acos(x)` | `Dimensionless -> Angle` | Inverse cosine |
+| `atan(x)` | `Dimensionless -> Angle` | Inverse tangent |
 | `atan2(y, x)` | `(D, D) -> Angle` | Two-argument arctangent |
+| `sinh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic sine |
+| `cosh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic cosine |
+| `tanh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic tangent |
+| `asinh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic sine |
+| `acosh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic cosine |
+| `atanh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic tangent |
 | `min(a, b)` | `(D, D) -> D` | Minimum of two values |
 | `max(a, b)` | `(D, D) -> D` | Maximum of two values |
 

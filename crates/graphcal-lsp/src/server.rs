@@ -338,6 +338,18 @@ fn builtin_signature_parts(arity: usize, dim_sig: DimSignature) -> (Vec<String>,
             vec!["y: D".to_string(), "x: D".to_string()],
             "Angle".to_string(),
         ),
+        DimSignature::PassthroughToDimensionless => {
+            (vec!["x: D".to_string()], "Dimensionless".to_string())
+        }
+        DimSignature::SameDimension3 => (
+            vec![
+                "x: D".to_string(),
+                "min: D".to_string(),
+                "max: D".to_string(),
+            ],
+            "D".to_string(),
+        ),
+        DimSignature::Cbrt => (vec!["x: D^3".to_string()], "D".to_string()),
     }
 }
 

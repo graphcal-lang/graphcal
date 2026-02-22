@@ -12,6 +12,10 @@ This page lists all dimensions, units, constants, and functions provided by the 
 |------|------|-------|
 | `PI` | `Dimensionless` | 3.14159265358979... |
 | `E` | `Dimensionless` | 2.71828182845904... |
+| `TAU` | `Dimensionless` | 6.28318530717958... (2*PI) |
+| `SQRT2` | `Dimensionless` | 1.41421356237309... |
+| `LN2` | `Dimensionless` | 0.69314718055994... |
+| `LN10` | `Dimensionless` | 2.30258509299404... |
 
 ## Built-in Functions
 
@@ -20,11 +24,22 @@ This page lists all dimensions, units, constants, and functions provided by the 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sqrt(x)` | `D^2 -> D` | Square root (dimension halved) |
+| `cbrt(x)` | `D^3 -> D` | Cube root (dimension divided by 3) |
 | `abs(x)` | `D -> D` | Absolute value |
-| `floor(x)` | `Dimensionless -> Dimensionless` | Round toward negative infinity |
-| `ceil(x)` | `Dimensionless -> Dimensionless` | Round toward positive infinity |
+| `sign(x)` | `D -> Dimensionless` | Sign of value (1.0, -1.0, or NaN) |
+| `round(x)` | `D -> D` | Round to nearest integer |
+| `trunc(x)` | `D -> D` | Truncate toward zero |
+| `floor(x)` | `D -> D` | Round toward negative infinity |
+| `ceil(x)` | `D -> D` | Round toward positive infinity |
+| `clamp(x, min, max)` | `(D, D, D) -> D` | Clamp value to range |
+| `hypot(a, b)` | `(D, D) -> D` | Hypotenuse (sqrt(a^2 + b^2)) |
 | `exp(x)` | `Dimensionless -> Dimensionless` | Exponential (e^x) |
+| `expm1(x)` | `Dimensionless -> Dimensionless` | exp(x) - 1 (numerically stable for small x) |
 | `ln(x)` | `Dimensionless -> Dimensionless` | Natural logarithm |
+| `log1p(x)` | `Dimensionless -> Dimensionless` | ln(1 + x) (numerically stable for small x) |
+| `log(x, base)` | `(Dimensionless, Dimensionless) -> Dimensionless` | Logarithm with arbitrary base |
+| `log2(x)` | `Dimensionless -> Dimensionless` | Base-2 logarithm |
+| `log10(x)` | `Dimensionless -> Dimensionless` | Base-10 logarithm |
 
 ### Trigonometric Functions
 
@@ -35,7 +50,19 @@ This page lists all dimensions, units, constants, and functions provided by the 
 | `tan(x)` | `Angle -> Dimensionless` | Tangent |
 | `asin(x)` | `Dimensionless -> Angle` | Inverse sine |
 | `acos(x)` | `Dimensionless -> Angle` | Inverse cosine |
+| `atan(x)` | `Dimensionless -> Angle` | Inverse tangent |
 | `atan2(y, x)` | `(D, D) -> Angle` | Two-argument inverse tangent |
+
+### Hyperbolic Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `sinh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic sine |
+| `cosh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic cosine |
+| `tanh(x)` | `Dimensionless -> Dimensionless` | Hyperbolic tangent |
+| `asinh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic sine |
+| `acosh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic cosine |
+| `atanh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic tangent |
 
 ### Comparison Functions
 
