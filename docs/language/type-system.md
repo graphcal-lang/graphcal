@@ -105,7 +105,8 @@ type Orbit {
     inc: Angle,
 }
 
-type Vec3<D: Dim, Frame: Type> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type Vec3<D: Dim, Frame: Type> {
     x: D,
     y: D,
     z: D,
@@ -390,7 +391,7 @@ This section lists the type of each expression form and the constraints the comp
 | `a ^ n` | `dim(a) ^ n` | `n` is a numeric literal |
 | `-a` | `dim(a)` | |
 
-For struct types with `derive(Add)`, `derive(Sub)`, or `derive(Neg)`, the corresponding operators are also allowed. Both operands must be the same struct type with the same type arguments, and the result is that struct type. The operation is applied component-wise.
+For struct types with `#[derive(Add)]`, `#[derive(Sub)]`, or `#[derive(Neg)]`, the corresponding operators are also allowed. Both operands must be the same struct type with the same type arguments, and the result is that struct type. The operation is applied component-wise.
 
 ### Comparison and Logical Operators
 
@@ -604,7 +605,8 @@ Functions and types can be generic over dimensions, indexes, and phantom types.
 Generic parameters can have defaults:
 
 ```
-type Vec3<D: Dim, F: Type = Unframed> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type Vec3<D: Dim, F: Type = Unframed> {
     x: D,
     y: D,
     z: D,
@@ -678,10 +680,11 @@ Named index labels have a dedicated `Label(IndexName)` type kind, distinct from 
 
 ## Derived Operations
 
-Struct types can derive arithmetic operators:
+Struct types can derive arithmetic operators using the `#[derive(...)]` attribute:
 
 ```
-type Vec3<D: Dim> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type Vec3<D: Dim> {
     x: D,
     y: D,
     z: D,
@@ -694,4 +697,4 @@ type Vec3<D: Dim> derive(Add, Sub, Neg) {
 | `Sub` | `a - b` | Both operands same struct type with same type args | Same struct type |
 | `Neg` | `-a` | Operand is the struct type | Same struct type |
 
-Operations are applied component-wise to all fields. All fields must have types that support the corresponding operation (e.g., for `derive(Add)`, all fields must be addable).
+Operations are applied component-wise to all fields. All fields must have types that support the corresponding operation (e.g., for `#[derive(Add)]`, all fields must be addable).

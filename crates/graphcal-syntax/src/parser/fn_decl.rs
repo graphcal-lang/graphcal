@@ -1,8 +1,7 @@
 use crate::ast::{
-    DeclKind, Declaration, DeriveOp, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam,
-    LetBinding,
+    DeclKind, Declaration, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, LetBinding,
 };
-use crate::names::{FnName, GenericParamName, Spanned};
+use crate::names::{FnName, GenericParamName};
 use crate::token::Token;
 
 use super::{ParseError, Parser, is_lower_snake_case};
@@ -121,40 +120,6 @@ impl Parser<'_> {
         }
         self.expect(Token::Gt)?;
         Ok(params)
-    }
-
-    /// Parse a derive clause: `derive(Add, Sub, Neg)`
-    pub(super) fn parse_derive_clause(&mut self) -> Result<Vec<Spanned<DeriveOp>>, ParseError> {
-        // Consume the `derive` identifier
-        self.lexer.next_token();
-        self.expect(Token::LParen)?;
-        let mut derives = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::RParen) {
-                break;
-            }
-            let op_ident = self.parse_any_ident()?;
-            let op = match op_ident.name.as_str() {
-                "Add" => DeriveOp::Add,
-                "Sub" => DeriveOp::Sub,
-                "Neg" => DeriveOp::Neg,
-                _ => {
-                    return Err(self.unexpected_token(
-                        "`Add`, `Sub`, or `Neg`",
-                        &op_ident.name,
-                        op_ident.span,
-                    ));
-                }
-            };
-            derives.push(Spanned::new(op, op_ident.span));
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
-        self.expect(Token::RParen)?;
-        Ok(derives)
     }
 
     /// Parse a function parameter: `name: TypeExpr`

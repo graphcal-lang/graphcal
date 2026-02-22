@@ -140,14 +140,15 @@ module.exports = grammar({
       ";",
     ),
 
+    // #[derive(Add, Sub, Neg)]
     // type TransferResult { dv1: Velocity, dv2: Velocity }       -- struct sugar
     // type ManeuverKind { Impulsive { dv: Velocity } Coasting }  -- multi-variant
     // type Eci {}                                                 -- empty marker type
     type_declaration: $ => seq(
+      repeat($.attribute),
       "type",
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
-      optional(field("derives", $.derive_clause)),
       "{",
       choice(
         // Empty type: type Eci {}
@@ -259,17 +260,6 @@ module.exports = grammar({
     ),
 
     generic_constraint: $ => choice("Dim", "Index", "Type"),
-
-    derive_clause: $ => seq(
-      "derive",
-      "(",
-      $.derive_op,
-      repeat(seq(",", $.derive_op)),
-      optional(","),
-      ")",
-    ),
-
-    derive_op: $ => choice("Add", "Sub", "Neg"),
 
     fn_param: $ => seq(
       field("name", $.identifier),

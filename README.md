@@ -219,7 +219,8 @@ node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
 Types can derive component-wise arithmetic:
 
 ```gcl
-type DeriveVec3<D: Dim, F: Type> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type DeriveVec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
 }
 
@@ -503,7 +504,8 @@ dimension Velocity = Length / Time;
 type Eci {}
 type Body {}
 
-type Vec3<D: Dim, F: Type> derive(Add, Sub, Neg) {
+#[derive(Add, Sub, Neg)]
+type Vec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
 }
 
