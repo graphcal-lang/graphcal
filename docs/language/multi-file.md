@@ -135,6 +135,15 @@ project/
   main.gcl        -- application-specific graph
 ```
 
+## Assertions in Imported Files
+
+When a file is imported, **all its assertions are automatically evaluated and
+reported**, regardless of whether they are explicitly listed in the import. This
+ensures that safety checks in library files are never silently skipped.
+
+To use an imported assertion in `#[assumes(...)]`, you must import it by name.
+See [Assertions](assertions.md#assertions-in-multi-file-projects) for details.
+
 ## Evaluation Entry Point
 
 When running `graphcal eval`, the entry file is the one you pass on the command line. All `import` dependencies are resolved transitively from that file:

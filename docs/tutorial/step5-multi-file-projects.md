@@ -113,12 +113,19 @@ import "./b.gcl" { x };
 import "./a.gcl" { y };  // ERROR: circular import
 ```
 
+## Assertions Are Always Checked
+
+When you import a file, **all its assertions are automatically evaluated**, even
+if you don't import them by name. This ensures that safety invariants in library
+files are never silently skipped. See [Assertions](../language/assertions.md#assertions-in-multi-file-projects) for details.
+
 ## What You Learned
 
 - **`import`** declarations to import declarations from other files
 - **Relative paths** for file references
 - **Import aliasing** with `as`
 - **Circular import detection** at compile time
+- **Automatic assertion checking** in imported files
 - A practical **project organization** pattern
 
 ## Next Step

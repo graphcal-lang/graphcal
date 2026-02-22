@@ -15,11 +15,17 @@ use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DimName, FnName};
 use graphcal_syntax::span::Span;
 
+use crate::dim_check::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval::format_unit_expr;
+use crate::eval_expr::RuntimeValue;
 use crate::prelude::load_prelude;
 use crate::registry::{self, Registry, RegistryBuilder};
-use crate::resolve::{DeclCategory, ImportedNames, ResolvedFile, resolve_with_imports};
+use crate::resolve::{
+    DeclCategory, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
+};
+#[cfg(test)]
+use crate::resolve::{ImportedNames, resolve_with_imports};
 
 /// Intermediate Representation produced by [`lower`].
 ///
@@ -53,6 +59,10 @@ pub struct IR {
     pub assert_names: HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
+    /// Pre-evaluated values imported from dependency files.
+    /// These are injected directly into the execution plan rather than compiled.
+    /// Each entry carries the runtime value and its declared type (for `dim_check`).
+    pub imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -98,6 +108,7 @@ fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+#[cfg(test)]
 pub fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -196,6 +207,112 @@ pub fn lower_to_builder(
         functions: resolved.functions,
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
+        imported_values: HashMap::new(),
+    };
+
+    Ok((builder, unfrozen))
+}
+
+/// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
+/// that can be further mutated before freezing.
+///
+/// Unlike [`lower_to_builder`], this uses [`resolve_with_imported_values`] which
+/// only adds imported names to the scope (not their expressions). The actual
+/// imported values are stored in `UnfrozenIR::imported_values` and injected
+/// into the execution plan at runtime.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+pub fn lower_to_builder_with_imported_values(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    // Step 1: Name resolution with imported value names in scope
+    let resolved = resolve_with_imported_values(ast, src, imported_names)?;
+
+    // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
+    let mut builder = RegistryBuilder::new();
+    load_prelude(&mut builder);
+    register_file_declarations(ast, &mut builder, src)?;
+
+    // Step 3: Register user-defined functions (including imported functions)
+    register_functions(&resolved, &mut builder, src)?;
+
+    // Step 4: Extract type annotations from local declarations only.
+    let mut type_anns: HashMap<String, TypeExpr> = HashMap::new();
+    for decl in &ast.declarations {
+        match &decl.kind {
+            DeclKind::Const(c) => {
+                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
+            }
+            DeclKind::Param(p) => {
+                type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
+            }
+            DeclKind::Node(n) => {
+                type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let consts = resolved
+        .consts
+        .into_iter()
+        .map(|(name, expr, span)| {
+            let type_ann = type_anns
+                .remove(&name)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let params = resolved
+        .params
+        .into_iter()
+        .map(|(name, expr, span)| {
+            let type_ann = type_anns
+                .remove(&name)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let nodes = resolved
+        .nodes
+        .into_iter()
+        .map(|(name, expr, span)| {
+            let type_ann = type_anns
+                .remove(&name)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("internal: missing type annotation for `{name}`"),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            Ok((name, type_ann, expr, span))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+
+    let unfrozen = UnfrozenIR {
+        consts,
+        params,
+        nodes,
+        asserts: resolved.asserts,
+        runtime_deps: resolved.runtime_deps,
+        const_deps: resolved.const_deps,
+        source_order: resolved.source_order,
+        functions: resolved.functions,
+        assert_names: resolved.assert_names,
+        assumes_map: resolved.assumes_map,
+        imported_values,
     };
 
     Ok((builder, unfrozen))
@@ -213,6 +330,7 @@ pub struct UnfrozenIR {
     functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
     assert_names: HashSet<String>,
     assumes_map: HashMap<String, Vec<String>>,
+    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 impl UnfrozenIR {
@@ -231,6 +349,7 @@ impl UnfrozenIR {
             functions: self.functions,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
+            imported_values: self.imported_values,
         }
     }
 }
@@ -246,7 +365,8 @@ pub fn register_file_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, None)
+    let file_path = std::path::PathBuf::from(src.name());
+    register_declarations_impl(file, registry, src, None, &file_path)
 }
 
 /// Register only the named type-system declarations (dimensions, units, indexes, types)
@@ -264,7 +384,8 @@ pub fn register_selected_declarations(
     src: &NamedSource<Arc<String>>,
     names: &std::collections::HashSet<String>,
 ) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, Some(names))
+    let file_path = std::path::PathBuf::from(src.name());
+    register_declarations_impl(file, registry, src, Some(names), &file_path)
 }
 
 /// Shared implementation for registering type-system declarations.
@@ -277,6 +398,7 @@ fn register_declarations_impl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     filter: Option<&std::collections::HashSet<String>>,
+    file_path: &std::path::Path,
 ) -> Result<(), GraphcalError> {
     let should_register = |name: &str| filter.is_none_or(|names| names.contains(name));
 
@@ -295,7 +417,11 @@ fn register_declarations_impl(
                     registry.register_dimension(d.name.value.clone(), dim);
                 } else {
                     // Base dimension — register a new orthogonal axis
-                    registry.register_base_dimension(d.name.value.clone());
+                    let dim_id = graphcal_syntax::dimension::BaseDimId::UserDefined {
+                        file: file_path.to_path_buf(),
+                        name: d.name.value.to_string(),
+                    };
+                    registry.register_base_dimension(d.name.value.clone(), dim_id);
                 }
             }
             DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
@@ -325,11 +451,11 @@ fn register_declarations_impl(
                 if u.definition.is_none() {
                     // Check if this dimension is a single base dimension
                     let mut iter = dim.iter();
-                    if let Some((&id, &exp)) = iter.next()
+                    if let Some((id, &exp)) = iter.next()
                         && iter.next().is_none()
                         && exp == Rational::ONE
                     {
-                        registry.set_base_dim_symbol(id, u.name.value.to_string());
+                        registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
                     }
                 }
                 registry.register_unit(u.name.value.clone(), dim, scale);

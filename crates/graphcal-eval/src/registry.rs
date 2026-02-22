@@ -238,6 +238,11 @@ impl DimensionRegistry {
         self.dimensions.get(name)
     }
 
+    /// Iterate over all named dimensions.
+    pub fn all_dimensions(&self) -> impl Iterator<Item = (&DimName, &Dimension)> {
+        self.dimensions.iter()
+    }
+
     /// Get the base dimension names map (for display purposes).
     #[must_use]
     pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
@@ -301,6 +306,13 @@ impl UnitRegistry {
     #[must_use]
     pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
         self.units.get(name)
+    }
+
+    /// Iterate over all units: (name, dimension, scale).
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &f64)> {
+        self.units
+            .iter()
+            .map(|(name, info)| (name, &info.dimension, &info.scale))
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound scale factor.
@@ -391,6 +403,11 @@ impl IndexRegistry {
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
         self.indexes.get(name)
     }
+
+    /// Iterate over all index definitions.
+    pub fn all_indexes(&self) -> impl Iterator<Item = &IndexDef> {
+        self.indexes.values()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -420,8 +437,6 @@ pub struct Registry {
 /// to produce an immutable [`Registry`].
 #[derive(Debug, Default)]
 pub struct RegistryBuilder {
-    /// Counter for assigning unique `BaseDimId` values.
-    next_base_dim_id: u32,
     base_dim_names: BTreeMap<BaseDimId, String>,
     base_dim_symbols: BTreeMap<BaseDimId, String>,
 
@@ -466,13 +481,11 @@ impl RegistryBuilder {
 
     /// Register a new base dimension (bodyless `dimension Foo;`).
     ///
-    /// Assigns the next available `BaseDimId`, creates a singleton `Dimension`,
-    /// and records the name for display purposes.
-    pub fn register_base_dimension(&mut self, name: DimName) -> BaseDimId {
-        let id = BaseDimId(self.next_base_dim_id);
-        self.next_base_dim_id += 1;
-        let dim = Dimension::base(id);
-        self.base_dim_names.insert(id, name.to_string());
+    /// The caller provides the [`BaseDimId`] which encodes the dimension's
+    /// identity (prelude name or user-defined file+name).
+    pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
+        let dim = Dimension::base(id.clone());
+        self.base_dim_names.insert(id.clone(), name.to_string());
         self.dimensions.insert(name, dim);
         id
     }
@@ -484,10 +497,11 @@ impl RegistryBuilder {
     pub fn register_base_dimension_with_symbol(
         &mut self,
         name: DimName,
+        id: BaseDimId,
         symbol: String,
     ) -> BaseDimId {
-        let id = self.register_base_dimension(name);
-        self.base_dim_symbols.insert(id, symbol);
+        let id = self.register_base_dimension(name, id);
+        self.base_dim_symbols.insert(id.clone(), symbol);
         id
     }
 
@@ -646,10 +660,16 @@ mod tests {
     use graphcal_syntax::names::Spanned;
     use graphcal_syntax::span::Span;
 
-    // Well-known IDs matching prelude registration order.
-    const LENGTH_ID: BaseDimId = BaseDimId(0);
-    const TIME_ID: BaseDimId = BaseDimId(1);
-    const MASS_ID: BaseDimId = BaseDimId(2);
+    // Well-known IDs matching prelude dimension names.
+    fn length_id() -> BaseDimId {
+        BaseDimId::Prelude("Length".to_string())
+    }
+    fn time_id() -> BaseDimId {
+        BaseDimId::Prelude("Time".to_string())
+    }
+    fn mass_id() -> BaseDimId {
+        BaseDimId::Prelude("Mass".to_string())
+    }
 
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
@@ -692,15 +712,15 @@ mod tests {
         let r = make_registry();
         assert_eq!(
             r.dimensions.get_dimension("Length"),
-            Some(&Dimension::base(LENGTH_ID))
+            Some(&Dimension::base(length_id()))
         );
         assert_eq!(
             r.dimensions.get_dimension("Time"),
-            Some(&Dimension::base(TIME_ID))
+            Some(&Dimension::base(time_id()))
         );
         assert_eq!(
             r.dimensions.get_dimension("Mass"),
-            Some(&Dimension::base(MASS_ID))
+            Some(&Dimension::base(mass_id()))
         );
     }
 
@@ -708,7 +728,7 @@ mod tests {
     fn registry_derived_dimensions() {
         let r = make_registry();
         let velocity = r.dimensions.get_dimension("Velocity").unwrap();
-        let expected = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
+        let expected = Dimension::base(length_id()) / Dimension::base(time_id());
         assert_eq!(*velocity, expected);
     }
 
@@ -716,7 +736,7 @@ mod tests {
     fn registry_base_units() {
         let r = make_registry();
         let m = r.units.get_unit("m").unwrap();
-        assert_eq!(m.dimension, Dimension::base(LENGTH_ID));
+        assert_eq!(m.dimension, Dimension::base(length_id()));
         assert!((m.scale - 1.0).abs() < f64::EPSILON);
     }
 
@@ -724,7 +744,7 @@ mod tests {
     fn registry_derived_units() {
         let r = make_registry();
         let km = r.units.get_unit("km").unwrap();
-        assert_eq!(km.dimension, Dimension::base(LENGTH_ID));
+        assert_eq!(km.dimension, Dimension::base(length_id()));
         assert!((km.scale - 1000.0).abs() < f64::EPSILON);
     }
 
@@ -754,7 +774,7 @@ mod tests {
             span: Span::new(0, 0),
         };
         let dim = r.dimensions.resolve_dim_expr(&expr).unwrap();
-        let expected = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
+        let expected = Dimension::base(length_id()) / Dimension::base(time_id());
         assert_eq!(dim, expected);
     }
 
@@ -778,7 +798,7 @@ mod tests {
             span: Span::new(0, 0),
         };
         let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
-        let expected_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID).pow_int(2);
+        let expected_dim = Dimension::base(length_id()) / Dimension::base(time_id()).pow_int(2);
         assert_eq!(dim, expected_dim);
         assert!((scale - 1.0).abs() < f64::EPSILON);
     }
@@ -803,7 +823,7 @@ mod tests {
             span: Span::new(0, 0),
         };
         let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
-        let expected_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
+        let expected_dim = Dimension::base(length_id()) / Dimension::base(time_id());
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
@@ -832,7 +852,7 @@ mod tests {
             }],
         });
         let r = b.build();
-        let velocity_dim = Dimension::base(LENGTH_ID) / Dimension::base(TIME_ID);
+        let velocity_dim = Dimension::base(length_id()) / Dimension::base(time_id());
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
         assert!(def.is_single_variant());
@@ -878,13 +898,16 @@ mod tests {
     fn register_user_defined_base_dimension() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
-        let id = b.register_base_dimension(DimName::new("Information"));
-        // Should get the next ID after the 8 prelude base dimensions
-        assert_eq!(id, BaseDimId(8));
+        let info_id = BaseDimId::UserDefined {
+            file: std::path::PathBuf::from("test.gcl"),
+            name: "Information".to_string(),
+        };
+        let id = b.register_base_dimension(DimName::new("Information"), info_id.clone());
+        assert_eq!(id, info_id);
         let r = b.build();
         // Should be retrievable
         let dim = r.dimensions.get_dimension("Information").unwrap();
-        assert_eq!(*dim, Dimension::base(id));
+        assert_eq!(*dim, Dimension::base(id.clone()));
         // Name should be recorded
         assert_eq!(
             r.dimensions.base_dim_names().get(&id),
@@ -895,7 +918,11 @@ mod tests {
     #[test]
     fn register_base_dimension_with_symbol() {
         let mut b = RegistryBuilder::new();
-        let id = b.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
+        let id = b.register_base_dimension_with_symbol(
+            DimName::new("Length"),
+            BaseDimId::Prelude("Length".to_string()),
+            "m".to_string(),
+        );
         let r = b.build();
         assert_eq!(
             r.dimensions.base_dim_symbols().get(&id),
@@ -906,10 +933,14 @@ mod tests {
     #[test]
     fn set_base_dim_symbol_only_first() {
         let mut b = RegistryBuilder::new();
-        let id = b.register_base_dimension(DimName::new("Information"));
-        b.set_base_dim_symbol(id, "bit".to_string());
+        let info_id = BaseDimId::UserDefined {
+            file: std::path::PathBuf::from("test.gcl"),
+            name: "Information".to_string(),
+        };
+        let id = b.register_base_dimension(DimName::new("Information"), info_id);
+        b.set_base_dim_symbol(id.clone(), "bit".to_string());
         // Second call should not overwrite
-        b.set_base_dim_symbol(id, "byte".to_string());
+        b.set_base_dim_symbol(id.clone(), "byte".to_string());
         let r = b.build();
         assert_eq!(
             r.dimensions.base_dim_symbols().get(&id),

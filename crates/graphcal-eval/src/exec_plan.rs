@@ -23,6 +23,9 @@ use crate::tir::TIR;
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
     pub const_values: HashMap<String, RuntimeValue>,
+    /// Pre-evaluated values imported from dependency files.
+    /// These are injected directly into the evaluation environment.
+    pub imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub topo_order: Vec<String>,
     /// Runtime expressions keyed by declaration name (params + nodes).
@@ -55,6 +58,11 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 
     Ok(ExecPlan {
         const_values,
+        imported_values: tir
+            .imported_values
+            .iter()
+            .map(|(k, (v, _dt))| (k.clone(), v.clone()))
+            .collect(),
         topo_order,
         expressions,
         assert_bodies,

@@ -218,7 +218,7 @@ pub struct EvalResult {
     pub assertions: Vec<(DeclName, AssertResult, Span)>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
-    /// Base dimension symbols for display (e.g., `BaseDimId(0) → "m"`).
+    /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
     pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
 }
 

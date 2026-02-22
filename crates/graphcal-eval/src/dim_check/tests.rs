@@ -40,7 +40,7 @@ fn check_dimensionless_arithmetic() {
 #[test]
 fn check_length_unit_literal() {
     let types = check("param alt: Length = 400.0 km;").unwrap();
-    let length = Dimension::base(BaseDimId(0));
+    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(types["alt"], DeclaredType::Scalar(length));
 }
 
@@ -48,7 +48,8 @@ fn check_length_unit_literal() {
 fn check_velocity_from_division() {
     let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 hour;\nnode speed: Velocity = @dist / @time;";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1));
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
     assert_eq!(types["speed"], DeclaredType::Scalar(velocity));
 }
 
@@ -74,7 +75,8 @@ fn check_conversion_same_dimension() {
     let source =
         "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / hour;";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1));
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
     assert_eq!(types["speed_kmh"], DeclaredType::Scalar(velocity));
 }
 
@@ -226,7 +228,8 @@ Maneuver::Correction: 0.5 km / s,
 Maneuver::Insertion: 1.8 km / s,
 };";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1));
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
     assert_eq!(
         types["dv"],
         DeclaredType::Indexed {

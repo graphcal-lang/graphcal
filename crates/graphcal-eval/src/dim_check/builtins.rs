@@ -34,7 +34,7 @@ pub(super) fn infer_fn_dim(
             Ok(Dimension::dimensionless())
         }
         DimSignature::AngleToDimensionless => {
-            let angle = Dimension::base(BaseDimId(7));
+            let angle = Dimension::base(BaseDimId::Prelude("Angle".to_string()));
             if arg_dims[0] != angle {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Angle".to_string(),
@@ -57,7 +57,7 @@ pub(super) fn infer_fn_dim(
                         .to_string(),
                 });
             }
-            Ok(Dimension::base(BaseDimId(7)))
+            Ok(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
         }
         DimSignature::Sqrt => {
             // Result dimension is arg^(1/2)
@@ -86,7 +86,7 @@ pub(super) fn infer_fn_dim(
                     help: "both arguments must have the same dimension".to_string(),
                 });
             }
-            Ok(Dimension::base(BaseDimId(7)))
+            Ok(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
         }
     }
 }

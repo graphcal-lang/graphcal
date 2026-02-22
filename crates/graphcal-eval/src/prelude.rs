@@ -27,18 +27,48 @@ pub fn load_prelude(builder: &mut RegistryBuilder) {
 }
 
 fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
-    let length_id = r.register_base_dimension_with_symbol(DimName::new("Length"), "m".to_string());
-    let time_id = r.register_base_dimension_with_symbol(DimName::new("Time"), "s".to_string());
-    let mass_id = r.register_base_dimension_with_symbol(DimName::new("Mass"), "kg".to_string());
-    let temperature_id =
-        r.register_base_dimension_with_symbol(DimName::new("Temperature"), "K".to_string());
-    let electric_current_id =
-        r.register_base_dimension_with_symbol(DimName::new("ElectricCurrent"), "A".to_string());
-    let amount_id =
-        r.register_base_dimension_with_symbol(DimName::new("Amount"), "mol".to_string());
-    let luminous_intensity_id =
-        r.register_base_dimension_with_symbol(DimName::new("LuminousIntensity"), "cd".to_string());
-    let angle_id = r.register_base_dimension_with_symbol(DimName::new("Angle"), "rad".to_string());
+    use graphcal_syntax::dimension::BaseDimId;
+
+    let length_id = r.register_base_dimension_with_symbol(
+        DimName::new("Length"),
+        BaseDimId::Prelude("Length".to_string()),
+        "m".to_string(),
+    );
+    let time_id = r.register_base_dimension_with_symbol(
+        DimName::new("Time"),
+        BaseDimId::Prelude("Time".to_string()),
+        "s".to_string(),
+    );
+    let mass_id = r.register_base_dimension_with_symbol(
+        DimName::new("Mass"),
+        BaseDimId::Prelude("Mass".to_string()),
+        "kg".to_string(),
+    );
+    let temperature_id = r.register_base_dimension_with_symbol(
+        DimName::new("Temperature"),
+        BaseDimId::Prelude("Temperature".to_string()),
+        "K".to_string(),
+    );
+    let electric_current_id = r.register_base_dimension_with_symbol(
+        DimName::new("ElectricCurrent"),
+        BaseDimId::Prelude("ElectricCurrent".to_string()),
+        "A".to_string(),
+    );
+    let amount_id = r.register_base_dimension_with_symbol(
+        DimName::new("Amount"),
+        BaseDimId::Prelude("Amount".to_string()),
+        "mol".to_string(),
+    );
+    let luminous_intensity_id = r.register_base_dimension_with_symbol(
+        DimName::new("LuminousIntensity"),
+        BaseDimId::Prelude("LuminousIntensity".to_string()),
+        "cd".to_string(),
+    );
+    let angle_id = r.register_base_dimension_with_symbol(
+        DimName::new("Angle"),
+        BaseDimId::Prelude("Angle".to_string()),
+        "rad".to_string(),
+    );
 
     BaseDimIds {
         length: Dimension::base(length_id),
@@ -145,10 +175,16 @@ mod tests {
     use crate::registry::RegistryBuilder;
     use graphcal_syntax::dimension::{BaseDimId, Rational};
 
-    // Well-known IDs matching registration order in load_base_dimensions.
-    const LENGTH_ID: BaseDimId = BaseDimId(0);
-    const TIME_ID: BaseDimId = BaseDimId(1);
-    const MASS_ID: BaseDimId = BaseDimId(2);
+    // Well-known IDs matching prelude dimension names.
+    fn length_id() -> BaseDimId {
+        BaseDimId::Prelude("Length".to_string())
+    }
+    fn time_id() -> BaseDimId {
+        BaseDimId::Prelude("Time".to_string())
+    }
+    fn mass_id() -> BaseDimId {
+        BaseDimId::Prelude("Mass".to_string())
+    }
 
     #[test]
     fn prelude_loads_all_base_dims() {
@@ -202,9 +238,9 @@ mod tests {
         let r = b.build();
         let force = r.dimensions.get_dimension("Force").unwrap();
         // Force = Mass * Length / Time^2
-        assert_eq!(force.get_exponent(MASS_ID), Rational::ONE);
-        assert_eq!(force.get_exponent(LENGTH_ID), Rational::ONE);
-        assert_eq!(force.get_exponent(TIME_ID), Rational::new(-2, 1));
+        assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
+        assert_eq!(force.get_exponent(&length_id()), Rational::ONE);
+        assert_eq!(force.get_exponent(&time_id()), Rational::new(-2, 1));
     }
 
     #[test]
@@ -243,8 +279,8 @@ mod tests {
         let r = b.build();
         let names = r.dimensions.base_dim_names();
         assert_eq!(names.len(), 8);
-        assert_eq!(names.get(&LENGTH_ID), Some(&"Length".to_string()));
-        assert_eq!(names.get(&TIME_ID), Some(&"Time".to_string()));
+        assert_eq!(names.get(&length_id()), Some(&"Length".to_string()));
+        assert_eq!(names.get(&time_id()), Some(&"Time".to_string()));
     }
 
     #[test]
@@ -254,7 +290,7 @@ mod tests {
         let r = b.build();
         let symbols = r.dimensions.base_dim_symbols();
         assert_eq!(symbols.len(), 8);
-        assert_eq!(symbols.get(&LENGTH_ID), Some(&"m".to_string()));
-        assert_eq!(symbols.get(&TIME_ID), Some(&"s".to_string()));
+        assert_eq!(symbols.get(&length_id()), Some(&"m".to_string()));
+        assert_eq!(symbols.get(&time_id()), Some(&"s".to_string()));
     }
 }

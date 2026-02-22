@@ -220,6 +220,15 @@ pub struct TIR {
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
     pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
+    /// Pre-evaluated values imported from dependency files (passed through from IR).
+    /// Each entry carries the runtime value and its declared type (for `dim_check`).
+    pub imported_values: HashMap<
+        crate::resolve::ScopedName,
+        (
+            crate::eval_expr::RuntimeValue,
+            crate::dim_check::DeclaredType,
+        ),
+    >,
 }
 
 impl TIR {
@@ -246,6 +255,11 @@ impl TIR {
         for (name, resolved) in &self.resolved_decl_types {
             let dt = resolved_to_declared_type(resolved, src)?;
             declared_types.insert(name.clone(), dt);
+        }
+        // Include imported values' declared types so dim_check can resolve references.
+        // ScopedName → String: dim_check uses flat string keys.
+        for (name, (_rv, dt)) in &self.imported_values {
+            declared_types.insert(name.to_string(), dt.clone());
         }
         Ok(declared_types)
     }
@@ -337,6 +351,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         assumes_map: ir.assumes_map,
         resolved_decl_types,
         resolved_fn_sigs,
+        imported_values: ir.imported_values,
     })
 }
 
@@ -1174,7 +1189,7 @@ mod tests {
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
         assert_eq!(
             resolved,
-            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
         );
     }
 
@@ -1183,7 +1198,8 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Length / Time^2");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1)).pow_int(2);
+        let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+            / Dimension::base(BaseDimId::Prelude("Time".to_string())).pow_int(2);
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 
@@ -1257,7 +1273,9 @@ mod tests {
             ResolvedTypeExpr::Indexed { base, indexes } => {
                 assert_eq!(
                     *base,
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude(
+                        "Length".to_string()
+                    )))
                 );
                 assert_eq!(indexes.len(), 1);
                 assert!(
@@ -1325,7 +1343,8 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Velocity");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDimId(0)) / Dimension::base(BaseDimId(1));
+        let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+            / Dimension::base(BaseDimId::Prelude("Time".to_string()));
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 
@@ -1413,7 +1432,9 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude(
+                        "Length".to_string()
+                    )))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
@@ -1424,7 +1445,7 @@ mod tests {
         // x_pos should be scalar Length
         assert_eq!(
             tir.resolved_decl_types["x_pos"],
-            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+            ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
         );
     }
 
@@ -1443,7 +1464,9 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude(
+                        "Length".to_string()
+                    )))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
@@ -1462,7 +1485,9 @@ mod tests {
                 assert_eq!(type_args.len(), 2);
                 assert_eq!(
                     type_args[0],
-                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))
+                    ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude(
+                        "Length".to_string()
+                    )))
                 );
                 assert!(
                     matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
@@ -1498,7 +1523,7 @@ mod tests {
 
     #[test]
     fn convert_scalar() {
-        let dim = Dimension::base(BaseDimId(0));
+        let dim = Dimension::base(BaseDimId::Prelude("Length".to_string()));
         let dt =
             resolved_to_declared_type(&ResolvedTypeExpr::Scalar(dim.clone()), &make_src()).unwrap();
         assert_eq!(dt, DeclaredType::Scalar(dim));
@@ -1518,7 +1543,9 @@ mod tests {
     fn convert_indexed() {
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
-                base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId(0)))),
+                base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(
+                    BaseDimId::Prelude("Length".to_string()),
+                ))),
                 indexes: vec![ResolvedIndex::Concrete(
                     IndexName::new("M"),
                     Span::new(0, 0),
@@ -1530,7 +1557,9 @@ mod tests {
         assert_eq!(
             dt,
             DeclaredType::Indexed {
-                element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId(0)))),
+                element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId::Prelude(
+                    "Length".to_string()
+                )))),
                 index: IndexName::new("M"),
             }
         );

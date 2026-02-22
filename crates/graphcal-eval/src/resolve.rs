@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl, TypeExpr};
+#[cfg(test)]
+use graphcal_syntax::ast::TypeExpr;
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -13,9 +15,44 @@ use crate::error::GraphcalError;
 const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
 const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
 
+/// A declaration name that may optionally be module-qualified.
+///
+/// Selective imports produce `Local` names (`x`), while module imports produce
+/// `Qualified` names (`module::x`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ScopedName {
+    /// A bare local name: `x`, `G0`, etc.
+    Local(String),
+    /// A module-qualified name: `module::x`, `constants::G0`, etc.
+    Qualified { module: String, member: String },
+}
+
+impl ScopedName {
+    /// Returns the member (leaf) part of the name.
+    ///
+    /// For `Local("x")` this returns `"x"`.
+    /// For `Qualified { module: "m", member: "x" }` this also returns `"x"`.
+    pub fn member(&self) -> &str {
+        match self {
+            Self::Local(name) => name,
+            Self::Qualified { member, .. } => member,
+        }
+    }
+}
+
+impl std::fmt::Display for ScopedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(name) => write!(f, "{name}"),
+            Self::Qualified { module, member } => write!(f, "{module}::{member}"),
+        }
+    }
+}
+
 /// Declarations imported from other files, to be injected into the resolve scope.
 ///
 /// These are treated as if they were declared locally, appearing before local declarations.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct ImportedNames {
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
@@ -23,6 +60,25 @@ pub struct ImportedNames {
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     pub functions: Vec<(String, FnDecl, Span)>,
     pub asserts: Vec<(String, AssertBody, Span)>,
+}
+
+/// Pre-evaluated value bindings imported from already-evaluated dependency files.
+///
+/// Unlike [`ImportedNames`] which carries AST expressions, this carries
+/// evaluated values. Used in per-file evaluation where each file is
+/// compiled and evaluated independently.
+#[derive(Debug, Default)]
+pub struct ImportedValueNames {
+    /// Imported const names (for scope checking only — actual values are in the exec plan).
+    pub const_names: Vec<(ScopedName, Span)>,
+    /// Imported param names.
+    pub param_names: Vec<(ScopedName, Span)>,
+    /// Imported node names.
+    pub node_names: Vec<(ScopedName, Span)>,
+    /// Imported function declarations (still need AST for compilation).
+    pub functions: Vec<(String, FnDecl, Span)>,
+    /// Imported assert names (for `#[assumes]` validation).
+    pub assert_names: Vec<(String, Span)>,
 }
 
 /// The kind of a declaration (used for source-order tracking).
@@ -81,6 +137,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 ///
 /// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
+#[cfg(test)]
 #[expect(
     clippy::too_many_lines,
     reason = "complex resolution logic with multiple passes"
@@ -487,6 +544,326 @@ pub fn resolve_with_imports(
         runtime_deps,
         const_deps,
         source_order: all_source_order,
+        functions: all_functions,
+        assert_names,
+        assumes_map,
+    })
+}
+
+/// Resolve names with pre-evaluated imported value names in scope.
+///
+/// Unlike [`resolve_with_imports`], this does **not** inject imported expressions
+/// into the DAG. Imported names are only used for scope checking (so that
+/// references to imported values are recognized as valid). The actual values
+/// are injected later via the execution plan.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
+/// violations, or arity mismatches are found.
+#[expect(
+    clippy::too_many_lines,
+    reason = "complex resolution logic with multiple passes"
+)]
+pub fn resolve_with_imported_values(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+    imported: &ImportedValueNames,
+) -> Result<ResolvedFile, GraphcalError> {
+    let builtin_consts = builtin_constants();
+    let builtin_fns = builtin_functions();
+
+    let mut names: HashMap<String, Span> = HashMap::new();
+    let mut consts = Vec::new();
+    let mut params = Vec::new();
+    let mut nodes = Vec::new();
+    let mut asserts = Vec::new();
+    let mut functions = Vec::new();
+    let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut source_order = Vec::new();
+    let mut user_fn_names: HashSet<String> = HashSet::new();
+    let mut assert_names: HashSet<String> = HashSet::new();
+
+    // Pre-populate with imported names (for scope checking only).
+    // ScopedName → String conversion: the resolver's internal scope uses flat strings
+    // because it mixes imported names with local declarations.
+    for (name, span) in &imported.const_names {
+        names.insert(name.to_string(), *span);
+    }
+    for (name, span) in &imported.param_names {
+        names.insert(name.to_string(), *span);
+    }
+    for (name, span) in &imported.node_names {
+        names.insert(name.to_string(), *span);
+    }
+    for (name, _, span) in &imported.functions {
+        names.insert(name.clone(), *span);
+        user_fn_names.insert(name.clone());
+    }
+    for (name, span) in &imported.assert_names {
+        names.insert(name.clone(), *span);
+        assert_names.insert(name.clone());
+    }
+
+    // First pass: collect all declarations and check for duplicates + casing
+    for decl in &file.declarations {
+        let (name, name_span, is_const) = match &decl.kind {
+            DeclKind::Param(p) => (p.name.value.to_string(), p.name.span, false),
+            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
+            DeclKind::Const(c) => (c.name.value.to_string(), c.name.span, true),
+            DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
+            DeclKind::Fn(f) => {
+                let fn_name_str = f.name.value.to_string();
+                if let Some(first_span) = names.get(&fn_name_str) {
+                    return Err(GraphcalError::DuplicateName {
+                        name: fn_name_str,
+                        src: src.clone(),
+                        duplicate: f.name.span.into(),
+                        first: (*first_span).into(),
+                    });
+                }
+                names.insert(fn_name_str.clone(), f.name.span);
+                user_fn_names.insert(fn_name_str);
+                continue;
+            }
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_) => {
+                continue;
+            }
+        };
+
+        if let Some(first_span) = names.get(&name) {
+            return Err(GraphcalError::DuplicateName {
+                name,
+                src: src.clone(),
+                duplicate: name_span.into(),
+                first: (*first_span).into(),
+            });
+        }
+        names.insert(name.clone(), name_span);
+
+        let category = match &decl.kind {
+            DeclKind::Const(_) => DeclCategory::Const,
+            DeclKind::Param(_) => DeclCategory::Param,
+            DeclKind::Node(_) => DeclCategory::Node,
+            DeclKind::Assert(_) => {
+                assert_names.insert(name.clone());
+                DeclCategory::Assert
+            }
+            _ => continue,
+        };
+        source_order.push((name.clone(), category));
+
+        #[expect(
+            clippy::else_if_without_else,
+            reason = "no action needed in the else case"
+        )]
+        if is_const {
+            if !is_upper_snake_case(&name) {
+                return Err(GraphcalError::EvalError {
+                    message: format!("const name `{name}` must be UPPER_SNAKE_CASE"),
+                    src: src.clone(),
+                    span: name_span.into(),
+                });
+            }
+        } else if !is_lower_snake_case(&name) {
+            return Err(GraphcalError::EvalError {
+                message: format!("param/node name `{name}` must be lower_snake_case"),
+                src: src.clone(),
+                span: name_span.into(),
+            });
+        }
+    }
+
+    // Build known name sets (including imported names for scope checking).
+    let all_const_names: HashSet<&str> = names
+        .keys()
+        .filter(|n| {
+            if let Some((_module, member)) = n.split_once("::") {
+                is_upper_snake_case(member)
+            } else {
+                is_upper_snake_case(n)
+            }
+        })
+        .map(String::as_str)
+        .collect();
+    let all_runtime_names: HashSet<&str> = names
+        .keys()
+        .filter(|n| {
+            if let Some((_module, member)) = n.split_once("::") {
+                is_lower_snake_case(member)
+            } else {
+                is_lower_snake_case(n)
+            }
+        })
+        .map(String::as_str)
+        .collect();
+
+    // Second pass: resolve references and extract dependencies (local only).
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_) => {}
+            DeclKind::Assert(a) => {
+                let body_exprs: Vec<&Expr> = match &a.body {
+                    AssertBody::Expr(expr) => vec![expr],
+                    AssertBody::Tolerance {
+                        actual,
+                        expected,
+                        tolerance,
+                        ..
+                    } => vec![actual, expected, tolerance],
+                };
+                for body_expr in &body_exprs {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        body_expr,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                }
+                let aname = a.name.value.to_string();
+                asserts.push((aname, a.body.clone(), decl.span));
+            }
+            DeclKind::Fn(f) => {
+                check_no_graph_refs_in_fn(f, src)?;
+                functions.push((f.name.value.to_string(), f.clone(), decl.span));
+            }
+            DeclKind::Const(c) => {
+                check_no_graph_refs(&c.value, src)?;
+                let deps = extract_const_refs(
+                    &c.value,
+                    &all_const_names,
+                    &builtin_consts,
+                    &builtin_fns,
+                    &user_fn_names,
+                    src,
+                )?;
+                let cname = c.name.value.to_string();
+                const_deps.insert(cname.clone(), deps);
+                consts.push((cname, c.value.clone(), decl.span));
+            }
+            DeclKind::Param(p) => {
+                check_no_assert_graph_refs(&p.value, &assert_names, src)?;
+                let (graph_refs, _const_refs) = extract_all_refs(
+                    &p.value,
+                    &all_runtime_names,
+                    &all_const_names,
+                    &builtin_consts,
+                    &builtin_fns,
+                    &user_fn_names,
+                    src,
+                )?;
+                let pname = p.name.value.to_string();
+                runtime_deps.insert(pname.clone(), graph_refs);
+                params.push((pname, p.value.clone(), decl.span));
+            }
+            DeclKind::Node(n) => {
+                check_no_assert_graph_refs(&n.value, &assert_names, src)?;
+                let (mut graph_refs, _const_refs) = extract_all_refs(
+                    &n.value,
+                    &all_runtime_names,
+                    &all_const_names,
+                    &builtin_consts,
+                    &builtin_fns,
+                    &user_fn_names,
+                    src,
+                )?;
+                let nname = n.name.value.to_string();
+                if matches!(n.value.kind, ExprKind::Unfold { .. }) {
+                    graph_refs.remove(&nname);
+                }
+                runtime_deps.insert(nname.clone(), graph_refs);
+                nodes.push((nname, n.value.clone(), decl.span));
+            }
+        }
+    }
+
+    // Imported functions still need to be in the resolved output for IR compilation.
+    let mut all_functions = imported.functions.clone();
+    all_functions.extend(functions);
+
+    // Validate attributes and build assumes_map
+    let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
+    for decl in &file.declarations {
+        let decl_name = match &decl.kind {
+            DeclKind::Param(p) => Some(p.name.value.to_string()),
+            DeclKind::Node(n) => Some(n.name.value.to_string()),
+            DeclKind::Const(c) => Some(c.name.value.to_string()),
+            DeclKind::Assert(a) => Some(a.name.value.to_string()),
+            DeclKind::Fn(f) => Some(f.name.value.to_string()),
+            _ => None,
+        };
+        for attr in &decl.attributes {
+            let attr_name = attr.name.name.as_str();
+            match attr_name {
+                "assumes" => {
+                    let kind = match &decl.kind {
+                        DeclKind::Param(_) | DeclKind::Node(_) => None,
+                        DeclKind::Const(_) => Some("const"),
+                        DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Fn(_) => Some("fn"),
+                        DeclKind::Dimension(_) => Some("dimension"),
+                        DeclKind::Unit(_) => Some("unit"),
+                        DeclKind::Type(_) => Some("type"),
+                        DeclKind::Index(_) => Some("index"),
+                        DeclKind::Import(_) => Some("import"),
+                    };
+                    if let Some(kind) = kind {
+                        return Err(GraphcalError::InvalidAssumesTarget {
+                            kind: kind.to_string(),
+                            src: src.clone(),
+                            span: attr.span.into(),
+                        });
+                    }
+                    for arg in &attr.args {
+                        let arg_name = arg.name.as_str();
+                        if !assert_names.contains(arg_name) {
+                            return Err(GraphcalError::UnknownAssertInAssumes {
+                                name: arg_name.to_string(),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        }
+                        if let Some(ref dname) = decl_name {
+                            assumes_map
+                                .entry(arg_name.to_string())
+                                .or_default()
+                                .push(dname.clone());
+                        }
+                    }
+                }
+                "lazy" => {}
+                _ => {
+                    return Err(GraphcalError::UnknownAttribute {
+                        name: attr_name.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(ResolvedFile {
+        consts,
+        params,
+        nodes,
+        asserts,
+        runtime_deps,
+        const_deps,
+        source_order,
         functions: all_functions,
         assert_names,
         assumes_map,
