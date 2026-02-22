@@ -22,9 +22,10 @@ use crate::eval_expr::RuntimeValue;
 use crate::prelude::load_prelude;
 use crate::registry::{self, Registry, RegistryBuilder};
 use crate::resolve::{
-    DeclCategory, ImportedNames, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
-    resolve_with_imports,
+    DeclCategory, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
+#[cfg(test)]
+use crate::resolve::{ImportedNames, resolve_with_imports};
 
 /// Intermediate Representation produced by [`lower`].
 ///
@@ -107,6 +108,7 @@ fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+#[cfg(test)]
 pub fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,

@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl, TypeExpr};
+#[cfg(test)]
+use graphcal_syntax::ast::TypeExpr;
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -50,6 +52,7 @@ impl std::fmt::Display for ScopedName {
 /// Declarations imported from other files, to be injected into the resolve scope.
 ///
 /// These are treated as if they were declared locally, appearing before local declarations.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct ImportedNames {
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
@@ -134,6 +137,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 ///
 /// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
+#[cfg(test)]
 #[expect(
     clippy::too_many_lines,
     reason = "complex resolution logic with multiple passes"
