@@ -451,3 +451,259 @@ snapshot_test!(snapshot_variant_match, "variant_match.gcl");
 snapshot_test!(snapshot_power_budget, "power_budget.gcl");
 snapshot_test!(snapshot_thermal_analysis, "thermal_analysis.gcl");
 snapshot_test!(snapshot_parenthesized_exprs, "parenthesized_exprs.gcl");
+snapshot_test!(snapshot_expected_fail_pass, "expected_fail_pass.gcl");
+snapshot_test!(
+    snapshot_expected_fail_unexpected_pass,
+    "expected_fail_unexpected_pass.gcl"
+);
+snapshot_test!(snapshot_expected_fail_indexed, "expected_fail_indexed.gcl");
+snapshot_test!(
+    snapshot_expected_fail_multi_indexed,
+    "expected_fail_multi_indexed.gcl"
+);
+snapshot_test!(
+    snapshot_comments_in_expressions,
+    "comments_in_expressions.gcl"
+);
+
+// ---------------------------------------------------------------------------
+// Fixture: comments_in_expressions.gcl
+// ---------------------------------------------------------------------------
+
+idempotency_test!(
+    idempotent_comments_in_expressions,
+    "comments_in_expressions.gcl"
+);
+roundtrip_test!(
+    roundtrip_comments_in_expressions,
+    "comments_in_expressions.gcl"
+);
+
+// ---------------------------------------------------------------------------
+// Comment-in-expression preservation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn preserves_trailing_comment_in_1d_table() {
+    let source = r"
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Dimensionless[Maneuver] = table[Maneuver] {
+    Departure:  2.46; // departure burn
+    Correction: 0.12; // midcourse
+    Insertion:  1.83; // insertion
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// departure burn"),
+        "Trailing comment on 1D table row lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// midcourse"),
+        "Trailing comment on 1D table row lost: {formatted}"
+    );
+    // Comments should be on the same line as the row
+    for line in formatted.lines() {
+        if line.contains("// departure burn") {
+            assert!(
+                line.contains("Departure"),
+                "Trailing comment not on same line as row: {formatted}"
+            );
+        }
+    }
+}
+
+#[test]
+fn preserves_leading_comment_between_table_rows() {
+    let source = r"
+index Maneuver = { Departure, Correction, Insertion }
+param dv: Dimensionless[Maneuver] = table[Maneuver] {
+    // first
+    Departure:  2.46;
+    // second
+    Correction: 0.12;
+    // third
+    Insertion:  1.83;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// first"),
+        "Leading comment between table rows lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// second"),
+        "Leading comment between table rows lost: {formatted}"
+    );
+    // Ensure the comment appears before the row, not after the declaration
+    let first_pos = formatted.find("// first").unwrap();
+    let departure_pos = formatted.find("Departure:").unwrap();
+    assert!(
+        first_pos < departure_pos,
+        "Leading comment should appear before row label: {formatted}"
+    );
+}
+
+#[test]
+fn preserves_comment_in_block_let() {
+    let source = r"
+fn f(x: Dimensionless) -> Dimensionless {
+    // before a
+    let a = x * 2.0;
+    // before b
+    let b = a + 1.0;
+    // before result
+    b
+}
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// before a"),
+        "Comment before let binding lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// before b"),
+        "Comment before second let binding lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// before result"),
+        "Comment before tail expression lost: {formatted}"
+    );
+    // Order check
+    let a_comment = formatted.find("// before a").unwrap();
+    let a_let = formatted.find("let a").unwrap();
+    assert!(
+        a_comment < a_let,
+        "Comment should appear before its let binding: {formatted}"
+    );
+}
+
+#[test]
+fn preserves_comment_in_match_arms() {
+    let source = r"
+index Phase = { Coast, Burn }
+node x: Dimensionless[Phase] = for p: Phase {
+    match p {
+        // coasting
+        Phase::Coast => 0.0,
+        // burning
+        Phase::Burn => 1.0,
+    }
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// coasting"),
+        "Comment before match arm lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// burning"),
+        "Comment before match arm lost: {formatted}"
+    );
+    let coast_comment = formatted.find("// coasting").unwrap();
+    let coast_arm = formatted.find("Phase::Coast =>").unwrap();
+    assert!(
+        coast_comment < coast_arm,
+        "Comment should appear before its match arm: {formatted}"
+    );
+}
+
+#[test]
+fn preserves_trailing_comment_in_map_literal() {
+    let source = r"
+index Maneuver = { Departure, Correction }
+param dv: Dimensionless[Maneuver] = {
+    Maneuver::Departure: 2.46, // departure
+    Maneuver::Correction: 0.12, // correction
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// departure"),
+        "Trailing comment on map entry lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// correction"),
+        "Trailing comment on map entry lost: {formatted}"
+    );
+    // Comment should be on the same line as the entry
+    for line in formatted.lines() {
+        if line.contains("// departure") {
+            assert!(
+                line.contains("Departure"),
+                "Trailing comment not on same line as map entry: {formatted}"
+            );
+        }
+    }
+}
+
+#[test]
+fn preserves_leading_comment_in_map_literal() {
+    let source = r"
+index Maneuver = { Departure, Correction }
+param dv: Dimensionless[Maneuver] = {
+    // departure entry
+    Maneuver::Departure: 2.46,
+    // correction entry
+    Maneuver::Correction: 0.12,
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// departure entry"),
+        "Leading comment on map entry lost: {formatted}"
+    );
+    let comment_pos = formatted.find("// departure entry").unwrap();
+    let entry_pos = formatted.find("Maneuver::Departure").unwrap();
+    assert!(
+        comment_pos < entry_pos,
+        "Leading comment should appear before map entry: {formatted}"
+    );
+}
+
+#[test]
+fn preserves_trailing_comment_on_3d_table_slice_header() {
+    let source = r"
+index Scenario = { Nominal, Contingency }
+index Phase = { Launch, Cruise, Arrival }
+index Maneuver = { Departure, Correction, Insertion }
+param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
+    [Scenario::Nominal] // nominal scenario
+             Departure, Correction, Insertion;
+    Launch:  5000.0,        0.0,       0.0;
+    Cruise:     0.0,     4500.0,       0.0;
+    Arrival:    0.0,        0.0,    4000.0;
+
+    [Scenario::Contingency] // contingency scenario
+             Departure, Correction, Insertion;
+    Launch:  4800.0,        0.0,       0.0;
+    Cruise:     0.0,     4200.0,       0.0;
+    Arrival:    0.0,        0.0,    3800.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    // Both trailing comments must survive
+    assert!(
+        formatted.contains("// nominal scenario"),
+        "Trailing comment on slice header lost: {formatted}"
+    );
+    assert!(
+        formatted.contains("// contingency scenario"),
+        "Trailing comment on slice header lost: {formatted}"
+    );
+    // Each comment must be on the same line as its slice header
+    for line in formatted.lines() {
+        if line.contains("// nominal scenario") {
+            assert!(
+                line.contains("[Scenario::Nominal]"),
+                "Comment not on same line as slice header: {formatted}"
+            );
+        }
+        if line.contains("// contingency scenario") {
+            assert!(
+                line.contains("[Scenario::Contingency]"),
+                "Comment not on same line as slice header: {formatted}"
+            );
+        }
+    }
+}

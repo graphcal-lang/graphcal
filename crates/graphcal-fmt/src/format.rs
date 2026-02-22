@@ -133,6 +133,16 @@ fn is_nil(doc: &RcDoc<'static>) -> bool {
     buf.is_empty()
 }
 
+/// Prepend leading comments before a doc. Returns the doc unchanged if
+/// there are no comments. Like Gleam's `commented()` helper.
+fn prepend_comments(leading: RcDoc<'static>, doc: RcDoc<'static>) -> RcDoc<'static> {
+    if is_nil(&leading) {
+        doc
+    } else {
+        leading.append(doc)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Declarations
 // ---------------------------------------------------------------------------
@@ -655,23 +665,10 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             };
             RcDoc::text(op_str).append(format_expr(fmt, operand))
         }
-        ExprKind::FnCall { name, args } => {
-            let arg_docs: Vec<RcDoc<'static>> = args.iter().map(|a| format_expr(fmt, a)).collect();
-            let sep = RcDoc::text(",").append(RcDoc::line());
-            let inner = RcDoc::intersperse(arg_docs, sep);
-            RcDoc::text(name.value.as_str().to_string())
-                .append(RcDoc::text("("))
-                .append(inner.nest(INDENT).group())
-                .append(RcDoc::text(")"))
-        }
+        ExprKind::FnCall { name, args } => format_fn_call_expr(fmt, name.value.as_str(), args),
         ExprKind::QualifiedFnCall { module, name, args } => {
-            let arg_docs: Vec<RcDoc<'static>> = args.iter().map(|a| format_expr(fmt, a)).collect();
-            let sep = RcDoc::text(",").append(RcDoc::line());
-            let inner = RcDoc::intersperse(arg_docs, sep);
-            RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
-                .append(RcDoc::text("("))
-                .append(inner.nest(INDENT).group())
-                .append(RcDoc::text(")"))
+            let fn_name = format!("{}::{}", module.name.as_str(), name.value.as_str());
+            format_fn_call_expr(fmt, &fn_name, args)
         }
         ExprKind::If {
             condition,
@@ -814,9 +811,40 @@ fn format_binop_child(
 }
 
 fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> RcDoc<'static> {
-    format_binop_child(fmt, lhs, op, false)
-        .append(RcDoc::text(op_str(op)))
-        .append(format_binop_child(fmt, rhs, op, true))
+    let lhs_doc = format_binop_child(fmt, lhs, op, false);
+    // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
+    let comment = fmt.drain_comments_before(rhs.span.offset());
+    let rhs_doc = format_binop_child(fmt, rhs, op, true);
+    if is_nil(&comment) {
+        lhs_doc.append(RcDoc::text(op_str(op))).append(rhs_doc)
+    } else {
+        // Force multi-line: put operator and comment on the lhs line,
+        // then rhs on the next line
+        lhs_doc
+            .append(RcDoc::text(op_str(op)))
+            .append(comment)
+            .append(rhs_doc)
+    }
+}
+
+/// Shared logic for `FnCall` and `QualifiedFnCall` with comment handling per argument.
+fn format_fn_call_expr(fmt: &mut Formatter<'_>, fn_name: &str, args: &[Expr]) -> RcDoc<'static> {
+    let mut arg_docs: Vec<RcDoc<'static>> = Vec::new();
+    for arg in args {
+        // Drain leading comments before this argument
+        let leading = fmt.drain_comments_before(arg.span.offset());
+        let arg_doc = format_expr(fmt, arg);
+        // Drain trailing comment after this argument
+        let arg_end = arg.span.offset() + arg.span.len();
+        let trailing = fmt.drain_trailing_comment(arg_end);
+        arg_docs.push(prepend_comments(leading, arg_doc.append(trailing)));
+    }
+    let sep = RcDoc::text(",").append(RcDoc::line());
+    let inner = RcDoc::intersperse(arg_docs, sep);
+    RcDoc::text(fn_name.to_string())
+        .append(RcDoc::text("("))
+        .append(inner.nest(INDENT).group())
+        .append(RcDoc::text(")"))
 }
 
 fn format_if(
@@ -854,9 +882,17 @@ fn format_if(
 fn format_block_body(fmt: &mut Formatter<'_>, stmts: &[LetBinding], tail: &Expr) -> RcDoc<'static> {
     let mut docs: Vec<RcDoc<'static>> = Vec::new();
     for stmt in stmts {
-        docs.push(format_let_binding(fmt, stmt));
+        // Drain leading comments before this let binding
+        let leading = fmt.drain_comments_before(stmt.span.offset());
+        let stmt_doc = format_let_binding(fmt, stmt);
+        // Drain trailing comment on the same line
+        let stmt_end = stmt.span.offset() + stmt.span.len();
+        let trailing = fmt.drain_trailing_comment(stmt_end);
+        docs.push(prepend_comments(leading, stmt_doc.append(trailing)));
     }
-    docs.push(format_expr(fmt, tail));
+    // Drain leading comments before the tail expression
+    let leading = fmt.drain_comments_before(tail.span.offset());
+    docs.push(prepend_comments(leading, format_expr(fmt, tail)));
     RcDoc::intersperse(docs, RcDoc::hardline())
 }
 
@@ -890,16 +926,17 @@ fn format_struct_construction(
             .append(RcDoc::text(">"));
     }
 
-    let field_docs: Vec<RcDoc<'static>> = fields
-        .iter()
-        .map(|f| {
-            let name = RcDoc::text(f.name.value.as_str().to_string());
-            match &f.value {
-                Some(val) => name.append(RcDoc::text(": ")).append(format_expr(fmt, val)),
-                None => name, // shorthand
-            }
-        })
-        .collect();
+    let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
+    for f in fields {
+        // Drain leading comments before this field
+        let leading = fmt.drain_comments_before(f.name.span.offset());
+        let name = RcDoc::text(f.name.value.as_str().to_string());
+        let field_doc = match &f.value {
+            Some(val) => name.append(RcDoc::text(": ")).append(format_expr(fmt, val)),
+            None => name, // shorthand
+        };
+        field_docs.push(prepend_comments(leading, field_doc));
+    }
 
     let sep = RcDoc::text(",").append(RcDoc::line());
     let trailing_comma = RcDoc::text(",").flat_alt(RcDoc::nil());
@@ -914,35 +951,39 @@ fn format_struct_construction(
 }
 
 fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDoc<'static> {
-    let entry_docs: Vec<RcDoc<'static>> = entries
-        .iter()
-        .map(|e| {
-            let key_doc = if e.keys.len() == 1 {
-                RcDoc::text(format!(
-                    "{}::{}",
-                    e.keys[0].index.value.as_str(),
-                    e.keys[0].variant.value.as_str()
-                ))
-            } else {
-                let key_parts: Vec<String> = e
-                    .keys
-                    .iter()
-                    .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
-                    .collect();
-                RcDoc::text(format!("({})", key_parts.join(", ")))
-            };
-            key_doc
-                .append(RcDoc::text(": "))
-                .append(format_expr(fmt, &e.value))
-        })
-        .collect();
+    let mut lines: Vec<RcDoc<'static>> = Vec::new();
+    for e in entries {
+        // Drain leading comments before this entry
+        let leading = fmt.drain_comments_before(e.value.span.offset());
 
-    let sep = RcDoc::text(",").append(RcDoc::hardline());
+        let key_doc = if e.keys.len() == 1 {
+            RcDoc::text(format!(
+                "{}::{}",
+                e.keys[0].index.value.as_str(),
+                e.keys[0].variant.value.as_str()
+            ))
+        } else {
+            let key_parts: Vec<String> = e
+                .keys
+                .iter()
+                .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .collect();
+            RcDoc::text(format!("({})", key_parts.join(", ")))
+        };
+        let entry_doc = key_doc
+            .append(RcDoc::text(": "))
+            .append(format_expr(fmt, &e.value))
+            .append(RcDoc::text(","));
+        // Drain trailing comment after this entry's value (but before next entry)
+        let value_end = e.value.span.offset() + e.value.span.len();
+        let trailing = fmt.drain_trailing_comment(value_end);
+        lines.push(prepend_comments(leading, entry_doc.append(trailing)));
+    }
+
     RcDoc::text("{")
         .append(
             RcDoc::hardline()
-                .append(RcDoc::intersperse(entry_docs, sep))
-                .append(RcDoc::text(","))
+                .append(RcDoc::intersperse(lines, RcDoc::hardline()))
                 .nest(INDENT),
         )
         .append(RcDoc::hardline())
@@ -1007,16 +1048,27 @@ fn format_table_1d(fmt: &mut Formatter<'_>, header: &str, entries: &[MapEntry]) 
 
     let mut rows: Vec<RcDoc<'static>> = Vec::new();
     for (e, rendered) in entries.iter().zip(&rendered_values) {
+        // Drain leading comments before this entry (use value span since
+        // key spans may point to the index declaration, not the table row)
+        let leading = fmt.drain_comments_before(e.value.span.offset());
+
         let label = e.keys[0].variant.value.as_str();
         let padding = max_label_width - label.len();
         let value_padding = max_value_width - rendered.len();
-        let row = format!(
+        let row_text = format!(
             "{}:{} {};",
             label,
             " ".repeat(padding + 1 + value_padding),
             rendered
         );
-        rows.push(RcDoc::text(row));
+
+        // Drain trailing comment on the same line after this entry's value
+        let value_end = e.value.span.offset() + e.value.span.len();
+        let trailing = fmt.drain_trailing_comment(value_end);
+
+        // Prepend leading comments (they already end with hardline)
+        let row_doc = prepend_comments(leading, RcDoc::text(row_text).append(trailing));
+        rows.push(row_doc);
     }
 
     RcDoc::text(format!("{header} {{"))
@@ -1075,14 +1127,16 @@ fn format_table_2d_body(
         }
     }
 
-    // Build 2D grid of rendered values
+    // Build 2D grid of rendered values and track entry indices per cell
     let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
-    for e in entries {
+    let mut entry_indices: Vec<Vec<Option<usize>>> = vec![vec![None; num_cols]; row_labels.len()];
+    for (ei, e) in entries.iter().enumerate() {
         let row_label = e.keys[row_idx].variant.value.as_str();
         let col_label = e.keys[col_idx].variant.value.as_str();
         let ri = row_labels.iter().position(|r| r == row_label).unwrap_or(0);
         let ci = col_labels.iter().position(|c| c == col_label).unwrap_or(0);
         grid[ri][ci] = render_doc_to_string(&format_expr(fmt, &e.value));
+        entry_indices[ri][ci] = Some(ei);
     }
 
     // Compute column widths: max of (column label width, max cell width in that column)
@@ -1119,6 +1173,12 @@ fn format_table_2d_body(
     all_rows.push(RcDoc::text(header_line));
 
     for (ri, row_label) in row_labels.iter().enumerate() {
+        // Drain leading comments before this row (use first entry's value span)
+        let first_entry_idx = entry_indices[ri].iter().find_map(|idx| *idx);
+        let leading = first_entry_idx.map_or_else(RcDoc::nil, |ei| {
+            fmt.drain_comments_before(entries[ei].value.span.offset())
+        });
+
         let label_padding = max_row_label_width - row_label.len();
         let cells: Vec<String> = (0..num_cols)
             .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
@@ -1129,7 +1189,16 @@ fn format_table_2d_body(
             " ".repeat(label_padding),
             cells.join(", ")
         );
-        all_rows.push(RcDoc::text(row_line));
+
+        // Drain trailing comment from last entry in this row
+        let last_entry_idx = entry_indices[ri].iter().rev().find_map(|idx| *idx);
+        let trailing = last_entry_idx.map_or_else(RcDoc::nil, |ei| {
+            let value_end = entries[ei].value.span.offset() + entries[ei].value.span.len();
+            fmt.drain_trailing_comment(value_end)
+        });
+
+        let row_doc = prepend_comments(leading, RcDoc::text(row_line).append(trailing));
+        all_rows.push(row_doc);
     }
 
     RcDoc::intersperse(all_rows, RcDoc::hardline())
@@ -1171,15 +1240,28 @@ fn format_table_sliced(
     let mut slice_docs: Vec<RcDoc<'static>> = Vec::new();
     for (entry_indices, slice_key) in &slices {
         let slice_header = format!("[{}]", slice_key.join(", "));
+
+        // Drain leading comments before this slice header
+        let first_idx = entry_indices[0];
+        let first_key_offset = entries[first_idx].keys[0].index.span.offset();
+        let leading = fmt.drain_comments_before(first_key_offset);
+
+        // Drain trailing comment on the same line as the slice header "]"
+        let last_slice_key = &entries[first_idx].keys[slice_dims - 1];
+        let header_end = last_slice_key.variant.span.offset() + last_slice_key.variant.span.len();
+        let trailing = fmt.drain_trailing_comment(header_end);
+
         let slice_entries: Vec<MapEntry> = entry_indices
             .iter()
             .map(|&idx| entries[idx].clone())
             .collect();
-        slice_docs.push(
+        slice_docs.push(prepend_comments(
+            leading,
             RcDoc::text(slice_header)
+                .append(trailing)
                 .append(RcDoc::hardline())
                 .append(format_table_2d_body(fmt, indexes, &slice_entries)),
-        );
+        ));
     }
 
     // Join slices: each slice is indented, separated by a blank line (no trailing whitespace).
@@ -1212,7 +1294,11 @@ fn format_for_comp(
         })
         .collect();
     let bindings_doc = RcDoc::intersperse(binding_docs, RcDoc::text(", "));
+
+    // Drain leading comments before the body expression
+    let leading = fmt.drain_comments_before(body.span.offset());
     let body_doc = format_expr(fmt, body);
+    let body_doc = prepend_comments(leading, body_doc);
 
     let single_line = RcDoc::text("for ")
         .append(bindings_doc.clone())
@@ -1270,17 +1356,21 @@ fn format_unfold(
 }
 
 fn format_match(fmt: &mut Formatter<'_>, scrutinee: &Expr, arms: &[MatchArm]) -> RcDoc<'static> {
-    let arm_docs: Vec<RcDoc<'static>> = arms
-        .iter()
-        .map(|arm| {
-            let pattern = format_match_pattern(&arm.pattern);
-            let body = format_expr(fmt, &arm.body);
-            pattern
-                .append(RcDoc::text(" => "))
-                .append(body)
-                .append(RcDoc::text(","))
-        })
-        .collect();
+    let mut arm_docs: Vec<RcDoc<'static>> = Vec::new();
+    for arm in arms {
+        // Drain leading comments before this arm
+        let leading = fmt.drain_comments_before(arm.span.offset());
+        let pattern = format_match_pattern(&arm.pattern);
+        let body = format_expr(fmt, &arm.body);
+        let arm_doc = pattern
+            .append(RcDoc::text(" => "))
+            .append(body)
+            .append(RcDoc::text(","));
+        // Drain trailing comment after this arm
+        let arm_end = arm.span.offset() + arm.span.len();
+        let trailing = fmt.drain_trailing_comment(arm_end);
+        arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
+    }
 
     RcDoc::text("match ")
         .append(format_expr(fmt, scrutinee))

@@ -1,0 +1,84 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// comments_in_expressions.gcl -- Comments inside expressions should stay in place
+dimension Velocity = Length / Time;
+dimension Mass = Mass;
+
+index Maneuver = { Departure, Correction, Insertion }
+index Phase = { Launch, Cruise, Arrival }
+
+// 1D table with trailing comments on rows
+param delta_v: Velocity[Maneuver] = table[Maneuver] {
+    Departure:   2.46 km/s; // departure burn
+    Correction:  0.12 km/s; // midcourse correction is small
+    Insertion:   1.83 km/s; // orbital insertion
+};
+
+// 1D table with leading comments between rows
+param mass: Mass[Maneuver] = table[Maneuver] {
+    // first maneuver
+    Departure:   5000.0 kg;
+    // second maneuver
+    Correction:  4500.0 kg;
+    // final maneuver
+    Insertion:   4000.0 kg;
+};
+
+// 1D table with both leading and trailing comments
+param fuel: Mass[Maneuver] = table[Maneuver] {
+    // departure fuel
+    Departure:   500.0 kg; // most fuel
+    // correction fuel
+    Correction:   50.0 kg; // least fuel
+    // insertion fuel
+    Insertion:   200.0 kg; // moderate fuel
+};
+
+// 2D table with trailing comments on rows
+param mass_2d: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
+             Departure, Correction, Insertion;
+    Launch:  5000.0 kg,     0.0 kg,    0.0 kg; // launch phase
+    Cruise:     0.0 kg,  4500.0 kg,    0.0 kg; // cruise phase
+    Arrival:    0.0 kg,     0.0 kg, 4000.0 kg; // arrival phase
+};
+
+// Block body with comments before let bindings
+fn compute(v: Velocity) -> Velocity {
+    // compute first intermediate
+    let a = v * 2.0;
+    // compute second intermediate
+    let b = a + 1.0 m/s;
+    // return result
+    b
+}
+
+// Match with comments before arms
+node scale: Dimensionless[Maneuver] = for m: Maneuver {
+    match m {
+        // main engine burn
+        Maneuver::Departure => 2.0,
+        // small thruster
+        Maneuver::Correction => 0.5,
+        // insertion burn
+        Maneuver::Insertion => 1.5,
+    }
+};
+
+// Map literal with trailing comments
+param dv_map: Velocity[Maneuver] = {
+    Maneuver::Departure: 2.46 km/s, // departure
+    Maneuver::Correction: 0.12 km/s, // correction
+    Maneuver::Insertion: 1.83 km/s, // insertion
+};
+
+// Map literal with leading comments
+param dv_map2: Velocity[Maneuver] = {
+    // departure burn
+    Maneuver::Departure: 2.46 km/s,
+    // correction burn
+    Maneuver::Correction: 0.12 km/s,
+    // insertion burn
+    Maneuver::Insertion: 1.83 km/s,
+};
