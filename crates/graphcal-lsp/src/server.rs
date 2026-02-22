@@ -26,6 +26,8 @@ use graphcal_eval::eval::{
 };
 use graphcal_eval::loader::LoadedProject;
 use graphcal_syntax::ast::DeclKind;
+use graphcal_syntax::names::VariantName;
+use indexmap::IndexMap;
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
@@ -412,15 +414,25 @@ fn format_value_inline_with_budget(
             if entries.is_empty() {
                 return "{}".to_string();
             }
-            format_braced_entries(
-                "",
-                entries
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v))
-                    .collect::<Vec<_>>(),
-                symbols,
-                max_len,
-            )
+            // For multi-indexed maps (nested Indexed values), flatten into
+            // tuple-keyed form: `{ (A, X): 1, (A, Y): 2, (B, X): 3 }` instead
+            // of nested braces: `{ A: { X: 1, Y: 2 }, B: { X: 3 } }`.
+            let mut flat: Vec<(Vec<&str>, &Value)> = Vec::new();
+            flatten_indexed_entries(entries, &mut Vec::new(), &mut flat);
+            let is_multi = flat.first().is_some_and(|(keys, _)| keys.len() > 1);
+            if is_multi {
+                format_tuple_keyed_entries("", &flat, symbols, max_len)
+            } else {
+                format_braced_entries(
+                    "",
+                    entries
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v))
+                        .collect::<Vec<_>>(),
+                    symbols,
+                    max_len,
+                )
+            }
         }
     }
 }
@@ -451,6 +463,66 @@ fn format_braced_entries(
 
         if i > 0 && result.len() + needed + suffix.len() > max_len {
             // Truncate: replace with ellipsis
+            result.push_str(ellipsis);
+            return result;
+        }
+
+        result.push_str(&entry_str);
+        if i + 1 < total {
+            result.push_str(", ");
+        }
+    }
+
+    result.push_str(suffix);
+    result
+}
+
+/// Recursively flatten nested `Indexed` values into a list of `(key_path, leaf_value)` pairs.
+///
+/// For a single-level `Indexed { A: 1, B: 2 }`, produces `[([A], 1), ([B], 2)]`.
+/// For a nested `Indexed { A: Indexed { X: 1, Y: 2 }, B: Indexed { X: 3 } }`,
+/// produces `[([A, X], 1), ([A, Y], 2), ([B, X], 3)]`.
+fn flatten_indexed_entries<'a>(
+    entries: &'a IndexMap<VariantName, Value>,
+    prefix: &mut Vec<&'a str>,
+    out: &mut Vec<(Vec<&'a str>, &'a Value)>,
+) {
+    for (key, val) in entries {
+        prefix.push(key.as_str());
+        if let Value::Indexed { entries: inner, .. } = val {
+            flatten_indexed_entries(inner, prefix, out);
+        } else {
+            out.push((prefix.clone(), val));
+        }
+        prefix.pop();
+    }
+}
+
+/// Format flattened tuple-keyed entries as `{ (A, X): v1, (A, Y): v2, ... }`,
+/// truncating with `...` when the result would exceed `max_len`.
+fn format_tuple_keyed_entries(
+    prefix: &str,
+    entries: &[(Vec<&str>, &Value)],
+    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    max_len: usize,
+) -> String {
+    let mut result = format!("{prefix}{{ ");
+    let suffix = " }";
+    let ellipsis = "... }";
+    let total = entries.len();
+
+    for (i, (keys, val)) in entries.iter().enumerate() {
+        let remaining_budget = max_len.saturating_sub(result.len() + suffix.len());
+        let key_str = format!("({})", keys.join(", "));
+        let entry_str = format!(
+            "{key_str}: {}",
+            format_value_inline_with_budget(val, symbols, remaining_budget)
+        );
+
+        let separator = if i + 1 < total { ", " } else { "" };
+        let needed = entry_str.len() + separator.len();
+
+        if i > 0 && result.len() + needed + suffix.len() > max_len {
             result.push_str(ellipsis);
             return result;
         }
@@ -958,5 +1030,109 @@ mod tests {
             entries,
         };
         assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
+    }
+
+    #[test]
+    fn format_nested_indexed_tuple_keyed() {
+        let symbols = empty_symbols();
+        let mut inner_a = IndexMap::new();
+        inner_a.insert(VariantName::new("X"), scalar(1.0));
+        inner_a.insert(VariantName::new("Y"), scalar(2.0));
+        let mut inner_b = IndexMap::new();
+        inner_b.insert(VariantName::new("X"), scalar(3.0));
+        inner_b.insert(VariantName::new("Y"), scalar(4.0));
+        let mut entries = IndexMap::new();
+        entries.insert(
+            VariantName::new("A"),
+            Value::Indexed {
+                index_name: IndexName::new("Col"),
+                entries: inner_a,
+            },
+        );
+        entries.insert(
+            VariantName::new("B"),
+            Value::Indexed {
+                index_name: IndexName::new("Col"),
+                entries: inner_b,
+            },
+        );
+        let val = Value::Indexed {
+            index_name: IndexName::new("Row"),
+            entries,
+        };
+        assert_eq!(
+            format_value_inline(&val, &symbols),
+            "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
+        );
+    }
+
+    #[test]
+    fn format_triple_nested_indexed() {
+        let symbols = empty_symbols();
+        // 3-level nesting: Scenario[Phase[Maneuver[scalar]]]
+        let mut inner_most = IndexMap::new();
+        inner_most.insert(VariantName::new("Dep"), scalar(100.0));
+        let mut mid = IndexMap::new();
+        mid.insert(
+            VariantName::new("Launch"),
+            Value::Indexed {
+                index_name: IndexName::new("Maneuver"),
+                entries: inner_most,
+            },
+        );
+        let mut outer = IndexMap::new();
+        outer.insert(
+            VariantName::new("Nom"),
+            Value::Indexed {
+                index_name: IndexName::new("Phase"),
+                entries: mid,
+            },
+        );
+        let val = Value::Indexed {
+            index_name: IndexName::new("Scenario"),
+            entries: outer,
+        };
+        assert_eq!(
+            format_value_inline(&val, &symbols),
+            "{ (Nom, Launch, Dep): 100 }"
+        );
+    }
+
+    #[test]
+    fn format_nested_indexed_truncation() {
+        let symbols = empty_symbols();
+        let mut inner_a = IndexMap::new();
+        inner_a.insert(VariantName::new("LongNameAlpha"), scalar(1.23456));
+        inner_a.insert(VariantName::new("LongNameBeta"), scalar(2.34567));
+        inner_a.insert(VariantName::new("LongNameGamma"), scalar(3.45678));
+        let mut inner_b = IndexMap::new();
+        inner_b.insert(VariantName::new("LongNameAlpha"), scalar(4.56789));
+        inner_b.insert(VariantName::new("LongNameBeta"), scalar(5.6789));
+        inner_b.insert(VariantName::new("LongNameGamma"), scalar(6.7891));
+        let mut entries = IndexMap::new();
+        entries.insert(
+            VariantName::new("LongOuter1"),
+            Value::Indexed {
+                index_name: IndexName::new("Inner"),
+                entries: inner_a,
+            },
+        );
+        entries.insert(
+            VariantName::new("LongOuter2"),
+            Value::Indexed {
+                index_name: IndexName::new("Inner"),
+                entries: inner_b,
+            },
+        );
+        let val = Value::Indexed {
+            index_name: IndexName::new("Outer"),
+            entries,
+        };
+        let result = format_value_inline(&val, &symbols);
+        assert!(
+            result.len() <= INLAY_HINT_MAX_LEN + 10,
+            "result too long: {result}"
+        );
+        assert!(result.ends_with("... }"), "expected truncation: {result}");
     }
 }

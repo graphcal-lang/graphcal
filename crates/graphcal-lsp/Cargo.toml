@@ -14,12 +14,10 @@ categories.workspace = true
 graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-syntax = { workspace = true }
+indexmap = { workspace = true }
 miette = { workspace = true }
 tokio = { workspace = true }
 tower-lsp = { workspace = true }
-
-[dev-dependencies]
-indexmap = { workspace = true }
 
 [lints]
 workspace = true
