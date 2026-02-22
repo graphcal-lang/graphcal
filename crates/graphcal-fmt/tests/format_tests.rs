@@ -56,6 +56,19 @@ idempotency_test!(idempotent_variant_match, "variant_match.gcl");
 idempotency_test!(idempotent_power_budget, "power_budget.gcl");
 idempotency_test!(idempotent_thermal_analysis, "thermal_analysis.gcl");
 idempotency_test!(idempotent_parenthesized_exprs, "parenthesized_exprs.gcl");
+idempotency_test!(idempotent_expected_fail_pass, "expected_fail_pass.gcl");
+idempotency_test!(
+    idempotent_expected_fail_unexpected_pass,
+    "expected_fail_unexpected_pass.gcl"
+);
+idempotency_test!(
+    idempotent_expected_fail_indexed,
+    "expected_fail_indexed.gcl"
+);
+idempotency_test!(
+    idempotent_expected_fail_multi_indexed,
+    "expected_fail_multi_indexed.gcl"
+);
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -105,6 +118,16 @@ roundtrip_test!(roundtrip_variant_match, "variant_match.gcl");
 roundtrip_test!(roundtrip_power_budget, "power_budget.gcl");
 roundtrip_test!(roundtrip_thermal_analysis, "thermal_analysis.gcl");
 roundtrip_test!(roundtrip_parenthesized_exprs, "parenthesized_exprs.gcl");
+roundtrip_test!(roundtrip_expected_fail_pass, "expected_fail_pass.gcl");
+roundtrip_test!(
+    roundtrip_expected_fail_unexpected_pass,
+    "expected_fail_unexpected_pass.gcl"
+);
+roundtrip_test!(roundtrip_expected_fail_indexed, "expected_fail_indexed.gcl");
+roundtrip_test!(
+    roundtrip_expected_fail_multi_indexed,
+    "expected_fail_multi_indexed.gcl"
+);
 
 // ---------------------------------------------------------------------------
 // Comment preservation

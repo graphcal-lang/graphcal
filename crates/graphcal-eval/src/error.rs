@@ -569,13 +569,49 @@ pub enum GraphcalError {
     #[error("unknown attribute `{name}`")]
     #[diagnostic(
         code(graphcal::A007),
-        help("recognized attributes are `#[assumes(...)]` and `#[lazy]`")
+        help("recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`")
     )]
     UnknownAttribute {
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown attribute")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail]` is not valid on `{kind}` declarations")]
+    #[diagnostic(
+        code(graphcal::A008),
+        help("`#[expected_fail]` is only valid on `assert` declarations")
+    )]
+    InvalidExpectedFailTarget {
+        kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not an assert")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "invalid argument in `#[expected_fail(...)]`: expected `Index::Variant` or `(Index::Variant, ...)`"
+    )]
+    #[diagnostic(code(graphcal::A009))]
+    ExpectedFailInvalidArg {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("invalid argument")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail(...)]` on non-indexed assertion")]
+    #[diagnostic(
+        code(graphcal::A010),
+        help("use `#[expected_fail]` without arguments for non-indexed assertions")
+    )]
+    ExpectedFailNotIndexed {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this assertion is not indexed")]
         span: SourceSpan,
     },
 

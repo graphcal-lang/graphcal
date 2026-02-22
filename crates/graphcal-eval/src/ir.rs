@@ -22,7 +22,7 @@ use crate::eval_expr::RuntimeValue;
 use crate::prelude::load_prelude;
 use crate::registry::{self, Registry, RegistryBuilder};
 use crate::resolve::{
-    DeclCategory, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
+    DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
 #[cfg(test)]
 use crate::resolve::{ImportedNames, resolve_with_imports};
@@ -59,6 +59,8 @@ pub struct IR {
     pub assert_names: HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
+    /// Mapping from assert name to its expected-fail configuration.
+    pub expected_fail: HashMap<String, ExpectedFail>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
@@ -207,6 +209,7 @@ pub fn lower_to_builder(
         functions: resolved.functions,
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
+        expected_fail: resolved.expected_fail,
         imported_values: HashMap::new(),
     };
 
@@ -312,6 +315,7 @@ pub fn lower_to_builder_with_imported_values(
         functions: resolved.functions,
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
+        expected_fail: resolved.expected_fail,
         imported_values,
     };
 
@@ -330,6 +334,7 @@ pub struct UnfrozenIR {
     functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
     assert_names: HashSet<String>,
     assumes_map: HashMap<String, Vec<String>>,
+    expected_fail: HashMap<String, ExpectedFail>,
     imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
@@ -349,6 +354,7 @@ impl UnfrozenIR {
             functions: self.functions,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
+            expected_fail: self.expected_fail,
             imported_values: self.imported_values,
         }
     }

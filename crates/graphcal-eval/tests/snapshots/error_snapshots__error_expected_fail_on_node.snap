@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`#[expected_fail]` is not valid on `node` declarations
+    Diagnostic severity: error
+Begin snippet for expected_fail_on_node.gcl starting at line 3, column 1
+
+snippet line 3: 
+snippet line 4: #[expected_fail]
+    label at line 4, columns 1 to 16: not an assert
+snippet line 5: node y: Dimensionless = @x + 1.0;
+diagnostic help: `#[expected_fail]` is only valid on `assert` declarations
+diagnostic code: graphcal::A008

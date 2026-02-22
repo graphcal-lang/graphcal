@@ -1435,3 +1435,64 @@ fn eval_diamond_import_assertions() {
         "expected base_positive exactly once, found {base_count}: {stdout}"
     );
 }
+
+// --- Expected-fail tests ---
+
+#[test]
+fn eval_expected_fail_pass() {
+    // A failing assertion marked #[expected_fail] should invert to pass
+    let output = graphcal_bin()
+        .args(["eval", &fixture("expected_fail_pass.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected success for expected_fail on failing assertion, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("x_greater") && stdout.contains("PASS"),
+        "expected x_greater PASS (inverted): {stdout}"
+    );
+}
+
+#[test]
+fn eval_expected_fail_unexpected_pass() {
+    // A passing assertion marked #[expected_fail] should invert to fail
+    let output = graphcal_bin()
+        .args(["eval", &fixture("expected_fail_unexpected_pass.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for unexpected pass"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("x_less") && stderr.contains("FAIL"),
+        "expected x_less FAIL (unexpected pass): {stderr}"
+    );
+    assert!(
+        stderr.contains("expected_fail"),
+        "expected mention of expected_fail in message: {stderr}"
+    );
+}
+
+#[test]
+fn eval_expected_fail_on_node_error() {
+    // #[expected_fail] on a node should produce a compile error
+    let output = graphcal_bin()
+        .args(["eval", &fixture("errors/expected_fail_on_node.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 for compile error"
+    );
+}

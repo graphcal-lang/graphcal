@@ -179,10 +179,12 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
         for attr in &decl.attributes {
             if attr.name.name == "assumes" {
                 for arg in &attr.args {
-                    table.references.push(ReferenceInfo {
-                        span: arg.span,
-                        target: arg.name.clone(),
-                    });
+                    if let Some(ident) = arg.as_single_ident() {
+                        table.references.push(ReferenceInfo {
+                            span: ident.span,
+                            target: ident.name.clone(),
+                        });
+                    }
                 }
             }
         }

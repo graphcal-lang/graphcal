@@ -105,8 +105,10 @@ The engineering practice is to assume a value, compute forward, then verify the 
   AttrName      = IDENT
   AttrArgs      = "(" AttrArgList ")"
   AttrArgList   = AttrArg ("," AttrArg)* ","?
-  AttrArg       = IDENT                          // positional (e.g., assumes)
+  AttrArg       = AttrPath                        // positional (e.g., assumes, Index::Variant)
+                | "(" AttrArgList ")"            // grouped tuple (e.g., (Mode::Boost, Phase::Launch))
                 | IDENT "=" Literal              // key-value (future use)
+  AttrPath      = IDENT ("::" IDENT)*            // plain ident or qualified path
   ```
 
 - [ ] **Unknown attributes are errors:** The compiler rejects unrecognized attribute names. This prevents silent typos and ensures forward compatibility is explicit.
@@ -212,6 +214,8 @@ AssertBody    = Expr                                    // must evaluate to Bool
 | **`assert` evaluator** | Evaluate assert bodies post-graph-evaluation, report pass/fail |
 | **`#[assumes]` resolver** | Validate `assumes` arguments refer to `assert` declarations |
 | **`#[assumes]` reporter** | On assertion failure, list nodes that assume the failed assertion |
+| **`#[expected_fail]` resolver** | Validate `expected_fail` arguments (qualified paths, tuple keys), build expected-fail map |
+| **`#[expected_fail]` evaluator** | Invert assertion pass/fail semantics based on expected-fail configuration |
 | **`#[lazy]` evaluator** | Skip lazy-annotated nodes during eager evaluation |
 | **CLI `typecheck` rename** | Rename `check` subcommand to `typecheck` |
 | **CLI `--no-assert` flag** | Add flag to `eval` to skip assertion checking |
@@ -225,7 +229,7 @@ AssertBody    = Expr                                    // must evaluate to Bool
 - Property-based testing (checking assertions across parameter ranges)
 - Snapshot testing (comparing full output to saved baselines)
 - Test discovery / test runner beyond `graphcal eval`
-- `#[deprecated]`, `#[doc]`, or other attributes beyond `#[assumes]` and `#[lazy]`
+- `#[deprecated]`, `#[doc]`, or other attributes beyond `#[assumes]`, `#[lazy]`, and `#[expected_fail]`
 
 ## Milestone Test
 

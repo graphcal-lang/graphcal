@@ -34,6 +34,8 @@ pub struct ExecPlan {
     pub assert_bodies: Vec<(String, AssertBody, Span)>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
+    /// Mapping from assert name to its expected-fail configuration.
+    pub expected_fail: HashMap<String, crate::resolve::ExpectedFail>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -67,6 +69,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         expressions,
         assert_bodies,
         assumes_map: tir.assumes_map.clone(),
+        expected_fail: tir.expected_fail.clone(),
     })
 }
 

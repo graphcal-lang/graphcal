@@ -359,6 +359,15 @@ fn error_unknown_attribute() {
     insta::assert_snapshot!(rendered);
 }
 
+// --- Expected-fail error tests ---
+
+#[test]
+fn error_expected_fail_on_node() {
+    let source = include_str!("../../../tests/fixtures/errors/expected_fail_on_node.gcl");
+    let rendered = render_error(source, "expected_fail_on_node.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Index variant match error tests ---
 
 #[test]
