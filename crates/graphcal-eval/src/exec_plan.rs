@@ -25,7 +25,7 @@ pub struct ExecPlan {
     pub const_values: HashMap<String, RuntimeValue>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
-    pub imported_values: HashMap<String, RuntimeValue>,
+    pub imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub topo_order: Vec<String>,
     /// Runtime expressions keyed by declaration name (params + nodes).

@@ -61,7 +61,7 @@ pub struct IR {
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    pub imported_values: HashMap<String, (RuntimeValue, DeclaredType)>,
+    pub imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -226,7 +226,7 @@ pub fn lower_to_builder_with_imported_values(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<String, (RuntimeValue, DeclaredType)>,
+    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
@@ -328,7 +328,7 @@ pub struct UnfrozenIR {
     functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
     assert_names: HashSet<String>,
     assumes_map: HashMap<String, Vec<String>>,
-    imported_values: HashMap<String, (RuntimeValue, DeclaredType)>,
+    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 impl UnfrozenIR {

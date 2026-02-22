@@ -15,7 +15,7 @@ use crate::dim_check::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval_expr::RuntimeValue;
 use crate::registry::{Registry, RegistryBuilder};
-use crate::resolve::{DeclCategory, ImportedNames, ImportedValueNames};
+use crate::resolve::{DeclCategory, ImportedNames, ImportedValueNames, ScopedName};
 
 use super::runtime::evaluate_plan;
 use super::types::{AssertResult, CompileError, EvalResult};
@@ -262,14 +262,19 @@ struct EvaluatedFile {
     const_values: HashMap<String, RuntimeValue>,
     /// Declared types for all consts/params/nodes in this file.
     declared_types: HashMap<String, DeclaredType>,
-    /// Assertion results from this file.
-    assertions: Vec<(DeclName, AssertResult, Span)>,
+    /// Assertion results from this file: name → (result, span).
+    assertions: HashMap<DeclName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
     /// Functions declared in this file: (name, decl, span).
     functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
-    /// Assert names declared in this file.
-    assert_names: HashSet<String>,
+}
+
+impl EvaluatedFile {
+    /// Check whether this file declares an assertion with the given name.
+    fn has_assert(&self, name: &str) -> bool {
+        self.assertions.keys().any(|n| n.as_str() == name)
+    }
 }
 
 /// Evaluate a project using per-file evaluation.
@@ -300,9 +305,9 @@ fn evaluate_project_perfile(
 
         // Build ImportedValueNames and imported_values from this file's import declarations.
         let mut imported_names = ImportedValueNames::default();
-        let mut imported_values: HashMap<String, (RuntimeValue, DeclaredType)> = HashMap::new();
+        let mut imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
         // Track imported value categories for output (source order).
-        let mut imported_source_order: Vec<(String, DeclCategory)> = Vec::new();
+        let mut imported_source_order: Vec<(ScopedName, DeclCategory)> = Vec::new();
         // Track type-system declarations to import from dependency registries.
         let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
         // Module imports: module_name → (canonical_path, span).
@@ -340,28 +345,28 @@ fn evaluate_project_perfile(
 
                             // Check if it's a value (const/param/node) or type-system decl.
                             if let Some(rv) = dep.const_values.get(orig_name) {
+                                let scoped = ScopedName::Local(local_name.clone());
                                 imported_names
                                     .const_names
-                                    .push((local_name.clone(), import_item.name.span));
+                                    .push((scoped.clone(), import_item.name.span));
                                 let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
                                     DeclaredType::Scalar(
                                         graphcal_syntax::dimension::Dimension::dimensionless(),
                                     ),
                                 );
-                                imported_source_order
-                                    .push((local_name.clone(), DeclCategory::Const));
-                                imported_values.insert(local_name, (rv.clone(), dt));
+                                imported_source_order.push((scoped.clone(), DeclCategory::Const));
+                                imported_values.insert(scoped, (rv.clone(), dt));
                             } else if let Some(rv) = dep.values.get(orig_name) {
+                                let scoped = ScopedName::Local(local_name.clone());
                                 let span = import_item.name.span;
-                                imported_names.param_names.push((local_name.clone(), span));
+                                imported_names.param_names.push((scoped.clone(), span));
                                 let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
                                     DeclaredType::Scalar(
                                         graphcal_syntax::dimension::Dimension::dimensionless(),
                                     ),
                                 );
-                                imported_source_order
-                                    .push((local_name.clone(), DeclCategory::Param));
-                                imported_values.insert(local_name, (rv.clone(), dt));
+                                imported_source_order.push((scoped.clone(), DeclCategory::Param));
+                                imported_values.insert(scoped, (rv.clone(), dt));
                             } else if let Some((_, fn_decl, fn_span)) =
                                 dep.functions.iter().find(|(n, _, _)| n == orig_name)
                             {
@@ -370,7 +375,7 @@ fn evaluate_project_perfile(
                                     fn_decl.clone(),
                                     *fn_span,
                                 ));
-                            } else if dep.assert_names.contains(orig_name) {
+                            } else if dep.has_assert(orig_name) {
                                 // Assert is already evaluated in the dep file.
                                 // We just need to make the name visible for #[assumes].
                                 imported_names
@@ -428,30 +433,36 @@ fn evaluate_project_perfile(
 
                         // Import all values under module::name prefix.
                         for (name, rv) in &dep.const_values {
-                            let flat = format!("{module_name}::{name}");
+                            let scoped = ScopedName::Qualified {
+                                module: module_name.clone(),
+                                member: name.clone(),
+                            };
                             imported_names
                                 .const_names
-                                .push((flat.clone(), import_decl.path_span));
+                                .push((scoped.clone(), import_decl.path_span));
                             let dt = dep.declared_types.get(name).cloned().unwrap_or(
                                 DeclaredType::Scalar(
                                     graphcal_syntax::dimension::Dimension::dimensionless(),
                                 ),
                             );
-                            imported_source_order.push((flat.clone(), DeclCategory::Const));
-                            imported_values.insert(flat, (rv.clone(), dt));
+                            imported_source_order.push((scoped.clone(), DeclCategory::Const));
+                            imported_values.insert(scoped, (rv.clone(), dt));
                         }
                         for (name, rv) in &dep.values {
-                            let flat = format!("{module_name}::{name}");
+                            let scoped = ScopedName::Qualified {
+                                module: module_name.clone(),
+                                member: name.clone(),
+                            };
                             imported_names
                                 .param_names
-                                .push((flat.clone(), import_decl.path_span));
+                                .push((scoped.clone(), import_decl.path_span));
                             let dt = dep.declared_types.get(name).cloned().unwrap_or(
                                 DeclaredType::Scalar(
                                     graphcal_syntax::dimension::Dimension::dimensionless(),
                                 ),
                             );
-                            imported_source_order.push((flat.clone(), DeclCategory::Param));
-                            imported_values.insert(flat, (rv.clone(), dt));
+                            imported_source_order.push((scoped.clone(), DeclCategory::Param));
+                            imported_values.insert(scoped, (rv.clone(), dt));
                         }
                         for (name, fn_decl, fn_span) in &dep.functions {
                             let flat = format!("{module_name}::{name}");
@@ -578,7 +589,12 @@ fn evaluate_project_perfile(
                     continue;
                 }
                 if let Some(dep_eval) = evaluated_files.get(dep_path) {
-                    all_assertions.extend(dep_eval.assertions.iter().cloned());
+                    all_assertions.extend(
+                        dep_eval
+                            .assertions
+                            .iter()
+                            .map(|(name, (result, span))| (name.clone(), result.clone(), *span)),
+                    );
                 }
             }
             all_assertions.extend(eval_result.assertions);
@@ -593,7 +609,7 @@ fn evaluate_project_perfile(
             for (name, cat) in &imported_source_order {
                 if let Some((rv, dt)) = root_imported_values.get(name) {
                     let value = super::runtime::runtime_to_value(rv, Some(dt), &tir.registry);
-                    let decl_name = DeclName::new(name);
+                    let decl_name = DeclName::new(name.to_string());
                     match cat {
                         DeclCategory::Const => {
                             all_consts.push((decl_name.clone(), value.clone()));
@@ -640,10 +656,13 @@ fn evaluate_project_perfile(
                 values: file_runtime_values,
                 const_values: plan.const_values,
                 declared_types,
-                assertions: eval_result.assertions,
+                assertions: eval_result
+                    .assertions
+                    .into_iter()
+                    .map(|(name, result, span)| (name, (result, span)))
+                    .collect(),
                 registry: tir.registry,
                 functions: tir.functions,
-                assert_names: tir.assert_names,
             },
         );
     }
@@ -770,8 +789,9 @@ fn extract_runtime_values(
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
 
     // Insert imported values.
+    // ScopedName → String: the runtime values map uses flat strings.
     for (name, val) in &plan.imported_values {
-        values.insert(name.clone(), val.clone());
+        values.insert(name.to_string(), val.clone());
     }
 
     // Insert const values.

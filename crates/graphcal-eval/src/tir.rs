@@ -223,7 +223,7 @@ pub struct TIR {
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
     pub imported_values: HashMap<
-        String,
+        crate::resolve::ScopedName,
         (
             crate::eval_expr::RuntimeValue,
             crate::dim_check::DeclaredType,
@@ -257,8 +257,9 @@ impl TIR {
             declared_types.insert(name.clone(), dt);
         }
         // Include imported values' declared types so dim_check can resolve references.
+        // ScopedName → String: dim_check uses flat string keys.
         for (name, (_rv, dt)) in &self.imported_values {
-            declared_types.insert(name.clone(), dt.clone());
+            declared_types.insert(name.to_string(), dt.clone());
         }
         Ok(declared_types)
     }

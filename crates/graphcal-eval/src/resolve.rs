@@ -13,6 +13,40 @@ use crate::error::GraphcalError;
 const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
 const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
 
+/// A declaration name that may optionally be module-qualified.
+///
+/// Selective imports produce `Local` names (`x`), while module imports produce
+/// `Qualified` names (`module::x`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ScopedName {
+    /// A bare local name: `x`, `G0`, etc.
+    Local(String),
+    /// A module-qualified name: `module::x`, `constants::G0`, etc.
+    Qualified { module: String, member: String },
+}
+
+impl ScopedName {
+    /// Returns the member (leaf) part of the name.
+    ///
+    /// For `Local("x")` this returns `"x"`.
+    /// For `Qualified { module: "m", member: "x" }` this also returns `"x"`.
+    pub fn member(&self) -> &str {
+        match self {
+            Self::Local(name) => name,
+            Self::Qualified { member, .. } => member,
+        }
+    }
+}
+
+impl std::fmt::Display for ScopedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(name) => write!(f, "{name}"),
+            Self::Qualified { module, member } => write!(f, "{module}::{member}"),
+        }
+    }
+}
+
 /// Declarations imported from other files, to be injected into the resolve scope.
 ///
 /// These are treated as if they were declared locally, appearing before local declarations.
@@ -33,11 +67,11 @@ pub struct ImportedNames {
 #[derive(Debug, Default)]
 pub struct ImportedValueNames {
     /// Imported const names (for scope checking only — actual values are in the exec plan).
-    pub const_names: Vec<(String, Span)>,
+    pub const_names: Vec<(ScopedName, Span)>,
     /// Imported param names.
-    pub param_names: Vec<(String, Span)>,
+    pub param_names: Vec<(ScopedName, Span)>,
     /// Imported node names.
-    pub node_names: Vec<(String, Span)>,
+    pub node_names: Vec<(ScopedName, Span)>,
     /// Imported function declarations (still need AST for compilation).
     pub functions: Vec<(String, FnDecl, Span)>,
     /// Imported assert names (for `#[assumes]` validation).
@@ -548,14 +582,16 @@ pub fn resolve_with_imported_values(
     let mut assert_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (for scope checking only).
+    // ScopedName → String conversion: the resolver's internal scope uses flat strings
+    // because it mixes imported names with local declarations.
     for (name, span) in &imported.const_names {
-        names.insert(name.clone(), *span);
+        names.insert(name.to_string(), *span);
     }
     for (name, span) in &imported.param_names {
-        names.insert(name.clone(), *span);
+        names.insert(name.to_string(), *span);
     }
     for (name, span) in &imported.node_names {
-        names.insert(name.clone(), *span);
+        names.insert(name.to_string(), *span);
     }
     for (name, _, span) in &imported.functions {
         names.insert(name.clone(), *span);

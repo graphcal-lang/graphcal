@@ -288,9 +288,11 @@ pub(super) fn evaluate_plan(
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
     let mut errors: HashMap<String, NodeError> = HashMap::new();
 
-    // Insert imported values into the lookup table (pre-evaluated by dependency files)
+    // Insert imported values into the lookup table (pre-evaluated by dependency files).
+    // ScopedName → String: the runtime values map uses flat strings because it
+    // merges imported, const, and locally computed values into a single namespace.
     for (name, val) in &plan.imported_values {
-        values.insert(name.clone(), val.clone());
+        values.insert(name.to_string(), val.clone());
     }
 
     // Insert const values into the lookup table
