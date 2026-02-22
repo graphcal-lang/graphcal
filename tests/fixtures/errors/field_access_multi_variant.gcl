@@ -6,6 +6,6 @@ type ManeuverKind {
     Coasting
 }
 
-param m: ManeuverKind = Coasting;
+param m: ManeuverKind = Coasting { };
 
 node v: Velocity = @m.delta_v;

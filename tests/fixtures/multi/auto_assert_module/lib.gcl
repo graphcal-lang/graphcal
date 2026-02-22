@@ -1,5 +1,4 @@
 // lib.gcl -- library with an assertion, imported as a module
-
 param limit: Dimensionless = 100.0;
 node doubled: Dimensionless = @limit * 2.0;
 assert limit_positive = @limit > 0.0;

@@ -2,22 +2,13 @@
 //
 // Demonstrates importing from child directories (./shared/, ./subsystems/)
 // with many identifiers in a single use statement.
-
-import "./shared/constants.gcl" {
-    G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON,
-    GravParam
-};
+import "./shared/constants.gcl" { G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON, GravParam };
 
 import "./shared/indexes.gcl" { MissionPhase, Subsystem };
 
-import "./subsystems/propulsion.gcl" {
-    isp, dry_mass, fuel_mass,
-    v_exhaust, total_mass, mass_ratio, total_delta_v
-};
+import "./subsystems/propulsion.gcl" { isp, dry_mass, fuel_mass, v_exhaust, total_mass, mass_ratio, total_delta_v };
 
-import "./subsystems/power.gcl" {
-    solar_array_power, battery_capacity_wh, power_margin
-};
+import "./subsystems/power.gcl" { solar_array_power, battery_capacity_wh, power_margin };
 
 // --- Delta-V budget per mission phase ---
 param dv_budget: Velocity[MissionPhase] = table[MissionPhase] {
@@ -34,14 +25,14 @@ param dv_budget: Velocity[MissionPhase] = table[MissionPhase] {
 
 // --- Mass allocation per subsystem ---
 param subsystem_mass: Mass[Subsystem] = table[Subsystem] {
-    Propulsion:      350.0 kg;
-    AttitudeControl:  45.0 kg;
-    CommandAndData:   30.0 kg;
-    Telecom:          25.0 kg;
-    Thermal:          40.0 kg;
-    Power:            80.0 kg;
-    Structure:       200.0 kg;
-    Payload:         120.0 kg;
+    Propulsion:       350.0 kg;
+    AttitudeControl:   45.0 kg;
+    CommandAndData:    30.0 kg;
+    Telecom:           25.0 kg;
+    Thermal:           40.0 kg;
+    Power:             80.0 kg;
+    Structure:        200.0 kg;
+    Payload:          120.0 kg;
 };
 
 // --- Computed nodes ---

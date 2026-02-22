@@ -1,5 +1,4 @@
 // subsystems/propulsion.gcl -- Propulsion parameters
-
 param isp: Time = 320.0 s;
 param dry_mass: Mass = 2500.0 kg;
 param fuel_mass: Mass = 12000.0 kg;

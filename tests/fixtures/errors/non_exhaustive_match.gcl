@@ -5,7 +5,7 @@ type Status {
     Critical { code: Dimensionless }
 }
 
-param s: Status = Nominal;
+param s: Status = Nominal { };
 
 node result: Dimensionless = match @s {
     Nominal => 0.0,

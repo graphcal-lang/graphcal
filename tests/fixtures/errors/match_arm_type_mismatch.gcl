@@ -6,7 +6,7 @@ type ManeuverKind {
     Coasting
 }
 
-param m: ManeuverKind = Coasting;
+param m: ManeuverKind = Coasting { };
 
 node result: Velocity = match @m {
     Impulsive { delta_v } => delta_v,

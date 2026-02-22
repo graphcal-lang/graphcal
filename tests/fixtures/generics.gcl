@@ -13,17 +13,9 @@ type Vec3<D: Dim, F: Type> {
 }
 
 // Construction with explicit type args
-param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> {
-    x: 6878.0 km,
-    y: 0.0 km,
-    z: 0.0 km,
-};
+param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> { x: 6878.0 km, y: 0.0 km, z: 0.0 km};
 
-param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
-    x: 0.0 m/s,
-    y: 7.67 km/s,
-    z: 0.0 m/s,
-};
+param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> { x: 0.0 m/s, y: 7.67 km/s, z: 0.0 m/s};
 
 // Field access on generic struct
 node x_pos: Length = @pos_eci.x;
@@ -41,18 +33,10 @@ type Pos3<D: Dim, F: Type = Unframed> {
 }
 
 // Use with all args explicitly
-param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci> {
-    x: 100.0 km,
-    y: 200.0 km,
-    z: 300.0 km,
-};
+param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci> { x: 100.0 km, y: 200.0 km, z: 300.0 km};
 
 // Use with default (omit F, gets Unframed)
-param pos3_default: Pos3<Length> = Pos3<Length> {
-    x: 10.0 km,
-    y: 20.0 km,
-    z: 30.0 km,
-};
+param pos3_default: Pos3<Length> = Pos3<Length> { x: 10.0 km, y: 20.0 km, z: 30.0 km};
 
 node pos3_eci_x: Length = @pos3_eci.x;
 node pos3_default_y: Length = @pos3_default.y;
@@ -100,8 +84,5 @@ type TransferResult {
     dv2: Velocity,
 }
 
-node transfer: TransferResult = TransferResult {
-    dv1: 100.0 m/s,
-    dv2: 200.0 m/s,
-};
+node transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s};
 node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;
