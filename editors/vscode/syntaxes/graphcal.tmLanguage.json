@@ -152,8 +152,62 @@
     },
 
     "import-declaration": {
-      "match": "\\b(import)\\b",
-      "name": "keyword.declaration.import.graphcal"
+      "begin": "\\b(import)\\b",
+      "end": ";",
+      "beginCaptures": {
+        "1": { "name": "keyword.declaration.import.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.terminator.graphcal" }
+      },
+      "patterns": [
+        { "include": "#strings" },
+        {
+          "comment": "Module alias: import '...' as alias",
+          "match": "\\b(as)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.operator.as.graphcal" },
+            "2": { "name": "entity.name.namespace.graphcal" }
+          }
+        },
+        { "include": "#import-item-list" }
+      ]
+    },
+
+    "import-item-list": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": { "name": "punctuation.brackets.curly.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.brackets.curly.graphcal" }
+      },
+      "patterns": [
+        {
+          "match": "\\b(as)\\b",
+          "name": "keyword.operator.as.graphcal"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        },
+        {
+          "comment": "ALL_CAPS identifiers are constants",
+          "match": "\\b([A-Z][A-Z0-9_]*[A-Z0-9])\\b|\\b([A-Z]{2,})\\b",
+          "name": "variable.other.constant.graphcal"
+        },
+        {
+          "comment": "PascalCase identifiers are types/dimensions/indexes",
+          "match": "\\b([A-Z][a-z][a-zA-Z0-9_]*)\\b",
+          "name": "entity.name.type.graphcal"
+        },
+        {
+          "comment": "snake_case identifiers are variables (params, nodes, fns)",
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\b",
+          "name": "variable.other.graphcal"
+        }
+      ]
     },
 
     "as-keyword": {
