@@ -69,6 +69,18 @@ idempotency_test!(
     idempotent_expected_fail_multi_indexed,
     "expected_fail_multi_indexed.gcl"
 );
+idempotency_test!(
+    idempotent_expected_fail_indexed_partial,
+    "expected_fail_indexed_partial.gcl"
+);
+idempotency_test!(
+    idempotent_expected_fail_indexed_unexpected_pass,
+    "expected_fail_indexed_unexpected_pass.gcl"
+);
+idempotency_test!(
+    idempotent_expected_fail_multi_indexed_partial,
+    "expected_fail_multi_indexed_partial.gcl"
+);
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -127,6 +139,18 @@ roundtrip_test!(roundtrip_expected_fail_indexed, "expected_fail_indexed.gcl");
 roundtrip_test!(
     roundtrip_expected_fail_multi_indexed,
     "expected_fail_multi_indexed.gcl"
+);
+roundtrip_test!(
+    roundtrip_expected_fail_indexed_partial,
+    "expected_fail_indexed_partial.gcl"
+);
+roundtrip_test!(
+    roundtrip_expected_fail_indexed_unexpected_pass,
+    "expected_fail_indexed_unexpected_pass.gcl"
+);
+roundtrip_test!(
+    roundtrip_expected_fail_multi_indexed_partial,
+    "expected_fail_multi_indexed_partial.gcl"
 );
 
 // ---------------------------------------------------------------------------
@@ -460,6 +484,18 @@ snapshot_test!(snapshot_expected_fail_indexed, "expected_fail_indexed.gcl");
 snapshot_test!(
     snapshot_expected_fail_multi_indexed,
     "expected_fail_multi_indexed.gcl"
+);
+snapshot_test!(
+    snapshot_expected_fail_indexed_partial,
+    "expected_fail_indexed_partial.gcl"
+);
+snapshot_test!(
+    snapshot_expected_fail_indexed_unexpected_pass,
+    "expected_fail_indexed_unexpected_pass.gcl"
+);
+snapshot_test!(
+    snapshot_expected_fail_multi_indexed_partial,
+    "expected_fail_multi_indexed_partial.gcl"
 );
 snapshot_test!(
     snapshot_comments_in_expressions,
