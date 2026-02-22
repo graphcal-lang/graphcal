@@ -5,7 +5,10 @@ use miette::NamedSource;
 
 #[cfg(test)]
 use graphcal_syntax::ast::TypeExpr;
-use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
+use graphcal_syntax::ast::{
+    AssertBody, AttributeArg, DeclKind, Expr, ExprKind, File, FnBody, FnDecl,
+};
+use graphcal_syntax::names::{IndexName, VariantName};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
@@ -90,6 +93,21 @@ pub enum DeclCategory {
     Assert,
 }
 
+/// A single expected-fail key: a list of `(IndexName, VariantName)` pairs.
+///
+/// - Length 1 for single-index assertions: `[("Mode", "Boost")]`
+/// - Length >1 for multi-index assertions: `[("Mode", "Boost"), ("Phase", "Launch")]`
+pub type ExpectedFailKey = Vec<(IndexName, VariantName)>;
+
+/// Describes how an assertion is expected to fail.
+#[derive(Debug, Clone)]
+pub enum ExpectedFail {
+    /// The entire assertion is expected to fail: `#[expected_fail]`.
+    All,
+    /// Specific index keys are expected to fail: `#[expected_fail(Index::Variant, ...)]`.
+    Variants(Vec<ExpectedFailKey>),
+}
+
 /// The result of name resolution: declarations separated by category with dependency info.
 #[derive(Debug)]
 pub struct ResolvedFile {
@@ -114,6 +132,9 @@ pub struct ResolvedFile {
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
     pub assumes_map: HashMap<String, Vec<String>>,
+    /// Mapping from assert name to its expected-fail configuration.
+    /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
+    pub expected_fail: HashMap<String, ExpectedFail>,
 }
 
 /// Resolve names, check casing, detect duplicates, and extract dependencies.
@@ -470,8 +491,9 @@ pub fn resolve_with_imports(
     }
     all_source_order.extend(source_order);
 
-    // Validate attributes and build assumes_map
+    // Validate attributes and build assumes_map / expected_fail_map
     let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
     for decl in &file.declarations {
         let decl_name = match &decl.kind {
             DeclKind::Param(p) => Some(p.name.value.to_string()),
@@ -506,12 +528,21 @@ pub fn resolve_with_imports(
                     }
                     // Each argument must reference an existing assert declaration
                     for arg in &attr.args {
-                        let arg_name = arg.name.as_str();
+                        let ident =
+                            arg.as_single_ident()
+                                .ok_or_else(|| GraphcalError::EvalError {
+                                    message:
+                                        "`#[assumes(...)]` arguments must be plain identifiers"
+                                            .to_string(),
+                                    src: src.clone(),
+                                    span: arg.span().into(),
+                                })?;
+                        let arg_name = ident.name.as_str();
                         if !assert_names.contains(arg_name) {
                             return Err(GraphcalError::UnknownAssertInAssumes {
                                 name: arg_name.to_string(),
                                 src: src.clone(),
-                                span: arg.span.into(),
+                                span: ident.span.into(),
                             });
                         }
                         if let Some(ref dname) = decl_name {
@@ -521,6 +552,32 @@ pub fn resolve_with_imports(
                                 .push(dname.clone());
                         }
                     }
+                }
+                "expected_fail" => {
+                    let kind = match &decl.kind {
+                        DeclKind::Assert(_) => {
+                            // Valid target — parse args and record
+                            let ef = parse_expected_fail_args(&attr.args, src)?;
+                            if let Some(ref dname) = decl_name {
+                                expected_fail_map.insert(dname.clone(), ef);
+                            }
+                            continue;
+                        }
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                        DeclKind::Import(_) => "import",
+                    };
+                    return Err(GraphcalError::InvalidExpectedFailTarget {
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
                 }
                 "lazy" => {
                     // Recognized but semantics deferred — no validation needed
@@ -547,6 +604,7 @@ pub fn resolve_with_imports(
         functions: all_functions,
         assert_names,
         assumes_map,
+        expected_fail: expected_fail_map,
     })
 }
 
@@ -794,8 +852,9 @@ pub fn resolve_with_imported_values(
     let mut all_functions = imported.functions.clone();
     all_functions.extend(functions);
 
-    // Validate attributes and build assumes_map
+    // Validate attributes and build assumes_map / expected_fail_map
     let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
     for decl in &file.declarations {
         let decl_name = match &decl.kind {
             DeclKind::Param(p) => Some(p.name.value.to_string()),
@@ -828,12 +887,21 @@ pub fn resolve_with_imported_values(
                         });
                     }
                     for arg in &attr.args {
-                        let arg_name = arg.name.as_str();
+                        let ident =
+                            arg.as_single_ident()
+                                .ok_or_else(|| GraphcalError::EvalError {
+                                    message:
+                                        "`#[assumes(...)]` arguments must be plain identifiers"
+                                            .to_string(),
+                                    src: src.clone(),
+                                    span: arg.span().into(),
+                                })?;
+                        let arg_name = ident.name.as_str();
                         if !assert_names.contains(arg_name) {
                             return Err(GraphcalError::UnknownAssertInAssumes {
                                 name: arg_name.to_string(),
                                 src: src.clone(),
-                                span: arg.span.into(),
+                                span: ident.span.into(),
                             });
                         }
                         if let Some(ref dname) = decl_name {
@@ -843,6 +911,31 @@ pub fn resolve_with_imported_values(
                                 .push(dname.clone());
                         }
                     }
+                }
+                "expected_fail" => {
+                    let kind = match &decl.kind {
+                        DeclKind::Assert(_) => {
+                            let ef = parse_expected_fail_args(&attr.args, src)?;
+                            if let Some(ref dname) = decl_name {
+                                expected_fail_map.insert(dname.clone(), ef);
+                            }
+                            continue;
+                        }
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                        DeclKind::Import(_) => "import",
+                    };
+                    return Err(GraphcalError::InvalidExpectedFailTarget {
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
                 }
                 "lazy" => {}
                 _ => {
@@ -867,7 +960,78 @@ pub fn resolve_with_imported_values(
         functions: all_functions,
         assert_names,
         assumes_map,
+        expected_fail: expected_fail_map,
     })
+}
+
+/// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
+///
+/// - No args → `ExpectedFail::All`
+/// - `Path` args (e.g. `Index::Variant`) → `ExpectedFail::Variants` with single-index keys
+/// - `Group` args (e.g. `(Mode::Boost, Phase::Launch)`) → `ExpectedFail::Variants` with multi-index keys
+fn parse_expected_fail_args(
+    args: &[AttributeArg],
+    src: &NamedSource<Arc<String>>,
+) -> Result<ExpectedFail, GraphcalError> {
+    if args.is_empty() {
+        return Ok(ExpectedFail::All);
+    }
+
+    let mut keys: Vec<ExpectedFailKey> = Vec::new();
+
+    for arg in args {
+        match arg {
+            AttributeArg::Path { segments, span } => {
+                // Must be exactly 2 segments: Index::Variant
+                if segments.len() != 2 {
+                    return Err(GraphcalError::ExpectedFailInvalidArg {
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
+                let index_name = IndexName::new(&segments[0].name);
+                let variant_name = VariantName::new(&segments[1].name);
+                keys.push(vec![(index_name, variant_name)]);
+            }
+            AttributeArg::Group { elements, span } => {
+                // Each element must be a 2-segment Path
+                let mut key: ExpectedFailKey = Vec::new();
+                for elem in elements {
+                    match elem {
+                        AttributeArg::Path {
+                            segments,
+                            span: elem_span,
+                        } => {
+                            if segments.len() != 2 {
+                                return Err(GraphcalError::ExpectedFailInvalidArg {
+                                    src: src.clone(),
+                                    span: (*elem_span).into(),
+                                });
+                            }
+                            let index_name = IndexName::new(&segments[0].name);
+                            let variant_name = VariantName::new(&segments[1].name);
+                            key.push((index_name, variant_name));
+                        }
+                        AttributeArg::Group { span: g_span, .. } => {
+                            return Err(GraphcalError::ExpectedFailInvalidArg {
+                                src: src.clone(),
+                                span: (*g_span).into(),
+                            });
+                        }
+                    }
+                }
+                if key.is_empty() {
+                    return Err(GraphcalError::ExpectedFailInvalidArg {
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
+                keys.push(key);
+            }
+        }
+    }
+
+    Ok(ExpectedFail::Variants(keys))
 }
 
 fn is_upper_snake_case(s: &str) -> bool {

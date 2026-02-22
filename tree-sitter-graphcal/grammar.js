@@ -51,7 +51,7 @@ module.exports = grammar({
       $.assert_declaration,
     ),
 
-    // #[name] or #[name(arg1, arg2)]
+    // #[name] or #[name(arg1, arg2)] or #[name(Index::Variant, (A::X, B::Y))]
     attribute: $ => seq(
       "#",
       "[",
@@ -59,13 +59,32 @@ module.exports = grammar({
       optional(seq(
         "(",
         optional(seq(
-          $.identifier,
-          repeat(seq(",", $.identifier)),
+          $._attribute_arg,
+          repeat(seq(",", $._attribute_arg)),
           optional(","),
         )),
         ")",
       )),
       "]",
+    ),
+
+    // An attribute argument: a path (ident or ident::ident::...) or a group ((arg, arg, ...))
+    _attribute_arg: $ => choice(
+      $.attribute_path,
+      $.attribute_group,
+    ),
+
+    attribute_path: $ => seq(
+      $.identifier,
+      repeat(seq("::", $.identifier)),
+    ),
+
+    attribute_group: $ => seq(
+      "(",
+      $._attribute_arg,
+      repeat(seq(",", $._attribute_arg)),
+      optional(","),
+      ")",
     ),
 
     // param dry_mass: Mass = 1200 kg;

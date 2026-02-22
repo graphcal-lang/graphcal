@@ -17,7 +17,7 @@ use crate::dim_check::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::registry::Registry;
-use crate::resolve::DeclCategory;
+use crate::resolve::{DeclCategory, ExpectedFail};
 
 use super::display::{attach_display_units, format_range_step};
 use super::project::resolve_field_declared_type;
@@ -436,7 +436,7 @@ pub(super) fn evaluate_plan(
         })
         .collect();
 
-    // Evaluate assertions in source order
+    // Evaluate assertions in source order, applying expected_fail inversion
     let assertions: Vec<(DeclName, AssertResult, Span)> = plan
         .assert_bodies
         .iter()
@@ -450,6 +450,10 @@ pub(super) fn evaluate_plan(
                 &tir.registry,
                 src,
             );
+            let assert_result = match plan.expected_fail.get(name) {
+                Some(ef) => apply_expected_fail(assert_result, ef),
+                None => assert_result,
+            };
             (DeclName::new(name), assert_result, *span)
         })
         .collect();
@@ -462,6 +466,36 @@ pub(super) fn evaluate_plan(
         assertions,
         assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
+    }
+}
+
+/// Apply `#[expected_fail]` inversion to an assertion result.
+///
+/// - `ExpectedFail::All`: a blanket inversion — `Pass` becomes an unexpected-pass
+///   failure, `Fail` becomes an expected-fail pass, `Error` is unchanged.
+/// - `ExpectedFail::Variants(keys)`: per-variant inversion is not yet implemented
+///   for indexed assertions; for now it falls back to `All` semantics.
+fn apply_expected_fail(result: AssertResult, ef: &ExpectedFail) -> AssertResult {
+    match ef {
+        ExpectedFail::All => match result {
+            AssertResult::Pass => AssertResult::Fail {
+                message: "assertion passed but was marked #[expected_fail]".to_string(),
+            },
+            AssertResult::Fail { .. } => AssertResult::Pass,
+            AssertResult::Error { .. } => result,
+        },
+        ExpectedFail::Variants(_keys) => {
+            // Per-variant inversion: for now, treat the same as All.
+            // A full implementation would walk indexed entries and invert
+            // only the specified keys.
+            match result {
+                AssertResult::Pass => AssertResult::Fail {
+                    message: "assertion passed but was marked #[expected_fail(...)]".to_string(),
+                },
+                AssertResult::Fail { .. } => AssertResult::Pass,
+                AssertResult::Error { .. } => result,
+            }
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, FieldDecl,
-    IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, TypeDecl, VariantDecl,
+    AssertBody, AssertDecl, Attribute, AttributeArg, ConstDecl, DeclKind, Declaration, DimDecl,
+    FieldDecl, IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, TypeDecl, VariantDecl,
 };
 use crate::names::{
     DeclName, DimName, FieldName, IndexName, Spanned, StructTypeName, UnitName, VariantName,
@@ -52,16 +52,14 @@ impl Parser<'_> {
         let mut args = Vec::new();
         if self.lexer.peek() == Some(&Token::LParen) {
             self.expect(Token::LParen)?;
-            // Parse comma-separated identifiers
             if self.lexer.peek() != Some(&Token::RParen) {
-                args.push(self.parse_any_ident()?);
+                args.push(self.parse_attribute_arg()?);
                 while self.lexer.peek() == Some(&Token::Comma) {
                     self.expect(Token::Comma)?;
-                    // Allow trailing comma
                     if self.lexer.peek() == Some(&Token::RParen) {
                         break;
                     }
-                    args.push(self.parse_any_ident()?);
+                    args.push(self.parse_attribute_arg()?);
                 }
             }
             self.expect(Token::RParen)?;
@@ -69,6 +67,45 @@ impl Parser<'_> {
         let (_, end_span) = self.expect(Token::RBracket)?;
         let span = start_span.merge(end_span);
         Ok(Attribute { name, args, span })
+    }
+
+    /// Parse a single attribute argument: a path (`ident`, `Idx::Var`) or
+    /// a parenthesized group (`(Idx::A, Idx::B)`).
+    fn parse_attribute_arg(&mut self) -> Result<AttributeArg, ParseError> {
+        if self.lexer.peek() == Some(&Token::LParen) {
+            // Group: (arg, arg, ...)
+            let (_, start_span) = self.expect(Token::LParen)?;
+            let mut elements = Vec::new();
+            if self.lexer.peek() != Some(&Token::RParen) {
+                elements.push(self.parse_attribute_arg()?);
+                while self.lexer.peek() == Some(&Token::Comma) {
+                    self.expect(Token::Comma)?;
+                    if self.lexer.peek() == Some(&Token::RParen) {
+                        break;
+                    }
+                    elements.push(self.parse_attribute_arg()?);
+                }
+            }
+            let (_, end_span) = self.expect(Token::RParen)?;
+            Ok(AttributeArg::Group {
+                elements,
+                span: start_span.merge(end_span),
+            })
+        } else {
+            // Path: ident or ident::ident::...
+            let first = self.parse_any_ident()?;
+            let start_span = first.span;
+            let mut segments = vec![first];
+            while self.lexer.peek() == Some(&Token::ColonColon) {
+                self.expect(Token::ColonColon)?;
+                segments.push(self.parse_any_ident()?);
+            }
+            let end_span = segments.last().map_or(start_span, |s| s.span);
+            Ok(AttributeArg::Path {
+                segments,
+                span: start_span.merge(end_span),
+            })
+        }
     }
 
     // --- param/node/const with required type annotation ---
@@ -1309,7 +1346,10 @@ param alt: Length = 400.0 km;
         let attr = &file.declarations[0].attributes[0];
         assert_eq!(attr.name.name, "assumes");
         assert_eq!(attr.args.len(), 1);
-        assert_eq!(attr.args[0].name, "pressure_safe");
+        assert_eq!(
+            attr.args[0].as_single_ident().unwrap().name,
+            "pressure_safe"
+        );
     }
 
     #[test]
@@ -1321,8 +1361,11 @@ param alt: Length = 400.0 km;
         let attr = &file.declarations[0].attributes[0];
         assert_eq!(attr.name.name, "assumes");
         assert_eq!(attr.args.len(), 2);
-        assert_eq!(attr.args[0].name, "pressure_safe");
-        assert_eq!(attr.args[1].name, "temp_bounded");
+        assert_eq!(
+            attr.args[0].as_single_ident().unwrap().name,
+            "pressure_safe"
+        );
+        assert_eq!(attr.args[1].as_single_ident().unwrap().name, "temp_bounded");
     }
 
     #[test]
@@ -1367,5 +1410,87 @@ param alt: Length = 400.0 km;
             .parse_file()
             .unwrap();
         assert_eq!(file.declarations[0].span.offset(), 0);
+    }
+
+    #[test]
+    fn parse_attribute_expected_fail_no_args() {
+        let file = Parser::new("#[expected_fail]\nassert x = true;")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations[0].attributes.len(), 1);
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.name.name, "expected_fail");
+        assert!(attr.args.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_qualified_path() {
+        let file = Parser::new("#[expected_fail(Mode::Boost)]\nassert x = true;")
+            .parse_file()
+            .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 1);
+        let AttributeArg::Path { segments, .. } = &attr.args[0] else {
+            panic!("expected Path, got {:?}", attr.args[0]);
+        };
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].name, "Mode");
+        assert_eq!(segments[1].name, "Boost");
+    }
+
+    #[test]
+    fn parse_attribute_multiple_qualified_paths() {
+        let file = Parser::new("#[expected_fail(Mode::Boost, Mode::Eco)]\nassert x = true;")
+            .parse_file()
+            .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 2);
+        let AttributeArg::Path { segments: s0, .. } = &attr.args[0] else {
+            panic!("expected Path, got {:?}", attr.args[0]);
+        };
+        assert_eq!(s0[0].name, "Mode");
+        assert_eq!(s0[1].name, "Boost");
+        let AttributeArg::Path { segments: s1, .. } = &attr.args[1] else {
+            panic!("expected Path, got {:?}", attr.args[1]);
+        };
+        assert_eq!(s1[0].name, "Mode");
+        assert_eq!(s1[1].name, "Eco");
+    }
+
+    #[test]
+    fn parse_attribute_group_arg() {
+        let file = Parser::new("#[expected_fail((Mode::Boost, Phase::Launch))]\nassert x = true;")
+            .parse_file()
+            .unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 1);
+        let AttributeArg::Group { elements, .. } = &attr.args[0] else {
+            panic!("expected Group, got {:?}", attr.args[0]);
+        };
+        assert_eq!(elements.len(), 2);
+        let AttributeArg::Path { segments: s0, .. } = &elements[0] else {
+            panic!("expected Path, got {:?}", elements[0]);
+        };
+        assert_eq!(s0[0].name, "Mode");
+        assert_eq!(s0[1].name, "Boost");
+        let AttributeArg::Path { segments: s1, .. } = &elements[1] else {
+            panic!("expected Path, got {:?}", elements[1]);
+        };
+        assert_eq!(s1[0].name, "Phase");
+        assert_eq!(s1[1].name, "Launch");
+    }
+
+    #[test]
+    fn parse_attribute_multiple_groups() {
+        let source = "#[expected_fail((Mode::Boost, Phase::Launch), (Mode::Eco, Phase::Cruise))]\nassert x = true;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let attr = &file.declarations[0].attributes[0];
+        assert_eq!(attr.args.len(), 2);
+        assert!(
+            matches!(&attr.args[0], AttributeArg::Group { elements, .. } if elements.len() == 2)
+        );
+        assert!(
+            matches!(&attr.args[1], AttributeArg::Group { elements, .. } if elements.len() == 2)
+        );
     }
 }

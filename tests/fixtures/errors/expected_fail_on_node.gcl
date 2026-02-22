@@ -1,0 +1,5 @@
+// expected_fail_on_node.gcl -- Error: #[expected_fail] is not valid on node declarations
+param x: Dimensionless = 1.0;
+
+#[expected_fail]
+node y: Dimensionless = @x + 1.0;

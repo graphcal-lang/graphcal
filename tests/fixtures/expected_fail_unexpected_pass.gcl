@@ -1,0 +1,7 @@
+// expected_fail_unexpected_pass.gcl -- A passing assertion marked #[expected_fail] becomes a failure
+param x: Dimensionless = 10.0;
+param y: Dimensionless = 20.0;
+
+// This assertion passes (10 < 20 is true), but expected_fail inverts it to fail
+#[expected_fail]
+assert x_less = @x < @y;

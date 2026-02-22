@@ -242,11 +242,18 @@
 ; Attributes
 ; ---------------------------------------------------------------
 
-; #[assumes(x, y)]
+; #[assumes(x, y)], #[expected_fail(Mode::Boost)]
 (attribute "#" @punctuation.special)
 (attribute "[" @punctuation.special)
 (attribute "]" @punctuation.special)
 (attribute name: (identifier) @attribute)
+
+; Attribute path arguments: ident, Index::Variant
+(attribute_path (identifier) @variable)
+
+; Attribute group arguments: (Index::A, Index::B)
+(attribute_group "(" @punctuation.bracket)
+(attribute_group ")" @punctuation.bracket)
 
 ; ---------------------------------------------------------------
 ; Assert declarations

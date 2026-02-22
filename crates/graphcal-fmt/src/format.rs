@@ -170,7 +170,7 @@ fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
         let args = attr
             .args
             .iter()
-            .map(|a| RcDoc::text(a.name.clone()))
+            .map(format_attribute_arg)
             .collect::<Vec<_>>();
         doc = doc
             .append(RcDoc::text("("))
@@ -178,6 +178,24 @@ fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
             .append(RcDoc::text(")"));
     }
     doc.append(RcDoc::text("]"))
+}
+
+fn format_attribute_arg(arg: &graphcal_syntax::ast::AttributeArg) -> RcDoc<'static> {
+    match arg {
+        graphcal_syntax::ast::AttributeArg::Path { segments, .. } => {
+            let parts: Vec<RcDoc<'static>> = segments
+                .iter()
+                .map(|s| RcDoc::text(s.name.clone()))
+                .collect();
+            RcDoc::intersperse(parts, RcDoc::text("::"))
+        }
+        graphcal_syntax::ast::AttributeArg::Group { elements, .. } => {
+            let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
+            RcDoc::text("(")
+                .append(RcDoc::intersperse(inner, RcDoc::text(", ")))
+                .append(RcDoc::text(")"))
+        }
+    }
 }
 
 /// `param name: Type = expr;`

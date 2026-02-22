@@ -121,7 +121,7 @@
     },
 
     "attribute": {
-      "comment": "Attribute: #[name] or #[name(arg1, arg2)]",
+      "comment": "Attribute: #[name] or #[name(arg1, arg2, Index::Variant, (A::X, B::Y))]",
       "begin": "(#)(\\[)",
       "end": "(\\])",
       "beginCaptures": {
@@ -135,6 +135,10 @@
         {
           "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\b",
           "name": "entity.other.attribute-name.graphcal"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.graphcal"
         },
         {
           "match": "[(),]",

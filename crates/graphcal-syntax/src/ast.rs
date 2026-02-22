@@ -14,8 +14,41 @@ pub struct File {
 #[derive(Debug, Clone)]
 pub struct Attribute {
     pub name: Ident,
-    pub args: Vec<Ident>,
+    pub args: Vec<AttributeArg>,
     pub span: Span,
+}
+
+/// An argument inside an attribute's parenthesized list.
+///
+/// Supports plain identifiers (`pressure_safe`), qualified paths
+/// (`Index::Variant`), and parenthesized groups (`(Mode::Boost, Phase::Launch)`).
+#[derive(Debug, Clone)]
+pub enum AttributeArg {
+    /// A path of one or more `::` separated segments: `foo`, `Index::Variant`.
+    Path { segments: Vec<Ident>, span: Span },
+    /// A parenthesized group of args: `(Index::A, Index::B)`.
+    Group { elements: Vec<Self>, span: Span },
+}
+
+impl AttributeArg {
+    /// Returns the span of this argument.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Path { span, .. } | Self::Group { span, .. } => *span,
+        }
+    }
+
+    /// If this is a single-segment `Path`, return the identifier.
+    ///
+    /// Used for backward-compatible access where attributes expect plain identifiers.
+    #[must_use]
+    pub fn as_single_ident(&self) -> Option<&Ident> {
+        match self {
+            Self::Path { segments, .. } if segments.len() == 1 => Some(&segments[0]),
+            _ => None,
+        }
+    }
 }
 
 /// A top-level declaration.

@@ -17,7 +17,7 @@ use graphcal_syntax::span::Span;
 use crate::error::GraphcalError;
 use crate::ir::IR;
 use crate::registry::Registry;
-use crate::resolve::DeclCategory;
+use crate::resolve::{DeclCategory, ExpectedFail};
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -216,6 +216,8 @@ pub struct TIR {
     pub assert_names: std::collections::HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
+    /// Mapping from assert name to its expected-fail configuration.
+    pub expected_fail: HashMap<String, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
@@ -349,6 +351,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         functions: ir.functions,
         assert_names: ir.assert_names,
         assumes_map: ir.assumes_map,
+        expected_fail: ir.expected_fail,
         resolved_decl_types,
         resolved_fn_sigs,
         imported_values: ir.imported_values,

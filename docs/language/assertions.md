@@ -146,9 +146,11 @@ node safety_factor: Dimensionless = 1.5;
 ### Syntax
 
 ```
-#[name]                       // no arguments
-#[name(arg1)]                 // one argument
-#[name(arg1, arg2, arg3)]    // multiple arguments
+#[name]                                     // no arguments
+#[name(arg1)]                               // one argument
+#[name(arg1, arg2, arg3)]                   // multiple arguments
+#[name(Index::Variant)]                     // qualified path argument
+#[name((Idx::A, Idx::B), (Idx::C, Idx::D))] // tuple key arguments
 ```
 
 Multiple attributes can be stacked:
@@ -191,6 +193,66 @@ Assertions:
 - Multiple assertions can be listed: `#[assumes(a, b, c)]`.
 - Cross-file: you can import an assert via `import` and reference it in
   `#[assumes]`.
+
+### `#[expected_fail]`
+
+The `#[expected_fail]` attribute marks an assertion that is expected to fail.
+This is useful for documenting known failures in engineering calculations
+without causing the overall evaluation to fail.
+
+A failing assertion marked `#[expected_fail]` is treated as a pass.
+A passing assertion marked `#[expected_fail]` is treated as a failure
+("unexpected pass"), since the known issue may have been resolved and the
+attribute should be removed.
+
+```
+// This assertion fails (10 > 20 is false), but it's a known issue
+#[expected_fail]
+assert x_greater = @x > @y;
+```
+
+#### Constraints
+
+- Valid only on `assert` declarations. Using `#[expected_fail]` on `param`,
+  `node`, `const`, etc. is a compile error (A008).
+- Evaluation errors (e.g., division by zero) are never inverted -- they remain
+  errors regardless of `#[expected_fail]`.
+
+#### Blanket Form
+
+When used without arguments, the entire assertion is expected to fail:
+
+```
+#[expected_fail]
+assert known_issue = @actual == @expected;
+```
+
+#### Per-Variant Form (Single Index)
+
+For indexed assertions, specific index variants can be marked as expected
+failures while other variants must still pass:
+
+```
+index Mode = { Normal, Eco, Boost }
+
+#[expected_fail(Mode::Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
+```
+
+Here, `Mode::Boost` is expected to fail (and is treated as a pass if it does),
+while `Mode::Normal` and `Mode::Eco` must still pass normally.
+
+#### Per-Tuple-Key Form (Multi Index)
+
+For multi-indexed assertions, tuple keys identify specific index combinations:
+
+```
+index Mode = { Normal, Eco, Boost }
+index Phase = { Launch, Cruise }
+
+#[expected_fail((Mode::Normal, Phase::Cruise), (Mode::Boost, Phase::Launch))]
+assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
+```
 
 ### `#[lazy]`
 
@@ -247,3 +309,6 @@ node ratio: Dimensionless = @limit / 2.0;
 | A005 | Unknown assert in `#[assumes(...)]` |
 | A006 | `#[assumes]` on invalid declaration kind (e.g., `const`) |
 | A007 | Unknown attribute name |
+| A008 | `#[expected_fail]` on invalid declaration kind (not `assert`) |
+| A009 | Invalid argument in `#[expected_fail(...)]` |
+| A010 | `#[expected_fail(...)]` with variant args on non-indexed assertion |

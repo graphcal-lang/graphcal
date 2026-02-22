@@ -1,0 +1,23 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// expected_fail_indexed.gcl -- Per-variant expected_fail on single-index assertion
+index Mode = { Normal, Eco, Boost }
+
+param power_gen: Dimensionless[Mode] = {
+    Mode::Normal: 100.0,
+    Mode::Eco: 50.0,
+    Mode::Boost: 200.0,
+};
+
+param power_use: Dimensionless[Mode] = {
+    Mode::Normal: 80.0,
+    Mode::Eco: 30.0,
+    Mode::Boost: 250.0,
+};
+
+// Boost fails (250 > 200), mark it as expected_fail
+// Normal and Eco pass and should remain passing
+#[expected_fail(Mode::Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
