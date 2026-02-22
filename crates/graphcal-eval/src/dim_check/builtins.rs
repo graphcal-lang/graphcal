@@ -88,5 +88,31 @@ pub(super) fn infer_fn_dim(
             }
             Ok(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
         }
+        DimSignature::PassthroughToDimensionless => Ok(Dimension::dimensionless()),
+        DimSignature::SameDimension3 => {
+            if arg_dims[0] != arg_dims[1] {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
+                    found: registry.dimensions.format_dimension(&arg_dims[1]),
+                    src: src.clone(),
+                    span: args[1].span.into(),
+                    help: "all arguments must have the same dimension".to_string(),
+                });
+            }
+            if arg_dims[0] != arg_dims[2] {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
+                    found: registry.dimensions.format_dimension(&arg_dims[2]),
+                    src: src.clone(),
+                    span: args[2].span.into(),
+                    help: "all arguments must have the same dimension".to_string(),
+                });
+            }
+            Ok(arg_dims[0].clone())
+        }
+        DimSignature::Cbrt => {
+            // Result dimension is arg^(1/3)
+            Ok(arg_dims[0].pow(Rational::new(1, 3)))
+        }
     }
 }
