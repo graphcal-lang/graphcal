@@ -1,5 +1,4 @@
 // functions.gcl -- Phase 3 milestone: user-defined pure functions
-
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
 
@@ -21,11 +20,7 @@ fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult {
     let v2 = sqrt(gm / r2);
     let dv1 = sqrt(2.0 * gm * r2 / (r1 * (r1 + r2))) - v1;
     let dv2 = v2 - sqrt(2.0 * gm * r1 / (r2 * (r1 + r2)));
-    TransferResult {
-        dv1,
-        dv2,
-        total_dv: dv1 + dv2,
-    }
+    TransferResult { dv1, dv2, total_dv: dv1 + dv2}
 }
 
 // Generic function: linear interpolation
@@ -35,7 +30,8 @@ fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
 fn earth_radius() -> Length = R_EARTH;
 
 // Function calling another function
-fn circular_velocity_at_alt(alt: Length) -> Velocity = orbital_velocity(GM_EARTH, earth_radius() + alt);
+fn circular_velocity_at_alt(alt: Length) -> Velocity = orbital_velocity(GM_EARTH,
+    earth_radius() + alt);
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;

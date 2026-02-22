@@ -19,18 +19,11 @@ node transfer: TransferResult = {
     let r1 = R_EARTH + @parking_alt;
     let r2 = R_EARTH + @target_alt;
     let a = (r1 + r2) / 2.0;
-
     let v1 = sqrt(GM_EARTH / r1);
     let v2 = sqrt(GM_EARTH / r2);
     let dv1 = sqrt(2.0 * GM_EARTH * r2 / (r1 * (r1 + r2))) - v1;
     let dv2 = v2 - sqrt(2.0 * GM_EARTH * r1 / (r2 * (r1 + r2)));
-
-    TransferResult {
-        dv1,
-        dv2,
-        total_dv: dv1 + dv2,
-        tof: PI * sqrt(a ^ 3.0 / GM_EARTH),
-    }
+    TransferResult { dv1, dv2, total_dv: dv1 + dv2, tof: PI * sqrt(a ^ 3.0 / GM_EARTH)}
 };
 
 node total_dv: Velocity = @transfer.total_dv;

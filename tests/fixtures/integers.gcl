@@ -1,5 +1,4 @@
 // integers.gcl -- Integer type tests
-
 // Basic integer params and arithmetic
 param a: Int = 10;
 param b: Int = 3;

@@ -1,5 +1,4 @@
 // assertions_assumes.gcl -- #[assumes] attribute test
-
 param pressure: Dimensionless = 200.0;
 param max_pressure: Dimensionless = 150.0;
 
