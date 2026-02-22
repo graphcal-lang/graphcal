@@ -9,9 +9,9 @@ Begin snippet for extra_variants.gcl starting at line 1, column 1
 snippet line 1: index Phase = { Coast, Burn }
 snippet line 2: param dv: Velocity[Phase] = {
     label starting at line 2, column 29: unexpected variants
-snippet line 3:     Phase::Coast: 2.46 km / s,
-snippet line 4:     Phase::Burn: 0.5 km / s,
-snippet line 5:     Phase::Insertion: 1.8 km / s,
+snippet line 3:     Phase::Coast: 2.46 km/s,
+snippet line 4:     Phase::Burn: 0.5 km/s,
+snippet line 5:     Phase::Insertion: 1.8 km/s,
 snippet line 6: };
     label ending at line 6, column 1: unexpected variants
 diagnostic help: only variants declared in the index are allowed
