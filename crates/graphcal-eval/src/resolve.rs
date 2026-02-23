@@ -1420,12 +1420,12 @@ fn collect_const_refs(
             // Only check arity for builtins (user fn arity checked later in dim_check).
             // Skip arity check for aggregation/conversion functions.
             if let Some(builtin) = builtin_fns.get(name_str)
-                && args.len() != builtin.arity
+                && args.len() != builtin.arity()
                 && !AGGREGATION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
-                    expected: builtin.arity,
+                    expected: builtin.arity(),
                     got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),
@@ -1758,12 +1758,12 @@ fn collect_all_refs(
                 });
             }
             if let Some(builtin) = builtin_fns.get(name_str)
-                && args.len() != builtin.arity
+                && args.len() != builtin.arity()
                 && !AGGREGATION_FNS.contains(&name_str)
             {
                 return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
-                    expected: builtin.arity,
+                    expected: builtin.arity(),
                     got: args.len(),
                     src: src.clone(),
                     span: name.span.into(),

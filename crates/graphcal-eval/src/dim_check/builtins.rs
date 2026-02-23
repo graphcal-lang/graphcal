@@ -1,118 +1,70 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use graphcal_syntax::ast::Expr;
-use graphcal_syntax::dimension::{Dimension, Rational};
+use graphcal_syntax::dimension::Dimension;
 
-use crate::builtins::DimSignature;
+use crate::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::error::GraphcalError;
 use crate::registry::Registry;
 
 pub(super) fn infer_fn_dim(
-    sig: DimSignature,
+    sig: &DimSignature,
     arg_dims: &[Dimension],
     args: &[Expr],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
-    use graphcal_syntax::dimension::BaseDimId;
+    let mut bindings: HashMap<&str, &Dimension> = HashMap::new();
 
-    match sig {
-        DimSignature::AllDimensionless => {
-            for (dim, arg) in arg_dims.iter().zip(args) {
-                if !dim.is_dimensionless() {
+    for (i, param) in sig.params.iter().enumerate() {
+        match &param.dim {
+            ParamDim::Fixed(expected) => {
+                if arg_dims[i] != *expected {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: "Dimensionless".to_string(),
-                        found: registry.dimensions.format_dimension(dim),
+                        expected: registry.dimensions.format_dimension(expected),
+                        found: registry.dimensions.format_dimension(&arg_dims[i]),
                         src: src.clone(),
-                        span: arg.span.into(),
-                        help: "this function requires Dimensionless arguments".to_string(),
+                        span: args[i].span.into(),
+                        help: format!(
+                            "parameter `{}` requires {}",
+                            param.name,
+                            registry.dimensions.format_dimension(expected),
+                        ),
                     });
                 }
             }
-            Ok(Dimension::dimensionless())
-        }
-        DimSignature::AngleToDimensionless => {
-            let angle = Dimension::base(BaseDimId::Prelude("Angle".to_string()));
-            if arg_dims[0] != angle {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Angle".to_string(),
-                    found: registry.dimensions.format_dimension(&arg_dims[0]),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                    help: "trigonometric functions require an Angle argument".to_string(),
-                });
+            ParamDim::Bind(var) => {
+                bindings.insert(var, &arg_dims[i]);
             }
-            Ok(Dimension::dimensionless())
-        }
-        DimSignature::DimensionlessToAngle => {
-            if !arg_dims[0].is_dimensionless() {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Dimensionless".to_string(),
-                    found: registry.dimensions.format_dimension(&arg_dims[0]),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                    help: "inverse trigonometric functions require a Dimensionless argument"
-                        .to_string(),
-                });
+            ParamDim::Ref(var) => {
+                let bound = bindings[var.as_str()];
+                if arg_dims[i] != *bound {
+                    let bind_param_name = sig
+                        .params
+                        .iter()
+                        .find(|p| matches!(&p.dim, ParamDim::Bind(v) if v == var))
+                        .map_or("?", |p| &p.name);
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: registry.dimensions.format_dimension(bound),
+                        found: registry.dimensions.format_dimension(&arg_dims[i]),
+                        src: src.clone(),
+                        span: args[i].span.into(),
+                        help: format!(
+                            "parameter `{}` must have the same dimension as `{}`",
+                            param.name, bind_param_name,
+                        ),
+                    });
+                }
             }
-            Ok(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
         }
-        DimSignature::Sqrt => {
-            // Result dimension is arg^(1/2)
-            Ok(arg_dims[0].pow(Rational::new(1, 2)))
-        }
-        DimSignature::Passthrough => Ok(arg_dims[0].clone()),
-        DimSignature::SameDimension => {
-            if arg_dims[0] != arg_dims[1] {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
-                    found: registry.dimensions.format_dimension(&arg_dims[1]),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                    help: "both arguments must have the same dimension".to_string(),
-                });
-            }
-            Ok(arg_dims[0].clone())
-        }
-        DimSignature::SameDimensionToAngle => {
-            if arg_dims[0] != arg_dims[1] {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
-                    found: registry.dimensions.format_dimension(&arg_dims[1]),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                    help: "both arguments must have the same dimension".to_string(),
-                });
-            }
-            Ok(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
-        }
-        DimSignature::PassthroughToDimensionless => Ok(Dimension::dimensionless()),
-        DimSignature::SameDimension3 => {
-            if arg_dims[0] != arg_dims[1] {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
-                    found: registry.dimensions.format_dimension(&arg_dims[1]),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                    help: "all arguments must have the same dimension".to_string(),
-                });
-            }
-            if arg_dims[0] != arg_dims[2] {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&arg_dims[0]),
-                    found: registry.dimensions.format_dimension(&arg_dims[2]),
-                    src: src.clone(),
-                    span: args[2].span.into(),
-                    help: "all arguments must have the same dimension".to_string(),
-                });
-            }
-            Ok(arg_dims[0].clone())
-        }
-        DimSignature::Cbrt => {
-            // Result dimension is arg^(1/3)
-            Ok(arg_dims[0].pow(Rational::new(1, 3)))
-        }
+    }
+
+    match &sig.result {
+        ResultDim::Fixed(dim) => Ok(dim.clone()),
+        ResultDim::Var(name) => Ok(bindings[name.as_str()].clone()),
+        ResultDim::VarPow(name, power) => Ok(bindings[name.as_str()].pow(*power)),
     }
 }

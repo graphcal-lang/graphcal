@@ -169,7 +169,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                 name_span: Span::new(0, 0),
                 decl_span: Span::new(0, 0),
                 type_description: None,
-                detail: Some(format!("builtin, arity {}", f.arity)),
+                detail: Some(format!("builtin, arity {}", f.arity())),
             },
         );
     }

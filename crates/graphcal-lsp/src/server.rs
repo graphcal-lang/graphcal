@@ -20,7 +20,7 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use graphcal_eval::builtins::{DimSignature, builtin_functions};
+use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -53,9 +53,9 @@ pub struct ImportDeclInfo {
 
 /// Structured function signature for Signature Help.
 pub struct FnSignatureInfo {
-    /// Full signature label, e.g. `"fn sqrt(x: D^2) -> D"`.
+    /// Full signature label, e.g. `"fn sqrt(x: D) -> D^(1/2)"`.
     pub label: String,
-    /// Individual parameter labels, e.g. `["x: D^2"]`.
+    /// Individual parameter labels, e.g. `["x: D"]`.
     pub parameters: Vec<String>,
 }
 
@@ -254,7 +254,7 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
 
     // Builtin functions — always available.
     for (name, f) in &builtin_functions() {
-        let (params, ret) = builtin_signature_parts(f.arity, f.dim_sig);
+        let (params, ret) = builtin_signature_parts(&f.dim_sig);
         let params_str = params.join(", ");
         let label = format!("fn {name}({params_str}) -> {ret}");
         sigs.insert(
@@ -308,49 +308,46 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
     sigs
 }
 
-/// Generate human-readable parameter and return type strings for a builtin function.
-fn builtin_signature_parts(arity: usize, dim_sig: DimSignature) -> (Vec<String>, String) {
-    match dim_sig {
-        DimSignature::AllDimensionless => {
-            let params: Vec<String> = if arity == 1 {
-                vec!["x: Dimensionless".to_string()]
-            } else {
-                vec![
-                    "a: Dimensionless".to_string(),
-                    "b: Dimensionless".to_string(),
-                ]
-            };
-            (params, "Dimensionless".to_string())
-        }
-        DimSignature::AngleToDimensionless => {
-            (vec!["x: Angle".to_string()], "Dimensionless".to_string())
-        }
-        DimSignature::DimensionlessToAngle => {
-            (vec!["x: Dimensionless".to_string()], "Angle".to_string())
-        }
-        DimSignature::Sqrt => (vec!["x: D^2".to_string()], "D".to_string()),
-        DimSignature::Passthrough => (vec!["x: D".to_string()], "D".to_string()),
-        DimSignature::SameDimension => (
-            vec!["a: D".to_string(), "b: D".to_string()],
-            "D".to_string(),
-        ),
-        DimSignature::SameDimensionToAngle => (
-            vec!["y: D".to_string(), "x: D".to_string()],
-            "Angle".to_string(),
-        ),
-        DimSignature::PassthroughToDimensionless => {
-            (vec!["x: D".to_string()], "Dimensionless".to_string())
-        }
-        DimSignature::SameDimension3 => (
-            vec![
-                "x: D".to_string(),
-                "min: D".to_string(),
-                "max: D".to_string(),
-            ],
-            "D".to_string(),
-        ),
-        DimSignature::Cbrt => (vec!["x: D^3".to_string()], "D".to_string()),
+/// Format a dimension for display in builtin signatures (no registry needed).
+fn format_dim_display(dim: &graphcal_syntax::dimension::Dimension) -> String {
+    if dim.is_dimensionless() {
+        return "Dimensionless".to_string();
     }
+    let parts: Vec<String> = dim
+        .iter()
+        .map(|(id, exp)| {
+            let name = id.fallback_symbol();
+            if *exp == graphcal_syntax::dimension::Rational::ONE {
+                name
+            } else {
+                format!("{name}^{exp}")
+            }
+        })
+        .collect();
+    parts.join(" * ")
+}
+
+/// Generate human-readable parameter and return type strings for a builtin function.
+fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = match &p.dim {
+                ParamDim::Fixed(dim) => format_dim_display(dim),
+                ParamDim::Bind(var) | ParamDim::Ref(var) => var.clone(),
+            };
+            format!("{}: {type_str}", p.name)
+        })
+        .collect();
+
+    let ret = match &sig.result {
+        ResultDim::Fixed(dim) => format_dim_display(dim),
+        ResultDim::Var(name) => name.clone(),
+        ResultDim::VarPow(name, power) => format!("{name}^({power})"),
+    };
+
+    (params, ret)
 }
 
 /// Format all successfully evaluated values into display strings.

@@ -9,5 +9,5 @@ Begin snippet for exp_requires_dimensionless.gcl starting at line 2, column 1
 snippet line 2: param alt: Length = 400.0 km;
 snippet line 3: node bad: Dimensionless = exp(@alt);
     label at line 3, columns 31 to 34: has dimension Length
-diagnostic help: this function requires Dimensionless arguments
+diagnostic help: parameter `x` requires Dimensionless
 diagnostic code: graphcal::D001
