@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`#[expected_fail]` without arguments on indexed assertion
+    Diagnostic severity: error
+Begin snippet for expected_fail_all_on_indexed.gcl starting at line 16, column 1
+
+snippet line 16: 
+snippet line 17: #[expected_fail]
+    label at line 17, columns 1 to 16: this assertion is indexed
+snippet line 18: assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
+diagnostic help: use `#[expected_fail(Index::Variant, ...)]` to specify which variants are expected to fail
+diagnostic code: graphcal::A011

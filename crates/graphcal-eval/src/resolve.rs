@@ -555,9 +555,23 @@ pub fn resolve_with_imports(
                 }
                 "expected_fail" => {
                     let kind = match &decl.kind {
-                        DeclKind::Assert(_) => {
+                        DeclKind::Assert(a) => {
                             // Valid target — parse args and record
                             let ef = parse_expected_fail_args(&attr.args, src)?;
+                            // #[expected_fail] (no args) on an indexed assertion is
+                            // an error — the user must specify which variants fail.
+                            if matches!(ef, ExpectedFail::All) {
+                                let is_indexed = matches!(
+                                    &a.body,
+                                    AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
+                                );
+                                if is_indexed {
+                                    return Err(GraphcalError::ExpectedFailAllOnIndexed {
+                                        src: src.clone(),
+                                        span: attr.span.into(),
+                                    });
+                                }
+                            }
                             if let Some(ref dname) = decl_name {
                                 expected_fail_map.insert(dname.clone(), ef);
                             }
@@ -914,8 +928,22 @@ pub fn resolve_with_imported_values(
                 }
                 "expected_fail" => {
                     let kind = match &decl.kind {
-                        DeclKind::Assert(_) => {
+                        DeclKind::Assert(a) => {
                             let ef = parse_expected_fail_args(&attr.args, src)?;
+                            // #[expected_fail] (no args) on an indexed assertion is
+                            // an error — the user must specify which variants fail.
+                            if matches!(ef, ExpectedFail::All) {
+                                let is_indexed = matches!(
+                                    &a.body,
+                                    AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
+                                );
+                                if is_indexed {
+                                    return Err(GraphcalError::ExpectedFailAllOnIndexed {
+                                        src: src.clone(),
+                                        span: attr.span.into(),
+                                    });
+                                }
+                            }
                             if let Some(ref dname) = decl_name {
                                 expected_fail_map.insert(dname.clone(), ef);
                             }

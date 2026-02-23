@@ -1,0 +1,18 @@
+// expected_fail_all_on_indexed.gcl -- #[expected_fail] without arguments on an
+// indexed assertion should be a compile error.
+index Mode = { Normal, Eco, Boost }
+
+param power_gen: Dimensionless[Mode] = {
+    Mode::Normal: 100.0,
+    Mode::Eco: 50.0,
+    Mode::Boost: 200.0,
+};
+
+param power_use: Dimensionless[Mode] = {
+    Mode::Normal: 80.0,
+    Mode::Eco: 30.0,
+    Mode::Boost: 250.0,
+};
+
+#[expected_fail]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
