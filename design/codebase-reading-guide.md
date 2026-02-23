@@ -413,7 +413,8 @@ Read these files in order:
 
 1. **`crates/graphcal-eval/src/builtins.rs`** -- Defines 14 built-in functions (`sqrt`, `ln`,
    `sin`, `cos`, `abs`, `floor`, `ceil`, `atan2`, `min`, `max`, ...) and constants (`PI`, `E`).
-   Each built-in has a `DimSignature` that describes its dimensional behavior.
+   Each built-in has a `DimSignature` (a composable struct of per-parameter constraints
+   and result rule) that describes its dimensional behavior.
 2. **`crates/graphcal-eval/src/prelude.rs`** -- Registers the standard library: 8 base
    dimensions, 9 derived dimensions, and 20+ units with their scale factors.
 3. **`crates/graphcal-eval/src/registry.rs`** -- The type system's lookup tables, split into
@@ -1008,9 +1009,11 @@ working artifact with locked design decisions.
 ### Adding a New Built-in Function
 
 1. Add the function entry to `BUILTIN_FUNCTIONS` in `crates/graphcal-eval/src/builtins.rs`.
-   Specify: name, arity, eval closure (operating on `f64` values), and `DimSignature`.
-2. If needed, add a new `DimSignature` variant and handle it in `dim_check.rs` at the
-   `BuiltinFunction` match arm in `infer_type()`.
+   Specify: name, eval closure (operating on `f64` values), and `DimSignature` (built using
+   convenience constructors like `DimSignature::passthrough`, `DimSignature::same_dim`, etc.).
+   The arity is derived from the number of parameters in the `DimSignature`.
+2. No code changes are needed in `dim_check.rs` — the generic `infer_fn_dim` interpreter
+   handles any `DimSignature` automatically.
 3. Add test fixtures in `tests/fixtures/` and snapshot tests in
    `crates/graphcal-eval/tests/error_snapshots.rs` for error cases.
 4. Update LSP completion in `crates/graphcal-lsp/src/completion.rs` if the function needs

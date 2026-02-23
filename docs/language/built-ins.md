@@ -23,8 +23,8 @@ This page lists all dimensions, units, constants, and functions provided by the 
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `sqrt(x)` | `D^2 -> D` | Square root (dimension halved) |
-| `cbrt(x)` | `D^3 -> D` | Cube root (dimension divided by 3) |
+| `sqrt(x)` | `D -> D^(1/2)` | Square root (dimension halved) |
+| `cbrt(x)` | `D -> D^(1/3)` | Cube root (dimension divided by 3) |
 | `abs(x)` | `D -> D` | Absolute value |
 | `sign(x)` | `D -> Dimensionless` | Sign of value (1.0, -1.0, or NaN) |
 | `round(x)` | `D -> D` | Round to nearest integer |

@@ -493,7 +493,7 @@ pub(super) fn infer_type(
                         expect_scalar(&t, registry, src, a.span)
                     })
                     .collect::<Result<_, _>>()?;
-                return infer_fn_dim(func.dim_sig, &arg_dims, args, registry, src)
+                return infer_fn_dim(&func.dim_sig, &arg_dims, args, registry, src)
                     .map(InferredType::Scalar);
             }
 

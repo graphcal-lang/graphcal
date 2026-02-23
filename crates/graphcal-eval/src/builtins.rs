@@ -1,44 +1,175 @@
 use std::collections::HashMap;
 
+use graphcal_syntax::dimension::{BaseDimId, Dimension, Rational};
+
+/// Describes how a single parameter's dimension is constrained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParamDim {
+    /// Must be a specific fixed dimension (e.g., dimensionless, Angle).
+    Fixed(Dimension),
+    /// Introduces a new dimension variable. The variable is bound to
+    /// the argument's actual dimension.
+    Bind(String),
+    /// Must match the dimension already bound to this variable name.
+    Ref(String),
+}
+
+/// Describes how the result dimension is computed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResultDim {
+    /// A specific fixed dimension.
+    Fixed(Dimension),
+    /// The dimension bound to the named variable.
+    Var(String),
+    /// The dimension bound to the named variable, raised to a rational power.
+    VarPow(String, Rational),
+}
+
+/// A parameter with its display name and dimension constraint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamSig {
+    /// Display name (e.g., "x", "a", "min").
+    pub name: String,
+    /// Dimension constraint.
+    pub dim: ParamDim,
+}
+
 /// Describes how a built-in function interacts with dimensions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DimSignature {
-    /// All arguments must be Dimensionless, returns Dimensionless.
-    /// e.g., exp, ln
-    AllDimensionless,
-    /// Argument must be Angle, returns Dimensionless.
-    /// e.g., sin, cos, tan
-    AngleToDimensionless,
-    /// Returns Angle from Dimensionless arguments.
-    /// e.g., asin, acos
-    DimensionlessToAngle,
-    /// Argument is D, returns D^(1/2). Dimension must have even exponents.
-    /// e.g., sqrt
-    Sqrt,
-    /// Argument is D, returns D (preserves dimension).
-    /// e.g., abs, floor, ceil
-    Passthrough,
-    /// Both arguments must have same dimension D, returns D.
-    /// e.g., min, max
-    SameDimension,
-    /// Both arguments must have same dimension D, returns Angle.
-    /// e.g., atan2
-    SameDimensionToAngle,
-    /// Argument is D, returns Dimensionless.
-    /// e.g., sign
-    PassthroughToDimensionless,
-    /// All three arguments must have same dimension D, returns D.
-    /// e.g., clamp(x, lo, hi)
-    SameDimension3,
-    /// Argument is D, returns D^(1/3). Dimension exponents must be divisible by 3.
-    /// e.g., cbrt
-    Cbrt,
+///
+/// Each parameter has an independent constraint, and the result dimension
+/// is computed from fixed values or dimension variables bound by the parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimSignature {
+    /// Per-parameter constraints, in order. Length determines arity.
+    pub params: Vec<ParamSig>,
+    /// How the result dimension is computed.
+    pub result: ResultDim,
+}
+
+const fn dimensionless() -> Dimension {
+    Dimension::dimensionless()
+}
+
+fn angle() -> Dimension {
+    Dimension::base(BaseDimId::Prelude("Angle".to_string()))
+}
+
+impl DimSignature {
+    /// All params must be dimensionless, result is dimensionless.
+    #[must_use]
+    pub fn all_dimensionless(names: &[&str]) -> Self {
+        Self {
+            params: names
+                .iter()
+                .map(|&n| ParamSig {
+                    name: n.to_string(),
+                    dim: ParamDim::Fixed(dimensionless()),
+                })
+                .collect(),
+            result: ResultDim::Fixed(dimensionless()),
+        }
+    }
+
+    /// Single fixed-dimension param, fixed-dimension result.
+    #[must_use]
+    pub fn fixed_to_fixed(name: &str, input: Dimension, output: Dimension) -> Self {
+        Self {
+            params: vec![ParamSig {
+                name: name.to_string(),
+                dim: ParamDim::Fixed(input),
+            }],
+            result: ResultDim::Fixed(output),
+        }
+    }
+
+    /// Single free param D, result is D.
+    #[must_use]
+    pub fn passthrough(name: &str) -> Self {
+        Self {
+            params: vec![ParamSig {
+                name: name.to_string(),
+                dim: ParamDim::Bind("D".to_string()),
+            }],
+            result: ResultDim::Var("D".to_string()),
+        }
+    }
+
+    /// Single free param D, result is a fixed dimension.
+    #[must_use]
+    pub fn free_to_fixed(name: &str, output: Dimension) -> Self {
+        Self {
+            params: vec![ParamSig {
+                name: name.to_string(),
+                dim: ParamDim::Bind("D".to_string()),
+            }],
+            result: ResultDim::Fixed(output),
+        }
+    }
+
+    /// Single free param D, result is D^power.
+    #[must_use]
+    pub fn free_to_pow(name: &str, power: Rational) -> Self {
+        Self {
+            params: vec![ParamSig {
+                name: name.to_string(),
+                dim: ParamDim::Bind("D".to_string()),
+            }],
+            result: ResultDim::VarPow("D".to_string(), power),
+        }
+    }
+
+    /// N params all same dimension D, result is D.
+    #[must_use]
+    pub fn same_dim(names: &[&str]) -> Self {
+        Self {
+            params: names
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| ParamSig {
+                    name: n.to_string(),
+                    dim: if i == 0 {
+                        ParamDim::Bind("D".to_string())
+                    } else {
+                        ParamDim::Ref("D".to_string())
+                    },
+                })
+                .collect(),
+            result: ResultDim::Var("D".to_string()),
+        }
+    }
+
+    /// N params all same dimension D, result is a fixed dimension.
+    #[must_use]
+    pub fn same_dim_to_fixed(names: &[&str], output: Dimension) -> Self {
+        Self {
+            params: names
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| ParamSig {
+                    name: n.to_string(),
+                    dim: if i == 0 {
+                        ParamDim::Bind("D".to_string())
+                    } else {
+                        ParamDim::Ref("D".to_string())
+                    },
+                })
+                .collect(),
+            result: ResultDim::Fixed(output),
+        }
+    }
 }
 
 pub struct BuiltinFunction {
-    pub arity: usize,
     pub eval: fn(&[f64]) -> f64,
     pub dim_sig: DimSignature,
+}
+
+impl BuiltinFunction {
+    /// Returns the arity (number of parameters) of this function.
+    #[must_use]
+    pub const fn arity(&self) -> usize {
+        self.dim_sig.params.len()
+    }
 }
 
 #[must_use]
@@ -48,261 +179,235 @@ pub struct BuiltinFunction {
 )]
 pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
     let mut m = HashMap::new();
+    // Root functions
     m.insert(
         "sqrt",
         BuiltinFunction {
-            arity: 1,
             eval: |a| a[0].sqrt(),
-            dim_sig: DimSignature::Sqrt,
-        },
-    );
-    m.insert(
-        "exp",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].exp(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "ln",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].ln(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "abs",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].abs(),
-            dim_sig: DimSignature::Passthrough,
-        },
-    );
-    m.insert(
-        "sin",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].sin(),
-            dim_sig: DimSignature::AngleToDimensionless,
-        },
-    );
-    m.insert(
-        "cos",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].cos(),
-            dim_sig: DimSignature::AngleToDimensionless,
-        },
-    );
-    m.insert(
-        "tan",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].tan(),
-            dim_sig: DimSignature::AngleToDimensionless,
-        },
-    );
-    m.insert(
-        "asin",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].asin(),
-            dim_sig: DimSignature::DimensionlessToAngle,
-        },
-    );
-    m.insert(
-        "acos",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].acos(),
-            dim_sig: DimSignature::DimensionlessToAngle,
-        },
-    );
-    m.insert(
-        "floor",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].floor(),
-            dim_sig: DimSignature::Passthrough,
-        },
-    );
-    m.insert(
-        "ceil",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].ceil(),
-            dim_sig: DimSignature::Passthrough,
-        },
-    );
-    m.insert(
-        "atan2",
-        BuiltinFunction {
-            arity: 2,
-            eval: |a| a[0].atan2(a[1]),
-            dim_sig: DimSignature::SameDimensionToAngle,
-        },
-    );
-    m.insert(
-        "min",
-        BuiltinFunction {
-            arity: 2,
-            eval: |a| a[0].min(a[1]),
-            dim_sig: DimSignature::SameDimension,
-        },
-    );
-    m.insert(
-        "max",
-        BuiltinFunction {
-            arity: 2,
-            eval: |a| a[0].max(a[1]),
-            dim_sig: DimSignature::SameDimension,
-        },
-    );
-    // --- New Phase A functions ---
-    m.insert(
-        "atan",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].atan(),
-            dim_sig: DimSignature::DimensionlessToAngle,
-        },
-    );
-    m.insert(
-        "round",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].round(),
-            dim_sig: DimSignature::Passthrough,
-        },
-    );
-    m.insert(
-        "trunc",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].trunc(),
-            dim_sig: DimSignature::Passthrough,
-        },
-    );
-    m.insert(
-        "sign",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].signum(),
-            dim_sig: DimSignature::PassthroughToDimensionless,
-        },
-    );
-    m.insert(
-        "clamp",
-        BuiltinFunction {
-            arity: 3,
-            eval: |a| a[0].clamp(a[1], a[2]),
-            dim_sig: DimSignature::SameDimension3,
-        },
-    );
-    m.insert(
-        "hypot",
-        BuiltinFunction {
-            arity: 2,
-            eval: |a| a[0].hypot(a[1]),
-            dim_sig: DimSignature::SameDimension,
-        },
-    );
-    m.insert(
-        "log10",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].log10(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "log2",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].log2(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "log",
-        BuiltinFunction {
-            arity: 2,
-            eval: |a| a[0].log(a[1]),
-            dim_sig: DimSignature::AllDimensionless,
+            dim_sig: DimSignature::free_to_pow("x", Rational::new(1, 2)),
         },
     );
     m.insert(
         "cbrt",
         BuiltinFunction {
-            arity: 1,
             eval: |a| a[0].cbrt(),
-            dim_sig: DimSignature::Cbrt,
+            dim_sig: DimSignature::free_to_pow("x", Rational::new(1, 3)),
         },
     );
+    // Exponential and logarithmic functions (all dimensionless)
     m.insert(
-        "sinh",
+        "exp",
         BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].sinh(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "cosh",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].cosh(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "tanh",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].tanh(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "asinh",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].asinh(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "acosh",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].acosh(),
-            dim_sig: DimSignature::AllDimensionless,
-        },
-    );
-    m.insert(
-        "atanh",
-        BuiltinFunction {
-            arity: 1,
-            eval: |a| a[0].atanh(),
-            dim_sig: DimSignature::AllDimensionless,
+            eval: |a| a[0].exp(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "expm1",
         BuiltinFunction {
-            arity: 1,
             eval: |a| a[0].exp_m1(),
-            dim_sig: DimSignature::AllDimensionless,
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "ln",
+        BuiltinFunction {
+            eval: |a| a[0].ln(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "log10",
+        BuiltinFunction {
+            eval: |a| a[0].log10(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "log2",
+        BuiltinFunction {
+            eval: |a| a[0].log2(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "log",
+        BuiltinFunction {
+            eval: |a| a[0].log(a[1]),
+            dim_sig: DimSignature::all_dimensionless(&["x", "base"]),
         },
     );
     m.insert(
         "log1p",
         BuiltinFunction {
-            arity: 1,
             eval: |a| a[0].ln_1p(),
-            dim_sig: DimSignature::AllDimensionless,
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    // Trigonometric functions (Angle -> Dimensionless)
+    m.insert(
+        "sin",
+        BuiltinFunction {
+            eval: |a| a[0].sin(),
+            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+        },
+    );
+    m.insert(
+        "cos",
+        BuiltinFunction {
+            eval: |a| a[0].cos(),
+            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+        },
+    );
+    m.insert(
+        "tan",
+        BuiltinFunction {
+            eval: |a| a[0].tan(),
+            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+        },
+    );
+    // Inverse trigonometric functions (Dimensionless -> Angle)
+    m.insert(
+        "asin",
+        BuiltinFunction {
+            eval: |a| a[0].asin(),
+            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+        },
+    );
+    m.insert(
+        "acos",
+        BuiltinFunction {
+            eval: |a| a[0].acos(),
+            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+        },
+    );
+    m.insert(
+        "atan",
+        BuiltinFunction {
+            eval: |a| a[0].atan(),
+            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+        },
+    );
+    m.insert(
+        "atan2",
+        BuiltinFunction {
+            eval: |a| a[0].atan2(a[1]),
+            dim_sig: DimSignature::same_dim_to_fixed(&["y", "x"], angle()),
+        },
+    );
+    // Hyperbolic functions (all dimensionless)
+    m.insert(
+        "sinh",
+        BuiltinFunction {
+            eval: |a| a[0].sinh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "cosh",
+        BuiltinFunction {
+            eval: |a| a[0].cosh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "tanh",
+        BuiltinFunction {
+            eval: |a| a[0].tanh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "asinh",
+        BuiltinFunction {
+            eval: |a| a[0].asinh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "acosh",
+        BuiltinFunction {
+            eval: |a| a[0].acosh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "atanh",
+        BuiltinFunction {
+            eval: |a| a[0].atanh(),
+            dim_sig: DimSignature::all_dimensionless(&["x"]),
+        },
+    );
+    // Rounding and sign functions (passthrough dimension)
+    m.insert(
+        "abs",
+        BuiltinFunction {
+            eval: |a| a[0].abs(),
+            dim_sig: DimSignature::passthrough("x"),
+        },
+    );
+    m.insert(
+        "floor",
+        BuiltinFunction {
+            eval: |a| a[0].floor(),
+            dim_sig: DimSignature::passthrough("x"),
+        },
+    );
+    m.insert(
+        "ceil",
+        BuiltinFunction {
+            eval: |a| a[0].ceil(),
+            dim_sig: DimSignature::passthrough("x"),
+        },
+    );
+    m.insert(
+        "round",
+        BuiltinFunction {
+            eval: |a| a[0].round(),
+            dim_sig: DimSignature::passthrough("x"),
+        },
+    );
+    m.insert(
+        "trunc",
+        BuiltinFunction {
+            eval: |a| a[0].trunc(),
+            dim_sig: DimSignature::passthrough("x"),
+        },
+    );
+    m.insert(
+        "sign",
+        BuiltinFunction {
+            eval: |a| a[0].signum(),
+            dim_sig: DimSignature::free_to_fixed("x", dimensionless()),
+        },
+    );
+    // Multi-argument same-dimension functions
+    m.insert(
+        "min",
+        BuiltinFunction {
+            eval: |a| a[0].min(a[1]),
+            dim_sig: DimSignature::same_dim(&["a", "b"]),
+        },
+    );
+    m.insert(
+        "max",
+        BuiltinFunction {
+            eval: |a| a[0].max(a[1]),
+            dim_sig: DimSignature::same_dim(&["a", "b"]),
+        },
+    );
+    m.insert(
+        "hypot",
+        BuiltinFunction {
+            eval: |a| a[0].hypot(a[1]),
+            dim_sig: DimSignature::same_dim(&["a", "b"]),
+        },
+    );
+    m.insert(
+        "clamp",
+        BuiltinFunction {
+            eval: |a| a[0].clamp(a[1], a[2]),
+            dim_sig: DimSignature::same_dim(&["x", "min", "max"]),
         },
     );
     m
@@ -336,7 +441,7 @@ mod tests {
     fn builtin_sqrt() {
         let fns = builtin_functions();
         let sqrt = &fns["sqrt"];
-        assert_eq!(sqrt.arity, 1);
+        assert_eq!(sqrt.arity(), 1);
         assert!(((sqrt.eval)(&[4.0]) - 2.0).abs() < f64::EPSILON);
     }
 
@@ -351,7 +456,7 @@ mod tests {
     fn builtin_atan2() {
         let fns = builtin_functions();
         let atan2 = &fns["atan2"];
-        assert_eq!(atan2.arity, 2);
+        assert_eq!(atan2.arity(), 2);
         let result = (atan2.eval)(&[1.0, 1.0]);
         assert!((result - std::f64::consts::FRAC_PI_4).abs() < f64::EPSILON);
     }
@@ -374,7 +479,7 @@ mod tests {
     fn all_builtins_have_correct_arity() {
         let fns = builtin_functions();
         for (name, f) in &fns {
-            match f.arity {
+            match f.arity() {
                 1 => assert!(
                     [
                         "sqrt", "exp", "ln", "abs", "sin", "cos", "tan", "asin", "acos", "floor",
@@ -389,7 +494,7 @@ mod tests {
                     "unexpected 2-arity fn: {name}"
                 ),
                 3 => assert!(["clamp"].contains(name), "unexpected 3-arity fn: {name}"),
-                _ => panic!("unexpected arity for {name}: {}", f.arity),
+                _ => panic!("unexpected arity for {name}: {}", f.arity()),
             }
         }
     }
@@ -398,7 +503,7 @@ mod tests {
     fn builtin_atan() {
         let fns = builtin_functions();
         let f = &fns["atan"];
-        assert_eq!(f.arity, 1);
+        assert_eq!(f.arity(), 1);
         assert!(((f.eval)(&[1.0]) - std::f64::consts::FRAC_PI_4).abs() < f64::EPSILON);
     }
 
@@ -432,7 +537,7 @@ mod tests {
     fn builtin_clamp() {
         let fns = builtin_functions();
         let f = &fns["clamp"];
-        assert_eq!(f.arity, 3);
+        assert_eq!(f.arity(), 3);
         assert!(((f.eval)(&[5.0, 0.0, 10.0]) - 5.0).abs() < f64::EPSILON);
         assert!(((f.eval)(&[-1.0, 0.0, 10.0]) - 0.0).abs() < f64::EPSILON);
         assert!(((f.eval)(&[15.0, 0.0, 10.0]) - 10.0).abs() < f64::EPSILON);
@@ -442,7 +547,7 @@ mod tests {
     fn builtin_hypot() {
         let fns = builtin_functions();
         let f = &fns["hypot"];
-        assert_eq!(f.arity, 2);
+        assert_eq!(f.arity(), 2);
         assert!(((f.eval)(&[3.0, 4.0]) - 5.0).abs() < f64::EPSILON);
     }
 
@@ -464,7 +569,7 @@ mod tests {
     fn builtin_log() {
         let fns = builtin_functions();
         let f = &fns["log"];
-        assert_eq!(f.arity, 2);
+        assert_eq!(f.arity(), 2);
         assert!(((f.eval)(&[27.0, 3.0]) - 3.0).abs() < 1e-10);
     }
 

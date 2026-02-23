@@ -339,7 +339,7 @@ Built-in math functions have specific dimension constraints:
 
 | Function | Argument Dimension | Result Dimension |
 |----------|--------------------|------------------|
-| `sqrt(x)` | Any `D^2` | `D` (exponents halved) |
+| `sqrt(x)` | Any `D` | `D^(1/2)` (exponents halved) |
 | `sin(x)`, `cos(x)`, `tan(x)` | `Angle` | `Dimensionless` |
 | `asin(x)`, `acos(x)`, `atan2(y, x)` | `Dimensionless` | `Angle` |
 | `exp(x)`, `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
