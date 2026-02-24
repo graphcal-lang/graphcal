@@ -316,6 +316,161 @@ fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
     files
 }
 
+/// Count how many levels of `Indexed` nesting a value has.
+fn index_depth(value: &graphcal_eval::eval::Value) -> usize {
+    match value {
+        graphcal_eval::eval::Value::Indexed { entries, .. } => {
+            entries.values().next().map_or(1, |v| 1 + index_depth(v))
+        }
+        _ => 0,
+    }
+}
+
+/// Walk into nested `Indexed` to find the first leaf scalar's display label (unit).
+fn extract_unit_label(
+    value: &graphcal_eval::eval::Value,
+    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+) -> Option<String> {
+    match value {
+        graphcal_eval::eval::Value::Scalar { .. } => value.display_label(symbols),
+        graphcal_eval::eval::Value::Indexed { entries, .. } => entries
+            .values()
+            .next()
+            .and_then(|v| extract_unit_label(v, symbols)),
+        _ => None,
+    }
+}
+
+/// Format a leaf value as a cell string without unit suffix.
+fn format_leaf_cell(value: &graphcal_eval::eval::Value) -> String {
+    use graphcal_eval::eval::Value;
+    match value {
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Label {
+            index_name,
+            variant,
+        } => format!("{index_name}::{variant}"),
+        Value::Scalar { .. } => format_number(value.display_value().unwrap_or_default()),
+        Value::Struct { variant, .. } => variant.as_str().to_string(),
+        Value::Indexed { .. } => "...".to_string(),
+    }
+}
+
+/// Render a 2D `Indexed` value as a formatted table grid (without name/unit header).
+fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
+    use graphcal_eval::eval::Value;
+    use tabled::builder::Builder;
+    use tabled::settings::{Alignment, Style, object::Columns};
+
+    let Value::Indexed {
+        entries: row_entries,
+        ..
+    } = value
+    else {
+        return String::new();
+    };
+
+    // Extract column names from first row
+    let Some(first_row) = row_entries.values().next() else {
+        return String::new();
+    };
+    let Value::Indexed {
+        entries: col_entries,
+        ..
+    } = first_row
+    else {
+        return String::new();
+    };
+    let col_names: Vec<&str> = col_entries
+        .keys()
+        .map(graphcal_syntax::names::VariantName::as_str)
+        .collect();
+
+    let mut builder = Builder::default();
+
+    // Header row: empty corner cell + column variant names
+    let mut header_row = vec![String::new()];
+    header_row.extend(col_names.iter().map(|s| (*s).to_string()));
+    builder.push_record(header_row);
+
+    // Data rows: row variant name + cell values
+    for (row_variant, row_val) in row_entries {
+        let mut row = vec![row_variant.as_str().to_string()];
+        if let Value::Indexed { entries: cells, .. } = row_val {
+            for col_name in &col_names {
+                let cell_val = cells
+                    .iter()
+                    .find(|(k, _)| k.as_str() == *col_name)
+                    .map(|(_, v)| format_leaf_cell(v))
+                    .unwrap_or_default();
+                row.push(cell_val);
+            }
+        }
+        builder.push_record(row);
+    }
+
+    let mut table = builder.build();
+    table
+        .with(Style::rounded())
+        .modify(Columns::new(1..), Alignment::right());
+    table.to_string()
+}
+
+/// Render an N-dimensional indexed value (N >= 2) as formatted table(s).
+fn format_indexed_table(
+    name: &str,
+    value: &graphcal_eval::eval::Value,
+    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+) -> String {
+    let unit_label = extract_unit_label(value, symbols);
+    let header = unit_label
+        .as_ref()
+        .map_or_else(|| format!("{name}:"), |label| format!("{name} ({label}):"));
+
+    let depth = index_depth(value);
+    if depth == 2 {
+        let grid = format_table_grid(value);
+        return format!("{header}\n{grid}");
+    }
+
+    // depth >= 3: peel off outermost index levels until we reach 2D slices
+    let mut parts = vec![header];
+    format_table_slices(value, symbols, depth, &mut parts);
+    parts.join("\n")
+}
+
+/// Recursively peel outer index dimensions and render 2D table slices with section headers.
+fn format_table_slices(
+    value: &graphcal_eval::eval::Value,
+    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    depth: usize,
+    parts: &mut Vec<String>,
+) {
+    use graphcal_eval::eval::Value;
+
+    let Value::Indexed {
+        index_name,
+        entries,
+    } = value
+    else {
+        return;
+    };
+
+    if depth == 2 {
+        let grid = format_table_grid(value);
+        parts.push(grid);
+        return;
+    }
+
+    // depth >= 3: emit section headers and recurse
+    let _ = symbols; // used only for recursive calls
+    for (variant, inner_val) in entries {
+        parts.push(format!("\n  [{index_name}::{variant}]"));
+        format_table_slices(inner_val, symbols, depth - 1, parts);
+    }
+}
+
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
 #[expect(
@@ -325,17 +480,23 @@ fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
 fn print_text(result: &EvalResult, no_assert: bool) {
     use graphcal_eval::eval::{NodeError, Value};
 
-    enum DisplayEntry<'a> {
+    /// A block of output: either a batch of flat lines or a table block.
+    enum OutputBlock<'a> {
+        Flat(Vec<FlatEntry<'a>>),
+        Table(&'a str, &'a Value),
+    }
+
+    enum FlatEntry<'a> {
         Value(String, &'a Value),
         Error(String, &'a NodeError),
     }
 
     // Flatten entries: scalars are one line, structs expand to `name.field` lines,
-    // indexed values expand to `name[Variant]` lines
-    fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<DisplayEntry<'a>>) {
+    // indexed values (1D only) expand to `name[Variant]` lines
+    fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatEntry<'a>>) {
         match value {
             Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) | Value::Label { .. } => {
-                entries.push(DisplayEntry::Value(prefix.to_string(), value));
+                entries.push(FlatEntry::Value(prefix.to_string(), value));
             }
             Value::Struct {
                 variant,
@@ -343,7 +504,6 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                 fields,
             } => {
                 if variant.as_str() == type_name.as_str() {
-                    // Single-variant (struct sugar): show fields directly
                     for (field_name, field_val) in fields {
                         flatten_value(
                             &format!("{prefix}.{}", field_name.as_str()),
@@ -352,10 +512,8 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                         );
                     }
                 } else if fields.is_empty() {
-                    // Bare variant: show as a label
-                    entries.push(DisplayEntry::Value(prefix.to_string(), value));
+                    entries.push(FlatEntry::Value(prefix.to_string(), value));
                 } else {
-                    // Multi-variant with fields: show variant name as prefix
                     for (field_name, field_val) in fields {
                         flatten_value(
                             &format!("{prefix}::{}.{}", variant.as_str(), field_name.as_str()),
@@ -377,52 +535,87 @@ fn print_text(result: &EvalResult, no_assert: bool) {
         }
     }
 
-    let mut entries: Vec<DisplayEntry> = Vec::new();
+    // Build output blocks preserving source order
+    let mut blocks: Vec<OutputBlock> = Vec::new();
+    let mut current_flat: Vec<FlatEntry> = Vec::new();
+
     for (name, node_result, _) in &result.all {
         match node_result {
-            Ok(value) => flatten_value(name.as_str(), value, &mut entries),
+            Ok(value) if index_depth(value) >= 2 => {
+                // Flush accumulated flat entries before the table
+                if !current_flat.is_empty() {
+                    blocks.push(OutputBlock::Flat(std::mem::take(&mut current_flat)));
+                }
+                blocks.push(OutputBlock::Table(name.as_str(), value));
+            }
+            Ok(value) => {
+                flatten_value(name.as_str(), value, &mut current_flat);
+            }
             Err(err) => {
-                entries.push(DisplayEntry::Error(name.as_str().to_string(), err));
+                current_flat.push(FlatEntry::Error(name.as_str().to_string(), err));
             }
         }
     }
+    // Flush remaining flat entries
+    if !current_flat.is_empty() {
+        blocks.push(OutputBlock::Flat(current_flat));
+    }
 
-    let max_name_len = entries
+    // Compute max name width across all flat entries for alignment
+    let max_name_len = blocks
         .iter()
-        .map(|e| match e {
-            DisplayEntry::Value(n, _) | DisplayEntry::Error(n, _) => n.len(),
+        .filter_map(|b| match b {
+            OutputBlock::Flat(entries) => Some(entries.iter().map(|e| match e {
+                FlatEntry::Value(n, _) | FlatEntry::Error(n, _) => n.len(),
+            })),
+            OutputBlock::Table(..) => None,
         })
+        .flatten()
         .max()
         .unwrap_or(0);
 
-    for entry in &entries {
-        let width = max_name_len;
-        match entry {
-            DisplayEntry::Error(name, err) => {
-                eprintln!("{name:width$} = ERROR: {err}");
-            }
-            DisplayEntry::Value(name, value) => match value {
-                Value::Bool(b) => println!("{name:width$} = {b}"),
-                Value::Int(i) => println!("{name:width$} = {i}"),
-                Value::Label {
-                    index_name,
-                    variant,
-                } => {
-                    println!("{name:width$} = {index_name}::{variant}");
-                }
-                Value::Struct { variant, .. } => {
-                    // Bare variant (no fields) — display the variant name
-                    println!("{name:width$} = {}", variant.as_str());
-                }
-                _ => {
-                    let formatted = format_number(value.display_value().unwrap_or_default());
-                    if let Some(label) = value.display_label(&result.base_dim_symbols) {
-                        println!("{name:width$} = {formatted} {label}");
-                    } else {
-                        println!("{name:width$} = {formatted}");
+    // Print all blocks in order
+    for block in &blocks {
+        match block {
+            OutputBlock::Flat(entries) => {
+                let width = max_name_len;
+                for entry in entries {
+                    match entry {
+                        FlatEntry::Error(name, err) => {
+                            eprintln!("{name:width$} = ERROR: {err}");
+                        }
+                        FlatEntry::Value(name, value) => match value {
+                            Value::Bool(b) => println!("{name:width$} = {b}"),
+                            Value::Int(i) => println!("{name:width$} = {i}"),
+                            Value::Label {
+                                index_name,
+                                variant,
+                            } => {
+                                println!("{name:width$} = {index_name}::{variant}");
+                            }
+                            Value::Struct { variant, .. } => {
+                                println!("{name:width$} = {}", variant.as_str());
+                            }
+                            _ => {
+                                let formatted =
+                                    format_number(value.display_value().unwrap_or_default());
+                                if let Some(label) = value.display_label(&result.base_dim_symbols) {
+                                    println!("{name:width$} = {formatted} {label}");
+                                } else {
+                                    println!("{name:width$} = {formatted}");
+                                }
+                            }
+                        },
                     }
                 }
-            },
+            }
+            OutputBlock::Table(name, value) => {
+                println!();
+                println!(
+                    "{}",
+                    format_indexed_table(name, value, &result.base_dim_symbols)
+                );
+            }
         }
     }
 
