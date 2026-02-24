@@ -4,6 +4,12 @@ import {
   LanguageClientOptions,
   ServerOptions,
 } from "vscode-languageclient/node";
+import {
+  findEnclosingTable,
+  findNextCell,
+  findPreviousCell,
+  isInsideTable,
+} from "./tableNavigation";
 
 let client: LanguageClient | undefined;
 
@@ -23,6 +29,36 @@ export async function activate(
     }),
   );
 
+  // Table cell navigation commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "graphcal.jumpToNextTableCell",
+      () => jumpTableCell("next"),
+    ),
+    vscode.commands.registerCommand(
+      "graphcal.jumpToPreviousTableCell",
+      () => jumpTableCell("previous"),
+    ),
+  );
+
+  // Update context key when cursor moves in a graphcal file
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (e.textEditor.document.languageId !== "graphcal") {
+        return;
+      }
+      const doc = e.textEditor.document;
+      const text = doc.getText();
+      const offset = doc.offsetAt(e.selections[0].active);
+      const inTable = isInsideTable(text, offset);
+      vscode.commands.executeCommand(
+        "setContext",
+        "graphcal.cursorInTable",
+        inTable,
+      );
+    }),
+  );
+
   const config = vscode.workspace.getConfiguration("graphcal.lsp");
   if (!config.get<boolean>("enabled", true)) {
     return;
@@ -32,6 +68,34 @@ export async function activate(
   if (client) {
     await client.start();
   }
+}
+
+function jumpTableCell(direction: "next" | "previous"): void {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "graphcal") {
+    return;
+  }
+
+  const doc = editor.document;
+  const text = doc.getText();
+  const offset = doc.offsetAt(editor.selection.active);
+  const table = findEnclosingTable(text, offset);
+  if (!table) {
+    return;
+  }
+
+  const target =
+    direction === "next"
+      ? findNextCell(text, offset, table)
+      : findPreviousCell(text, offset, table);
+
+  if (target === null) {
+    return;
+  }
+
+  const newPos = doc.positionAt(target);
+  editor.selection = new vscode.Selection(newPos, newPos);
+  editor.revealRange(new vscode.Range(newPos, newPos));
 }
 
 export async function deactivate(): Promise<void> {
