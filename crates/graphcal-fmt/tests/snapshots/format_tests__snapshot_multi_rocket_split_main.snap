@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// main.gcl -- rocket equation using imported constants and params
+import "./constants.gcl" { G0 };
+import "./params.gcl" { dry_mass, fuel_mass, isp };
+
+dimension Velocity = Length / Time;
+
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

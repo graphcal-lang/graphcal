@@ -1,0 +1,6 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+import "./nonexistent.gcl" { x };
+param y: Dimensionless = 1.0;

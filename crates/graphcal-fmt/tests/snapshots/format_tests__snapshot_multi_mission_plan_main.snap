@@ -1,0 +1,57 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// main.gcl -- Lunar mission plan
+//
+// Demonstrates importing from child directories (./shared/, ./subsystems/)
+// with many identifiers in a single use statement.
+import "./shared/constants.gcl" { G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON, GravParam };
+
+import "./shared/indexes.gcl" { MissionPhase, Subsystem };
+
+import "./subsystems/propulsion.gcl" { isp, dry_mass, fuel_mass, v_exhaust, total_mass, mass_ratio, total_delta_v };
+
+import "./subsystems/power.gcl" { solar_array_power, battery_capacity_wh, power_margin };
+
+// --- Delta-V budget per mission phase ---
+param dv_budget: Velocity[MissionPhase] = table[MissionPhase] {
+    Launch:                  0.0 m/s;
+    LeoParking:             50.0 m/s;
+    TransLunarInjection:  3150.0 m/s;
+    TransLunarCoast:        25.0 m/s;
+    LunarOrbitInsertion:   850.0 m/s;
+    LunarOps:               50.0 m/s;
+    TransEarthInjection:   750.0 m/s;
+    TransEarthCoast:        20.0 m/s;
+    EarthReturn:             0.0 m/s;
+};
+
+// --- Mass allocation per subsystem ---
+param subsystem_mass: Mass[Subsystem] = table[Subsystem] {
+    Propulsion:       350.0 kg;
+    AttitudeControl:   45.0 kg;
+    CommandAndData:    30.0 kg;
+    Telecom:           25.0 kg;
+    Thermal:           40.0 kg;
+    Power:             80.0 kg;
+    Structure:        200.0 kg;
+    Payload:          120.0 kg;
+};
+
+// --- Computed nodes ---
+node required_dv: Velocity = sum(for p: MissionPhase { @dv_budget[p] });
+
+node dv_margin: Velocity = @total_delta_v - @required_dv;
+
+node dv_margin_pct: Dimensionless = @dv_margin / @required_dv;
+
+node structure_mass: Mass = sum(for s: Subsystem { @subsystem_mass[s] });
+
+// --- Parking orbit velocity ---
+param parking_alt: Length = 200.0 km;
+node v_parking: Velocity = sqrt(GM_EARTH / (R_EARTH + @parking_alt));
+
+// --- Assertions ---
+assert positive_dv_margin = @dv_margin > 0.0 m/s;
+assert margin_at_least_5pct = @dv_margin_pct > 0.05;

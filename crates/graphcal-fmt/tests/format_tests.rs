@@ -516,6 +516,405 @@ roundtrip_test!(
 );
 
 // ---------------------------------------------------------------------------
+// Multi-file fixtures: import syntax, module imports, qualified references
+// ---------------------------------------------------------------------------
+
+// alias: selective import with renaming
+idempotency_test!(idempotent_multi_alias_main, "multi/alias/main.gcl");
+idempotency_test!(idempotent_multi_alias_helper, "multi/alias/helper.gcl");
+roundtrip_test!(roundtrip_multi_alias_main, "multi/alias/main.gcl");
+roundtrip_test!(roundtrip_multi_alias_helper, "multi/alias/helper.gcl");
+snapshot_test!(snapshot_multi_alias_main, "multi/alias/main.gcl");
+snapshot_test!(snapshot_multi_alias_helper, "multi/alias/helper.gcl");
+
+// alias_conflict: multiple imports with renaming
+idempotency_test!(
+    idempotent_multi_alias_conflict_main,
+    "multi/alias_conflict/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_alias_conflict_a,
+    "multi/alias_conflict/a.gcl"
+);
+idempotency_test!(
+    idempotent_multi_alias_conflict_b,
+    "multi/alias_conflict/b.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_alias_conflict_main,
+    "multi/alias_conflict/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_alias_conflict_main,
+    "multi/alias_conflict/main.gcl"
+);
+
+// module_import: whole-module import
+idempotency_test!(
+    idempotent_multi_module_import_main,
+    "multi/module_import/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_module_import_constants,
+    "multi/module_import/constants.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_module_import_main,
+    "multi/module_import/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_main,
+    "multi/module_import/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_constants,
+    "multi/module_import/constants.gcl"
+);
+
+// module_import_alias: import with alias
+idempotency_test!(
+    idempotent_multi_module_import_alias_main,
+    "multi/module_import_alias/main.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_module_import_alias_main,
+    "multi/module_import_alias/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_alias_main,
+    "multi/module_import_alias/main.gcl"
+);
+
+// module_import_fn: qualified function call
+idempotency_test!(
+    idempotent_multi_module_import_fn_main,
+    "multi/module_import_fn/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_module_import_fn_lib,
+    "multi/module_import_fn/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_module_import_fn_main,
+    "multi/module_import_fn/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_fn_main,
+    "multi/module_import_fn/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_fn_lib,
+    "multi/module_import_fn/lib.gcl"
+);
+
+// module_import_graph_ref: qualified @-references
+idempotency_test!(
+    idempotent_multi_module_import_graph_ref_main,
+    "multi/module_import_graph_ref/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_module_import_graph_ref_params,
+    "multi/module_import_graph_ref/params.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_module_import_graph_ref_main,
+    "multi/module_import_graph_ref/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_graph_ref_main,
+    "multi/module_import_graph_ref/main.gcl"
+);
+
+// module_import_mixed: selective + module imports in same file
+idempotency_test!(
+    idempotent_multi_module_import_mixed_main,
+    "multi/module_import_mixed/main.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_module_import_mixed_main,
+    "multi/module_import_mixed/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_module_import_mixed_main,
+    "multi/module_import_mixed/main.gcl"
+);
+
+// mission_plan: complex multi-file project with subdirectories
+idempotency_test!(
+    idempotent_multi_mission_plan_main,
+    "multi/mission_plan/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_mission_plan_constants,
+    "multi/mission_plan/shared/constants.gcl"
+);
+idempotency_test!(
+    idempotent_multi_mission_plan_indexes,
+    "multi/mission_plan/shared/indexes.gcl"
+);
+idempotency_test!(
+    idempotent_multi_mission_plan_power,
+    "multi/mission_plan/subsystems/power.gcl"
+);
+idempotency_test!(
+    idempotent_multi_mission_plan_propulsion,
+    "multi/mission_plan/subsystems/propulsion.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_mission_plan_main,
+    "multi/mission_plan/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_mission_plan_main,
+    "multi/mission_plan/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_mission_plan_constants,
+    "multi/mission_plan/shared/constants.gcl"
+);
+snapshot_test!(
+    snapshot_multi_mission_plan_indexes,
+    "multi/mission_plan/shared/indexes.gcl"
+);
+snapshot_test!(
+    snapshot_multi_mission_plan_power,
+    "multi/mission_plan/subsystems/power.gcl"
+);
+snapshot_test!(
+    snapshot_multi_mission_plan_propulsion,
+    "multi/mission_plan/subsystems/propulsion.gcl"
+);
+
+// rocket_split: selective import with many identifiers
+idempotency_test!(
+    idempotent_multi_rocket_split_main,
+    "multi/rocket_split/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_rocket_split_constants,
+    "multi/rocket_split/constants.gcl"
+);
+idempotency_test!(
+    idempotent_multi_rocket_split_params,
+    "multi/rocket_split/params.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_rocket_split_main,
+    "multi/rocket_split/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_rocket_split_main,
+    "multi/rocket_split/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_rocket_split_constants,
+    "multi/rocket_split/constants.gcl"
+);
+snapshot_test!(
+    snapshot_multi_rocket_split_params,
+    "multi/rocket_split/params.gcl"
+);
+
+// parent_import: importing from parent directory
+idempotency_test!(
+    idempotent_multi_parent_import_child_main,
+    "multi/parent_import/child/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_parent_import_lib,
+    "multi/parent_import/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_parent_import_child_main,
+    "multi/parent_import/child/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_parent_import_child_main,
+    "multi/parent_import/child/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_parent_import_lib,
+    "multi/parent_import/lib.gcl"
+);
+
+// parent_import_with_manifest
+idempotency_test!(
+    idempotent_multi_parent_import_manifest_child_main,
+    "multi/parent_import_with_manifest/child/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_parent_import_manifest_lib,
+    "multi/parent_import_with_manifest/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_parent_import_manifest_child_main,
+    "multi/parent_import_with_manifest/child/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_parent_import_manifest_child_main,
+    "multi/parent_import_with_manifest/child/main.gcl"
+);
+
+// explicit_index: import of index types
+idempotency_test!(
+    idempotent_multi_explicit_index_main,
+    "multi/explicit_index/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_explicit_index_lib,
+    "multi/explicit_index/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_explicit_index_main,
+    "multi/explicit_index/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_explicit_index_main,
+    "multi/explicit_index/main.gcl"
+);
+
+// diamond_assert: diamond-shaped import graph
+idempotency_test!(
+    idempotent_multi_diamond_assert_main,
+    "multi/diamond_assert/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_diamond_assert_shared,
+    "multi/diamond_assert/shared.gcl"
+);
+idempotency_test!(
+    idempotent_multi_diamond_assert_left,
+    "multi/diamond_assert/left.gcl"
+);
+idempotency_test!(
+    idempotent_multi_diamond_assert_right,
+    "multi/diamond_assert/right.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_diamond_assert_main,
+    "multi/diamond_assert/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_diamond_assert_main,
+    "multi/diamond_assert/main.gcl"
+);
+
+// assertions: cross-file assertions with #[assumes]
+idempotency_test!(
+    idempotent_multi_assertions_main,
+    "multi/assertions/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_assertions_checks,
+    "multi/assertions/checks.gcl"
+);
+roundtrip_test!(roundtrip_multi_assertions_main, "multi/assertions/main.gcl");
+snapshot_test!(snapshot_multi_assertions_main, "multi/assertions/main.gcl");
+snapshot_test!(
+    snapshot_multi_assertions_checks,
+    "multi/assertions/checks.gcl"
+);
+
+// auto_assert: auto-evaluated assertions from imports
+idempotency_test!(
+    idempotent_multi_auto_assert_main,
+    "multi/auto_assert/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_auto_assert_lib,
+    "multi/auto_assert/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_auto_assert_main,
+    "multi/auto_assert/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_auto_assert_main,
+    "multi/auto_assert/main.gcl"
+);
+snapshot_test!(snapshot_multi_auto_assert_lib, "multi/auto_assert/lib.gcl");
+
+// auto_assert_module: module import with auto assertions
+idempotency_test!(
+    idempotent_multi_auto_assert_module_main,
+    "multi/auto_assert_module/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_auto_assert_module_lib,
+    "multi/auto_assert_module/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_auto_assert_module_main,
+    "multi/auto_assert_module/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_auto_assert_module_main,
+    "multi/auto_assert_module/main.gcl"
+);
+
+// imported_deps: import with internal graph dependencies
+idempotency_test!(
+    idempotent_multi_imported_deps_main,
+    "multi/imported_deps/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_imported_deps_lib,
+    "multi/imported_deps/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_imported_deps_main,
+    "multi/imported_deps/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_imported_deps_main,
+    "multi/imported_deps/main.gcl"
+);
+
+// imported_assert_fail: import with failing assertion
+idempotency_test!(
+    idempotent_multi_imported_assert_fail_main,
+    "multi/imported_assert_fail/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_imported_assert_fail_lib,
+    "multi/imported_assert_fail/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_imported_assert_fail_main,
+    "multi/imported_assert_fail/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_imported_assert_fail_main,
+    "multi/imported_assert_fail/main.gcl"
+);
+
+// bad_name_import, missing_import, circular: error-case import syntax (still parseable)
+idempotency_test!(
+    idempotent_multi_bad_name_import,
+    "multi/bad_name_import.gcl"
+);
+idempotency_test!(idempotent_multi_missing_import, "multi/missing_import.gcl");
+idempotency_test!(idempotent_multi_circular_a, "multi/circular_a.gcl");
+idempotency_test!(idempotent_multi_circular_b, "multi/circular_b.gcl");
+idempotency_test!(idempotent_multi_helper, "multi/helper.gcl");
+roundtrip_test!(roundtrip_multi_bad_name_import, "multi/bad_name_import.gcl");
+roundtrip_test!(roundtrip_multi_missing_import, "multi/missing_import.gcl");
+roundtrip_test!(roundtrip_multi_circular_a, "multi/circular_a.gcl");
+roundtrip_test!(roundtrip_multi_circular_b, "multi/circular_b.gcl");
+snapshot_test!(snapshot_multi_bad_name_import, "multi/bad_name_import.gcl");
+snapshot_test!(snapshot_multi_missing_import, "multi/missing_import.gcl");
+snapshot_test!(snapshot_multi_circular_a, "multi/circular_a.gcl");
+snapshot_test!(snapshot_multi_circular_b, "multi/circular_b.gcl");
+
+// ---------------------------------------------------------------------------
+// Edge-case fixture: long lines, deep nesting, complex expressions
+// ---------------------------------------------------------------------------
+
+idempotency_test!(idempotent_format_edge_cases, "format_edge_cases.gcl");
+roundtrip_test!(roundtrip_format_edge_cases, "format_edge_cases.gcl");
+snapshot_test!(snapshot_format_edge_cases, "format_edge_cases.gcl");
+
+// ---------------------------------------------------------------------------
 // Comment-in-expression preservation tests
 // ---------------------------------------------------------------------------
 

@@ -1583,3 +1583,149 @@ fn eval_expected_fail_multi_indexed_partial() {
         "expected within_limits FAIL with Eco: {stderr}"
     );
 }
+
+// --- Format command tests ---
+
+#[test]
+fn format_check_already_formatted() {
+    // rocket.gcl is a formatter-tested fixture and should already be formatted.
+    let output = graphcal_bin()
+        .args(["format", "--check", &fixture("rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected success for already-formatted file, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn format_check_unformatted_exits_nonzero() {
+    // Create a temp file with valid but unformatted graphcal
+    let dir = std::env::temp_dir().join("graphcal_fmt_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("unformatted.gcl");
+    // Extra spaces and missing trailing newline
+    std::fs::write(&path, "param   x  :  Dimensionless  =   1.0  ;").unwrap();
+
+    let output = graphcal_bin()
+        .args(["format", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1 for unformatted file"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("would be reformatted"),
+        "expected 'would be reformatted' message: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn format_check_parse_error_skipped() {
+    // Files with parse errors should be skipped with a warning, not cause a failure
+    let dir = std::env::temp_dir().join("graphcal_fmt_test_err");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bad.gcl");
+    std::fs::write(&path, "this is }{ not valid").unwrap();
+
+    let output = graphcal_bin()
+        .args(["format", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    // Should succeed (parse errors are skipped, not counted as unformatted)
+    assert!(
+        output.status.success(),
+        "expected success when skipping parse errors, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("parse errors"),
+        "expected parse error warning: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn format_in_place_then_check() {
+    // Format a file in-place, then verify --check passes (idempotency via CLI)
+    let dir = std::env::temp_dir().join("graphcal_fmt_test_inplace");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fixme.gcl");
+    std::fs::write(
+        &path,
+        "param   x:Dimensionless=1.0;\nparam y  : Dimensionless = 2.0 ;  \n",
+    )
+    .unwrap();
+
+    // Format in-place
+    let output = graphcal_bin()
+        .args(["format", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "format in-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Now --check should pass
+    let output = graphcal_bin()
+        .args(["format", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "expected --check to pass after formatting, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn format_check_recursive_directory() {
+    // --check on a directory should recursively find .gcl files
+    let output = graphcal_bin()
+        .args(["format", "--check", &fixture("multi/rocket_split")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected all multi/rocket_split files to be formatted, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn format_check_multiple_fixtures() {
+    // --check on multiple already-formatted fixtures
+    let output = graphcal_bin()
+        .args([
+            "format",
+            "--check",
+            &fixture("rocket.gcl"),
+            &fixture("functions.gcl"),
+            &fixture("generics.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected all fixtures to be formatted, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
