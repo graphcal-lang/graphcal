@@ -404,3 +404,10 @@ fn error_table_row_mismatch() {
     let rendered = render_error(source, "table_row_mismatch.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_datetime_scale_mismatch() {
+    let source = include_str!("../../../tests/fixtures/errors/datetime_scale_mismatch.gcl");
+    let rendered = render_error(source, "datetime_scale_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}

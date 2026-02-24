@@ -657,6 +657,7 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             RcDoc::text(fmt.slice(expr.span).to_string())
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
+        ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value.as_str())),
         ExprKind::QualifiedGraphRef { module, name } => RcDoc::text(format!(
             "@{}::{}",

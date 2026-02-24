@@ -1,0 +1,16 @@
+// Basic datetime construction and arithmetic
+param launch: Datetime = datetime("2024-11-05T12:00:00 UTC");
+
+// Datetime + Time -> Datetime
+node one_hour_later: Datetime = @launch + 3600.0 s;
+
+// Datetime - Datetime -> Time
+node duration: Time = @one_hour_later - @launch;
+
+// Datetime - Time -> Datetime
+node one_hour_before: Datetime = @launch - 3600.0 s;
+
+// Datetime comparisons
+assert later_is_after = @one_hour_later > @launch;
+assert before_is_before = @one_hour_before < @launch;
+assert same_equals = @launch == @launch;

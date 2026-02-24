@@ -99,6 +99,7 @@ pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
