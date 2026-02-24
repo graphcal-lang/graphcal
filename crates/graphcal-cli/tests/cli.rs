@@ -1994,3 +1994,101 @@ fn eval_datetime_jd_unix() {
     );
     assert!(!stdout.contains("FAIL"), "no assertions should fail");
 }
+
+// --- Instantiated import tests ---
+
+#[test]
+fn eval_instantiated_import_selective() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/instantiated_import/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // dry_mass=800, delta_v should be ~4719 m/s
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("result") && l.contains("4719")),
+        "expected result ~4719 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_instantiated_import_multi() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/instantiated_import_multi/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|l| l.contains("total_dv")),
+        "expected total_dv in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_instantiated_import_module() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("multi/instantiated_import_module/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("dv") && l.contains("4719")),
+        "expected dv ~4719 in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("mr") && l.contains("4.5")),
+        "expected mr = 4.5 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_instantiated_import_graph_ref() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("multi/instantiated_import_graph_ref/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // my_mass = 800 kg used as dry_mass binding
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("result") && l.contains("4719")),
+        "expected result ~4719 in output: {stdout}"
+    );
+}

@@ -174,7 +174,44 @@
             "2": { "name": "entity.name.namespace.graphcal" }
           }
         },
+        { "include": "#import-param-bindings" },
         { "include": "#import-item-list" }
+      ]
+    },
+
+    "import-param-bindings": {
+      "comment": "Param bindings for module instantiation: (name = expr, ...)",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": { "name": "punctuation.brackets.round.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.brackets.round.graphcal" }
+      },
+      "patterns": [
+        {
+          "comment": "Param binding: name = expr",
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(=)",
+          "captures": {
+            "1": { "name": "variable.other.graphcal" },
+            "2": { "name": "keyword.operator.assignment.graphcal" }
+          }
+        },
+        { "include": "#graph-ref" },
+        { "include": "#numbers" },
+        { "include": "#booleans" },
+        { "include": "#strings" },
+        { "include": "#qualified-fn-call" },
+        { "include": "#fn-call" },
+        { "include": "#qualified-const-ref" },
+        { "include": "#upper-constant" },
+        { "include": "#pascal-type" },
+        { "include": "#operators" },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        }
       ]
     },
 

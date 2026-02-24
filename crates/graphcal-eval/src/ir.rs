@@ -12,7 +12,7 @@ use miette::NamedSource;
 
 use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnDecl, TypeExpr};
 use graphcal_syntax::dimension::Rational;
-use graphcal_syntax::names::{DimName, FnName};
+use graphcal_syntax::names::{DeclName, DimName, FnName};
 use graphcal_syntax::span::Span;
 
 use crate::dim_check::DeclaredType;
@@ -330,8 +330,10 @@ pub struct UnfrozenIR {
     asserts: Vec<(String, graphcal_syntax::ast::AssertBody, Span)>,
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
-    source_order: Vec<(String, DeclCategory)>,
-    functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
+    /// All declaration names in source order with their category.
+    pub source_order: Vec<(String, DeclCategory)>,
+    /// User-defined function declarations: (name, decl, span).
+    pub functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
     assert_names: HashSet<String>,
     assumes_map: HashMap<String, Vec<String>>,
     expected_fail: HashMap<String, ExpectedFail>,
@@ -357,6 +359,386 @@ impl UnfrozenIR {
             expected_fail: self.expected_fail,
             imported_values: self.imported_values,
         }
+    }
+
+    /// Add a const alias: a synthetic const declaration that references another const.
+    ///
+    /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
+    pub fn add_const_alias(
+        &mut self,
+        name: String,
+        type_ann: TypeExpr,
+        expr: Expr,
+        span: Span,
+        target: String,
+    ) {
+        let mut deps = HashSet::new();
+        deps.insert(target);
+        self.const_deps.insert(name.clone(), deps);
+        self.consts.push((name.clone(), type_ann, expr, span));
+        self.source_order.push((name, DeclCategory::Const));
+    }
+
+    /// Add a node alias: a synthetic node declaration that references another node/param.
+    ///
+    /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
+    pub fn add_node_alias(
+        &mut self,
+        name: String,
+        type_ann: TypeExpr,
+        expr: Expr,
+        span: Span,
+        target: String,
+    ) {
+        let mut deps = HashSet::new();
+        deps.insert(target);
+        self.runtime_deps.insert(name.clone(), deps);
+        self.nodes.push((name.clone(), type_ann, expr, span));
+        self.source_order.push((name, DeclCategory::Node));
+    }
+
+    /// Merge an instantiated dependency's IR into this IR.
+    ///
+    /// All declarations from the dependency are prefixed with `prefix::` and
+    /// appended to this IR's declaration lists. Param bindings replace the
+    /// dependency's param default expressions. Internal references within the
+    /// dependency's expressions are rewritten to use prefixed names.
+    ///
+    /// `dep_names` is the set of all declaration names in the dependency (before
+    /// prefixing), used to determine which references should be rewritten.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single logical operation: prefix and merge all declaration kinds"
+    )]
+    pub fn merge_dependency(
+        &mut self,
+        dep: Self,
+        prefix: &str,
+        bindings: &HashMap<String, Expr>,
+        dep_names: &HashSet<String>,
+    ) {
+        // Merge consts
+        for (name, type_ann, mut expr, span) in dep.consts {
+            prefix_expr_refs(&mut expr, prefix, dep_names);
+            let prefixed = format!("{prefix}::{name}");
+            self.consts.push((prefixed.clone(), type_ann, expr, span));
+            // Prefix const deps
+            if let Some(deps) = dep.const_deps.get(&name) {
+                let prefixed_deps = deps
+                    .iter()
+                    .map(|d| {
+                        if dep_names.contains(d) {
+                            format!("{prefix}::{d}")
+                        } else {
+                            d.clone()
+                        }
+                    })
+                    .collect();
+                self.const_deps.insert(prefixed.clone(), prefixed_deps);
+            }
+            self.source_order.push((prefixed, DeclCategory::Const));
+        }
+
+        // Merge params — replace defaults with bindings where provided
+        for (name, type_ann, mut expr, span) in dep.params {
+            let prefixed = format!("{prefix}::{name}");
+            if let Some(binding_expr) = bindings.get(&name) {
+                // Use the binding expression (from the importer's scope, no prefixing needed
+                // for refs that belong to the importer — only dep-internal refs get prefixed)
+                expr = binding_expr.clone();
+            } else {
+                // Keep default, but prefix internal refs
+                prefix_expr_refs(&mut expr, prefix, dep_names);
+            }
+            self.params.push((prefixed.clone(), type_ann, expr, span));
+            // Rebuild runtime deps for the (possibly rewritten) expression
+            let mut graph_refs = HashSet::new();
+            if let Some(orig_deps) = dep.runtime_deps.get(&name) {
+                if bindings.contains_key(&name) {
+                    // Binding expression — deps are already in the importer's namespace.
+                    // We'll recompute deps from the binding expression below.
+                } else {
+                    // Default expression — prefix dep-internal deps
+                    for d in orig_deps {
+                        if dep_names.contains(d) {
+                            graph_refs.insert(format!("{prefix}::{d}"));
+                        } else {
+                            graph_refs.insert(d.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(binding_expr) = bindings.get(&name) {
+                // Collect graph refs from the binding expression
+                collect_graph_refs_from_expr(binding_expr, &mut graph_refs);
+            }
+            self.runtime_deps.insert(prefixed.clone(), graph_refs);
+            self.source_order.push((prefixed, DeclCategory::Param));
+        }
+
+        // Merge nodes
+        for (name, type_ann, mut expr, span) in dep.nodes {
+            prefix_expr_refs(&mut expr, prefix, dep_names);
+            let prefixed = format!("{prefix}::{name}");
+            self.nodes.push((prefixed.clone(), type_ann, expr, span));
+            if let Some(deps) = dep.runtime_deps.get(&name) {
+                let prefixed_deps = deps
+                    .iter()
+                    .map(|d| {
+                        if dep_names.contains(d) {
+                            format!("{prefix}::{d}")
+                        } else {
+                            d.clone()
+                        }
+                    })
+                    .collect();
+                self.runtime_deps.insert(prefixed.clone(), prefixed_deps);
+            }
+            self.source_order.push((prefixed, DeclCategory::Node));
+        }
+
+        // Merge asserts
+        for (name, mut body, span) in dep.asserts {
+            match &mut body {
+                graphcal_syntax::ast::AssertBody::Expr(e) => {
+                    prefix_expr_refs(e, prefix, dep_names);
+                }
+                graphcal_syntax::ast::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    ..
+                } => {
+                    prefix_expr_refs(actual, prefix, dep_names);
+                    prefix_expr_refs(expected, prefix, dep_names);
+                    prefix_expr_refs(tolerance, prefix, dep_names);
+                }
+            }
+            let prefixed = format!("{prefix}::{name}");
+            self.asserts.push((prefixed.clone(), body, span));
+            self.assert_names.insert(prefixed.clone());
+            self.source_order.push((prefixed, DeclCategory::Assert));
+        }
+
+        // Merge functions
+        for (name, mut fn_decl, span) in dep.functions {
+            match &mut fn_decl.body {
+                graphcal_syntax::ast::FnBody::Short(e) => {
+                    prefix_expr_refs(e, prefix, dep_names);
+                }
+                graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                    for stmt in stmts {
+                        prefix_expr_refs(&mut stmt.value, prefix, dep_names);
+                    }
+                    prefix_expr_refs(expr, prefix, dep_names);
+                }
+            }
+            let prefixed = format!("{prefix}::{name}");
+            self.functions.push((prefixed, fn_decl, span));
+        }
+
+        // Merge assumes_map and expected_fail
+        for (assert_name, assumers) in dep.assumes_map {
+            let prefixed_assert = format!("{prefix}::{assert_name}");
+            let prefixed_assumers: Vec<String> =
+                assumers.iter().map(|a| format!("{prefix}::{a}")).collect();
+            self.assumes_map
+                .entry(prefixed_assert)
+                .or_default()
+                .extend(prefixed_assumers);
+        }
+        for (assert_name, ef) in dep.expected_fail {
+            let prefixed = format!("{prefix}::{assert_name}");
+            self.expected_fail.insert(prefixed, ef);
+        }
+    }
+}
+
+/// Rewrite `@`-references and const/fn references within an expression to use
+/// prefixed names, but only for names that belong to the dependency.
+///
+/// For example, `GraphRef("dry_mass")` becomes `GraphRef("r::dry_mass")` when
+/// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
+///
+/// Built-in names and names from the importer's scope are left unchanged.
+pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
+    match &mut expr.kind {
+        ExprKind::GraphRef(ident) | ExprKind::ConstRef(ident) => {
+            if dep_names.contains(ident.value.as_str()) {
+                ident.value = DeclName::new(format!("{prefix}::{}", ident.value));
+            }
+        }
+        ExprKind::FnCall { name, args } => {
+            if dep_names.contains(name.value.as_str()) {
+                name.value = FnName::new(format!("{prefix}::{}", name.value));
+            }
+            for arg in args {
+                prefix_expr_refs(arg, prefix, dep_names);
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            prefix_expr_refs(lhs, prefix, dep_names);
+            prefix_expr_refs(rhs, prefix, dep_names);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            prefix_expr_refs(operand, prefix, dep_names);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            prefix_expr_refs(condition, prefix, dep_names);
+            prefix_expr_refs(then_branch, prefix, dep_names);
+            prefix_expr_refs(else_branch, prefix, dep_names);
+        }
+        ExprKind::Convert { expr, .. }
+        | ExprKind::DisplayTimezone { expr, .. }
+        | ExprKind::AsCast { expr, .. }
+        | ExprKind::FieldAccess { expr, .. }
+        | ExprKind::IndexAccess { expr, .. } => {
+            prefix_expr_refs(expr, prefix, dep_names);
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                prefix_expr_refs(&mut stmt.value, prefix, dep_names);
+            }
+            prefix_expr_refs(expr, prefix, dep_names);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &mut field.value {
+                    prefix_expr_refs(val, prefix, dep_names);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            for entry in entries {
+                prefix_expr_refs(&mut entry.value, prefix, dep_names);
+            }
+        }
+        ExprKind::ForComp { body, .. } => {
+            prefix_expr_refs(body, prefix, dep_names);
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            prefix_expr_refs(source, prefix, dep_names);
+            prefix_expr_refs(init, prefix, dep_names);
+            prefix_expr_refs(body, prefix, dep_names);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            prefix_expr_refs(init, prefix, dep_names);
+            prefix_expr_refs(body, prefix, dep_names);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            prefix_expr_refs(scrutinee, prefix, dep_names);
+            for arm in arms {
+                prefix_expr_refs(&mut arm.body, prefix, dep_names);
+            }
+        }
+        // Qualified refs (rewritten before merging) and leaf nodes need no rewriting.
+        ExprKind::QualifiedGraphRef { .. }
+        | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::QualifiedFnCall { .. }
+        | ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
+    }
+}
+
+/// Collect all `@`-referenced names from an expression (non-recursive into child scopes).
+///
+/// This is a simpler version of `resolve::collect_graph_refs` that operates on
+/// arbitrary expressions without requiring a known-names set. Used for building
+/// runtime deps from binding expressions.
+fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::GraphRef(ident) => {
+            refs.insert(ident.value.to_string());
+        }
+        ExprKind::QualifiedGraphRef { module, name } => {
+            refs.insert(format!("{}::{}", module.name, name.value));
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_graph_refs_from_expr(lhs, refs);
+            collect_graph_refs_from_expr(rhs, refs);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            collect_graph_refs_from_expr(operand, refs);
+        }
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
+            for arg in args {
+                collect_graph_refs_from_expr(arg, refs);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_graph_refs_from_expr(condition, refs);
+            collect_graph_refs_from_expr(then_branch, refs);
+            collect_graph_refs_from_expr(else_branch, refs);
+        }
+        ExprKind::Convert { expr, .. }
+        | ExprKind::DisplayTimezone { expr, .. }
+        | ExprKind::AsCast { expr, .. }
+        | ExprKind::FieldAccess { expr, .. }
+        | ExprKind::IndexAccess { expr, .. } => {
+            collect_graph_refs_from_expr(expr, refs);
+        }
+        ExprKind::Block { stmts, expr } => {
+            for stmt in stmts {
+                collect_graph_refs_from_expr(&stmt.value, refs);
+            }
+            collect_graph_refs_from_expr(expr, refs);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                if let Some(val) = &field.value {
+                    collect_graph_refs_from_expr(val, refs);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            for entry in entries {
+                collect_graph_refs_from_expr(&entry.value, refs);
+            }
+        }
+        ExprKind::ForComp { body, .. } => {
+            collect_graph_refs_from_expr(body, refs);
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_graph_refs_from_expr(source, refs);
+            collect_graph_refs_from_expr(init, refs);
+            collect_graph_refs_from_expr(body, refs);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            collect_graph_refs_from_expr(init, refs);
+            collect_graph_refs_from_expr(body, refs);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_graph_refs_from_expr(scrutinee, refs);
+            for arm in arms {
+                collect_graph_refs_from_expr(&arm.body, refs);
+            }
+        }
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral { .. } => {}
     }
 }
 

@@ -1,0 +1,8 @@
+// main.gcl -- binding uses @ref from importer's scope
+dimension Velocity = Length / Time;
+
+param my_mass: Mass = 800.0 kg;
+
+import "./rocket.gcl"(dry_mass = @my_mass) { delta_v };
+
+node result: Velocity = @delta_v;

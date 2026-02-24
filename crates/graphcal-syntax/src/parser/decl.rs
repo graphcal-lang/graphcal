@@ -474,10 +474,22 @@ impl Parser<'_> {
             }
         };
 
+        // Optional param bindings: `(name = expr, ...)`
+        let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
+            self.parse_import_param_bindings()?
+        } else {
+            Vec::new()
+        };
+
         // Determine the kind of import based on the next token:
         //   `{`  → selective import (existing)
         //   `as` → module import with alias
         //   `;`  → module import with name derived from filename
+        let after_bindings_hint = if param_bindings.is_empty() {
+            "`(`, `{`, `as`, or `;` after path"
+        } else {
+            "`{`, `as`, or `;` after param bindings"
+        };
         let (kind, end_span) = match self.lexer.peek() {
             Some(Token::LBrace) => {
                 let names = self.parse_import_selective_body()?;
@@ -500,10 +512,10 @@ impl Parser<'_> {
             Some(tok) => {
                 let tok_str = tok.to_string();
                 let (_, span) = self.advance()?;
-                return Err(self.unexpected_token("`{`, `as`, or `;` after path", &tok_str, span));
+                return Err(self.unexpected_token(after_bindings_hint, &tok_str, span));
             }
             None => {
-                return Err(self.unexpected_eof("`{`, `as`, or `;` after path"));
+                return Err(self.unexpected_eof(after_bindings_hint));
             }
         };
 
@@ -514,6 +526,7 @@ impl Parser<'_> {
             kind: DeclKind::Import(crate::ast::ImportDecl {
                 path,
                 path_span,
+                param_bindings,
                 kind,
             }),
             span,
@@ -583,6 +596,45 @@ impl Parser<'_> {
 
         self.expect(Token::RBrace)?;
         Ok(names)
+    }
+
+    /// Parse the `(name = expr, ...)` param bindings of an instantiated import.
+    fn parse_import_param_bindings(&mut self) -> Result<Vec<crate::ast::ParamBinding>, ParseError> {
+        self.expect(Token::LParen)?;
+
+        let mut bindings = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RParen) {
+                break;
+            }
+            let name_ident = self.parse_any_ident()?;
+            let name_span = name_ident.span;
+            self.expect(Token::Eq)?;
+            let value = self.parse_expr()?;
+            let binding_span = name_span.merge(value.span);
+            bindings.push(crate::ast::ParamBinding {
+                name: name_ident,
+                value,
+                span: binding_span,
+            });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+
+        if bindings.is_empty() {
+            let (tok, span) = self.advance()?;
+            return Err(self.unexpected_token(
+                "at least one param binding",
+                &tok.to_string(),
+                span,
+            ));
+        }
+
+        self.expect(Token::RParen)?;
+        Ok(bindings)
     }
 
     // --- index declaration ---
