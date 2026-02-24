@@ -568,6 +568,7 @@ fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
         TypeExprKind::Dimensionless => RcDoc::text("Dimensionless"),
         TypeExprKind::Bool => RcDoc::text("Bool"),
         TypeExprKind::Int => RcDoc::text("Int"),
+        TypeExprKind::Datetime => RcDoc::text("Datetime"),
         TypeExprKind::DimExpr(de) => format_dim_expr_inline(de),
         TypeExprKind::Indexed { base, indexes } => {
             let idx_docs: Vec<RcDoc<'static>> = indexes

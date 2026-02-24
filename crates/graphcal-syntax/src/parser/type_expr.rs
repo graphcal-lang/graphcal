@@ -34,6 +34,27 @@ impl Parser<'_> {
                     kind: TypeExprKind::Int,
                     span,
                 }
+            } else if text == "Datetime" {
+                let ident = self.parse_any_ident()?;
+                if self.is_lt_after_ident(ident.span) {
+                    // Datetime<TT> — parse as TypeApplication
+                    let type_args = self.parse_type_arg_list()?;
+                    let end_span = type_args.last().map_or(ident.span, |a| a.span);
+                    let span = ident.span.merge(end_span);
+                    TypeExpr {
+                        kind: TypeExprKind::TypeApplication {
+                            name: ident,
+                            type_args,
+                        },
+                        span,
+                    }
+                } else {
+                    // Bare Datetime (= Datetime<UTC>)
+                    TypeExpr {
+                        kind: TypeExprKind::Datetime,
+                        span: ident.span,
+                    }
+                }
             } else if is_pascal_case(text) && self.is_lt_after_ident(span) {
                 // Type application: Vec3<Length, ECI>
                 let ident = self.parse_any_ident()?;

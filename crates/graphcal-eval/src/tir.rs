@@ -18,6 +18,7 @@ use crate::error::GraphcalError;
 use crate::ir::IR;
 use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ExpectedFail};
+use crate::time_scale::TimeScale;
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -35,6 +36,8 @@ pub enum ResolvedTypeExpr {
     Bool,
     /// `Int`
     Int,
+    /// A datetime instant in a specific time scale (e.g., `Datetime` = UTC, `Datetime<TT>`).
+    Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver` in `m: Maneuver`).
     Label(IndexName, Span),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
@@ -69,6 +72,13 @@ impl ResolvedTypeExpr {
             Self::Dimensionless => "Dimensionless".to_string(),
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
+            Self::Datetime(scale) => {
+                if scale.is_utc() {
+                    "Datetime".to_string()
+                } else {
+                    format!("Datetime<{scale}>")
+                }
+            }
             Self::Label(index, _) => format!("Label({index})"),
             Self::Scalar(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
@@ -382,6 +392,7 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
+        ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
         ResolvedTypeExpr::Label(index, _) => Ok(DeclaredType::Label(index.clone())),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
@@ -532,6 +543,24 @@ pub fn unify_resolved_type(
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Int argument".to_string(),
+                });
+            }
+            Ok(())
+        }
+
+        ResolvedTypeExpr::Datetime(expected_scale) => {
+            if *actual != InferredType::Datetime(*expected_scale) {
+                let expected_str = if expected_scale.is_utc() {
+                    "Datetime".to_string()
+                } else {
+                    format!("Datetime<{expected_scale}>")
+                };
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: expected_str,
+                    found: format_inferred(actual, registry),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: "expected Datetime argument".to_string(),
                 });
             }
             Ok(())
@@ -738,6 +767,7 @@ pub fn substitute_resolved_type(
         ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
+        ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
         ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(index.clone())),
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone(), vec![])),
@@ -855,6 +885,13 @@ fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> 
                 format!("{name}<{}>", args_str.join(", "))
             }
         }
+        InferredType::Datetime(scale) => {
+            if *scale == crate::time_scale::TimeScale::UTC {
+                "Datetime".to_string()
+            } else {
+                format!("Datetime<{scale}>")
+            }
+        }
         InferredType::Indexed { element, index } => {
             format!("{}[{index}]", format_inferred(element, registry))
         }
@@ -889,6 +926,7 @@ pub fn resolve_type_expr(
         TypeExprKind::Dimensionless => Ok(ResolvedTypeExpr::Dimensionless),
         TypeExprKind::Bool => Ok(ResolvedTypeExpr::Bool),
         TypeExprKind::Int => Ok(ResolvedTypeExpr::Int),
+        TypeExprKind::Datetime => Ok(ResolvedTypeExpr::Datetime(TimeScale::UTC)),
 
         TypeExprKind::Indexed { base, indexes } => {
             let resolved_base = resolve_type_expr(base, registry, dim_params, index_params, src)?;
@@ -1002,6 +1040,48 @@ pub fn resolve_type_expr(
 
         TypeExprKind::TypeApplication { name, type_args } => {
             let type_name = &name.name;
+
+            // Special case: Datetime<TimeScale>
+            if type_name == "Datetime" {
+                if type_args.len() != 1 {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "type `Datetime` expects 0 or 1 type argument(s), got {}",
+                            type_args.len()
+                        ),
+                        src: src.clone(),
+                        span: type_ann.span.into(),
+                    });
+                }
+                // The type arg should be a bare identifier naming a time scale
+                let arg = &type_args[0];
+                let scale_name = match &arg.kind {
+                    TypeExprKind::DimExpr(dim_expr)
+                        if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
+                    {
+                        &dim_expr.terms[0].term.name.name
+                    }
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
+                                .to_string(),
+                            src: src.clone(),
+                            span: arg.span.into(),
+                        });
+                    }
+                };
+                let scale: TimeScale =
+                    scale_name.parse().map_err(|_| GraphcalError::EvalError {
+                        message: format!(
+                            "unknown time scale `{scale_name}`; \
+                                 expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
+                        ),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    })?;
+                return Ok(ResolvedTypeExpr::Datetime(scale));
+            }
+
             // Verify this is a known generic type
             let type_def = registry.types.get_type(type_name).ok_or_else(|| {
                 GraphcalError::UnknownStructType {
@@ -1592,5 +1672,70 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, GraphcalError::EvalError { .. }));
+    }
+
+    // --- Datetime type resolution tests ---
+
+    #[test]
+    fn resolve_bare_datetime() {
+        let r = make_registry();
+        let te = parse_type("Datetime");
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
+    }
+
+    #[test]
+    fn resolve_datetime_utc() {
+        let r = make_registry();
+        let te = parse_type("Datetime<UTC>");
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
+    }
+
+    #[test]
+    fn resolve_datetime_tt() {
+        let r = make_registry();
+        let te = parse_type("Datetime<TT>");
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TT));
+    }
+
+    #[test]
+    fn resolve_datetime_tai() {
+        let r = make_registry();
+        let te = parse_type("Datetime<TAI>");
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TAI));
+    }
+
+    #[test]
+    fn resolve_datetime_gpst() {
+        let r = make_registry();
+        let te = parse_type("Datetime<GPST>");
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::GPST));
+    }
+
+    #[test]
+    fn resolve_datetime_unknown_scale_error() {
+        let r = make_registry();
+        let te = parse_type("Datetime<XYZ>");
+        let err = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap_err();
+        assert!(matches!(err, GraphcalError::EvalError { .. }));
+    }
+
+    #[test]
+    fn convert_datetime_utc() {
+        let dt =
+            resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::UTC), &make_src())
+                .unwrap();
+        assert_eq!(dt, DeclaredType::Datetime(TimeScale::UTC));
+    }
+
+    #[test]
+    fn convert_datetime_tt() {
+        let dt = resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::TT), &make_src())
+            .unwrap();
+        assert_eq!(dt, DeclaredType::Datetime(TimeScale::TT));
     }
 }

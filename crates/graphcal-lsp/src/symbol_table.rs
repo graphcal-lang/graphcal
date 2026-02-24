@@ -823,7 +823,10 @@ fn collect_expr_refs(
 /// Collect references from a type expression.
 fn collect_type_expr_refs(type_expr: &graphcal_syntax::ast::TypeExpr, table: &mut SymbolTable) {
     match &type_expr.kind {
-        TypeExprKind::Dimensionless | TypeExprKind::Bool | TypeExprKind::Int => {}
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => {}
         TypeExprKind::DimExpr(dim_expr) => {
             collect_dim_expr_refs(dim_expr, table);
         }
