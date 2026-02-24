@@ -15,8 +15,18 @@ use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
 
 /// Aggregation functions recognized as special forms (not registered as builtins).
-const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
-const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
+pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
+pub const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
+
+/// Returns `true` if `name` is a built-in aggregation function (`sum`, `min`, etc.).
+pub fn is_aggregation_fn(name: &str) -> bool {
+    AGGREGATION_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a built-in conversion function (`to_float`, `to_int`).
+pub fn is_conversion_fn(name: &str) -> bool {
+    CONVERSION_FNS.contains(&name)
+}
 
 /// A declaration name that may optionally be module-qualified.
 ///
@@ -1436,8 +1446,8 @@ fn collect_const_refs(
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
-                && !AGGREGATION_FNS.contains(&name_str)
-                && !CONVERSION_FNS.contains(&name_str)
+                && !is_aggregation_fn(name_str)
+                && !is_conversion_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -1449,7 +1459,7 @@ fn collect_const_refs(
             // Skip arity check for aggregation/conversion functions.
             if let Some(builtin) = builtin_fns.get(name_str)
                 && args.len() != builtin.arity()
-                && !AGGREGATION_FNS.contains(&name_str)
+                && !is_aggregation_fn(name_str)
             {
                 return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
@@ -1776,8 +1786,8 @@ fn collect_all_refs(
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
-                && !AGGREGATION_FNS.contains(&name_str)
-                && !CONVERSION_FNS.contains(&name_str)
+                && !is_aggregation_fn(name_str)
+                && !is_conversion_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -1787,7 +1797,7 @@ fn collect_all_refs(
             }
             if let Some(builtin) = builtin_fns.get(name_str)
                 && args.len() != builtin.arity()
-                && !AGGREGATION_FNS.contains(&name_str)
+                && !is_aggregation_fn(name_str)
             {
                 return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),

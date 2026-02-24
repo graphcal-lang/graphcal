@@ -16,6 +16,7 @@ use graphcal_syntax::names::{
 
 use crate::error::GraphcalError;
 use crate::registry::Registry;
+use crate::resolve::is_aggregation_fn;
 use crate::tir::ResolvedFnSig;
 
 use super::builtins::infer_fn_dim;
@@ -389,11 +390,7 @@ pub(super) fn infer_type(
 
         ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
-            if matches!(
-                name.value.as_str(),
-                "sum" | "min" | "max" | "mean" | "count"
-            ) && args.len() == 1
-            {
+            if is_aggregation_fn(name.value.as_str()) && args.len() == 1 {
                 let arg_type = infer_type(
                     &args[0],
                     declared_types,

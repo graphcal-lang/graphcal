@@ -9,6 +9,7 @@ mod runtime;
 mod tests;
 mod types;
 
+pub use display::format_number;
 pub(crate) use display::format_unit_expr;
 pub use project::{
     compile_and_eval_from_project, compile_and_eval_project, compile_to_tir,

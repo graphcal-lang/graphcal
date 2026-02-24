@@ -11,6 +11,7 @@ use graphcal_syntax::span::Span;
 use crate::builtins::BuiltinFunction;
 use crate::error::GraphcalError;
 use crate::registry::Registry;
+use crate::resolve::is_aggregation_fn;
 
 /// A runtime value: either a scalar (f64 in SI units), a bool, a struct, or an indexed collection.
 #[derive(Debug, Clone)]
@@ -453,11 +454,7 @@ pub fn eval_expr(
         },
         ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             // Aggregation functions over indexed values: sum, min, max, mean, count
-            if matches!(
-                name.value.as_str(),
-                "sum" | "min" | "max" | "mean" | "count"
-            ) && args.len() == 1
-            {
+            if is_aggregation_fn(name.value.as_str()) && args.len() == 1 {
                 let arg_val = eval_expr(
                     &args[0],
                     values,

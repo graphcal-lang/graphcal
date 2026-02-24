@@ -114,7 +114,7 @@ pub(super) fn format_range_step(idx_def: &crate::registry::IndexDef, step_index:
     } = &idx_def.kind
     {
         let display_value = si_value / display_scale;
-        let formatted = format_step_number(display_value);
+        let formatted = format_number(display_value);
         match display_label {
             Some(label) => format!("{formatted} {label}"),
             None => formatted,
@@ -124,8 +124,10 @@ pub(super) fn format_range_step(idx_def: &crate::registry::IndexDef, step_index:
     }
 }
 
-/// Format a numeric value for display in range index labels.
-pub(super) fn format_step_number(value: f64) -> String {
+/// Format a numeric value for display: integers without decimal point, floats with
+/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
+#[must_use]
+pub fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
         #[expect(
             clippy::cast_possible_truncation,
