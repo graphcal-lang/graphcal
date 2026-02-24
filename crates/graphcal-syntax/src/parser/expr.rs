@@ -28,6 +28,20 @@ impl Parser<'_> {
 
         if self.lexer.peek() == Some(&Token::Arrow) {
             self.lexer.next_token();
+            // If the next token is a string literal, this is a timezone display conversion
+            if self.lexer.peek() == Some(&Token::StringLiteral) {
+                let (_, tz_span) = self.advance()?;
+                let raw = self.lexer.slice_at(tz_span);
+                let timezone = raw[1..raw.len() - 1].to_string();
+                let span = expr.span.merge(tz_span);
+                return Ok(Expr {
+                    kind: ExprKind::DisplayTimezone {
+                        expr: Box::new(expr),
+                        timezone,
+                    },
+                    span,
+                });
+            }
             let target = self.parse_unit_expr()?;
             let span = expr.span.merge(target.span);
             Ok(Expr {

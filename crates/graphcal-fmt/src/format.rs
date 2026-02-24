@@ -702,6 +702,12 @@ fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         } => format_expr(fmt, inner)
             .append(RcDoc::text(" -> "))
             .append(format_unit_expr_inline(target)),
+        ExprKind::DisplayTimezone {
+            expr: inner,
+            timezone,
+        } => format_expr(fmt, inner)
+            .append(RcDoc::text(" -> "))
+            .append(RcDoc::text(format!("\"{timezone}\""))),
         ExprKind::AsCast {
             expr: inner,
             target_type,

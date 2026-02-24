@@ -1812,3 +1812,73 @@ fn format_check_multiple_fixtures() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn eval_datetime_timezone() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_timezone.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        output.status.success(),
+        "datetime timezone should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // Timezone display produces IANA-zoned output
+    assert!(
+        stdout.contains("Asia/Tokyo"),
+        "launch_tokyo should display in Asia/Tokyo timezone"
+    );
+    assert!(
+        stdout.contains("America/New_York"),
+        "launch_ny should display in America/New_York timezone"
+    );
+
+    // Two-arg constructor resolves to UTC
+    assert!(
+        stdout.contains("meeting_tokyo"),
+        "should output meeting_tokyo"
+    );
+
+    // All assertions pass
+    assert!(
+        stdout.contains("same_instant               PASS"),
+        "same_instant assert should pass"
+    );
+    assert!(
+        stdout.contains("same_instant_ny            PASS"),
+        "same_instant_ny assert should pass"
+    );
+    assert!(
+        stdout.contains("display_preserves_instant  PASS"),
+        "display_preserves_instant assert should pass"
+    );
+    assert!(
+        stdout.contains("arith_works                PASS"),
+        "arith_works assert should pass"
+    );
+}
+
+#[test]
+fn eval_datetime_timezone_non_datetime_error() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("errors/datetime_timezone_non_datetime.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "timezone display on non-Datetime should fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("dimension mismatch") || stderr.contains("requires a Datetime"),
+        "error should mention dimension mismatch or Datetime requirement"
+    );
+}

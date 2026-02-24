@@ -140,6 +140,7 @@ pub(super) fn runtime_to_value(
             Value::Datetime {
                 epoch: *epoch,
                 time_scale,
+                display_tz: None,
             }
         }
     }

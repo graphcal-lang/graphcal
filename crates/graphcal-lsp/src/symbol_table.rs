@@ -527,6 +527,9 @@ fn collect_expr_refs(
             collect_expr_refs(expr, table, scopes);
             collect_unit_expr_refs(target, table);
         }
+        ExprKind::DisplayTimezone { expr, .. } => {
+            collect_expr_refs(expr, table, scopes);
+        }
         ExprKind::AsCast { expr, target_type } => {
             collect_expr_refs(expr, table, scopes);
             collect_type_expr_refs(target_type, table);

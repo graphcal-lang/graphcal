@@ -361,7 +361,7 @@ fn format_leaf_cell(value: &graphcal_eval::eval::Value) -> String {
         Value::Scalar { .. } => format_number(value.display_value().unwrap_or_default()),
         Value::Struct { variant, .. } => variant.as_str().to_string(),
         Value::Indexed { .. } => "...".to_string(),
-        Value::Datetime { epoch, .. } => format!("{epoch}"),
+        Value::Datetime { .. } => value.format_datetime().unwrap_or_default(),
     }
 }
 
@@ -608,8 +608,9 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                             Value::Struct { variant, .. } => {
                                 println!("{name:width$} = {}", variant.as_str());
                             }
-                            Value::Datetime { epoch, .. } => {
-                                println!("{name:width$} = {epoch}");
+                            Value::Datetime { .. } => {
+                                let formatted = value.format_datetime().unwrap_or_default();
+                                println!("{name:width$} = {formatted}");
                             }
                             _ => {
                                 let formatted =
@@ -750,11 +751,23 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                 );
                 serde_json::Value::Object(map)
             }
-            Value::Datetime { epoch, time_scale } => {
-                serde_json::json!({
-                    "datetime": format!("{epoch}"),
-                    "time_scale": time_scale.to_string()
-                })
+            Value::Datetime {
+                epoch,
+                time_scale,
+                display_tz,
+            } => {
+                let mut map = serde_json::Map::new();
+                let formatted =
+                    graphcal_eval::eval::format_epoch_with_tz(epoch, display_tz.as_deref());
+                map.insert("datetime".to_string(), serde_json::json!(formatted));
+                map.insert(
+                    "time_scale".to_string(),
+                    serde_json::json!(time_scale.to_string()),
+                );
+                if let Some(tz) = display_tz {
+                    map.insert("display_tz".to_string(), serde_json::json!(tz));
+                }
+                serde_json::Value::Object(map)
             }
         }
     }

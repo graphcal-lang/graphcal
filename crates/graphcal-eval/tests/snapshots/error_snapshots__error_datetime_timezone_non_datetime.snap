@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Datetime, found Dimensionless
+    Diagnostic severity: error
+Begin snippet for datetime_timezone_non_datetime.gcl starting at line 2, column 1
+
+snippet line 2: node x: Dimensionless = 42.0;
+snippet line 3: node y: Dimensionless = @x -> "Asia/Tokyo";
+    label at line 3, columns 25 to 26: has dimension Dimensionless
+diagnostic help: timezone display `-> "Asia/Tokyo"` requires a Datetime expression
+diagnostic code: graphcal::D001
