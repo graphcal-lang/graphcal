@@ -741,6 +741,33 @@ pub fn eval_expr(
                 return Ok(RuntimeValue::Datetime(epoch));
             }
 
+            // Time scale conversion: to_utc, to_tai, to_tt, etc.
+            if let Some(target_scale) =
+                crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
+            {
+                let arg = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let RuntimeValue::Datetime(epoch) = arg else {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "internal: {}() received non-Datetime argument",
+                            name.value
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                let converted = epoch.to_time_scale(target_scale.to_hifitime());
+                return Ok(RuntimeValue::Datetime(converted));
+            }
+
             // Try builtin first
             if let Some(builtin) = builtin_fns.get(name.value.as_str()) {
                 let arg_values: Vec<f64> = args

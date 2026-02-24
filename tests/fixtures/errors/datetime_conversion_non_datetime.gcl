@@ -1,0 +1,2 @@
+param x: Dimensionless = 42.0;
+node bad: Datetime = to_utc(@x);

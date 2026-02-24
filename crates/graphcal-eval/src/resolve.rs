@@ -16,7 +16,10 @@ use crate::error::GraphcalError;
 
 /// Aggregation functions recognized as special forms (not registered as builtins).
 pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
-pub const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
+pub const CONVERSION_FNS: &[&str] = &[
+    "to_float", "to_int", "to_utc", "to_tai", "to_tt", "to_tdb", "to_et", "to_gpst", "to_gst",
+    "to_bdt", "to_qzsst",
+];
 /// Constructor functions that create values from string literals (not registered as builtins).
 pub const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
 

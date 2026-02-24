@@ -1793,6 +1793,54 @@ fn eval_datetime_scale_mismatch_error() {
 }
 
 #[test]
+fn eval_datetime_conversion() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_conversion.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        output.status.success(),
+        "datetime conversion should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("t_utc"), "should output t_utc");
+    assert!(stdout.contains("t_tai"), "should output t_tai");
+    assert!(stdout.contains("t_tt_back"), "should output t_tt_back");
+    assert!(stdout.contains("t_gpst"), "should output t_gpst");
+    assert!(
+        stdout.contains("roundtrip     PASS"),
+        "roundtrip assert should pass"
+    );
+    assert!(
+        stdout.contains("same_instant  PASS"),
+        "same_instant assert should pass"
+    );
+}
+
+#[test]
+fn eval_datetime_conversion_non_datetime_error() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("errors/datetime_conversion_non_datetime.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "to_utc on non-Datetime should fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("dimension mismatch") || stderr.contains("requires a Datetime"),
+        "error should mention dimension mismatch or Datetime requirement"
+    );
+}
+
+#[test]
 fn format_check_multiple_fixtures() {
     // --check on multiple already-formatted fixtures
     let output = graphcal_bin()
