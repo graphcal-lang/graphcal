@@ -13,7 +13,7 @@ For introductory material, see the [tutorial](../tutorial/index.md). For specifi
 Graphcal's type system is organized into three levels:
 
 ```
-Level 1: Primitive  = Scalar(Dim) | Int | Bool
+Level 1: Primitive  = Scalar(Dim) | Int | Bool | Datetime(TimeScale)
 Level 2: ValueType  = Primitive
                     | Struct(name, fields: [ValueType])
                     | TaggedUnion(name, variants: [Variant(fields: [ValueType])])
@@ -54,6 +54,7 @@ The indivisible types. Each represents a single atomic datum.
 | `Scalar(Dim)` | 64-bit float in SI base units | Yes |
 | `Int` | 64-bit signed integer | No (dimensionless) |
 | `Bool` | Boolean | No (dimensionless) |
+| `Datetime(TimeScale)` | High-precision epoch | No (point in time) |
 
 #### Scalar Types
 
@@ -89,6 +90,33 @@ Integer arithmetic uses checked operations -- overflow is a runtime error, not s
 param enabled: Bool = true;
 node active: Bool = @enabled && @count > 0;
 ```
+
+#### Datetime
+
+`Datetime` represents a precise point in time. It is parameterized by a **time scale** that determines how the instant is interpreted. Bare `Datetime` defaults to UTC.
+
+```
+param launch: Datetime = datetime("2024-11-05T12:00:00 UTC");
+param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+```
+
+Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
+
+Datetime values follow **point-vs-vector** semantics:
+
+| Operation | Result | Notes |
+|-----------|--------|-------|
+| `Datetime - Datetime` | `Time` (scalar) | Both must be the same time scale |
+| `Datetime + Time` | `Datetime` | Add a duration |
+| `Datetime - Time` | `Datetime` | Subtract a duration |
+| `Datetime == Datetime` | `Bool` | Equality comparison |
+| `Datetime < Datetime` | `Bool` | Ordering comparison |
+
+Datetime values cannot be added together, multiplied, or divided.
+
+Cross-scale operations are type errors: `Datetime<UTC> - Datetime<TT>` does not compile. Use explicit time scale conversion functions (`to_utc`, `to_tt`, etc.) first.
+
+See [Built-in Reference](built-ins.md#datetime-functions) for the full list of datetime constructors, conversions, and extraction functions.
 
 ### Value Types (Level 2)
 
@@ -292,8 +320,11 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion 
 |----------|------|----|---------|
 | `to_float(x)` | `Int` | `Dimensionless` (Float) | `to_float(42)` yields `42.0` |
 | `to_int(x)` | `Dimensionless` (Float) | `Int` | `to_int(3.7)` yields `3` |
+| `to_utc(x)` | `Datetime(any)` | `Datetime<UTC>` | Time scale conversion |
+| `to_tai(x)` | `Datetime(any)` | `Datetime<TAI>` | Time scale conversion |
+| `to_tt(x)` | `Datetime(any)` | `Datetime<TT>` | Time scale conversion |
 
-`to_int` truncates toward zero (like Rust's `as` cast).
+`to_int` truncates toward zero (like Rust's `as` cast). Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
 
 ## Dimension Algebra
 
@@ -650,6 +681,7 @@ Two types are equivalent if:
 - **Scalars**: They have the same dimension in canonical form. Named dimensions are transparent (e.g., `Velocity` equals `Length / Time`).
 - **Int**: Both are `Int`.
 - **Bool**: Both are `Bool`.
+- **Datetime**: Same time scale. `Datetime<UTC>` and `Datetime<TT>` are different types.
 - **Labels**: Same index name. `Label(Maneuver)` and `Label(Phase)` are different types.
 - **Structs**: Same struct name and all type arguments are equivalent.
 - **Tagged unions**: Same type name and same variants.
@@ -666,6 +698,7 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Scalar value | ValueType | Yes | Yes | Yes | Yes |
 | Int value | ValueType | Yes | Yes | Yes | Yes |
 | Bool value | ValueType | Yes | Yes | Yes | Yes |
+| Datetime value | ValueType | Yes | Yes | Yes | Yes |
 | Struct instance | ValueType | Yes | Yes | Yes | Yes |
 | Tagged union variant | ValueType | Yes | Yes | Yes | Yes |
 | Named index label | Label(IndexName) (expression-level) | Yes | Yes | Yes | Yes |

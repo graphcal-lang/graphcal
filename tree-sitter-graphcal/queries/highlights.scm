@@ -129,8 +129,11 @@
 ; Indexed type index names: Velocity[Maneuver], Mass[Phase, Maneuver]
 (indexed_type (identifier) @type)
 
-; Dimensionless keyword in type positions
+; Builtin type keywords in type positions
 (dimensionless) @type.builtin
+(bool_type) @type.builtin
+(int_type) @type.builtin
+(datetime_type) @type.builtin
 
 ; Generic constraints: Dim, Index
 (generic_constraint) @type.builtin

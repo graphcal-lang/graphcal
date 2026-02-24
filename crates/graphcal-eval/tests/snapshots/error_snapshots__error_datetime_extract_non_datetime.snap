@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Datetime, found Int
+    Diagnostic severity: error
+Begin snippet for datetime_extract_non_datetime.gcl starting at line 2, column 1
+
+snippet line 2: param x: Int = 42;
+snippet line 3: node y: Int = year(@x);
+    label at line 3, columns 20 to 21: has dimension Int
+diagnostic help: year() requires a Datetime argument
+diagnostic code: graphcal::D001

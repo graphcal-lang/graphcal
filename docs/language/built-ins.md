@@ -78,6 +78,62 @@ This page lists all dimensions, units, constants, and functions provided by the 
 | `to_float(x)` | `Int -> Dimensionless` | Convert integer to float |
 | `to_int(x)` | `Dimensionless -> Int` | Convert float to integer (truncates toward zero) |
 
+### Datetime Functions
+
+#### Constructors
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `datetime("...")` | `String -> Datetime` | Parse ISO 8601/RFC 3339 datetime string (UTC) |
+| `datetime("...", "tz")` | `(String, String) -> Datetime` | Parse civil datetime in a timezone (e.g., `"Asia/Tokyo"`) |
+| `epoch("...", Scale)` | `(String, TimeScale) -> Datetime<Scale>` | Parse datetime in a specific time scale |
+| `from_jd(x)` | `Dimensionless -> Datetime` | Construct from Julian Date (UTC) |
+| `from_mjd(x)` | `Dimensionless -> Datetime` | Construct from Modified Julian Date (UTC) |
+| `from_unix(x)` | `Dimensionless -> Datetime` | Construct from Unix timestamp in seconds |
+
+#### Time Scale Conversions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `to_utc(x)` | `Datetime(any) -> Datetime<UTC>` | Convert to UTC |
+| `to_tai(x)` | `Datetime(any) -> Datetime<TAI>` | Convert to TAI |
+| `to_tt(x)` | `Datetime(any) -> Datetime<TT>` | Convert to Terrestrial Time |
+| `to_tdb(x)` | `Datetime(any) -> Datetime<TDB>` | Convert to Barycentric Dynamical Time |
+| `to_et(x)` | `Datetime(any) -> Datetime<ET>` | Convert to Ephemeris Time |
+| `to_gpst(x)` | `Datetime(any) -> Datetime<GPST>` | Convert to GPS Time |
+| `to_gst(x)` | `Datetime(any) -> Datetime<GST>` | Convert to Galileo System Time |
+| `to_bdt(x)` | `Datetime(any) -> Datetime<BDT>` | Convert to BeiDou Time |
+| `to_qzsst(x)` | `Datetime(any) -> Datetime<QZSST>` | Convert to QZSS Time |
+
+#### Numeric Conversions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `to_jd(x)` | `Datetime -> Dimensionless` | Convert to Julian Date (UTC days) |
+| `to_mjd(x)` | `Datetime -> Dimensionless` | Convert to Modified Julian Date (UTC days) |
+| `to_unix(x)` | `Datetime -> Dimensionless` | Convert to Unix timestamp (seconds since 1970-01-01) |
+
+#### Extraction Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `year(x)` | `Datetime -> Int` | Extract year |
+| `month(x)` | `Datetime -> Int` | Extract month (1-12) |
+| `day(x)` | `Datetime -> Int` | Extract day of month (1-31) |
+| `hour(x)` | `Datetime -> Int` | Extract hour (0-23) |
+| `minute(x)` | `Datetime -> Int` | Extract minute (0-59) |
+| `second(x)` | `Datetime -> Int` | Extract second (0-59) |
+| `weekday(x)` | `Datetime -> Int` | Day of week (0=Monday, 6=Sunday) |
+| `day_of_year(x)` | `Datetime -> Int` | Day of year (1-366) |
+
+#### Timezone Display
+
+The `->` operator can display a datetime in a specific timezone without changing the underlying value:
+
+```
+node meeting_ny: Datetime = @meeting -> "America/New_York";
+```
+
 ### Aggregation Functions (Indexed Values)
 
 These functions operate on `for` comprehensions or indexed values:

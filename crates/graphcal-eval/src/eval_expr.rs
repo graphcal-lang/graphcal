@@ -768,6 +768,139 @@ pub fn eval_expr(
                 return Ok(RuntimeValue::Datetime(converted));
             }
 
+            // Datetime extraction functions: year, month, day, etc.
+            if crate::resolve::DATETIME_EXTRACT_FNS.contains(&name.value.as_str()) {
+                let arg_val = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let RuntimeValue::Datetime(epoch) = arg_val else {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "internal: {}() received non-Datetime argument",
+                            name.value
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                // Decompose into Gregorian components in UTC
+                let (year, month, day, hour, minute, second, _nanos) = epoch.to_gregorian_utc();
+                let result: i64 = match name.value.as_str() {
+                    "year" => i64::from(year),
+                    "month" => i64::from(month),
+                    "day" => i64::from(day),
+                    "hour" => i64::from(hour),
+                    "minute" => i64::from(minute),
+                    "second" => i64::from(second),
+                    "weekday" => i64::from(u8::from(epoch.weekday_utc())),
+                    "day_of_year" => {
+                        let start_of_year =
+                            hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
+                        let diff = epoch - start_of_year;
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "day-of-year fits in i64"
+                        )]
+                        let doy = diff.to_seconds().div_euclid(86400.0) as i64 + 1;
+                        doy
+                    }
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!("unknown extraction function `{}`", name.value),
+                            src: src.clone(),
+                            span: name.span.into(),
+                        });
+                    }
+                };
+                return Ok(RuntimeValue::Int(result));
+            }
+
+            // Datetime from-numeric constructors: from_jd, from_mjd, from_unix
+            if crate::resolve::DATETIME_FROM_FNS.contains(&name.value.as_str()) {
+                let arg_val = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let num = match arg_val {
+                    RuntimeValue::Scalar(v) => v,
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "Julian/Unix values are small enough for f64"
+                    )]
+                    RuntimeValue::Int(v) => v as f64,
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "internal: {}() received non-numeric argument",
+                                name.value
+                            ),
+                            src: src.clone(),
+                            span: args[0].span.into(),
+                        });
+                    }
+                };
+                let epoch = match name.value.as_str() {
+                    "from_jd" => hifitime::Epoch::from_jde_utc(num),
+                    "from_mjd" => hifitime::Epoch::from_mjd_utc(num),
+                    "from_unix" => hifitime::Epoch::from_unix_seconds(num),
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!("unknown from-datetime function `{}`", name.value),
+                            src: src.clone(),
+                            span: name.span.into(),
+                        });
+                    }
+                };
+                return Ok(RuntimeValue::Datetime(epoch));
+            }
+
+            // Datetime to-numeric functions: to_jd, to_mjd, to_unix
+            if crate::resolve::DATETIME_TO_FNS.contains(&name.value.as_str()) {
+                let arg_val = eval_expr(
+                    &args[0],
+                    values,
+                    local_values,
+                    builtin_consts,
+                    builtin_fns,
+                    registry,
+                    src,
+                )?;
+                let RuntimeValue::Datetime(epoch) = arg_val else {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "internal: {}() received non-Datetime argument",
+                            name.value
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                let result = match name.value.as_str() {
+                    "to_jd" => epoch.to_jde_utc_days(),
+                    "to_mjd" => epoch.to_mjd_utc_days(),
+                    "to_unix" => epoch.to_unix_seconds(),
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!("unknown to-datetime function `{}`", name.value),
+                            src: src.clone(),
+                            span: name.span.into(),
+                        });
+                    }
+                };
+                return Ok(RuntimeValue::Scalar(result));
+            }
+
             // Try builtin first
             if let Some(builtin) = builtin_fns.get(name.value.as_str()) {
                 let arg_values: Vec<f64> = args
