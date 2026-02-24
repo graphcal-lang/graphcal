@@ -546,19 +546,25 @@ fn evaluate_project_perfile(
             let eval_result =
                 evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
 
-            // Aggregate assertions from all dependency files.
+            // Build a mapping from each dependency file path to the root-level
+            // import statement span that (directly or transitively) brought it in.
+            let dep_import_spans = build_dep_import_spans(project);
+
+            // Aggregate assertions from all dependency files, replacing the
+            // assertion's original span with the root file's import statement span.
             let mut all_assertions: Vec<(DeclName, AssertResult, Span)> = Vec::new();
             for dep_path in &project.load_order {
                 if *dep_path == project.root {
                     continue;
                 }
                 if let Some(dep_eval) = evaluated_files.get(dep_path) {
-                    all_assertions.extend(
-                        dep_eval
-                            .assertions
-                            .iter()
-                            .map(|(name, (result, span))| (name.clone(), result.clone(), *span)),
-                    );
+                    let import_span = dep_import_spans
+                        .get(dep_path)
+                        .copied()
+                        .unwrap_or(Span::new(0, 0));
+                    all_assertions.extend(dep_eval.assertions.iter().map(
+                        |(name, (result, _span))| (name.clone(), result.clone(), import_span),
+                    ));
                 }
             }
             all_assertions.extend(eval_result.assertions);
@@ -619,6 +625,56 @@ fn evaluate_project_perfile(
         src: NamedSource::new("internal", Arc::new(String::new())),
         span: (0, 0).into(),
     }))
+}
+
+/// Map each dependency file to the root-level import statement span that brought it in.
+///
+/// Direct imports get the span of their own `import` declaration in the root file.
+/// Transitive imports inherit the root-level import span of the direct import
+/// that started the chain.
+fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<PathBuf, Span> {
+    let root_file = &project.files[&project.root];
+    let root_dir = project.root.parent().unwrap_or_else(|| Path::new("."));
+    let mut spans: HashMap<PathBuf, Span> = HashMap::new();
+
+    // Map root's direct imports.
+    for decl in &root_file.ast.declarations {
+        if let DeclKind::Import(import_decl) = &decl.kind
+            && let Ok(canonical) = root_dir.join(&import_decl.path).canonicalize()
+        {
+            spans.entry(canonical).or_insert(decl.span);
+        }
+    }
+
+    // For transitive deps: walk load_order (topological, deps first).
+    // If a dep is not yet mapped, find which already-mapped file imports it
+    // and inherit that file's root-level span.
+    for file_path in &project.load_order {
+        if *file_path == project.root || spans.contains_key(file_path) {
+            continue;
+        }
+        let mut found = false;
+        for (mapped_path, root_span) in &spans.clone() {
+            if let Some(mapped_file) = project.files.get(mapped_path) {
+                let dir = mapped_path.parent().unwrap_or_else(|| Path::new("."));
+                for decl in &mapped_file.ast.declarations {
+                    if let DeclKind::Import(imp) = &decl.kind
+                        && let Ok(c) = dir.join(&imp.path).canonicalize()
+                        && c == *file_path
+                    {
+                        spans.insert(file_path.clone(), *root_span);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
+
+    spans
 }
 
 /// Compile a project to TIR using per-file evaluation.

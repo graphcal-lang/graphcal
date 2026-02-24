@@ -288,4 +288,40 @@ mod tests {
             "expected no diagnostics for multi-file project, got: {diags:?}"
         );
     }
+
+    #[test]
+    fn imported_assertion_failure_span_points_to_import() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/imported_assert_fail/main.gcl");
+        let source = std::fs::read_to_string(&root).unwrap();
+        let diags = produce_diagnostics_for_file(&root, &source);
+        let assert_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                d.code.as_ref().is_some_and(
+                    |c| matches!(c, NumberOrString::String(s) if s == "graphcal::A001"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            assert_diags.len(),
+            1,
+            "expected exactly 1 assertion diagnostic, got: {assert_diags:?}"
+        );
+        // The span should point to the import statement on line 0 of the root file,
+        // not to the assertion declaration in the dependency file.
+        assert_eq!(
+            assert_diags[0].range.start.line, 0,
+            "expected diagnostic span on line 0 (the import statement), got line {}",
+            assert_diags[0].range.start.line
+        );
+        // The span should be within the root file's source (valid byte offsets).
+        let end_offset = assert_diags[0].range.end;
+        assert!(
+            (end_offset.line as usize) < source.lines().count(),
+            "diagnostic end line {} exceeds root file line count {}",
+            end_offset.line,
+            source.lines().count()
+        );
+    }
 }
