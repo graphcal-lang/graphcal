@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use graphcal_eval::eval::{EvalResult, compile_and_eval_project, compile_to_tir_project};
+use graphcal_eval::eval::{
+    EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
+};
 use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
@@ -168,7 +170,12 @@ fn main() {
                 Ok(result) => {
                     match format {
                         OutputFormat::Text => print_text(&result, no_assert),
-                        OutputFormat::Json => print_json(&result, no_assert),
+                        OutputFormat::Json => {
+                            if let Err(e) = print_json(&result, no_assert) {
+                                eprintln!("JSON serialization error: {e}");
+                                process::exit(2);
+                            }
+                        }
                     }
                     let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                         || result.nodes.iter().any(|(_, r)| r.is_err());
@@ -656,16 +663,12 @@ fn print_text(result: &EvalResult, no_assert: bool) {
     }
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "serde_json serialization cannot fail for these types"
-)]
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
 )]
-fn print_json(result: &EvalResult, no_assert: bool) {
+fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Error> {
     use graphcal_eval::eval::{NodeError, Value};
 
     fn value_to_json(
@@ -777,30 +780,30 @@ fn print_json(result: &EvalResult, no_assert: bool) {
     let symbols = &result.base_dim_symbols;
     let mut output = serde_json::Map::new();
 
-    let consts: BTreeMap<&str, serde_json::Value> = result
+    let consts: serde_json::Map<String, serde_json::Value> = result
         .consts
         .iter()
-        .map(|(n, v)| (n.as_str(), value_to_json(v, symbols)))
+        .map(|(n, v)| (n.to_string(), value_to_json(v, symbols)))
         .collect();
-    let params: BTreeMap<&str, serde_json::Value> = result
+    let params: serde_json::Map<String, serde_json::Value> = result
         .params
         .iter()
-        .map(|(n, r)| (n.as_str(), result_to_json(r, symbols)))
+        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
-    let nodes: BTreeMap<&str, serde_json::Value> = result
+    let nodes: serde_json::Map<String, serde_json::Value> = result
         .nodes
         .iter()
-        .map(|(n, r)| (n.as_str(), result_to_json(r, symbols)))
+        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
 
-    output.insert("const".to_string(), serde_json::to_value(consts).unwrap());
-    output.insert("param".to_string(), serde_json::to_value(params).unwrap());
-    output.insert("node".to_string(), serde_json::to_value(nodes).unwrap());
+    output.insert("const".to_string(), serde_json::Value::Object(consts));
+    output.insert("param".to_string(), serde_json::Value::Object(params));
+    output.insert("node".to_string(), serde_json::Value::Object(nodes));
 
     if !no_assert && !result.assertions.is_empty() {
         use graphcal_eval::eval::AssertResult;
 
-        let assertions: BTreeMap<&str, serde_json::Value> = result
+        let assertions: serde_json::Map<String, serde_json::Value> = result
             .assertions
             .iter()
             .map(|(n, r, _)| {
@@ -817,37 +820,17 @@ fn print_json(result: &EvalResult, no_assert: bool) {
                         serde_json::json!({"status": "error", "message": message})
                     }
                 };
-                (n.as_str(), val)
+                (n.to_string(), val)
             })
             .collect();
-        output.insert(
-            "assert".to_string(),
-            serde_json::to_value(assertions).unwrap(),
-        );
+        output.insert("assert".to_string(), serde_json::Value::Object(assertions));
     }
 
     println!(
         "{}",
-        serde_json::to_string_pretty(&serde_json::Value::Object(output)).unwrap()
+        serde_json::to_string_pretty(&serde_json::Value::Object(output))?
     );
-}
-
-/// Format a number for display: integers without decimal point, floats with
-/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "guarded by abs() < 1e15 check"
-)]
-fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        // Format with up to 6 decimal places, then strip trailing zeros
-        let s = format!("{value:.6}");
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
-    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
+    format_number,
 };
 use graphcal_eval::loader::LoadedProject;
 use graphcal_syntax::ast::DeclKind;
@@ -105,6 +106,22 @@ impl Backend {
         std::path::Path::new(uri.path())
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    }
+
+    /// Look up cached analysis for a document and apply a closure to it.
+    ///
+    /// Returns `Ok(None)` if the document has not been analyzed yet.
+    async fn with_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&AnalysisResult) -> Option<R>,
+    {
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(uri) else {
+            return Ok(None);
+        };
+        let result = f(analysis);
+        drop(docs);
+        Ok(result)
     }
 
     async fn analyze_and_publish(&self, uri: Url, text: String) {
@@ -546,28 +563,15 @@ fn format_tuple_keyed_entries(
     result
 }
 
-/// Format a number for display: integers without decimal point, floats with
-/// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "guarded by abs() < 1e15 check"
-)]
-fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        let s = format!("{value:.6}");
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
-    }
-}
-
 /// Collect imported definitions from a loaded project.
 ///
 /// For each `import` declaration in the root file, resolves the import path,
 /// looks up the imported file in the project, and builds a symbol table
 /// from the imported file's AST to extract the definition info.
+#[expect(
+    clippy::print_stderr,
+    reason = "LSP server uses stderr for debug logging"
+)]
 fn collect_imported_definitions(
     root_uri: &Url,
     root_ast: &graphcal_syntax::ast::File,
@@ -587,9 +591,17 @@ fn collect_imported_definitions(
         if let DeclKind::Import(import_decl) = &decl.kind {
             let import_path = root_dir.join(&import_decl.path);
             let Ok(canonical) = import_path.canonicalize() else {
+                eprintln!(
+                    "LSP: failed to canonicalize import path: {}",
+                    import_path.display()
+                );
                 continue;
             };
             let Some(loaded_file) = project.files.get(&canonical) else {
+                eprintln!(
+                    "LSP: imported file not found in project: {}",
+                    canonical.display()
+                );
                 continue;
             };
 
@@ -719,13 +731,12 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&params.text_document.uri) else {
-            return Ok(None);
-        };
-        let result = crate::document_symbols::build_document_symbols(analysis);
-        drop(docs);
-        Ok(Some(DocumentSymbolResponse::Nested(result)))
+        self.with_analysis(&params.text_document.uri, |analysis| {
+            Some(DocumentSymbolResponse::Nested(
+                crate::document_symbols::build_document_symbols(analysis),
+            ))
+        })
+        .await
     }
 
     async fn goto_definition(
@@ -734,98 +745,72 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::goto_definition::goto_definition(analysis, &uri, offset);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::goto_definition::goto_definition(analysis, &uri, offset)
+        })
+        .await
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::hover::hover(analysis, offset);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::hover::hover(analysis, offset)
+        })
+        .await
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::references::references(analysis, &uri, offset, include_declaration);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::references::references(analysis, &uri, offset, include_declaration)
+        })
+        .await
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let result = crate::inlay_hints::inlay_hints(analysis, params.range);
-        drop(docs);
-        Ok(result)
+        let range = params.range;
+        self.with_analysis(&uri, |analysis| {
+            crate::inlay_hints::inlay_hints(analysis, range)
+        })
+        .await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::signature_help::signature_help(analysis, offset);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::signature_help::signature_help(analysis, offset)
+        })
+        .await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::completion::completion(analysis, offset);
-        drop(docs);
-        Ok(result.map(CompletionResponse::Array))
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::completion::completion(analysis, offset).map(CompletionResponse::Array)
+        })
+        .await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::rename::rename(analysis, &uri, offset, &new_name);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::rename::rename(analysis, &uri, offset, &new_name)
+        })
+        .await
     }
 
     async fn prepare_rename(
@@ -834,38 +819,27 @@ impl LanguageServer for Backend {
     ) -> Result<Option<PrepareRenameResponse>> {
         let uri = params.text_document.uri;
         let position = params.position;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let offset = position_to_byte_offset(&analysis.source, position);
-        let result = crate::rename::prepare_rename(analysis, offset);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            let offset = position_to_byte_offset(&analysis.source, position);
+            crate::rename::prepare_rename(analysis, offset)
+        })
+        .await
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
-
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let result = crate::document_links::document_links(analysis, &uri);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            crate::document_links::document_links(analysis, &uri)
+        })
+        .await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(&uri) else {
-            return Ok(None);
-        };
-        let result = crate::formatting::format_document(&analysis.source);
-        drop(docs);
-        Ok(result)
+        self.with_analysis(&uri, |analysis| {
+            crate::formatting::format_document(&analysis.source)
+        })
+        .await
     }
 }
 

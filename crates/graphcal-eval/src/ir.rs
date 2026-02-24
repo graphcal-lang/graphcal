@@ -398,7 +398,6 @@ pub fn register_selected_declarations(
 ///
 /// When `filter` is `None`, all declarations are registered.
 /// When `filter` is `Some(names)`, only declarations whose names are in `names` are registered.
-#[expect(clippy::too_many_lines, reason = "sequential declaration registration")]
 fn register_declarations_impl(
     file: &File,
     registry: &mut RegistryBuilder,
@@ -411,122 +410,156 @@ fn register_declarations_impl(
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
-                if let Some(def) = &d.definition {
-                    // Derived dimension — resolve the expression
-                    let dim = registry.resolve_dim_expr(def).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: d.name.value.clone(),
-                            src: src.clone(),
-                            span: d.name.span.into(),
-                        }
-                    })?;
-                    registry.register_dimension(d.name.value.clone(), dim);
-                } else {
-                    // Base dimension — register a new orthogonal axis
-                    let dim_id = graphcal_syntax::dimension::BaseDimId::UserDefined {
-                        file: file_path.to_path_buf(),
-                        name: d.name.value.to_string(),
-                    };
-                    registry.register_base_dimension(d.name.value.clone(), dim_id);
-                }
+                register_dimension_decl(d, registry, src, file_path)?;
             }
             DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
-                let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
-                    GraphcalError::UnknownDimension {
-                        name: DimName::new(u.name.value.as_str()),
-                        src: src.clone(),
-                        span: u.name.span.into(),
-                    }
-                })?;
-                let scale = if let Some(def) = &u.definition {
-                    let (_unit_dim, base_scale) = registry
-                        .resolve_unit_expr(&def.unit_expr)
-                        .ok_or_else(|| GraphcalError::UnknownUnit {
-                            name: u.name.value.clone(),
-                            src: src.clone(),
-                            span: def.span.into(),
-                        })?;
-                    def.scale * base_scale
-                } else {
-                    1.0
-                };
-                // If this is a base unit (scale=1, no definition) for a single
-                // base dimension, record the unit name as the SI symbol for
-                // that dimension. This handles user-defined dimensions like
-                // `unit bit: Information;` → symbol "bit" for Information.
-                if u.definition.is_none() {
-                    // Check if this dimension is a single base dimension
-                    let mut iter = dim.iter();
-                    if let Some((id, &exp)) = iter.next()
-                        && iter.next().is_none()
-                        && exp == Rational::ONE
-                    {
-                        registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
-                    }
-                }
-                registry.register_unit(u.name.value.clone(), dim, scale);
+                register_unit_decl(u, registry, src)?;
             }
             DeclKind::Index(idx) if should_register(idx.name.value.as_str()) => {
-                let kind = match &idx.kind {
-                    graphcal_syntax::ast::IndexDeclKind::Named { variants } => {
-                        registry::IndexKind::Named {
-                            variants: variants.iter().map(|v| v.value.clone()).collect(),
-                        }
-                    }
-                    graphcal_syntax::ast::IndexDeclKind::Range {
-                        start: start_expr,
-                        end: end_expr,
-                        step: step_expr,
-                    } => lower_range_index(
-                        &idx.name.value,
-                        start_expr,
-                        end_expr,
-                        step_expr,
-                        registry,
-                        src,
-                        decl.span,
-                    )?,
-                };
-                registry.register_index(registry::IndexDef {
-                    name: idx.name.value.clone(),
-                    kind,
-                });
+                register_index_decl(idx, registry, src, decl.span)?;
             }
             DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
-                let generic_params: Vec<registry::TypeGenericParam> = t
-                    .generic_params
-                    .iter()
-                    .map(|g| registry::TypeGenericParam {
-                        name: g.name.value.clone(),
-                        constraint: g.constraint.into(),
-                        default: g.default.clone(),
-                    })
-                    .collect();
-                let mut variants = Vec::new();
-                for variant in &t.variants {
-                    let mut fields = Vec::new();
-                    for field in &variant.fields {
-                        fields.push(registry::StructField {
-                            name: field.name.value.clone(),
-                            type_ann: field.type_ann.clone(),
-                        });
-                    }
-                    variants.push(registry::VariantDef {
-                        name: variant.name.value.clone(),
-                        fields,
-                    });
-                }
-                registry.register_type(registry::TypeDef {
-                    name: t.name.value.clone(),
-                    generic_params,
-                    derives: t.derives.iter().map(|d| d.value).collect(),
-                    variants,
-                });
+                register_type_decl(t, registry);
             }
             _ => {}
         }
     }
     Ok(())
+}
+
+fn register_dimension_decl(
+    d: &graphcal_syntax::ast::DimDecl,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+    file_path: &std::path::Path,
+) -> Result<(), GraphcalError> {
+    if let Some(def) = &d.definition {
+        // Derived dimension — resolve the expression
+        let dim =
+            registry
+                .resolve_dim_expr(def)
+                .ok_or_else(|| GraphcalError::UnknownDimension {
+                    name: d.name.value.clone(),
+                    src: src.clone(),
+                    span: d.name.span.into(),
+                })?;
+        registry.register_dimension(d.name.value.clone(), dim);
+    } else {
+        // Base dimension — register a new orthogonal axis
+        let dim_id = graphcal_syntax::dimension::BaseDimId::UserDefined {
+            file: file_path.to_path_buf(),
+            name: d.name.value.to_string(),
+        };
+        registry.register_base_dimension(d.name.value.clone(), dim_id);
+    }
+    Ok(())
+}
+
+fn register_unit_decl(
+    u: &graphcal_syntax::ast::UnitDecl,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let dim =
+        registry
+            .resolve_dim_expr(&u.dim_type)
+            .ok_or_else(|| GraphcalError::UnknownDimension {
+                name: DimName::new(u.name.value.as_str()),
+                src: src.clone(),
+                span: u.name.span.into(),
+            })?;
+    let scale = if let Some(def) = &u.definition {
+        let (_unit_dim, base_scale) =
+            registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
+                GraphcalError::UnknownUnit {
+                    name: u.name.value.clone(),
+                    src: src.clone(),
+                    span: def.span.into(),
+                }
+            })?;
+        def.scale * base_scale
+    } else {
+        1.0
+    };
+    // If this is a base unit (scale=1, no definition) for a single
+    // base dimension, record the unit name as the SI symbol for
+    // that dimension. This handles user-defined dimensions like
+    // `unit bit: Information;` → symbol "bit" for Information.
+    if u.definition.is_none() {
+        // Check if this dimension is a single base dimension
+        let mut iter = dim.iter();
+        if let Some((id, &exp)) = iter.next()
+            && iter.next().is_none()
+            && exp == Rational::ONE
+        {
+            registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
+        }
+    }
+    registry.register_unit(u.name.value.clone(), dim, scale);
+    Ok(())
+}
+
+fn register_index_decl(
+    idx: &graphcal_syntax::ast::IndexDecl,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+    decl_span: Span,
+) -> Result<(), GraphcalError> {
+    let kind = match &idx.kind {
+        graphcal_syntax::ast::IndexDeclKind::Named { variants } => registry::IndexKind::Named {
+            variants: variants.iter().map(|v| v.value.clone()).collect(),
+        },
+        graphcal_syntax::ast::IndexDeclKind::Range {
+            start: start_expr,
+            end: end_expr,
+            step: step_expr,
+        } => lower_range_index(
+            &idx.name.value,
+            start_expr,
+            end_expr,
+            step_expr,
+            registry,
+            src,
+            decl_span,
+        )?,
+    };
+    registry.register_index(registry::IndexDef {
+        name: idx.name.value.clone(),
+        kind,
+    });
+    Ok(())
+}
+
+fn register_type_decl(t: &graphcal_syntax::ast::TypeDecl, registry: &mut RegistryBuilder) {
+    let generic_params: Vec<registry::TypeGenericParam> = t
+        .generic_params
+        .iter()
+        .map(|g| registry::TypeGenericParam {
+            name: g.name.value.clone(),
+            constraint: g.constraint.into(),
+            default: g.default.clone(),
+        })
+        .collect();
+    let mut variants = Vec::new();
+    for variant in &t.variants {
+        let mut fields = Vec::new();
+        for field in &variant.fields {
+            fields.push(registry::StructField {
+                name: field.name.value.clone(),
+                type_ann: field.type_ann.clone(),
+            });
+        }
+        variants.push(registry::VariantDef {
+            name: variant.name.value.clone(),
+            fields,
+        });
+    }
+    registry.register_type(registry::TypeDef {
+        name: t.name.value.clone(),
+        generic_params,
+        derives: t.derives.iter().map(|d| d.value).collect(),
+        variants,
+    });
 }
 
 /// Evaluate a range expression (e.g. `0.0 s`) to get its SI value and dimension.
