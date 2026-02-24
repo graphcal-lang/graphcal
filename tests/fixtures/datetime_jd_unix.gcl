@@ -1,0 +1,21 @@
+// Test from_jd, from_mjd, from_unix, to_jd, to_mjd, to_unix
+param t: Datetime = datetime("2024-11-05T12:00:00 UTC");
+
+// Roundtrip: to_jd -> from_jd
+node jd: Dimensionless = to_jd(@t);
+node t_from_jd: Datetime = from_jd(@jd);
+assert jd_roundtrip = @t_from_jd == @t;
+
+// Roundtrip: to_mjd -> from_mjd
+node mjd: Dimensionless = to_mjd(@t);
+node t_from_mjd: Datetime = from_mjd(@mjd);
+assert mjd_roundtrip = @t_from_mjd == @t;
+
+// Roundtrip: to_unix -> from_unix
+node unix_ts: Dimensionless = to_unix(@t);
+node t_from_unix: Datetime = from_unix(@unix_ts);
+assert unix_roundtrip = @t_from_unix == @t;
+
+// Known values:
+// 2024-11-05T12:00:00 UTC Unix timestamp = 1730808000
+assert unix_value = @unix_ts == 1730808000.0;

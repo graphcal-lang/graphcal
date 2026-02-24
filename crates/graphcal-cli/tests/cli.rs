@@ -1930,3 +1930,67 @@ fn eval_datetime_timezone_non_datetime_error() {
         "error should mention dimension mismatch or Datetime requirement"
     );
 }
+
+#[test]
+fn eval_datetime_extract() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_extract.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("y   = 2024"), "year should be 2024");
+    assert!(stdout.contains("mo  = 11"), "month should be 11");
+    assert!(stdout.contains("d   = 5"), "day should be 5");
+    assert!(stdout.contains("h   = 14"), "hour should be 14");
+    assert!(stdout.contains("mi  = 30"), "minute should be 30");
+    assert!(stdout.contains("s   = 45"), "second should be 45");
+    assert!(stdout.contains("wd  = 1"), "weekday should be 1 (Tuesday)");
+    assert!(stdout.contains("doy = 310"), "day_of_year should be 310");
+    assert!(!stdout.contains("FAIL"), "no assertions should fail");
+}
+
+#[test]
+fn eval_datetime_extract_non_datetime_error() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("errors/datetime_extract_non_datetime.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "extraction on non-Datetime should fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("dimension mismatch") || stderr.contains("requires a Datetime"),
+        "error should mention dimension mismatch or Datetime requirement"
+    );
+}
+
+#[test]
+fn eval_datetime_jd_unix() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_jd_unix.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("unix_ts     = 1730808000"),
+        "unix timestamp should be 1730808000"
+    );
+    assert!(!stdout.contains("FAIL"), "no assertions should fail");
+}

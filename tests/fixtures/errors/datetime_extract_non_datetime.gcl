@@ -1,0 +1,3 @@
+// Error: extraction function on non-Datetime
+param x: Int = 42;
+node y: Int = year(@x);

@@ -737,6 +737,109 @@ pub(super) fn infer_type(
                 return Ok(InferredType::Datetime(target_scale));
             }
 
+            // Datetime extraction functions: year, month, day, etc. -> Int
+            if crate::resolve::DATETIME_EXTRACT_FNS.contains(&name.value.as_str()) {
+                if args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: name.value.clone(),
+                        expected: 1,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                let arg_type = infer_type(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                if !matches!(&arg_type, InferredType::Datetime(_)) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Datetime".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                        help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                    });
+                }
+                return Ok(InferredType::Int);
+            }
+
+            // Datetime from-numeric constructors: from_jd, from_mjd, from_unix -> Datetime(UTC)
+            if crate::resolve::DATETIME_FROM_FNS.contains(&name.value.as_str()) {
+                if args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: name.value.clone(),
+                        expected: 1,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                let arg_type = infer_type(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                match &arg_type {
+                    InferredType::Scalar(dim) if dim.is_dimensionless() => {}
+                    InferredType::Int => {}
+                    _ => {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Dimensionless or Int".to_string(),
+                            found: format_inferred_type(&arg_type, registry),
+                            src: src.clone(),
+                            span: args[0].span.into(),
+                            help: format!(
+                                "{}() requires a dimensionless numeric argument",
+                                name.value.as_str()
+                            ),
+                        });
+                    }
+                }
+                return Ok(InferredType::Datetime(crate::time_scale::TimeScale::UTC));
+            }
+
+            // Datetime to-numeric functions: to_jd, to_mjd, to_unix -> Dimensionless
+            if crate::resolve::DATETIME_TO_FNS.contains(&name.value.as_str()) {
+                if args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: name.value.clone(),
+                        expected: 1,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                let arg_type = infer_type(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                if !matches!(&arg_type, InferredType::Datetime(_)) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Datetime".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                        help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                    });
+                }
+                return Ok(InferredType::Scalar(Dimension::dimensionless()));
+            }
+
             // Try builtin first
             if let Some(func) = builtin_fns.get(name.value.as_str()) {
                 let arg_dims: Vec<Dimension> = args

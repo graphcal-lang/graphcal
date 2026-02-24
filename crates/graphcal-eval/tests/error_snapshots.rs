@@ -419,3 +419,10 @@ fn error_datetime_conversion_non_datetime() {
     let rendered = render_error(source, "datetime_conversion_non_datetime.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_datetime_extract_non_datetime() {
+    let source = include_str!("../../../tests/fixtures/errors/datetime_extract_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_extract_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}

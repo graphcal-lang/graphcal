@@ -2567,6 +2567,10 @@
             "named": true
           },
           {
+            "type": "datetime_type",
+            "named": true
+          },
+          {
             "type": "dim_expr",
             "named": true
           },
@@ -5322,6 +5326,10 @@
           "named": true
         },
         {
+          "type": "datetime_type",
+          "named": true
+        },
+        {
           "type": "dim_expr",
           "named": true
         },
@@ -6008,6 +6016,10 @@
   {
     "type": "const",
     "named": false
+  },
+  {
+    "type": "datetime_type",
+    "named": true
   },
   {
     "type": "dimension",

@@ -339,6 +339,7 @@ module.exports = grammar({
       $.dimensionless,
       $.bool_type,
       $.int_type,
+      $.datetime_type,
       $.type_application,
       $.dim_expr,
     ),
@@ -358,6 +359,7 @@ module.exports = grammar({
     dimensionless: $ => "Dimensionless",
     bool_type: $ => "Bool",
     int_type: $ => "Int",
+    datetime_type: $ => "Datetime",
 
     // Indexed type: Velocity[Maneuver] or Dimensionless[A, B]
     indexed_type: $ => seq(

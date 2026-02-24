@@ -1430,6 +1430,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "datetime_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "type_application"
         },
         {
@@ -1514,6 +1518,10 @@
     "int_type": {
       "type": "STRING",
       "value": "Int"
+    },
+    "datetime_type": {
+      "type": "STRING",
+      "value": "Datetime"
     },
     "indexed_type": {
       "type": "SEQ",

@@ -20,7 +20,7 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
 ];
 
 /// Built-in type keywords available in type annotation position.
-const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int"];
+const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime"];
 
 /// Produce completion items for the given cursor position.
 pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<CompletionItem>> {

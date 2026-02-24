@@ -22,6 +22,21 @@ pub const CONVERSION_FNS: &[&str] = &[
 ];
 /// Constructor functions that create values from string literals (not registered as builtins).
 pub const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
+/// Functions that construct a Datetime from a numeric value (Julian Date, MJD, Unix).
+pub const DATETIME_FROM_FNS: &[&str] = &["from_jd", "from_mjd", "from_unix"];
+/// Functions that convert a Datetime to a numeric value (Julian Date, MJD, Unix).
+pub const DATETIME_TO_FNS: &[&str] = &["to_jd", "to_mjd", "to_unix"];
+/// Datetime component extraction functions.
+pub const DATETIME_EXTRACT_FNS: &[&str] = &[
+    "year",
+    "month",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "weekday",
+    "day_of_year",
+];
 
 /// Returns `true` if `name` is a built-in aggregation function (`sum`, `min`, etc.).
 pub fn is_aggregation_fn(name: &str) -> bool {
@@ -36,6 +51,21 @@ pub fn is_conversion_fn(name: &str) -> bool {
 /// Returns `true` if `name` is a constructor function (`datetime`, `epoch`).
 pub fn is_constructor_fn(name: &str) -> bool {
     CONSTRUCTOR_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a datetime extraction function (`year`, `month`, etc.).
+pub fn is_datetime_extract_fn(name: &str) -> bool {
+    DATETIME_EXTRACT_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a datetime-from-numeric constructor (`from_jd`, etc.).
+pub fn is_datetime_from_fn(name: &str) -> bool {
+    DATETIME_FROM_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a datetime-to-numeric function (`to_jd`, etc.).
+pub fn is_datetime_to_fn(name: &str) -> bool {
+    DATETIME_TO_FNS.contains(&name)
 }
 
 /// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).
@@ -1475,6 +1505,9 @@ fn collect_const_refs(
                 && !is_aggregation_fn(name_str)
                 && !is_conversion_fn(name_str)
                 && !is_constructor_fn(name_str)
+                && !is_datetime_extract_fn(name_str)
+                && !is_datetime_from_fn(name_str)
+                && !is_datetime_to_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -1820,6 +1853,9 @@ fn collect_all_refs(
                 && !is_aggregation_fn(name_str)
                 && !is_conversion_fn(name_str)
                 && !is_constructor_fn(name_str)
+                && !is_datetime_extract_fn(name_str)
+                && !is_datetime_from_fn(name_str)
+                && !is_datetime_to_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
