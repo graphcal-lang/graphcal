@@ -17,6 +17,7 @@ miette.workspace = true
 petgraph = { workspace = true }
 serde = { workspace = true }
 thiserror.workspace = true
+hifitime.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
