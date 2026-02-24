@@ -7,6 +7,8 @@ use graphcal_syntax::ast::Expr;
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{FnName, IndexName, StructTypeName};
 
+use crate::time_scale::TimeScale;
+
 use crate::builtins::builtin_functions;
 use crate::error::GraphcalError;
 use crate::registry::Registry;
@@ -29,6 +31,8 @@ pub enum DeclaredType {
     Scalar(Dimension),
     Bool,
     Int,
+    /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
+    Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
     Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
@@ -45,6 +49,8 @@ pub enum InferredType {
     Scalar(Dimension),
     Bool,
     Int,
+    /// A datetime instant in a specific time scale.
+    Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
     Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.

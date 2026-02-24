@@ -288,7 +288,10 @@ impl DimensionRegistry {
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
-            TypeExprKind::Bool | TypeExprKind::Int | TypeExprKind::TypeApplication { .. } => None,
+            TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::TypeApplication { .. } => None,
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
             TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
         }
@@ -611,7 +614,10 @@ impl RegistryBuilder {
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
-            TypeExprKind::Bool | TypeExprKind::Int | TypeExprKind::TypeApplication { .. } => None,
+            TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::TypeApplication { .. } => None,
             TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
             TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
         }
