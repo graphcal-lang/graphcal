@@ -1498,6 +1498,21 @@ fn eval_expected_fail_on_node_error() {
 }
 
 #[test]
+fn eval_expected_fail_all_on_indexed_error() {
+    // #[expected_fail] without arguments on an indexed assertion should produce a compile error
+    let output = graphcal_bin()
+        .args(["eval", &fixture("errors/expected_fail_all_on_indexed.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 for compile error"
+    );
+}
+
+#[test]
 fn eval_expected_fail_indexed_partial() {
     // Per-variant expected_fail should only suppress the specified variant;
     // other failing variants should still be reported.

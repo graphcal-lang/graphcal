@@ -615,6 +615,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`#[expected_fail]` without arguments on indexed assertion")]
+    #[diagnostic(
+        code(graphcal::A011),
+        help(
+            "use `#[expected_fail(Index::Variant, ...)]` to specify which variants are expected to fail"
+        )
+    )]
+    ExpectedFailAllOnIndexed {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this assertion is indexed")]
+        span: SourceSpan,
+    },
+
     #[error("import path `{path}` resolves outside the project root")]
     #[diagnostic(
         code(graphcal::M008),
