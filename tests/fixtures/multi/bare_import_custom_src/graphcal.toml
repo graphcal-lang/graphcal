@@ -1,0 +1,3 @@
+[package]
+name = "myproject"
+source_dir = "lib"

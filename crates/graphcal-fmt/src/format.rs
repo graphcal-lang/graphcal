@@ -508,6 +508,20 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
     let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
 
+    let path_doc = match &d.path {
+        graphcal_syntax::ast::ImportPath::FilePath { path, .. } => {
+            RcDoc::text(format!("import \"{path}\""))
+        }
+        graphcal_syntax::ast::ImportPath::ModulePath { segments, .. } => {
+            let path_str = segments
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join("/");
+            RcDoc::text(format!("import {path_str}"))
+        }
+    };
+
     match &d.kind {
         graphcal_syntax::ast::ImportKind::Selective(names) => {
             let name_docs: Vec<RcDoc<'static>> = names
@@ -522,22 +536,18 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
                     doc
                 })
                 .collect();
-            RcDoc::text(format!("import \"{}\"", d.path))
+            path_doc
                 .append(bindings_doc)
                 .append(RcDoc::text(" { "))
                 .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(" };"))
         }
         graphcal_syntax::ast::ImportKind::Module { alias: None } => {
-            RcDoc::text(format!("import \"{}\"", d.path))
-                .append(bindings_doc)
-                .append(RcDoc::text(";"))
+            path_doc.append(bindings_doc).append(RcDoc::text(";"))
         }
-        graphcal_syntax::ast::ImportKind::Module { alias: Some(a) } => {
-            RcDoc::text(format!("import \"{}\"", d.path))
-                .append(bindings_doc)
-                .append(RcDoc::text(format!(" as {};", a.name)))
-        }
+        graphcal_syntax::ast::ImportKind::Module { alias: Some(a) } => path_doc
+            .append(bindings_doc)
+            .append(RcDoc::text(format!(" as {};", a.name))),
     }
 }
 

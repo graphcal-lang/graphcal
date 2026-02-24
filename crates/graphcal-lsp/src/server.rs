@@ -46,10 +46,8 @@ pub struct ImportedDefinition {
 
 /// Info about an `import` declaration for Document Links.
 pub struct ImportDeclInfo {
-    /// The raw path string (e.g., `"./constants.gcl"`).
-    pub path: String,
-    /// Span of the path literal in the source.
-    pub path_span: graphcal_syntax::span::Span,
+    /// The import path (file or module).
+    pub path: graphcal_syntax::ast::ImportPath,
 }
 
 /// Structured function signature for Signature Help.
@@ -253,7 +251,6 @@ fn collect_import_decl_info(ast: &graphcal_syntax::ast::File) -> Vec<ImportDeclI
             if let DeclKind::Import(u) = &decl.kind {
                 Some(ImportDeclInfo {
                     path: u.path.clone(),
-                    path_span: u.path_span,
                 })
             } else {
                 None
@@ -590,13 +587,24 @@ fn collect_imported_definitions(
 
     for decl in &root_ast.declarations {
         if let DeclKind::Import(import_decl) = &decl.kind {
-            let import_path = root_dir.join(&import_decl.path);
-            let Ok(canonical) = import_path.canonicalize() else {
-                eprintln!(
-                    "LSP: failed to canonicalize import path: {}",
-                    import_path.display()
-                );
-                continue;
+            // Resolve file-based imports only; module paths require manifest context
+            // which the LSP doesn't currently track.
+            let canonical = match &import_decl.path {
+                graphcal_syntax::ast::ImportPath::FilePath { path, .. } => {
+                    let import_path = root_dir.join(path);
+                    let Ok(c) = import_path.canonicalize() else {
+                        eprintln!(
+                            "LSP: failed to canonicalize import path: {}",
+                            import_path.display()
+                        );
+                        continue;
+                    };
+                    c
+                }
+                graphcal_syntax::ast::ImportPath::ModulePath { .. } => {
+                    // Module path resolution needs manifest; skip for now.
+                    continue;
+                }
             };
             let Some(loaded_file) = project.files.get(&canonical) else {
                 eprintln!(

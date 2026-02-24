@@ -36,6 +36,7 @@ tabled = "0.20.0"
 tempfile = "3.25.0"
 thiserror = "2.0.18"
 tokio = { version = "1", features = ["full"] }
+toml-spanner = "0.4.0"
 tower-lsp = "0.20"
 
 [workspace.lints.clippy]

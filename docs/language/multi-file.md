@@ -4,7 +4,7 @@ icon: material/file-multiple
 
 # Multi-File Projects
 
-Graphcal supports splitting projects across multiple files using `import` declarations. There are two import styles: **selective imports** and **module imports**.
+Graphcal supports splitting projects across multiple files using `import` declarations. Import paths can be either **file paths** (quoted strings) or **module paths** (bare identifiers). There are two import styles: **selective imports** and **module imports**.
 
 ## Selective Imports
 
@@ -51,6 +51,84 @@ Paths are resolved relative to the file containing the `import` declaration:
 // In project/main.gcl:
 import "./lib/constants.gcl" { G0 };     // resolves to project/lib/constants.gcl
 import "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
+```
+
+## Module Paths (Bare Imports)
+
+For organized projects, you can import modules using bare identifier paths instead of quoted file paths. This requires a `graphcal.toml` manifest file at the project root.
+
+### Setting up `graphcal.toml`
+
+Create a `graphcal.toml` in your project root with a `[package]` section:
+
+```toml
+[package]
+name = "nasa"
+# source_dir = "src"  # optional, defaults to "src"
+```
+
+### Using module paths
+
+With the manifest above, organize your source files under the `src/` directory and import them by package-qualified paths:
+
+```
+import nasa/rocket { delta_v };
+import nasa/orbital/transfer as transfer;
+import nasa/constants;
+```
+
+Module paths require at least two segments separated by `/`. The first segment must match the `package.name` from `graphcal.toml`.
+
+### Resolution
+
+`import nasa/rocket { delta_v }` resolves to `<project_root>/src/nasa/rocket.gcl`.
+
+Nested paths work as expected: `import nasa/orbital/transfer` resolves to `<project_root>/src/nasa/orbital/transfer.gcl`.
+
+### Custom source directory
+
+Set `source_dir` in `graphcal.toml` to use a different directory:
+
+```toml
+[package]
+name = "myproject"
+source_dir = "lib"
+```
+
+Now `import myproject/helpers` resolves to `<project_root>/lib/myproject/helpers.gcl`.
+
+### Parameterized module paths
+
+Module paths work with all import forms, including parameterized imports:
+
+```
+import nasa/rocket(dry_mass = 800.0 kg) as stage_1;
+import nasa/rocket(dry_mass = 500.0 kg, isp = 450.0 s) as stage_2;
+
+node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
+```
+
+### Mixing file paths and module paths
+
+File paths and module paths can be used in the same project:
+
+```
+import nasa/constants { G0 };
+import "./local_helpers.gcl" { my_fn };
+```
+
+### Project layout example
+
+```
+my_project/
+  graphcal.toml            # [package] name = "nasa"
+  src/
+    main.gcl               # entry point
+    nasa/
+      constants.gcl        # import nasa/constants { G0 };
+      rocket.gcl            # import nasa/rocket { delta_v };
+      orbital/
+        transfer.gcl       # import nasa/orbital/transfer { dv };
 ```
 
 ## Import Aliasing
@@ -241,7 +319,7 @@ workspace/
 
 ### Widening the root with `graphcal.toml`
 
-Place an empty `graphcal.toml` file in an ancestor directory to widen the project root to that directory:
+Place a `graphcal.toml` file in an ancestor directory to widen the project root to that directory. A `graphcal.toml` with a `[package]` section also enables [module paths](#module-paths-bare-imports). An empty `graphcal.toml` (without `[package]`) only widens the root:
 
 ```
 workspace/

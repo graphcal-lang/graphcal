@@ -1,0 +1,3 @@
+import myproject/helpers { x };
+
+node y: Dimensionless = @x + 1.0;

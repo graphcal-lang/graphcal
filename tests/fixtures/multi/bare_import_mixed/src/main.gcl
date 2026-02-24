@@ -1,0 +1,8 @@
+// Mix of bare module path and file-based import
+import nasa/constants { G0 };
+import "./local_params.gcl" { isp };
+
+dimension Velocity = Length / Time;
+dimension Acceleration = Length / Time^2;
+
+node v_exhaust: Velocity = @isp * G0;

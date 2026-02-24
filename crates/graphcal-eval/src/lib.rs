@@ -17,6 +17,7 @@ pub(crate) mod exec_plan;
 pub(crate) mod fn_check;
 pub(crate) mod ir;
 pub mod loader;
+pub mod manifest;
 pub(crate) mod prelude;
 pub mod registry;
 pub(crate) mod resolve;

@@ -272,9 +272,11 @@ module.exports = grammar({
     // import "./path.gcl" as alias;                      -- module import with alias
     // import "./path.gcl"(dry_mass = 800.0 kg) { delta_v };  -- instantiated selective
     // import "./path.gcl"(dry_mass = 800.0 kg) as stage_1;   -- instantiated module
+    // import nasa/rocket { delta_v };                     -- bare module path
+    // import nasa/rocket as r;                            -- bare module path with alias
     import_declaration: $ => seq(
       "import",
-      field("path", $.string_literal),
+      field("path", choice($.string_literal, $.bare_module_path)),
       optional(field("param_bindings", $.import_param_bindings)),
       choice(
         // Selective import: { name1, name2 as alias }
@@ -309,6 +311,13 @@ module.exports = grammar({
       field("name", $.identifier),
       "=",
       field("value", $._expr),
+    ),
+
+    // Bare module path: nasa/rocket, nasa/orbital/transfer
+    // Requires at least two segments separated by /
+    bare_module_path: $ => seq(
+      $.identifier,
+      repeat1(seq("/", $.identifier)),
     ),
 
     // Import item with optional alias: name or name as alias

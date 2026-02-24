@@ -396,17 +396,32 @@ range_index
 (* "range" and "step" are contextual keywords here.
    Note: named index has no trailing semicolon; range index does. *)
 (* --- import --- *)
-(* Six forms (three non-instantiated, three instantiated):
+(* Import paths can be either a quoted string (file path) or a bare
+   module path (slash-separated identifiers). File paths are resolved
+   relative to the importing file. Bare module paths require a
+   graphcal.toml manifest with [package].name; the first segment must
+   match the package name, and the path resolves to
+   <project_root>/<source_dir>/<seg0>/<seg1>/.../<segN>.gcl.
+
+   Six forms (three non-instantiated, three instantiated):
    1. Selective import:               import "./file.gcl" { name1, name2 };
    2. Module import:                  import "./file.gcl";
    3. Module with alias:              import "./file.gcl" as alias;
    4. Instantiated selective import:  import "./file.gcl"(p = expr) { name1 };
    5. Instantiated module import:     import "./file.gcl"(p = expr);
    6. Instantiated module with alias: import "./file.gcl"(p = expr) as alias;
+
+   Bare module path examples:
+   7. Bare selective:                 import nasa/rocket { delta_v };
+   8. Bare module:                    import nasa/rocket;
+   9. Bare module with alias:         import nasa/rocket as r;
+  10. Bare instantiated:              import nasa/rocket(dry_mass = 800 kg) as r;
+
    Module imports bring the entire file in as a namespace. Members are
    accessed via "::" (e.g., constants::G0, @params::dry_mass).
-   The module name defaults to the filename stem, which must be a
-   valid lower_snake_case identifier; use "as" to override.
+   The module name defaults to the filename stem (for file paths) or
+   the last segment (for bare module paths), which must be a valid
+   lower_snake_case identifier; use "as" to override.
    Instantiated imports supply param bindings that override the
    dependency's param defaults. The binding expressions are evaluated
    in the importer's scope and may use @refs. The dependency's
@@ -415,7 +430,12 @@ range_index
    require either a selective import or a module alias (bare module
    import without alias is not allowed). *)
 import_decl
-   = "import", STRING_LITERAL, [ import_param_bindings ], import_body;
+   = "import", import_path, [ import_param_bindings ], import_body;
+
+import_path
+   = STRING_LITERAL                                                    (* file path *)
+   | lower_snake_case_ident, "/", lower_snake_case_ident,
+     { "/", lower_snake_case_ident };                                  (* bare module path *)
 
 import_param_bindings
    = "(", import_param_binding, { ",", import_param_binding }, [ "," ], ")";
