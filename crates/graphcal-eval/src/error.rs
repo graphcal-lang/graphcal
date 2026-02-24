@@ -697,4 +697,52 @@ pub enum GraphcalError {
         #[label("instantiated import without alias or selective names")]
         span: SourceSpan,
     },
+
+    #[error("bare module import requires a graphcal.toml with [package].name")]
+    #[diagnostic(
+        code(graphcal::M012),
+        help(
+            "create a graphcal.toml file in the project root with:\n\n[package]\nname = \"your_package_name\""
+        )
+    )]
+    BareImportWithoutManifest {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("bare module path requires a manifest")]
+        span: SourceSpan,
+    },
+
+    #[error("module path starts with `{path_first}` but package name is `{package_name}`")]
+    #[diagnostic(
+        code(graphcal::M013),
+        help("module paths must start with the package name from graphcal.toml")
+    )]
+    PackageNameMismatch {
+        path_first: String,
+        package_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("should start with `{package_name}`")]
+        span: SourceSpan,
+    },
+
+    #[error("standard library modules are not yet implemented")]
+    #[diagnostic(
+        code(graphcal::M014),
+        help(
+            "the graphcal standard library (graphcal/math, etc.) will be available in a future release"
+        )
+    )]
+    StdlibNotImplemented {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("stdlib not yet available")]
+        span: SourceSpan,
+    },
+
+    #[error("failed to parse graphcal.toml: {message}")]
+    #[diagnostic(code(graphcal::M015))]
+    ManifestError { message: String },
 }

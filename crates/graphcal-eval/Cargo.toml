@@ -19,6 +19,7 @@ serde = { workspace = true }
 thiserror.workspace = true
 hifitime.workspace = true
 jiff.workspace = true
+toml-spanner.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

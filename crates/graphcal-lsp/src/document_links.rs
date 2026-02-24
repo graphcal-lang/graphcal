@@ -1,5 +1,6 @@
 //! textDocument/documentLink handler.
 
+use graphcal_syntax::ast::ImportPath;
 use tower_lsp::lsp_types::{DocumentLink, Url};
 
 use crate::convert::span_to_range;
@@ -19,7 +20,12 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
     let mut links = Vec::new();
 
     for import_decl in &analysis.import_decls {
-        let import_path = root_dir.join(&import_decl.path);
+        let import_path = match &import_decl.path {
+            ImportPath::FilePath { path, .. } => root_dir.join(path),
+            // Bare module paths require manifest resolution which is not
+            // available in the LSP document-link context yet. Skip them.
+            ImportPath::ModulePath { .. } => continue,
+        };
         let Ok(canonical) = import_path.canonicalize() else {
             continue;
         };
@@ -28,7 +34,7 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
         };
 
         links.push(DocumentLink {
-            range: span_to_range(&analysis.source, import_decl.path_span),
+            range: span_to_range(&analysis.source, import_decl.path.span()),
             target: Some(target_uri),
             tooltip: Some("Open imported file".to_string()),
             data: None,

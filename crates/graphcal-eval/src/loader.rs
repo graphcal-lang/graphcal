@@ -6,7 +6,7 @@ use miette::NamedSource;
 
 use crate::error::GraphcalError;
 use crate::eval::CompileError;
-use graphcal_syntax::ast::{DeclKind, File};
+use graphcal_syntax::ast::{DeclKind, File, ImportPath};
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
@@ -98,6 +98,8 @@ impl LoadedProject {
         let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
         let project_root = resolve_project_root(root_dir, project_root_override)?;
 
+        let mut manifest: Option<crate::manifest::Manifest> = None;
+
         load_file_dfs(
             &root_canonical,
             &project_root,
@@ -106,6 +108,7 @@ impl LoadedProject {
             &mut loading,
             &mut stack,
             Some((&overlay_canonical, overlay.1)),
+            &mut manifest,
         )?;
 
         Ok(Self {
@@ -139,6 +142,8 @@ pub fn load_project(
     let mut loading: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
+    let mut manifest: Option<crate::manifest::Manifest> = None;
+
     load_file_dfs(
         &root_canonical,
         &project_root,
@@ -147,6 +152,7 @@ pub fn load_project(
         &mut loading,
         &mut stack,
         None,
+        &mut manifest,
     )?;
 
     Ok(LoadedProject {
@@ -163,6 +169,10 @@ pub fn load_project(
 ///
 /// `project_root` is the import boundary (parent directory of the entry-point
 /// file). All imports must resolve to paths within this directory tree.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "DFS state requires many parameters"
+)]
 fn load_file_dfs(
     canonical_path: &Path,
     project_root: &Path,
@@ -171,6 +181,7 @@ fn load_file_dfs(
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
     overlay: Option<(&Path, &str)>,
+    manifest: &mut Option<crate::manifest::Manifest>,
 ) -> Result<(), CompileError> {
     // Already fully loaded — skip.
     if files.contains_key(canonical_path) {
@@ -208,25 +219,24 @@ fn load_file_dfs(
     let named_source = NamedSource::new(&name, Arc::clone(&source));
     let ast = graphcal_syntax::parser::Parser::with_name(&source, &name).parse_file()?;
 
-    // Find use declarations and recurse.
+    // Find import declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     for decl in &ast.declarations {
         if let DeclKind::Import(import_decl) = &decl.kind {
-            let import_path = parent_dir.join(&import_decl.path);
-            let import_canonical = import_path.canonicalize().map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: import_decl.path.clone(),
-                    src: named_source.clone(),
-                    span: import_decl.path_span.into(),
-                })
-            })?;
+            let import_canonical = resolve_import_path(
+                &import_decl.path,
+                parent_dir,
+                project_root,
+                &named_source,
+                manifest,
+            )?;
 
             // Path sandboxing: reject imports that resolve outside the project root.
             if !import_canonical.starts_with(project_root) {
                 return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
-                    path: import_decl.path.clone(),
+                    path: import_decl.path.display_path(),
                     src: named_source,
-                    span: import_decl.path_span.into(),
+                    span: import_decl.path.span().into(),
                 }));
             }
 
@@ -238,6 +248,7 @@ fn load_file_dfs(
                 loading,
                 stack,
                 overlay,
+                manifest,
             )?;
         }
     }
@@ -329,6 +340,109 @@ fn resolve_project_root(
         || Ok(project_root_for(root_file_dir)),
         |explicit| explicit.canonicalize().map_err(|_| io_not_found(explicit)),
     )
+}
+
+/// Resolve an `ImportPath` to a canonical file path on disk.
+///
+/// - `FilePath`: resolved relative to `parent_dir` (the importing file's directory).
+/// - `ModulePath`: resolved via the project manifest (`graphcal.toml`).
+fn resolve_import_path(
+    import_path: &ImportPath,
+    parent_dir: &Path,
+    project_root: &Path,
+    src: &NamedSource<Arc<String>>,
+    manifest: &mut Option<crate::manifest::Manifest>,
+) -> Result<PathBuf, CompileError> {
+    match import_path {
+        ImportPath::FilePath { path, span } => {
+            let file_path = parent_dir.join(path);
+            file_path.canonicalize().map_err(|_| {
+                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                    path: path.clone(),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
+            })
+        }
+        ImportPath::ModulePath { segments, span } => {
+            resolve_module_path(segments, *span, project_root, src, manifest)
+        }
+    }
+}
+
+/// Resolve a bare module path to a canonical file path.
+///
+/// For `nasa/rocket`, resolves to `<project_root>/<source_dir>/nasa/rocket.gcl`.
+fn resolve_module_path(
+    segments: &[graphcal_syntax::ast::Ident],
+    span: graphcal_syntax::span::Span,
+    project_root: &Path,
+    src: &NamedSource<Arc<String>>,
+    manifest: &mut Option<crate::manifest::Manifest>,
+) -> Result<PathBuf, CompileError> {
+    let display_path = segments
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    // Check for stdlib imports (deferred).
+    if !segments.is_empty() && segments[0].name == "graphcal" {
+        return Err(CompileError::Eval(GraphcalError::StdlibNotImplemented {
+            path: display_path,
+            src: src.clone(),
+            span: span.into(),
+        }));
+    }
+
+    // Load manifest if not already cached.
+    if manifest.is_none() {
+        let manifest_path = project_root.join("graphcal.toml");
+        if !manifest_path.exists() {
+            return Err(CompileError::Eval(
+                GraphcalError::BareImportWithoutManifest {
+                    path: display_path,
+                    src: src.clone(),
+                    span: span.into(),
+                },
+            ));
+        }
+        let parsed = crate::manifest::parse_manifest(&manifest_path).map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: e.to_string(),
+            })
+        })?;
+        *manifest = Some(parsed);
+    }
+
+    // Unwrap is safe: we just ensured `manifest` is `Some` above.
+    #[expect(clippy::unwrap_used, reason = "manifest was just set to Some above")]
+    let m = manifest.as_ref().unwrap();
+
+    // Validate first segment matches package name.
+    if !segments.is_empty() && segments[0].name != m.package_name {
+        return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
+            path_first: segments[0].name.clone(),
+            package_name: m.package_name.clone(),
+            src: src.clone(),
+            span: span.into(),
+        }));
+    }
+
+    // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
+    let mut file_path = project_root.join(&m.source_dir);
+    for seg in segments {
+        file_path = file_path.join(&seg.name);
+    }
+    file_path.set_extension("gcl");
+
+    file_path.canonicalize().map_err(|_| {
+        CompileError::Eval(GraphcalError::ImportFileNotFound {
+            path: display_path,
+            src: src.clone(),
+            span: span.into(),
+        })
+    })
 }
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
@@ -731,5 +845,111 @@ mod tests {
 
         let project = load_project(&dir.path().join("sub/main.gcl"), Some(dir.path())).unwrap();
         assert_eq!(project.files.len(), 2);
+    }
+
+    // ---- Bare module path loader tests ----
+
+    #[test]
+    fn load_bare_import_selective() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            ("src/nasa/rocket.gcl", "param x: Dimensionless = 1.0;"),
+            (
+                "src/main.gcl",
+                "import nasa/rocket { x };\nnode y: Dimensionless = @x + 1.0;",
+            ),
+        ]);
+        let project = load_project(&dir.path().join("src/main.gcl"), None).unwrap();
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn load_bare_import_nested_path() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            (
+                "src/nasa/orbital/transfer.gcl",
+                "param dv: Dimensionless = 2460.0;",
+            ),
+            (
+                "src/main.gcl",
+                "import nasa/orbital/transfer { dv };\nnode x: Dimensionless = @dv;",
+            ),
+        ]);
+        let project = load_project(&dir.path().join("src/main.gcl"), None).unwrap();
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn load_bare_import_custom_source_dir() {
+        let dir = setup_temp_dir(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"myproject\"\nsource_dir = \"lib\"\n",
+            ),
+            (
+                "lib/myproject/helpers.gcl",
+                "param x: Dimensionless = 42.0;",
+            ),
+            (
+                "lib/main.gcl",
+                "import myproject/helpers { x };\nnode y: Dimensionless = @x + 1.0;",
+            ),
+        ]);
+        let project = load_project(&dir.path().join("lib/main.gcl"), None).unwrap();
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn load_bare_import_without_manifest_error() {
+        let dir = setup_temp_dir(&[("main.gcl", "import nasa/rocket { x };")]);
+        let result = load_project(&dir.path().join("main.gcl"), None);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("BareImportWithoutManifest") || err.contains("graphcal.toml"),
+            "error should mention missing manifest: {err}"
+        );
+    }
+
+    #[test]
+    fn load_bare_import_package_name_mismatch_error() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            ("src/other/rocket.gcl", "param x: Dimensionless = 1.0;"),
+            ("src/main.gcl", "import other/rocket { x };"),
+        ]);
+        let result = load_project(&dir.path().join("src/main.gcl"), None);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("PackageNameMismatch") || err.contains("package name"),
+            "error should mention package name mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn load_bare_import_stdlib_deferred_error() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            ("src/main.gcl", "import graphcal/math { sin };"),
+        ]);
+        let result = load_project(&dir.path().join("src/main.gcl"), None);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("StdlibNotImplemented") || err.contains("stdlib"),
+            "error should mention stdlib not implemented: {err}"
+        );
+    }
+
+    #[test]
+    fn load_bare_import_file_not_found_error() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            ("src/main.gcl", "import nasa/nonexistent { x };"),
+        ]);
+        let result = load_project(&dir.path().join("src/main.gcl"), None);
+        assert!(result.is_err());
     }
 }

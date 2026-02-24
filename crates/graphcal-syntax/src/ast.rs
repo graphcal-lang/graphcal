@@ -110,16 +110,47 @@ pub enum ImportKind {
     Module { alias: Option<Ident> },
 }
 
-/// Import declaration: `import "./path/to/file.gcl" { name1, name2 as alias };`
-/// or module import: `import "./path/to/file.gcl";` / `use "./path/to/file.gcl" as mod;`
+/// The path in an `import` declaration.
+#[derive(Debug, Clone)]
+pub enum ImportPath {
+    /// Quoted string path: `"./path/to/file.gcl"`
+    FilePath { path: String, span: Span },
+    /// Bare identifier path: `nasa/rocket`
+    ModulePath { segments: Vec<Ident>, span: Span },
+}
+
+impl ImportPath {
+    /// Returns the span of this import path.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::FilePath { span, .. } | Self::ModulePath { span, .. } => *span,
+        }
+    }
+
+    /// Human-readable path string for diagnostics.
+    #[must_use]
+    pub fn display_path(&self) -> String {
+        match self {
+            Self::FilePath { path, .. } => path.clone(),
+            Self::ModulePath { segments, .. } => segments
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join("/"),
+        }
+    }
+}
+
+/// Import declaration.
 ///
-/// Optionally instantiated: `import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };`
+/// Supports file paths (`import "./file.gcl" { ... };`) and bare module paths
+/// (`import nasa/rocket { ... };`). Optionally instantiated with param bindings:
+/// `import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
-    /// The file path (quotes stripped, relative to the importing file).
-    pub path: String,
-    /// The path literal's span (for diagnostics).
-    pub path_span: Span,
+    /// The import path (file-based or bare module path).
+    pub path: ImportPath,
     /// Param bindings for module instantiation (empty = non-instantiated).
     pub param_bindings: Vec<ParamBinding>,
     /// The kind of import (selective or module).

@@ -345,6 +345,21 @@
     }
   },
   {
+    "type": "bare_module_path",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "binary_expr",
     "named": true,
     "fields": {
@@ -2051,6 +2066,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "bare_module_path",
+            "named": true
+          },
           {
             "type": "string_literal",
             "named": true

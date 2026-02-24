@@ -2019,6 +2019,70 @@ fn eval_instantiated_import_selective() {
     );
 }
 
+// ---- Bare module path CLI tests ----
+
+#[test]
+fn eval_bare_import_selective() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/bare_import_selective/src/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("total_mass") && l.contains("4000")),
+        "expected total_mass=4000 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_bare_import_instantiated() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("multi/bare_import_instantiated/src/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|l| l.contains("dv")),
+        "expected dv in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_bare_import_mixed() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi/bare_import_mixed/src/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|l| l.contains("v_exhaust")),
+        "expected v_exhaust in output: {stdout}"
+    );
+}
+
 #[test]
 fn eval_instantiated_import_multi() {
     let output = graphcal_bin()

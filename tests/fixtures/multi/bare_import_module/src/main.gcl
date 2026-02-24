@@ -1,0 +1,3 @@
+import nasa/constants as consts;
+
+node g: Acceleration = consts::G0;

@@ -106,6 +106,9 @@
 ; import "./path.gcl" { name1, name2 as alias2 }
 (import_declaration path: (string_literal) @string)
 
+; import nasa/rocket { delta_v }
+(import_declaration path: (bare_module_path) @module)
+
 ; Casing heuristics for import items:
 ; ALL_CAPS → constant, PascalCase → type, else → variable
 (import_item name: (identifier) @constant

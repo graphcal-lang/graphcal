@@ -1098,6 +1098,75 @@ fn project_instantiated_import_graph_ref() {
     );
 }
 
+// ---- Bare module path eval tests ----
+
+#[test]
+fn project_bare_import_selective() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_selective/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    let total_mass = find_value(&result, "total_mass");
+    assert!(
+        (total_mass - 4000.0).abs() < f64::EPSILON,
+        "total_mass = {total_mass}, expected 4000.0"
+    );
+}
+
+#[test]
+fn project_bare_import_module() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_module/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    let g = find_value(&result, "g");
+    assert!((g - 9.80665).abs() < 1e-10, "g = {g}, expected 9.80665");
+}
+
+#[test]
+fn project_bare_import_nested() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_nested/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    let dv = find_value(&result, "dv");
+    assert!((dv - 2460.0).abs() < 0.01, "dv = {dv}, expected 2460.0");
+}
+
+#[test]
+fn project_bare_import_instantiated() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_instantiated/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // dry_mass = 800 kg, fuel_mass = 3200 kg, isp = 320 s
+    // delta_v = 320 * 9.80665 * ln(4000/800)
+    let expected_dv = 320.0 * 9.80665 * (4000.0_f64 / 800.0).ln();
+    let dv = find_value(&result, "dv");
+    assert!(
+        (dv - expected_dv).abs() < 0.01,
+        "dv = {dv}, expected = {expected_dv}"
+    );
+}
+
+#[test]
+fn project_bare_import_mixed() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_mixed/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    let v_exhaust = find_value(&result, "v_exhaust");
+    let expected = 320.0 * 9.80665;
+    assert!(
+        (v_exhaust - expected).abs() < 0.01,
+        "v_exhaust = {v_exhaust}, expected = {expected}"
+    );
+}
+
+#[test]
+fn project_bare_import_custom_src() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_import_custom_src/lib/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    let y = find_value(&result, "y");
+    assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;

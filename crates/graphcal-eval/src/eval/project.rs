@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind};
+use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
 use graphcal_syntax::names::{DeclName, FnName, Spanned};
 use graphcal_syntax::span::Span;
 
@@ -23,6 +23,86 @@ use super::types::{AssertResult, CompileError, EvalResult};
 // ---------------------------------------------------------------------------
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
 // ---------------------------------------------------------------------------
+
+/// Helper function to resolve an import path to a canonical file path.
+///
+/// For `FilePath`, joins with the parent directory and canonicalizes.
+/// For `ModulePath`, searches the already-loaded project files to find the match.
+/// This function is only called after the project is fully loaded, so module paths
+/// have already been resolved by the loader.
+fn resolve_import_to_canonical(
+    import_path: &ImportPath,
+    parent_dir: &Path,
+    project: &crate::loader::LoadedProject,
+    src: &NamedSource<Arc<String>>,
+) -> Result<PathBuf, CompileError> {
+    match import_path {
+        ImportPath::FilePath { path, span } => {
+            let file_path = parent_dir.join(path);
+            file_path.canonicalize().map_err(|_| {
+                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                    path: path.clone(),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
+            })
+        }
+        ImportPath::ModulePath { segments, span } => {
+            // Module paths are resolved by the loader. Since the project is already loaded,
+            // we need to find the canonical path from project.files.
+            // The loader constructs paths as: <project_root>/<source_dir>/segments.../last.gcl
+            //
+            // Simple approach: iterate through project.files to find a matching file.
+            // The segments should match the relative path from the source directory.
+            let search_suffix = segments
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join("/")
+                + ".gcl";
+
+            for canonical_path in project.files.keys() {
+                if canonical_path.ends_with(&search_suffix) {
+                    return Ok(canonical_path.clone());
+                }
+            }
+
+            // Not found - this shouldn't happen if the loader did its job
+            Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+                path: import_path.display_path(),
+                src: src.clone(),
+                span: (*span).into(),
+            }))
+        }
+    }
+}
+
+/// Helper function to derive a module name from an `ImportPath`.
+///
+/// For `FilePath`, uses the filename stem.
+/// For `ModulePath`, uses the last segment as the module name.
+fn derive_module_name_from_import_path(
+    import_path: &ImportPath,
+    src: &NamedSource<Arc<String>>,
+) -> Result<String, CompileError> {
+    match import_path {
+        ImportPath::FilePath { path, span } => {
+            crate::loader::derive_module_name(path).map_err(|stem| {
+                CompileError::Eval(GraphcalError::InvalidModuleName {
+                    stem,
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
+            })
+        }
+        ImportPath::ModulePath { segments, .. } => {
+            // For module paths, the last segment is the module name
+            Ok(segments
+                .last()
+                .map_or_else(|| "module".to_string(), |seg| seg.name.clone()))
+        }
+    }
+}
 
 /// Rewrite qualified references to flat names in-place.
 ///
@@ -247,14 +327,8 @@ fn compile_single_file_in_project(
 
     for decl in &loaded_file.ast.declarations {
         if let DeclKind::Import(import_decl) = &decl.kind {
-            let import_path = file_dir.join(&import_decl.path);
-            let import_canonical = import_path.canonicalize().map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: import_decl.path.clone(),
-                    src: file_src.clone(),
-                    span: import_decl.path_span.into(),
-                })
-            })?;
+            let import_canonical =
+                resolve_import_to_canonical(&import_decl.path, file_dir, project, file_src)?;
 
             // Instantiated import: defer to post-lowering IR merging.
             if !import_decl.param_bindings.is_empty() {
@@ -266,27 +340,13 @@ fn compile_single_file_in_project(
                         if let Some(alias_ident) = alias {
                             alias_ident.name.clone()
                         } else {
-                            crate::loader::derive_module_name(&import_decl.path).map_err(
-                                |stem| {
-                                    CompileError::Eval(GraphcalError::InvalidModuleName {
-                                        stem,
-                                        src: file_src.clone(),
-                                        span: import_decl.path_span.into(),
-                                    })
-                                },
-                            )?
+                            derive_module_name_from_import_path(&import_decl.path, file_src)?
                         }
                     }
                     graphcal_syntax::ast::ImportKind::Selective(_) => {
                         // For selective instantiated imports, we still need a prefix
                         // for the merged declarations. Derive from filename.
-                        crate::loader::derive_module_name(&import_decl.path).map_err(|stem| {
-                            CompileError::Eval(GraphcalError::InvalidModuleName {
-                                stem,
-                                src: file_src.clone(),
-                                span: import_decl.path_span.into(),
-                            })
-                        })?
+                        derive_module_name_from_import_path(&import_decl.path, file_src)?
                     }
                 };
 
@@ -295,13 +355,13 @@ fn compile_single_file_in_project(
                     return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                         name: prefix,
                         src: file_src.clone(),
-                        span: import_decl.path_span.into(),
+                        span: import_decl.path.span().into(),
                         first: (*first_span).into(),
                     }));
                 }
                 module_map.insert(
                     prefix.clone(),
-                    (import_canonical.clone(), import_decl.path_span),
+                    (import_canonical.clone(), import_decl.path.span()),
                 );
 
                 // Validate param bindings against the dependency's AST.
@@ -339,7 +399,7 @@ fn compile_single_file_in_project(
                         }
                         return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
                             name: binding_name.clone(),
-                            file_path: import_decl.path.clone(),
+                            file_path: import_decl.path.display_path(),
                             src: file_src.clone(),
                             span: binding.name.span.into(),
                         }));
@@ -361,7 +421,7 @@ fn compile_single_file_in_project(
                                 return Err(CompileError::Eval(
                                     GraphcalError::ImportNameNotFound {
                                         name: orig_name.clone(),
-                                        file_path: import_decl.path.clone(),
+                                        file_path: import_decl.path.display_path(),
                                         src: file_src.clone(),
                                         span: import_item.name.span.into(),
                                     },
@@ -378,14 +438,11 @@ fn compile_single_file_in_project(
                                     || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
                             });
                             let scoped = ScopedName::Local(local_name.clone());
+                            let span = import_item.name.span;
                             if is_const {
-                                imported_names
-                                    .const_names
-                                    .push((scoped, import_item.name.span));
+                                imported_names.const_names.push((scoped, span));
                             } else if is_runtime {
-                                imported_names
-                                    .param_names
-                                    .push((scoped, import_item.name.span));
+                                imported_names.param_names.push((scoped, span));
                             } else {
                                 // Type-system declarations (dim/unit/index/type) are not
                                 // registered in imported_names; handled via registry merge.
@@ -414,6 +471,7 @@ fn compile_single_file_in_project(
                     }
                     graphcal_syntax::ast::ImportKind::Module { .. } => {
                         // Register all dep names under the prefix for scope checking.
+                        let import_span = import_decl.path.span();
                         for dep_decl in &dep_loaded.ast.declarations {
                             let (dep_name, is_const) = match &dep_decl.kind {
                                 DeclKind::Const(c) => (Some(c.name.value.to_string()), true),
@@ -427,13 +485,9 @@ fn compile_single_file_in_project(
                                     member: name,
                                 };
                                 if is_const {
-                                    imported_names
-                                        .const_names
-                                        .push((scoped, import_decl.path_span));
+                                    imported_names.const_names.push((scoped, import_span));
                                 } else {
-                                    imported_names
-                                        .param_names
-                                        .push((scoped, import_decl.path_span));
+                                    imported_names.param_names.push((scoped, import_span));
                                 }
                             }
                         }
@@ -462,7 +516,7 @@ fn compile_single_file_in_project(
                         import_canonical.display()
                     ),
                     src: file_src.clone(),
-                    span: import_decl.path_span.into(),
+                    span: import_decl.path.span().into(),
                 })
             })?;
 
@@ -521,7 +575,7 @@ fn compile_single_file_in_project(
                                 return Err(CompileError::Eval(
                                     GraphcalError::ImportNameNotFound {
                                         name: orig_name.clone(),
-                                        file_path: import_decl.path.clone(),
+                                        file_path: import_decl.path.display_path(),
                                         src: file_src.clone(),
                                         span: import_item.name.span.into(),
                                     },
@@ -534,28 +588,23 @@ fn compile_single_file_in_project(
                     let module_name = if let Some(alias_ident) = alias {
                         alias_ident.name.clone()
                     } else {
-                        crate::loader::derive_module_name(&import_decl.path).map_err(|stem| {
-                            CompileError::Eval(GraphcalError::InvalidModuleName {
-                                stem,
-                                src: file_src.clone(),
-                                span: import_decl.path_span.into(),
-                            })
-                        })?
+                        derive_module_name_from_import_path(&import_decl.path, file_src)?
                     };
                     if let Some((_, first_span)) = module_map.get(&module_name) {
                         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                             name: module_name,
                             src: file_src.clone(),
-                            span: import_decl.path_span.into(),
+                            span: import_decl.path.span().into(),
                             first: (*first_span).into(),
                         }));
                     }
                     module_map.insert(
                         module_name.clone(),
-                        (import_canonical.clone(), import_decl.path_span),
+                        (import_canonical.clone(), import_decl.path.span()),
                     );
 
                     // Import all values under module::name prefix.
+                    let import_span = import_decl.path.span();
                     for (name, rv) in &dep.const_values {
                         let scoped = ScopedName::Qualified {
                             module: module_name.clone(),
@@ -563,7 +612,7 @@ fn compile_single_file_in_project(
                         };
                         imported_names
                             .const_names
-                            .push((scoped.clone(), import_decl.path_span));
+                            .push((scoped.clone(), import_span));
                         let dt =
                             dep.declared_types
                                 .get(name)
@@ -581,7 +630,7 @@ fn compile_single_file_in_project(
                         };
                         imported_names
                             .param_names
-                            .push((scoped.clone(), import_decl.path_span));
+                            .push((scoped.clone(), import_span));
                         let dt =
                             dep.declared_types
                                 .get(name)
@@ -857,18 +906,12 @@ fn build_dep_imported_values(
                 return Err(CompileError::Eval(GraphcalError::EvalError {
                     message: "nested instantiated imports are not yet supported".to_string(),
                     src: dep_src.clone(),
-                    span: import_decl.path_span.into(),
+                    span: import_decl.path.span().into(),
                 }));
             }
 
-            let trans_path = dep_dir.join(&import_decl.path);
-            let trans_canonical = trans_path.canonicalize().map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: import_decl.path.clone(),
-                    src: dep_src.clone(),
-                    span: import_decl.path_span.into(),
-                })
-            })?;
+            let trans_canonical =
+                resolve_import_to_canonical(&import_decl.path, dep_dir, project, dep_src)?;
 
             let trans_dep = evaluated_files.get(&trans_canonical).ok_or_else(|| {
                 CompileError::Eval(GraphcalError::EvalError {
@@ -877,7 +920,7 @@ fn build_dep_imported_values(
                         trans_canonical.display()
                     ),
                     src: dep_src.clone(),
-                    span: import_decl.path_span.into(),
+                    span: import_decl.path.span().into(),
                 })
             })?;
 
@@ -923,11 +966,12 @@ fn build_dep_imported_values(
                 graphcal_syntax::ast::ImportKind::Module { alias } => {
                     let module_name = alias.as_ref().map_or_else(
                         || {
-                            crate::loader::derive_module_name(&import_decl.path)
+                            derive_module_name_from_import_path(&import_decl.path, dep_src)
                                 .unwrap_or_else(|_| "dep".to_string())
                         },
                         |alias_ident| alias_ident.name.clone(),
                     );
+                    let import_span = import_decl.path.span();
                     for (name, rv) in &trans_dep.const_values {
                         let scoped = ScopedName::Qualified {
                             module: module_name.clone(),
@@ -935,7 +979,7 @@ fn build_dep_imported_values(
                         };
                         imported_names
                             .const_names
-                            .push((scoped.clone(), import_decl.path_span));
+                            .push((scoped.clone(), import_span));
                         let dt = trans_dep.declared_types.get(name).cloned().unwrap_or(
                             DeclaredType::Scalar(
                                 graphcal_syntax::dimension::Dimension::dimensionless(),
@@ -950,7 +994,7 @@ fn build_dep_imported_values(
                         };
                         imported_names
                             .param_names
-                            .push((scoped.clone(), import_decl.path_span));
+                            .push((scoped.clone(), import_span));
                         let dt = trans_dep.declared_types.get(name).cloned().unwrap_or(
                             DeclaredType::Scalar(
                                 graphcal_syntax::dimension::Dimension::dimensionless(),
@@ -1128,10 +1172,16 @@ fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<Pat
 
     // Map root's direct imports.
     for decl in &root_file.ast.declarations {
-        if let DeclKind::Import(import_decl) = &decl.kind
-            && let Ok(canonical) = root_dir.join(&import_decl.path).canonicalize()
-        {
-            spans.entry(canonical).or_insert(decl.span);
+        if let DeclKind::Import(import_decl) = &decl.kind {
+            // Use the helper to resolve the import path, ignoring errors (best-effort)
+            if let Ok(canonical) = resolve_import_to_canonical(
+                &import_decl.path,
+                root_dir,
+                project,
+                &root_file.named_source,
+            ) {
+                spans.entry(canonical).or_insert(decl.span);
+            }
         }
     }
 
@@ -1148,7 +1198,12 @@ fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<Pat
                 let dir = mapped_path.parent().unwrap_or_else(|| Path::new("."));
                 for decl in &mapped_file.ast.declarations {
                     if let DeclKind::Import(imp) = &decl.kind
-                        && let Ok(c) = dir.join(&imp.path).canonicalize()
+                        && let Ok(c) = resolve_import_to_canonical(
+                            &imp.path,
+                            dir,
+                            project,
+                            &mapped_file.named_source,
+                        )
                         && c == *file_path
                     {
                         spans.insert(file_path.clone(), *root_span);
@@ -1245,14 +1300,12 @@ fn route_overrides_to_files(
                         let local_name = item.local_name().to_string();
                         if local_name == name_str {
                             let orig_name = &item.name.name;
-                            let import_path = root_dir.join(&import_decl.path);
-                            let import_canonical = import_path.canonicalize().map_err(|_| {
-                                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                                    path: import_decl.path.clone(),
-                                    src: root_src.clone(),
-                                    span: import_decl.path_span.into(),
-                                })
-                            })?;
+                            let import_canonical = resolve_import_to_canonical(
+                                &import_decl.path,
+                                root_dir,
+                                project,
+                                root_src,
+                            )?;
 
                             // Verify it's actually a param in the source file.
                             let dep_file = &project.files[&import_canonical];

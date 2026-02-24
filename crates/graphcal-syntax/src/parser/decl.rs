@@ -458,19 +458,61 @@ impl Parser<'_> {
     fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
-        // Expect a string literal for the file path
-        let (path, path_span) = match self.lexer.next_token() {
-            Some((Token::StringLiteral, span)) => {
+        // Parse the import path: string literal or bare identifier path.
+        let path = match self.lexer.peek() {
+            Some(Token::StringLiteral) => {
+                let (_, span) = self.advance()?;
                 let raw = self.lexer.slice_at(span);
-                // Strip surrounding quotes
-                let path = raw[1..raw.len() - 1].to_string();
-                (path, span)
+                let path_str = raw[1..raw.len() - 1].to_string();
+                crate::ast::ImportPath::FilePath {
+                    path: path_str,
+                    span,
+                }
             }
-            Some((tok, span)) => {
-                return Err(self.unexpected_token("a string literal", &tok.to_string(), span));
+            Some(Token::Ident) => {
+                // Bare module path: ident / ident / ...
+                let first = self.parse_any_ident()?;
+                let path_start = first.span;
+                let mut segments = vec![first];
+
+                // Parse subsequent `/ident` pairs
+                while self.lexer.peek() == Some(&Token::Slash) {
+                    self.lexer.next_token(); // consume `/`
+                    let seg = self.parse_any_ident()?;
+                    segments.push(seg);
+                }
+
+                // Require at least two segments (e.g., `nasa/rocket`, not just `nasa`)
+                if segments.len() < 2 {
+                    let found = self
+                        .lexer
+                        .peek()
+                        .map_or_else(|| "end of file".to_string(), ToString::to_string);
+                    let err_span = segments.last().map_or(path_start, |s| s.span);
+                    return Err(self.unexpected_token(
+                        "a `/` followed by a module name (bare import paths require at least two segments, e.g., `package/module`)",
+                        &found,
+                        err_span,
+                    ));
+                }
+
+                let path_end = segments.last().map_or(path_start, |s| s.span);
+                crate::ast::ImportPath::ModulePath {
+                    segments,
+                    span: path_start.merge(path_end),
+                }
+            }
+            Some(tok) => {
+                let tok_str = tok.to_string();
+                let (_, span) = self.advance()?;
+                return Err(self.unexpected_token(
+                    "a string literal or module path",
+                    &tok_str,
+                    span,
+                ));
             }
             None => {
-                return Err(self.unexpected_eof("a string literal"));
+                return Err(self.unexpected_eof("a string literal or module path"));
             }
         };
 
@@ -525,7 +567,6 @@ impl Parser<'_> {
             attributes: vec![],
             kind: DeclKind::Import(crate::ast::ImportDecl {
                 path,
-                path_span,
                 param_bindings,
                 kind,
             }),
@@ -1323,7 +1364,8 @@ param alt: Length = 400.0 km;
         let DeclKind::Import(u) = &file.declarations[0].kind else {
             panic!("expected Use");
         };
-        assert_eq!(u.path, "./helper.gcl");
+        assert_eq!(u.path.display_path(), "./helper.gcl");
+        assert!(matches!(&u.path, crate::ast::ImportPath::FilePath { .. }));
         let crate::ast::ImportKind::Selective(names) = &u.kind else {
             panic!("expected Selective");
         };
@@ -1389,7 +1431,7 @@ param alt: Length = 400.0 km;
         let DeclKind::Import(u) = &file.declarations[0].kind else {
             panic!("expected Use");
         };
-        assert_eq!(u.path, "./constants.gcl");
+        assert_eq!(u.path.display_path(), "./constants.gcl");
         let crate::ast::ImportKind::Module { alias } = &u.kind else {
             panic!("expected Module");
         };
@@ -1404,7 +1446,7 @@ param alt: Length = 400.0 km;
         let DeclKind::Import(u) = &file.declarations[0].kind else {
             panic!("expected Use");
         };
-        assert_eq!(u.path, "./constants.gcl");
+        assert_eq!(u.path.display_path(), "./constants.gcl");
         let crate::ast::ImportKind::Module { alias } = &u.kind else {
             panic!("expected Module");
         };
@@ -1415,6 +1457,88 @@ param alt: Length = 400.0 km;
     fn parse_import_module_missing_alias_ident_error() {
         let result = Parser::new(r#"import "./f.gcl" as;"#).parse_file();
         assert!(result.is_err());
+    }
+
+    // ---- Bare module path tests ----
+
+    #[test]
+    fn parse_import_bare_path_selective() {
+        let file = Parser::new("import nasa/rocket { delta_v };")
+            .parse_file()
+            .unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Import");
+        };
+        let crate::ast::ImportPath::ModulePath { segments, .. } = &u.path else {
+            panic!("expected ModulePath");
+        };
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].name, "nasa");
+        assert_eq!(segments[1].name, "rocket");
+        assert_eq!(u.path.display_path(), "nasa/rocket");
+        let crate::ast::ImportKind::Selective(names) = &u.kind else {
+            panic!("expected Selective");
+        };
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name.name, "delta_v");
+    }
+
+    #[test]
+    fn parse_import_bare_path_nested() {
+        let file = Parser::new("import a/b/c/d;").parse_file().unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Import");
+        };
+        let crate::ast::ImportPath::ModulePath { segments, .. } = &u.path else {
+            panic!("expected ModulePath");
+        };
+        assert_eq!(segments.len(), 4);
+        assert_eq!(u.path.display_path(), "a/b/c/d");
+    }
+
+    #[test]
+    fn parse_import_bare_path_with_alias() {
+        let file = Parser::new("import nasa/rocket as r;")
+            .parse_file()
+            .unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Import");
+        };
+        assert!(matches!(&u.path, crate::ast::ImportPath::ModulePath { .. }));
+        assert_eq!(u.path.display_path(), "nasa/rocket");
+        let crate::ast::ImportKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert_eq!(alias.as_ref().unwrap().name, "r");
+    }
+
+    #[test]
+    fn parse_import_bare_path_with_param_bindings() {
+        let file = Parser::new("import nasa/rocket(dry_mass = 800.0 kg) as stage_1;")
+            .parse_file()
+            .unwrap();
+        let DeclKind::Import(u) = &file.declarations[0].kind else {
+            panic!("expected Import");
+        };
+        assert!(matches!(&u.path, crate::ast::ImportPath::ModulePath { .. }));
+        assert_eq!(u.path.display_path(), "nasa/rocket");
+        assert_eq!(u.param_bindings.len(), 1);
+        assert_eq!(u.param_bindings[0].name.name, "dry_mass");
+        let crate::ast::ImportKind::Module { alias } = &u.kind else {
+            panic!("expected Module");
+        };
+        assert_eq!(alias.as_ref().unwrap().name, "stage_1");
+    }
+
+    #[test]
+    fn parse_import_bare_path_single_segment_error() {
+        // Single-segment bare paths are ambiguous; require at least pkg/module
+        let result = Parser::new("import foo;").parse_file();
+        // This should parse as a module import with a bare identifier... actually
+        // our parser requires at least one `/` for bare paths, so a single bare
+        // identifier after `import` that isn't followed by `/` should error.
+        assert!(result.is_err(), "single-segment bare import should fail");
     }
 
     #[test]
