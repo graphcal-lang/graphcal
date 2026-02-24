@@ -54,7 +54,9 @@ pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
             rewrite_qualified_refs(then_branch);
             rewrite_qualified_refs(else_branch);
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => {
             rewrite_qualified_refs(inner);
         }
         ExprKind::Block { stmts, expr } => {

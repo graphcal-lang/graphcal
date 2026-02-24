@@ -674,7 +674,8 @@ pub fn eval_expr(
                 return Ok(RuntimeValue::Int(f as i64));
             }
 
-            // datetime(string_literal) -> Datetime
+            // datetime(string_literal) -> Datetime(UTC)
+            // datetime(string_literal, timezone_string) -> Datetime(UTC)
             if name.value.as_str() == "datetime" {
                 let ExprKind::StringLiteral(s) = &args[0].kind else {
                     return Err(GraphcalError::EvalError {
@@ -683,13 +684,31 @@ pub fn eval_expr(
                         span: args[0].span.into(),
                     });
                 };
-                let epoch = hifitime::Epoch::from_gregorian_str(s).map_err(|e| {
-                    GraphcalError::EvalError {
-                        message: format!("invalid datetime string: {e}"),
+                let epoch = if args.len() == 2 {
+                    // Two-arg form: datetime("2024-11-05T10:00", "Asia/Tokyo")
+                    let ExprKind::StringLiteral(tz_name) = &args[1].kind else {
+                        return Err(GraphcalError::EvalError {
+                            message: "internal: datetime() received non-string timezone argument"
+                                .to_string(),
+                            src: src.clone(),
+                            span: args[1].span.into(),
+                        });
+                    };
+                    datetime_with_timezone(s, tz_name).map_err(|e| GraphcalError::EvalError {
+                        message: format!("invalid datetime with timezone: {e}"),
                         src: src.clone(),
                         span: args[0].span.into(),
-                    }
-                })?;
+                    })?
+                } else {
+                    // One-arg form: datetime("2024-11-05T12:00:00Z")
+                    hifitime::Epoch::from_gregorian_str(s).map_err(|e| {
+                        GraphcalError::EvalError {
+                            message: format!("invalid datetime string: {e}"),
+                            src: src.clone(),
+                            span: args[0].span.into(),
+                        }
+                    })?
+                };
                 return Ok(RuntimeValue::Datetime(epoch));
             }
 
@@ -868,7 +887,9 @@ pub fn eval_expr(
                 )
             }
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => eval_expr(
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => eval_expr(
             inner,
             values,
             local_values,
@@ -1638,6 +1659,26 @@ fn eval_struct_binop(
         variant: variant.clone(),
         fields: result_fields,
     })
+}
+
+/// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.
+///
+/// Uses jiff to resolve the civil time to a UTC instant, then converts to hifitime.
+fn datetime_with_timezone(
+    datetime_str: &str,
+    tz_name: &str,
+) -> Result<hifitime::Epoch, Box<dyn std::error::Error>> {
+    let civil_dt: jiff::civil::DateTime = datetime_str.parse()?;
+    let tz = jiff::tz::TimeZone::get(tz_name)?;
+    let zdt = tz.to_zoned(civil_dt)?;
+    let ts = zdt.timestamp();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "unix seconds for reasonable dates fit within f64 mantissa precision"
+    )]
+    let epoch = hifitime::Epoch::from_unix_seconds(ts.as_second() as f64)
+        + hifitime::Duration::from_nanoseconds(f64::from(ts.subsec_nanosecond()));
+    Ok(epoch)
 }
 
 /// Component-wise negation of a struct value (for derive(Neg)).

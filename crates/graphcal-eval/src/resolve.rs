@@ -1137,9 +1137,9 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
             check_no_graph_refs(then_branch, src)?;
             check_no_graph_refs(else_branch, src)
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
-            check_no_graph_refs(inner, src)
-        }
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => check_no_graph_refs(inner, src),
         ExprKind::Block { stmts, expr } => {
             for stmt in stmts {
                 check_no_graph_refs(&stmt.value, src)?;
@@ -1247,7 +1247,9 @@ fn check_no_graph_refs_in_fn_expr(
             check_no_graph_refs_in_fn_expr(then_branch, fn_name, src)?;
             check_no_graph_refs_in_fn_expr(else_branch, fn_name, src)
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => {
             check_no_graph_refs_in_fn_expr(inner, fn_name, src)
         }
         ExprKind::Block { stmts, expr } => {
@@ -1343,7 +1345,9 @@ fn check_no_assert_graph_refs(
             check_no_assert_graph_refs(then_branch, assert_names, src)?;
             check_no_assert_graph_refs(else_branch, assert_names, src)
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => {
             check_no_assert_graph_refs(inner, assert_names, src)
         }
         ExprKind::Block { stmts, expr } => {
@@ -1564,17 +1568,17 @@ fn collect_const_refs(
                 deps,
             )
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
-            collect_const_refs(
-                inner,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                deps,
-            )
-        }
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => collect_const_refs(
+            inner,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            user_fn_names,
+            src,
+            deps,
+        ),
         ExprKind::Block { stmts, expr } => {
             for stmt in stmts {
                 collect_const_refs(
@@ -1921,19 +1925,19 @@ fn collect_all_refs(
                 const_refs,
             )
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
-            collect_all_refs(
-                inner,
-                all_runtime_names,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                graph_refs,
-                const_refs,
-            )
-        }
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => collect_all_refs(
+            inner,
+            all_runtime_names,
+            all_const_names,
+            builtin_consts,
+            builtin_fns,
+            user_fn_names,
+            src,
+            graph_refs,
+            const_refs,
+        ),
         ExprKind::Block { stmts, expr } => {
             for stmt in stmts {
                 collect_all_refs(
@@ -2146,7 +2150,9 @@ pub fn collect_graph_refs(
             collect_graph_refs(then_branch, all_runtime_names, refs);
             collect_graph_refs(else_branch, all_runtime_names, refs);
         }
-        ExprKind::Convert { expr: inner, .. } | ExprKind::AsCast { expr: inner, .. } => {
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. } => {
             collect_graph_refs(inner, all_runtime_names, refs);
         }
         ExprKind::Block { stmts, expr } => {

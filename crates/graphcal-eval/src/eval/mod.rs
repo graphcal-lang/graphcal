@@ -17,6 +17,7 @@ pub use project::{
 };
 pub use types::{
     AssertResult, CompileError, DeclType, DisplayUnit, EvalResult, NodeError, Value, ValueError,
+    format_epoch_with_tz,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

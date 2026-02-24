@@ -1,0 +1,3 @@
+// Error: timezone display on a non-Datetime value
+node x: Dimensionless = 42.0;
+node y: Dimensionless = @x -> "Asia/Tokyo";

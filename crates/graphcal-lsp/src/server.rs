@@ -460,7 +460,7 @@ fn format_value_inline_with_budget(
                 )
             }
         }
-        Value::Datetime { epoch, .. } => format!("{epoch}"),
+        Value::Datetime { .. } => value.format_datetime().unwrap_or_default(),
     }
 }
 

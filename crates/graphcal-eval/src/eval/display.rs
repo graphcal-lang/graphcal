@@ -63,6 +63,10 @@ pub(super) fn attach_display_units(
                 }
             }
         }
+        // Timezone display: set display_tz on Datetime values
+        (Value::Datetime { display_tz, .. }, ExprKind::DisplayTimezone { timezone, .. }) => {
+            *display_tz = Some(timezone.clone());
+        }
         // All other combinations: no display unit to attach
         _ => {}
     }

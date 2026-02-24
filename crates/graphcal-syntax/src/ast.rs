@@ -508,6 +508,8 @@ pub enum ExprKind {
     UnitLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
     Convert { expr: Box<Expr>, target: UnitExpr },
+    /// Timezone display: `expr -> "America/New_York"` (datetime only)
+    DisplayTimezone { expr: Box<Expr>, timezone: String },
     /// Phantom type cast: `expr as TypeExpr`
     AsCast {
         expr: Box<Expr>,

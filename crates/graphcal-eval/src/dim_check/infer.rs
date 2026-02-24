@@ -570,12 +570,11 @@ pub(super) fn infer_type(
             }
 
             // datetime(string_literal) -> Datetime(UTC)
+            // datetime(string_literal, string_literal) -> Datetime(UTC)  (with timezone)
             if name.value.as_str() == "datetime" {
-                if args.len() != 1 {
-                    return Err(GraphcalError::WrongArity {
-                        name: FnName::new("datetime"),
-                        expected: 1,
-                        got: args.len(),
+                if args.is_empty() || args.len() > 2 {
+                    return Err(GraphcalError::EvalError {
+                        message: format!("datetime() expects 1 or 2 arguments, got {}", args.len()),
                         src: src.clone(),
                         span: name.span.into(),
                     });
@@ -601,6 +600,31 @@ pub(super) fn infer_type(
                             span: args[0].span.into(),
                             help: "datetime() requires a string literal argument".to_string(),
                         });
+                    }
+                }
+                if args.len() == 2 {
+                    match &args[1].kind {
+                        ExprKind::StringLiteral(_) => {}
+                        _ => {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: "string literal (IANA timezone)".to_string(),
+                                found: format_inferred_type(
+                                    &infer_type(
+                                        &args[1],
+                                        declared_types,
+                                        local_types,
+                                        registry,
+                                        builtin_fns,
+                                        resolved_fn_sigs,
+                                        src,
+                                    )?,
+                                    registry,
+                                ),
+                                src: src.clone(),
+                                span: args[1].span.into(),
+                                help: "datetime() second argument must be a timezone string literal (e.g. \"Asia/Tokyo\")".to_string(),
+                            });
+                        }
                     }
                 }
                 return Ok(InferredType::Datetime(crate::time_scale::TimeScale::UTC));
@@ -883,6 +907,33 @@ pub(super) fn infer_type(
             }
 
             Ok(InferredType::Scalar(expr_dim))
+        }
+
+        ExprKind::DisplayTimezone {
+            expr: inner,
+            timezone,
+        } => {
+            let inner_type = infer_type(
+                inner,
+                declared_types,
+                local_types,
+                registry,
+                builtin_fns,
+                resolved_fn_sigs,
+                src,
+            )?;
+            if !matches!(&inner_type, InferredType::Datetime(_)) {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Datetime".to_string(),
+                    found: format_inferred_type(&inner_type, registry),
+                    src: src.clone(),
+                    span: inner.span.into(),
+                    help: format!(
+                        "timezone display `-> \"{timezone}\"` requires a Datetime expression"
+                    ),
+                });
+            }
+            Ok(inner_type)
         }
 
         ExprKind::AsCast {

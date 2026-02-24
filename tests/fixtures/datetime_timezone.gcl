@@ -1,0 +1,30 @@
+// Timezone display and two-arg datetime constructor
+// One-arg constructor (UTC) with timezone display
+param launch: Datetime = datetime("2024-11-05T12:00:00 UTC");
+node launch_tokyo: Datetime = @launch -> "Asia/Tokyo";
+node launch_ny: Datetime = @launch -> "America/New_York";
+
+// Two-arg constructor: civil time + IANA timezone
+param meeting_tokyo: Datetime = datetime("2024-11-05T10:00", "Asia/Tokyo");
+
+// The meeting is at 2024-11-05T01:00:00 UTC (JST = UTC+9)
+// Verify by subtracting from a known UTC time
+node delta: Time = datetime("2024-11-05T01:00:00 UTC") - @meeting_tokyo;
+assert same_instant = @delta == 0.0 s;
+
+// Two-arg constructor with a different timezone
+param meeting_ny: Datetime = datetime("2024-11-05T10:00", "America/New_York");
+
+// EST = UTC-5 in November, so 10:00 EST = 15:00 UTC
+node delta_ny: Time = datetime("2024-11-05T15:00:00 UTC") - @meeting_ny;
+assert same_instant_ny = @delta_ny == 0.0 s;
+
+// Timezone display does not change the underlying instant
+node meeting_displayed: Datetime = @meeting_tokyo -> "America/New_York";
+node check_same: Time = @meeting_displayed - @meeting_tokyo;
+assert display_preserves_instant = @check_same == 0.0 s;
+
+// Arithmetic still works on datetime values
+node later: Datetime = @meeting_tokyo + 3600.0 s;
+node dur: Time = @later - @meeting_tokyo;
+assert arith_works = @dur == 3600.0 s;

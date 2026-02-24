@@ -64,6 +64,8 @@ pub enum Value {
         epoch: hifitime::Epoch,
         /// The time scale for display purposes.
         time_scale: crate::time_scale::TimeScale,
+        /// Optional IANA timezone for display (e.g. `"America/New_York"`).
+        display_tz: Option<String>,
     },
 }
 
@@ -166,6 +168,62 @@ impl Value {
             | Self::Datetime { .. } => None,
         }
     }
+
+    /// Format a `Datetime` value for display.
+    ///
+    /// If `display_tz` is set, formats the instant in that IANA timezone
+    /// (e.g. `"2024-11-05T10:00:00+09:00[Asia/Tokyo]"`).
+    /// Otherwise, falls back to the hifitime `Epoch` display (e.g. `"2024-11-05T12:00:00 UTC"`).
+    ///
+    /// Returns `None` if this is not a `Datetime` value.
+    #[must_use]
+    pub fn format_datetime(&self) -> Option<String> {
+        let Self::Datetime {
+            epoch, display_tz, ..
+        } = self
+        else {
+            return None;
+        };
+        Some(format_epoch_with_tz(epoch, display_tz.as_deref()))
+    }
+}
+
+/// Format an `hifitime::Epoch` with an optional IANA timezone.
+///
+/// If `tz` is `Some`, converts to that timezone via jiff and formats as
+/// `"2024-11-05T10:00:00+09:00[Asia/Tokyo]"`.
+/// Otherwise, falls back to hifitime's `Display` (e.g. `"2024-11-05T12:00:00 UTC"`).
+#[must_use]
+pub fn format_epoch_with_tz(epoch: &hifitime::Epoch, tz: Option<&str>) -> String {
+    if let Some(tz_name) = tz
+        && let Ok(formatted) = format_epoch_in_timezone(epoch, tz_name)
+    {
+        return formatted;
+    }
+    format!("{epoch}")
+}
+
+/// Convert a `hifitime::Epoch` to a jiff `Zoned` datetime in the given timezone
+/// and format it as an ISO 8601 string.
+fn format_epoch_in_timezone(
+    epoch: &hifitime::Epoch,
+    tz_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let ts = epoch_to_jiff_timestamp(epoch)?;
+    let zdt = ts.in_tz(tz_name)?;
+    Ok(zdt.strftime("%Y-%m-%dT%H:%M:%S%:z[%Q]").to_string())
+}
+
+/// Convert a `hifitime::Epoch` to a `jiff::Timestamp`.
+fn epoch_to_jiff_timestamp(epoch: &hifitime::Epoch) -> Result<jiff::Timestamp, jiff::Error> {
+    let unix_secs = epoch.to_unix_seconds();
+    let secs = unix_secs.floor();
+    let nanos = (unix_secs - secs) * 1e9;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "unix seconds fit in i64 for any reasonable date; nanos < 1e9 fits in i32"
+    )]
+    jiff::Timestamp::new(secs as i64, nanos as i32)
 }
 
 /// A runtime error associated with a specific node or param evaluation.

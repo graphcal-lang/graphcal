@@ -411,3 +411,10 @@ fn error_datetime_scale_mismatch() {
     let rendered = render_error(source, "datetime_scale_mismatch.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_datetime_timezone_non_datetime() {
+    let source = include_str!("../../../tests/fixtures/errors/datetime_timezone_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_timezone_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}
