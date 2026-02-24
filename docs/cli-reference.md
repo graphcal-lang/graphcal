@@ -116,6 +116,29 @@ $ graphcal eval rocket.gcl --format json
 }
 ```
 
+Multi-indexed values (2D and higher) are displayed as formatted tables:
+
+```bash
+# Indexed values displayed as tables
+$ graphcal eval mission.gcl
+delta_v[Departure]  = 2.46 km/s
+delta_v[Correction] = 0.12 km/s
+delta_v[Insertion]  = 1.83 km/s
+
+spacecraft_mass (kg):
+╭─────────┬───────────┬────────────┬───────────╮
+│         │ Departure │ Correction │ Insertion │
+├─────────┼───────────┼────────────┼───────────┤
+│ Launch  │      5000 │          0 │         0 │
+│ Cruise  │         0 │       4500 │         0 │
+│ Arrival │         0 │          0 │      4000 │
+╰─────────┴───────────┴────────────┴───────────╯
+```
+
+1D indexed values remain as flat lines, while 2D values are shown as table
+grids. 3D and higher values are displayed as multiple 2D table slices with
+section headers.
+
 When a file contains assertions, they are checked after evaluation and printed
 below the values:
 
