@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Datetime, found Dimensionless
+    Diagnostic severity: error
+Begin snippet for datetime_conversion_non_datetime.gcl starting at line 1, column 1
+
+snippet line 1: param x: Dimensionless = 42.0;
+snippet line 2: node bad: Datetime = to_utc(@x);
+    label at line 2, columns 29 to 30: has dimension Dimensionless
+diagnostic help: to_utc() requires a Datetime argument
+diagnostic code: graphcal::D001

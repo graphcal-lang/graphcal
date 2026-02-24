@@ -1,0 +1,28 @@
+// Time scale conversion functions
+param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+
+// Convert TT -> UTC
+node t_utc: Datetime = to_utc(@t_tt);
+
+// Convert TT -> TAI
+node t_tai: Datetime<TAI> = to_tai(@t_tt);
+
+// Convert UTC -> TT (roundtrip)
+node t_tt_back: Datetime<TT> = to_tt(@t_utc);
+
+// UTC -> GPST
+node t_gpst: Datetime<GPST> = to_gpst(@t_utc);
+
+// Verify roundtrip: TT -> UTC -> TT should yield the same instant
+// (subtracting same-scale datetimes gives Time in seconds)
+node roundtrip_delta: Time = @t_tt_back - @t_tt;
+assert roundtrip = @roundtrip_delta == 0.0 s;
+
+// UTC - TT offset is approximately 32.184 seconds (TT = TAI + 32.184s, TAI ≈ UTC + 37s for 2024)
+// So TT is ahead of UTC by about 69.184s.
+// The conversion changes the *labeling* of the same instant, so:
+//   t_utc is the same physical instant as t_tt, just labeled in UTC
+// Arithmetic between same-scale is allowed; the difference should be ~0.
+// Let's verify the physical instants match by converting both to UTC and subtracting.
+node same_instant_check: Time = to_utc(@t_tt) - @t_utc;
+assert same_instant = @same_instant_check == 0.0 s;

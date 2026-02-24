@@ -703,6 +703,40 @@ pub(super) fn infer_type(
                 return Ok(InferredType::Datetime(scale));
             }
 
+            // Time scale conversion: to_utc, to_tai, to_tt, to_tdb, to_et, to_gpst, to_gst, to_bdt, to_qzsst
+            if let Some(target_scale) =
+                crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
+            {
+                if args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: name.value.clone(),
+                        expected: 1,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                let arg_type = infer_type(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                if !matches!(&arg_type, InferredType::Datetime(_)) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Datetime".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                        help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                    });
+                }
+                return Ok(InferredType::Datetime(target_scale));
+            }
+
             // Try builtin first
             if let Some(func) = builtin_fns.get(name.value.as_str()) {
                 let arg_dims: Vec<Dimension> = args
