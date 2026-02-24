@@ -56,6 +56,26 @@
       {
         "command": "graphcal.restartServer",
         "title": "Graphcal: Restart Language Server"
+      },
+      {
+        "command": "graphcal.jumpToNextTableCell",
+        "title": "Graphcal: Jump to Next Table Cell"
+      },
+      {
+        "command": "graphcal.jumpToPreviousTableCell",
+        "title": "Graphcal: Jump to Previous Table Cell"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "graphcal.jumpToNextTableCell",
+        "key": "tab",
+        "when": "editorTextFocus && !editorReadonly && editorLangId == 'graphcal' && graphcal.cursorInTable && !suggestWidgetVisible && !inlineSuggestionVisible && !editorTabMovesFocus && !inSnippetMode"
+      },
+      {
+        "command": "graphcal.jumpToPreviousTableCell",
+        "key": "shift+tab",
+        "when": "editorTextFocus && !editorReadonly && editorLangId == 'graphcal' && graphcal.cursorInTable && !suggestWidgetVisible && !inlineSuggestionVisible && !editorTabMovesFocus && !inSnippetMode"
       }
     ]
   },
