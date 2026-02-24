@@ -1,0 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// lib.gcl -- A library file in the parent directory
+param base_value: Dimensionless = 42.0;
+const SCALE: Dimensionless = 2.0;

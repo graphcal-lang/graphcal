@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// Explicitly import the Color index.
+import "./lib.gcl" { Color };
+
+param favorite: Dimensionless[Color] = {
+    Color::Red: 1.0,
+    Color::Green: 2.0,
+    Color::Blue: 3.0,
+};

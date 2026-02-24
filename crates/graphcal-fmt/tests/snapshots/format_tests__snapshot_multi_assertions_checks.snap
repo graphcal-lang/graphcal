@@ -1,0 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// checks.gcl -- shared assertions
+param limit: Dimensionless = 100.0;
+assert limit_positive = @limit > 0.0;

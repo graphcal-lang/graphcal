@@ -1,0 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+import "./helper.gcl" { x as imported_x };
+
+node y: Dimensionless = @imported_x + 1.0;

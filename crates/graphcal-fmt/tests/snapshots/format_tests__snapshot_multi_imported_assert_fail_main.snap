@@ -1,0 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+import "./lib.gcl" { value, always_fails };
+
+node result: Dimensionless = @value + 1.0;

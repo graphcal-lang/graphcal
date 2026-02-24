@@ -1,0 +1,8 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// Import both x and y. y's expression references @x internally.
+import "./lib.gcl" { x, y };
+
+node z: Dimensionless = @y + 1.0;
