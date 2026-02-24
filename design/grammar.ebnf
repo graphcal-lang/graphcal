@@ -396,16 +396,32 @@ range_index
 (* "range" and "step" are contextual keywords here.
    Note: named index has no trailing semicolon; range index does. *)
 (* --- import --- *)
-(* Three forms:
-   1. Selective import:   import "./file.gcl" { name1, name2 };
-   2. Module import:      import "./file.gcl";
-   3. Module with alias:  import "./file.gcl" as alias;
+(* Six forms (three non-instantiated, three instantiated):
+   1. Selective import:               import "./file.gcl" { name1, name2 };
+   2. Module import:                  import "./file.gcl";
+   3. Module with alias:              import "./file.gcl" as alias;
+   4. Instantiated selective import:  import "./file.gcl"(p = expr) { name1 };
+   5. Instantiated module import:     import "./file.gcl"(p = expr);
+   6. Instantiated module with alias: import "./file.gcl"(p = expr) as alias;
    Module imports bring the entire file in as a namespace. Members are
    accessed via "::" (e.g., constants::G0, @params::dry_mass).
    The module name defaults to the filename stem, which must be a
-   valid lower_snake_case identifier; use "as" to override. *)
+   valid lower_snake_case identifier; use "as" to override.
+   Instantiated imports supply param bindings that override the
+   dependency's param defaults. The binding expressions are evaluated
+   in the importer's scope and may use @refs. The dependency's
+   computation graph is inlined into the importer's DAG with all
+   declarations prefixed by the module alias. Instantiated imports
+   require either a selective import or a module alias (bare module
+   import without alias is not allowed). *)
 import_decl
-   = "import", STRING_LITERAL, import_body;
+   = "import", STRING_LITERAL, [ import_param_bindings ], import_body;
+
+import_param_bindings
+   = "(", import_param_binding, { ",", import_param_binding }, [ "," ], ")";
+
+import_param_binding
+   = lower_snake_case_ident, "=", expr;
 
 import_body
    = "{", import_item, { ",", import_item }, [ "," ], "}", ";"   (* selective *)

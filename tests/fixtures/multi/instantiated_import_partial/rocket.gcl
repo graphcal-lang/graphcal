@@ -1,0 +1,13 @@
+// rocket.gcl -- reusable rocket equation module
+dimension Velocity = Length / Time;
+dimension Acceleration = Length / Time^2;
+
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+param isp: Time = 320.0 s;
+
+const G0: Acceleration = 9.80665 m/s^2;
+
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

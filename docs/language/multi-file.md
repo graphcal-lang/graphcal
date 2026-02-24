@@ -97,6 +97,71 @@ Dimension, unit, type, and index declarations cannot currently be referenced via
 - **Selective imports** are best when you need only a few names, or when you need to import types and dimensions
 - **Module imports** are best when you import many values from a file and want to keep their origin clear
 
+## Parameterized Imports (Module Instantiation)
+
+You can instantiate a file with different parameter values by supplying **param bindings** in parentheses after the path. This inlines the dependency's computation graph into your file, replacing the specified param defaults with your expressions.
+
+### Selective instantiation
+
+```
+import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };
+
+node result: Velocity = @delta_v;
+```
+
+Only `delta_v` is exposed to the importing file. Other declarations from `rocket.gcl` are computed internally but not directly accessible.
+
+### Module instantiation
+
+```
+import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+
+node dv: Velocity = @r::delta_v;
+node mr: Dimensionless = @r::mass_ratio;
+```
+
+All declarations from `rocket.gcl` are accessible via the `r::` prefix.
+
+### Multiple instantiations
+
+The same file can be instantiated multiple times with different parameters:
+
+```
+import "./rocket.gcl"(dry_mass = 800.0 kg, isp = 320.0 s) as stage_1;
+import "./rocket.gcl"(dry_mass = 500.0 kg, isp = 450.0 s) as stage_2;
+
+node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
+```
+
+Each instantiation creates an independent set of computations under its own namespace.
+
+### Graph references in bindings
+
+Binding expressions can reference `@` values from the importing file's scope:
+
+```
+param my_mass: Mass = 800.0 kg;
+import "./rocket.gcl"(dry_mass = @my_mass) { delta_v };
+```
+
+The dependency's computation graph is merged into the importer's DAG, so the topological sort naturally handles evaluation order.
+
+### Partial overrides
+
+You only need to override the params you want to change. Unspecified params keep their default values:
+
+```
+// rocket.gcl has params: dry_mass, fuel_mass, isp
+// Only override dry_mass; fuel_mass and isp keep defaults
+import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+```
+
+### Validation
+
+- Binding names must be `param` declarations in the imported file
+- Binding a `node`, `const`, or unknown name is a compile error
+- Dimension mismatches are caught by the normal dimension checker after merging
+
 ## Circular Import Detection
 
 Graphcal detects circular imports at compile time:

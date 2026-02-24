@@ -112,14 +112,31 @@ pub enum ImportKind {
 
 /// Import declaration: `import "./path/to/file.gcl" { name1, name2 as alias };`
 /// or module import: `import "./path/to/file.gcl";` / `use "./path/to/file.gcl" as mod;`
+///
+/// Optionally instantiated: `import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };`
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     /// The file path (quotes stripped, relative to the importing file).
     pub path: String,
     /// The path literal's span (for diagnostics).
     pub path_span: Span,
+    /// Param bindings for module instantiation (empty = non-instantiated).
+    pub param_bindings: Vec<ParamBinding>,
     /// The kind of import (selective or module).
     pub kind: ImportKind,
+}
+
+/// A param binding in a module instantiation: `name = expr`.
+///
+/// Used in `import "path"(name = expr, ...) { ... };`
+#[derive(Debug, Clone)]
+pub struct ParamBinding {
+    /// The param name in the imported file.
+    pub name: Ident,
+    /// The value expression (evaluated in the importer's scope).
+    pub value: Expr,
+    /// Span covering the entire `name = expr`.
+    pub span: Span,
 }
 
 /// A single item in an `import` declaration, optionally aliased.

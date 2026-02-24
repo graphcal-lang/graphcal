@@ -1017,6 +1017,87 @@ fn eval_int_with_unit_parse_error() {
     assert!(err.is_err());
 }
 
+// --- Instantiated import tests ---
+
+#[test]
+fn project_instantiated_import_selective() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // dry_mass overridden to 800 kg, fuel_mass default 2800 kg, isp default 320 s
+    // delta_v = 320 * 9.80665 * ln((800 + 2800) / 800) = 3138.128 * ln(4.5)
+    let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - expected_delta_v).abs() < 0.01,
+        "result = {result_val}, expected = {expected_delta_v}"
+    );
+}
+
+#[test]
+fn project_instantiated_import_multi() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_multi/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // stage_1: dry_mass=800, fuel_mass=2800 (default), isp=320
+    // stage_1::delta_v = 320 * 9.80665 * ln(3600/800)
+    let dv_stage1 = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
+    // stage_2: dry_mass=500, fuel_mass=2800 (default), isp=450
+    // stage_2::delta_v = 450 * 9.80665 * ln(3300/500)
+    let dv_stage2 = 450.0 * 9.80665 * (3300.0_f64 / 500.0).ln();
+    let total_dv = find_value(&result, "total_dv");
+    let expected = dv_stage1 + dv_stage2;
+    assert!(
+        (total_dv - expected).abs() < 0.01,
+        "total_dv = {total_dv}, expected = {expected}"
+    );
+}
+
+#[test]
+fn project_instantiated_import_partial() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_partial/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // dry_mass overridden to 800, fuel_mass and isp keep defaults (2800 kg, 320 s)
+    let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - expected_delta_v).abs() < 0.01,
+        "result = {result_val}, expected = {expected_delta_v}"
+    );
+}
+
+#[test]
+fn project_instantiated_import_module() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_module/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // dry_mass overridden to 800, fuel_mass default 2800, isp default 320
+    let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
+    let dv = find_value(&result, "dv");
+    assert!(
+        (dv - expected_delta_v).abs() < 0.01,
+        "dv = {dv}, expected = {expected_delta_v}"
+    );
+    let mr = find_value(&result, "mr");
+    assert!((mr - 4.5).abs() < 1e-6, "mr = {mr}, expected = 4.5");
+}
+
+#[test]
+fn project_instantiated_import_graph_ref() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_graph_ref/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // my_mass = 800 kg, passed as dry_mass binding via @my_mass
+    // delta_v = 320 * 9.80665 * ln(3600/800)
+    let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - expected_delta_v).abs() < 0.01,
+        "result = {result_val}, expected = {expected_delta_v}"
+    );
+}
+
 mod prop {
     use super::*;
     use proptest::prelude::*;

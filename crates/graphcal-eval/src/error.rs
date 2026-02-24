@@ -657,4 +657,44 @@ pub enum GraphcalError {
         help("the name must match a `param` declared in the file")
     )]
     OverrideUnknownParam { name: DeclName },
+
+    #[error("unknown param `{name}` in import binding for `{file_path}`")]
+    #[diagnostic(
+        code(graphcal::M009),
+        help("param bindings must reference `param` declarations in the imported file")
+    )]
+    UnknownParamBinding {
+        name: String,
+        file_path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a param in the imported file")]
+        span: SourceSpan,
+    },
+
+    #[error("binding target `{name}` is a {actual_kind}, not a param")]
+    #[diagnostic(
+        code(graphcal::M010),
+        help("only `param` declarations can be overridden in import bindings")
+    )]
+    BindingNotAParam {
+        name: String,
+        actual_kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("targets a {actual_kind}, not a param")]
+        span: SourceSpan,
+    },
+
+    #[error("instantiated import requires an alias or selective names")]
+    #[diagnostic(
+        code(graphcal::M011),
+        help("use `import \"path\"(...) as alias;` or `import \"path\"(...) {{ name1, name2 }};`")
+    )]
+    InstantiatedImportNeedsNamespace {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("instantiated import without alias or selective names")]
+        span: SourceSpan,
+    },
 }

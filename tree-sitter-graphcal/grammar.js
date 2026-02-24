@@ -270,9 +270,12 @@ module.exports = grammar({
     // import "./path.gcl" { name1, name2 as alias2 };  -- selective import
     // import "./path.gcl";                               -- module import (name from filename)
     // import "./path.gcl" as alias;                      -- module import with alias
+    // import "./path.gcl"(dry_mass = 800.0 kg) { delta_v };  -- instantiated selective
+    // import "./path.gcl"(dry_mass = 800.0 kg) as stage_1;   -- instantiated module
     import_declaration: $ => seq(
       "import",
       field("path", $.string_literal),
+      optional(field("param_bindings", $.import_param_bindings)),
       choice(
         // Selective import: { name1, name2 as alias }
         seq(
@@ -290,6 +293,22 @@ module.exports = grammar({
         // Module import (bare): ;
         ";",
       ),
+    ),
+
+    // Param bindings for module instantiation: (name = expr, ...)
+    import_param_bindings: $ => seq(
+      "(",
+      $.import_param_binding,
+      repeat(seq(",", $.import_param_binding)),
+      optional(","),
+      ")",
+    ),
+
+    // A single param binding: name = expr
+    import_param_binding: $ => seq(
+      field("name", $.identifier),
+      "=",
+      field("value", $._expr),
     ),
 
     // Import item with optional alias: name or name as alias

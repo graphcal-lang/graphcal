@@ -2,9 +2,9 @@ use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, BinOp, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
     DimExpr, DimTerm, Expr, ExprKind, FieldDecl, FieldInit, File, FnBody, FnDecl, FnParam,
     ForBinding, GenericConstraint, GenericParam, Ident, ImportDecl, IndexArg, IndexDecl,
-    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamDecl,
-    PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef, UnitExpr,
-    VariantDecl,
+    IndexDeclKind, LetBinding, MapEntry, MatchArm, MatchPattern, MulDivOp, NodeDecl, ParamBinding,
+    ParamDecl, PatternBinding, TypeDecl, TypeExpr, TypeExprKind, UnaryOp, UnitDecl, UnitDef,
+    UnitExpr, VariantDecl,
 };
 use graphcal_syntax::comments::SourceMetadata;
 use graphcal_syntax::names::{IndexName, Spanned};
@@ -504,7 +504,10 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 }
 
 /// `import "path" { name1, name2 };` or `import "path";` or `import "path" as alias;`
-fn format_import_decl(_fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
+/// Optionally with param bindings: `import "path"(x = 1.0 km) { ... };`
+fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
+    let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
+
     match &d.kind {
         graphcal_syntax::ast::ImportKind::Selective(names) => {
             let name_docs: Vec<RcDoc<'static>> = names
@@ -519,17 +522,44 @@ fn format_import_decl(_fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
                     doc
                 })
                 .collect();
-            RcDoc::text(format!("import \"{}\" {{ ", d.path))
+            RcDoc::text(format!("import \"{}\"", d.path))
+                .append(bindings_doc)
+                .append(RcDoc::text(" { "))
                 .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(" };"))
         }
         graphcal_syntax::ast::ImportKind::Module { alias: None } => {
-            RcDoc::text(format!("import \"{}\";", d.path))
+            RcDoc::text(format!("import \"{}\"", d.path))
+                .append(bindings_doc)
+                .append(RcDoc::text(";"))
         }
         graphcal_syntax::ast::ImportKind::Module { alias: Some(a) } => {
-            RcDoc::text(format!("import \"{}\" as {};", d.path, a.name))
+            RcDoc::text(format!("import \"{}\"", d.path))
+                .append(bindings_doc)
+                .append(RcDoc::text(format!(" as {};", a.name)))
         }
     }
+}
+
+/// Format param bindings: `(name = expr, ...)` or empty if no bindings.
+fn format_import_param_bindings(
+    fmt: &mut Formatter<'_>,
+    bindings: &[ParamBinding],
+) -> RcDoc<'static> {
+    if bindings.is_empty() {
+        return RcDoc::nil();
+    }
+    let binding_docs: Vec<RcDoc<'static>> = bindings
+        .iter()
+        .map(|b| {
+            RcDoc::text(b.name.name.clone())
+                .append(RcDoc::text(" = "))
+                .append(format_expr(fmt, &b.value))
+        })
+        .collect();
+    RcDoc::text("(")
+        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+        .append(RcDoc::text(")"))
 }
 
 /// `assert name = expr;`
