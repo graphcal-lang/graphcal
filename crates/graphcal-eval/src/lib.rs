@@ -20,4 +20,5 @@ pub mod loader;
 pub(crate) mod prelude;
 pub mod registry;
 pub(crate) mod resolve;
+pub mod time_scale;
 pub mod tir;

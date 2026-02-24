@@ -20,6 +20,7 @@ clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
 graphcal-eval = { path = "crates/graphcal-eval", version = "0.1.0" }
+hifitime = "4.2.4"
 graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.1.0" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.1.0" }
 graphcal-syntax = { path = "crates/graphcal-syntax", version = "0.1.0" }
