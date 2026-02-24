@@ -40,6 +40,8 @@ pub enum RuntimeValue {
         step_index: usize,
         value: f64,
     },
+    /// A datetime instant (internally stored as a `hifitime::Epoch`).
+    Datetime(hifitime::Epoch),
 }
 
 impl RuntimeValue {
@@ -63,6 +65,7 @@ impl RuntimeValue {
                 "expected scalar for {context}, got indexed value `{index_name}[...]`"
             )),
             Self::RangeLabel { value, .. } => Ok(*value),
+            Self::Datetime(_) => Err(format!("expected scalar for {context}, got Datetime")),
         }
     }
 
@@ -99,6 +102,11 @@ pub fn eval_expr(
     match &expr.kind {
         ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
         ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
+        ExprKind::StringLiteral(_) => Err(GraphcalError::EvalError {
+            message: "unexpected string literal in evaluation context".to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
         ExprKind::UnitLiteral { value, unit } => {
             let (_dim, scale) =
                 registry
@@ -260,6 +268,10 @@ pub fn eval_expr(
                         let eq = runtime_value_equals(&l, &r);
                         Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
                     }
+                    (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
+                        let eq = le == re;
+                        Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
+                    }
                     _ => {
                         let lv = l.expect_scalar("comparison operand").map_err(|msg| {
                             GraphcalError::EvalError {
@@ -311,6 +323,24 @@ pub fn eval_expr(
                             return Err(GraphcalError::EvalError {
                                 message: format!(
                                     "internal: unexpected operator {op:?} in integer comparison"
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
+                    };
+                    return Ok(RuntimeValue::Bool(result));
+                }
+                if let (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) = (&l, &r) {
+                    let result = match op {
+                        BinOp::Lt => le < re,
+                        BinOp::Gt => le > re,
+                        BinOp::Le => le <= re,
+                        BinOp::Ge => le >= re,
+                        _ => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "internal: unexpected operator {op:?} in datetime comparison"
                                 ),
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -377,6 +407,48 @@ pub fn eval_expr(
                     return eval_struct_binop(
                         *op, type_name, variant, lhs_fields, rhs_fields, src, expr.span,
                     );
+                }
+                // Datetime point-vs-vector arithmetic
+                match (&l, &r) {
+                    (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
+                        // Datetime - Datetime -> Scalar(Time in seconds)
+                        if *op == BinOp::Sub {
+                            return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
+                        }
+                        return Err(GraphcalError::EvalError {
+                            message: "cannot add two datetimes".to_string(),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        });
+                    }
+                    (RuntimeValue::Datetime(e), RuntimeValue::Scalar(secs)) => {
+                        // Datetime +/- Scalar(Time) -> Datetime
+                        let duration = hifitime::Duration::from_seconds(*secs);
+                        return match op {
+                            BinOp::Add => Ok(RuntimeValue::Datetime(*e + duration)),
+                            BinOp::Sub => Ok(RuntimeValue::Datetime(*e - duration)),
+                            _ => Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "unsupported operator {op:?} for Datetime and scalar"
+                                ),
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            }),
+                        };
+                    }
+                    (RuntimeValue::Scalar(secs), RuntimeValue::Datetime(e)) => {
+                        // Scalar(Time) + Datetime -> Datetime
+                        if *op == BinOp::Add {
+                            let duration = hifitime::Duration::from_seconds(*secs);
+                            return Ok(RuntimeValue::Datetime(*e + duration));
+                        }
+                        return Err(GraphcalError::EvalError {
+                            message: "cannot subtract a Datetime from a scalar".to_string(),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        });
+                    }
+                    _ => {}
                 }
                 let lv =
                     l.expect_scalar("binary operand")
@@ -600,6 +672,54 @@ pub fn eval_expr(
                     reason = "range-checked truncating conversion from float to Int"
                 )]
                 return Ok(RuntimeValue::Int(f as i64));
+            }
+
+            // datetime(string_literal) -> Datetime
+            if name.value.as_str() == "datetime" {
+                let ExprKind::StringLiteral(s) = &args[0].kind else {
+                    return Err(GraphcalError::EvalError {
+                        message: "internal: datetime() received non-string argument".to_string(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                let epoch = hifitime::Epoch::from_gregorian_str(s).map_err(|e| {
+                    GraphcalError::EvalError {
+                        message: format!("invalid datetime string: {e}"),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
+                })?;
+                return Ok(RuntimeValue::Datetime(epoch));
+            }
+
+            // epoch(string_literal, TimeScale) -> Datetime in specified scale
+            if name.value.as_str() == "epoch" {
+                let ExprKind::StringLiteral(s) = &args[0].kind else {
+                    return Err(GraphcalError::EvalError {
+                        message: "internal: epoch() received non-string first argument".to_string(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                let ExprKind::ConstRef(scale_ident) = &args[1].kind else {
+                    return Err(GraphcalError::EvalError {
+                        message: "internal: epoch() received non-identifier second argument"
+                            .to_string(),
+                        src: src.clone(),
+                        span: args[1].span.into(),
+                    });
+                };
+                // Append the time scale suffix for hifitime's parser
+                let with_scale = format!("{s} {}", scale_ident.value);
+                let epoch = hifitime::Epoch::from_gregorian_str(&with_scale).map_err(|e| {
+                    GraphcalError::EvalError {
+                        message: format!("invalid epoch string: {e}"),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
+                })?;
+                return Ok(RuntimeValue::Datetime(epoch));
             }
 
             // Try builtin first

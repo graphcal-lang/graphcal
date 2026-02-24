@@ -58,6 +58,13 @@ pub enum Value {
         /// Entries in declaration order.
         entries: IndexMap<VariantName, Self>,
     },
+    /// A datetime instant.
+    Datetime {
+        /// The hifitime epoch (internal representation).
+        epoch: hifitime::Epoch,
+        /// The time scale for display purposes.
+        time_scale: crate::time_scale::TimeScale,
+    },
 }
 
 /// Error returned when a [`Value`] accessor is called on an incompatible variant.
@@ -81,6 +88,7 @@ impl Value {
             } => format!("{index_name}::{variant}"),
             Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
+            Self::Datetime { .. } => "Datetime".to_string(),
         }
     }
 
@@ -154,7 +162,8 @@ impl Value {
             | Self::Int(_)
             | Self::Label { .. }
             | Self::Struct { .. }
-            | Self::Indexed { .. } => None,
+            | Self::Indexed { .. }
+            | Self::Datetime { .. } => None,
         }
     }
 }

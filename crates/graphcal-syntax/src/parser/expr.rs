@@ -363,6 +363,16 @@ impl Parser<'_> {
                     span,
                 })
             }
+            Some(Token::StringLiteral) => {
+                let (_, span) = self.advance()?;
+                let raw = self.lexer.slice_at(span);
+                // Strip surrounding quotes
+                let text = raw[1..raw.len() - 1].to_string();
+                Ok(Expr {
+                    kind: ExprKind::StringLiteral(text),
+                    span,
+                })
+            }
             Some(Token::At) => {
                 let (_, at_span) = self.advance()?;
                 let ident =

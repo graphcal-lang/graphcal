@@ -479,6 +479,8 @@ pub enum ExprKind {
     Integer(i64),
     /// Boolean literal: `true`, `false`
     Bool(bool),
+    /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
+    StringLiteral(String),
     /// Graph reference: `@lower_name`
     GraphRef(Spanned<DeclName>),
     /// Const or built-in constant reference: `UPPER_NAME`, `PI`, `E`

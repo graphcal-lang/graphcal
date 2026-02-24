@@ -23,6 +23,10 @@ use super::display::{attach_display_units, format_range_step};
 use super::project::resolve_field_declared_type;
 use super::types::{AssertResult, DeclType, EvalResult, NodeError, Value};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single match over all RuntimeValue variants"
+)]
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
@@ -126,6 +130,16 @@ pub(super) fn runtime_to_value(
                 si_value: *value,
                 dimension: Dimension::dimensionless(),
                 display_unit: None,
+            }
+        }
+        RuntimeValue::Datetime(epoch) => {
+            let time_scale = match declared_type {
+                Some(DeclaredType::Datetime(s)) => *s,
+                _ => crate::time_scale::TimeScale::UTC,
+            };
+            Value::Datetime {
+                epoch: *epoch,
+                time_scale,
             }
         }
     }

@@ -44,6 +44,14 @@ pub(super) fn infer_type(
         ExprKind::Number(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ExprKind::Integer(_) => Ok(InferredType::Int),
         ExprKind::Bool(_) => Ok(InferredType::Bool),
+        ExprKind::StringLiteral(_) => Err(GraphcalError::DimensionMismatch {
+            expected: "a numeric or boolean expression".to_string(),
+            found: "string literal".to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+            help: "string literals can only be used as arguments to datetime() or epoch()"
+                .to_string(),
+        }),
 
         ExprKind::VariantLiteral { index, variant } => {
             // Validate index exists
@@ -194,6 +202,22 @@ pub(super) fn infer_type(
                         }
                         return Ok(InferredType::Bool);
                     }
+                    // Datetime comparisons: same time scale required
+                    if let InferredType::Datetime(ls) = &lhs_type
+                        && let InferredType::Datetime(rs) = &rhs_type
+                    {
+                        if ls != rs {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format_inferred_type(&lhs_type, registry),
+                                found: format_inferred_type(&rhs_type, registry),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                                help: "cannot compare datetimes with different time scales"
+                                    .to_string(),
+                            });
+                        }
+                        return Ok(InferredType::Bool);
+                    }
                     let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
                     let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
                     if lhs_dim != rhs_dim {
@@ -223,6 +247,78 @@ pub(super) fn infer_type(
                         &lhs_type, &rhs_type, derive_op, registry, src, lhs.span, rhs.span,
                     )? {
                         return Ok(result);
+                    }
+                    // Point-vs-vector rules for Datetime
+                    if let InferredType::Datetime(ls) = &lhs_type {
+                        let time_dim = Dimension::base(
+                            graphcal_syntax::dimension::BaseDimId::Prelude("Time".to_string()),
+                        );
+                        if let InferredType::Datetime(rs) = &rhs_type {
+                            // Datetime - Datetime -> Scalar(Time)
+                            if *op == BinOp::Sub {
+                                if ls != rs {
+                                    return Err(GraphcalError::DimensionMismatch {
+                                        expected: format_inferred_type(&lhs_type, registry),
+                                        found: format_inferred_type(&rhs_type, registry),
+                                        src: src.clone(),
+                                        span: rhs.span.into(),
+                                        help:
+                                            "cannot subtract datetimes with different time scales"
+                                                .to_string(),
+                                    });
+                                }
+                                return Ok(InferredType::Scalar(time_dim));
+                            }
+                            // Datetime + Datetime -> error
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: "Scalar(Time)".to_string(),
+                                found: format_inferred_type(&rhs_type, registry),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                                help: "cannot add two datetimes; did you mean to subtract?"
+                                    .to_string(),
+                            });
+                        }
+                        // Datetime +/- Scalar(Time) -> Datetime
+                        let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
+                        if rhs_dim != time_dim {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: "Time".to_string(),
+                                found: registry.dimensions.format_dimension(&rhs_dim),
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                                help: "can only add/subtract a Time duration to/from a Datetime"
+                                    .to_string(),
+                            });
+                        }
+                        return Ok(InferredType::Datetime(*ls));
+                    }
+                    if let InferredType::Datetime(rs) = &rhs_type {
+                        // Scalar(Time) + Datetime -> Datetime (only for Add)
+                        if *op == BinOp::Add {
+                            let time_dim = Dimension::base(
+                                graphcal_syntax::dimension::BaseDimId::Prelude("Time".to_string()),
+                            );
+                            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
+                            if lhs_dim != time_dim {
+                                return Err(GraphcalError::DimensionMismatch {
+                                    expected: "Time".to_string(),
+                                    found: registry.dimensions.format_dimension(&lhs_dim),
+                                    src: src.clone(),
+                                    span: lhs.span.into(),
+                                    help: "can only add a Time duration to a Datetime".to_string(),
+                                });
+                            }
+                            return Ok(InferredType::Datetime(*rs));
+                        }
+                        // Scalar - Datetime -> error
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format_inferred_type(&lhs_type, registry),
+                            found: format_inferred_type(&rhs_type, registry),
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                            help: "cannot subtract a Datetime from a scalar".to_string(),
+                        });
                     }
                     let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
                     let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
@@ -471,6 +567,116 @@ pub(super) fn infer_type(
                     });
                 }
                 return Ok(InferredType::Int);
+            }
+
+            // datetime(string_literal) -> Datetime(UTC)
+            if name.value.as_str() == "datetime" {
+                if args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: FnName::new("datetime"),
+                        expected: 1,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                match &args[0].kind {
+                    ExprKind::StringLiteral(_) => {}
+                    _ => {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "string literal".to_string(),
+                            found: format_inferred_type(
+                                &infer_type(
+                                    &args[0],
+                                    declared_types,
+                                    local_types,
+                                    registry,
+                                    builtin_fns,
+                                    resolved_fn_sigs,
+                                    src,
+                                )?,
+                                registry,
+                            ),
+                            src: src.clone(),
+                            span: args[0].span.into(),
+                            help: "datetime() requires a string literal argument".to_string(),
+                        });
+                    }
+                }
+                return Ok(InferredType::Datetime(crate::time_scale::TimeScale::UTC));
+            }
+
+            // epoch(string_literal, TimeScale) -> Datetime(scale)
+            if name.value.as_str() == "epoch" {
+                if args.len() != 2 {
+                    return Err(GraphcalError::WrongArity {
+                        name: FnName::new("epoch"),
+                        expected: 2,
+                        got: args.len(),
+                        src: src.clone(),
+                        span: name.span.into(),
+                    });
+                }
+                // First arg must be a string literal
+                if !matches!(&args[0].kind, ExprKind::StringLiteral(_)) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "string literal".to_string(),
+                        found: format_inferred_type(
+                            &infer_type(
+                                &args[0],
+                                declared_types,
+                                local_types,
+                                registry,
+                                builtin_fns,
+                                resolved_fn_sigs,
+                                src,
+                            )?,
+                            registry,
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                        help: "epoch() requires a string literal as its first argument".to_string(),
+                    });
+                }
+                // Second arg must be a time scale identifier
+                let ExprKind::ConstRef(scale_ident) = &args[1].kind else {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)"
+                            .to_string(),
+                        found: format_inferred_type(
+                            &infer_type(
+                                &args[1],
+                                declared_types,
+                                local_types,
+                                registry,
+                                builtin_fns,
+                                resolved_fn_sigs,
+                                src,
+                            )?,
+                            registry,
+                        ),
+                        src: src.clone(),
+                        span: args[1].span.into(),
+                        help: "epoch() requires a time scale identifier as its second argument"
+                            .to_string(),
+                    });
+                };
+                let scale: crate::time_scale::TimeScale =
+                    scale_ident.value.as_str().parse().map_err(|_| {
+                        GraphcalError::DimensionMismatch {
+                            expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)"
+                                .to_string(),
+                            found: scale_ident.value.to_string(),
+                            src: src.clone(),
+                            span: args[1].span.into(),
+                            help: format!(
+                                "unknown time scale `{}`; expected one of: {}",
+                                scale_ident.value.as_str(),
+                                crate::time_scale::TimeScale::ALL_NAMES.join(", ")
+                            ),
+                        }
+                    })?;
+                return Ok(InferredType::Datetime(scale));
             }
 
             // Try builtin first

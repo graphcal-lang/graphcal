@@ -361,6 +361,7 @@ fn format_leaf_cell(value: &graphcal_eval::eval::Value) -> String {
         Value::Scalar { .. } => format_number(value.display_value().unwrap_or_default()),
         Value::Struct { variant, .. } => variant.as_str().to_string(),
         Value::Indexed { .. } => "...".to_string(),
+        Value::Datetime { epoch, .. } => format!("{epoch}"),
     }
 }
 
@@ -502,7 +503,11 @@ fn print_text(result: &EvalResult, no_assert: bool) {
     // indexed values (1D only) expand to `name[Variant]` lines
     fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatEntry<'a>>) {
         match value {
-            Value::Scalar { .. } | Value::Bool(_) | Value::Int(_) | Value::Label { .. } => {
+            Value::Scalar { .. }
+            | Value::Bool(_)
+            | Value::Int(_)
+            | Value::Label { .. }
+            | Value::Datetime { .. } => {
                 entries.push(FlatEntry::Value(prefix.to_string(), value));
             }
             Value::Struct {
@@ -602,6 +607,9 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                             }
                             Value::Struct { variant, .. } => {
                                 println!("{name:width$} = {}", variant.as_str());
+                            }
+                            Value::Datetime { epoch, .. } => {
+                                println!("{name:width$} = {epoch}");
                             }
                             _ => {
                                 let formatted =
@@ -741,6 +749,12 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                     serde_json::Value::Object(entries_map),
                 );
                 serde_json::Value::Object(map)
+            }
+            Value::Datetime { epoch, time_scale } => {
+                serde_json::json!({
+                    "datetime": format!("{epoch}"),
+                    "time_scale": time_scale.to_string()
+                })
             }
         }
     }

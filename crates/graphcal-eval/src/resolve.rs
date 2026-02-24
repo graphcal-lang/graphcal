@@ -17,6 +17,8 @@ use crate::error::GraphcalError;
 /// Aggregation functions recognized as special forms (not registered as builtins).
 pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
 pub const CONVERSION_FNS: &[&str] = &["to_float", "to_int"];
+/// Constructor functions that create values from string literals (not registered as builtins).
+pub const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
 
 /// Returns `true` if `name` is a built-in aggregation function (`sum`, `min`, etc.).
 pub fn is_aggregation_fn(name: &str) -> bool {
@@ -26,6 +28,16 @@ pub fn is_aggregation_fn(name: &str) -> bool {
 /// Returns `true` if `name` is a built-in conversion function (`to_float`, `to_int`).
 pub fn is_conversion_fn(name: &str) -> bool {
     CONVERSION_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a constructor function (`datetime`, `epoch`).
+pub fn is_constructor_fn(name: &str) -> bool {
+    CONSTRUCTOR_FNS.contains(&name)
+}
+
+/// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).
+pub fn is_time_scale_name(name: &str) -> bool {
+    crate::time_scale::TimeScale::ALL_NAMES.contains(&name)
 }
 
 /// A declaration name that may optionally be module-qualified.
@@ -1099,6 +1111,7 @@ fn check_no_graph_refs(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<()
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::ConstRef(_)
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
@@ -1208,6 +1221,7 @@ fn check_no_graph_refs_in_fn_expr(
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::ConstRef(_)
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
@@ -1303,6 +1317,7 @@ fn check_no_assert_graph_refs(
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::ConstRef(_)
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::UnitLiteral { .. }
@@ -1415,6 +1430,7 @@ fn collect_const_refs(
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
@@ -1429,10 +1445,13 @@ fn collect_const_refs(
             })
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
-            if builtin_consts.contains_key(ident.value.as_str()) {
-                Ok(())
-            } else if all_const_names.contains(ident.value.as_str()) {
-                deps.insert(ident.value.to_string());
+            if builtin_consts.contains_key(ident.value.as_str())
+                || all_const_names.contains(ident.value.as_str())
+                || is_time_scale_name(ident.value.as_str())
+            {
+                if all_const_names.contains(ident.value.as_str()) {
+                    deps.insert(ident.value.to_string());
+                }
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
@@ -1448,6 +1467,7 @@ fn collect_const_refs(
                 && !user_fn_names.contains(name_str)
                 && !is_aggregation_fn(name_str)
                 && !is_conversion_fn(name_str)
+                && !is_constructor_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -1753,6 +1773,7 @@ fn collect_all_refs(
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
@@ -1769,10 +1790,13 @@ fn collect_all_refs(
             }
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
-            if builtin_consts.contains_key(ident.value.as_str()) {
-                Ok(())
-            } else if all_const_names.contains(ident.value.as_str()) {
-                const_refs.insert(ident.value.to_string());
+            if builtin_consts.contains_key(ident.value.as_str())
+                || all_const_names.contains(ident.value.as_str())
+                || is_time_scale_name(ident.value.as_str())
+            {
+                if all_const_names.contains(ident.value.as_str()) {
+                    const_refs.insert(ident.value.to_string());
+                }
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
@@ -1788,6 +1812,7 @@ fn collect_all_refs(
                 && !user_fn_names.contains(name_str)
                 && !is_aggregation_fn(name_str)
                 && !is_conversion_fn(name_str)
+                && !is_constructor_fn(name_str)
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -2168,6 +2193,7 @@ pub fn collect_graph_refs(
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::ConstRef(_)
         | ExprKind::QualifiedConstRef { .. }

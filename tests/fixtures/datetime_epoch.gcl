@@ -1,0 +1,12 @@
+// epoch() constructor with explicit time scales
+param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+param t_tai: Datetime<TAI> = epoch("2024-11-05T12:00:00", TAI);
+param t_gpst: Datetime<GPST> = epoch("2024-11-05T12:00:00", GPST);
+
+// Arithmetic within the same time scale
+node t_tt_later: Datetime<TT> = @t_tt + 3600.0 s;
+node tt_dur: Time = @t_tt_later - @t_tt;
+
+// Comparison within the same time scale
+assert tt_later = @t_tt_later > @t_tt;
+assert tt_equal = @t_tt == @t_tt;

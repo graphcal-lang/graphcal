@@ -1710,6 +1710,89 @@ fn format_check_recursive_directory() {
 }
 
 #[test]
+fn eval_datetime_basic() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_basic.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("launch"), "should contain launch");
+    assert!(
+        stdout.contains("2024-11-05T12:00:00 UTC"),
+        "launch should be 2024-11-05T12:00:00 UTC"
+    );
+    assert!(
+        stdout.contains("2024-11-05T13:00:00 UTC"),
+        "one_hour_later should be 2024-11-05T13:00:00 UTC"
+    );
+    assert!(stdout.contains("3600"), "duration should be 3600 s");
+    assert!(
+        stdout.contains("2024-11-05T11:00:00 UTC"),
+        "one_hour_before should be 2024-11-05T11:00:00 UTC"
+    );
+    assert!(stdout.contains("PASS"), "assertions should pass");
+}
+
+#[test]
+fn eval_datetime_epoch() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("datetime_epoch.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("2024-11-05T12:00:00 TT"),
+        "t_tt should be in TT scale"
+    );
+    assert!(
+        stdout.contains("2024-11-05T12:00:00 TAI"),
+        "t_tai should be in TAI scale"
+    );
+    assert!(
+        stdout.contains("2024-11-05T12:00:00 GPST"),
+        "t_gpst should be in GPST scale"
+    );
+    assert!(
+        stdout.contains("2024-11-05T13:00:00 TT"),
+        "t_tt_later should be one hour later in TT"
+    );
+    assert!(stdout.contains("3600"), "tt_dur should be 3600 s");
+    assert!(stdout.contains("PASS"), "assertions should pass");
+}
+
+#[test]
+fn eval_datetime_scale_mismatch_error() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("errors/datetime_scale_mismatch.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "cross-scale operation should fail"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("dimension mismatch") || stderr.contains("time scale"),
+        "error should mention dimension mismatch or time scale"
+    );
+}
+
+#[test]
 fn format_check_multiple_fixtures() {
     // --check on multiple already-formatted fixtures
     let output = graphcal_bin()

@@ -816,7 +816,10 @@ fn collect_expr_refs(
                 scopes.pop();
             }
         }
-        ExprKind::Number(_) | ExprKind::Integer(_) | ExprKind::Bool(_) => {}
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_) => {}
     }
 }
 
