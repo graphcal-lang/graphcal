@@ -136,6 +136,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    /// An internal invariant violation that should never be reached if earlier
+    /// compiler phases (parsing, resolution, `dim_check`) are correct.
+    #[error("internal error: {message}")]
+    #[diagnostic(
+        code(graphcal::X001),
+        help("this is a compiler bug — please report it")
+    )]
+    InternalError {
+        message: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unexpected state here")]
+        span: SourceSpan,
+    },
+
     #[error("dimension mismatch: expected {expected}, found {found}")]
     #[diagnostic(code(graphcal::D001))]
     DimensionMismatch {
