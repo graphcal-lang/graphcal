@@ -7,12 +7,12 @@ use graphcal_syntax::ast::Expr;
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{FnName, IndexName, StructTypeName};
 
-use crate::time_scale::TimeScale;
+use graphcal_registry::time_scale::TimeScale;
 
-use crate::builtins::builtin_functions;
-use crate::error::GraphcalError;
-use crate::registry::Registry;
 use crate::tir::ResolvedFnSig;
+use graphcal_registry::builtins::builtin_functions;
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::registry::Registry;
 
 use helpers::{
     expect_scalar, format_declared_type, format_inferred_type, is_bool_type, types_match,
@@ -21,27 +21,19 @@ use infer::infer_type;
 
 mod builtins;
 mod helpers;
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::doc_markdown,
+    reason = "inference functions pass compilation context through many parameters; \
+              large match on ExprKind variants is inherently long"
+)]
 mod infer;
 #[cfg(test)]
 mod tests;
 
-/// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeclaredType {
-    Scalar(Dimension),
-    Bool,
-    Int,
-    /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
-    Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
-    Label(IndexName),
-    /// A struct type, optionally with concrete type arguments for generic structs.
-    Struct(StructTypeName, Vec<Self>),
-    Indexed {
-        element: Box<Self>,
-        index: IndexName,
-    },
-}
+pub use graphcal_registry::declared_type::DeclaredType;
 
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +248,10 @@ pub fn check_dimensions_tir(
 ///
 /// Returns a [`GraphcalError::DimensionMismatch`] if the expression's inferred
 /// dimension does not match the declared type of the param.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
 pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,

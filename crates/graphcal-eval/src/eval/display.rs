@@ -7,8 +7,8 @@ use indexmap::IndexMap;
 
 use crate::registry::Registry;
 
-use super::format::{format_number, format_unit_expr};
 use super::types::{DisplayUnit, Value};
+use crate::format::{format_number, format_unit_expr};
 
 pub(super) fn attach_display_units(
     value: &mut Value,

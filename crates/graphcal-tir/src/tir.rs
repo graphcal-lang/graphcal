@@ -14,11 +14,11 @@ use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
 use graphcal_syntax::span::Span;
 
-use crate::error::GraphcalError;
-use crate::ir::IR;
-use crate::registry::Registry;
-use crate::resolve::{DeclCategory, ExpectedFail};
-use crate::time_scale::TimeScale;
+use graphcal_ir::ir::IR;
+use graphcal_ir::resolve::{DeclCategory, ExpectedFail};
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::registry::Registry;
+use graphcal_registry::time_scale::TimeScale;
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -259,10 +259,10 @@ pub struct TIR {
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
     pub imported_values: HashMap<
-        crate::resolve::ScopedName,
+        graphcal_ir::resolve::ScopedName,
         (
-            crate::eval_expr::RuntimeValue,
-            crate::dim_check::DeclaredType,
+            graphcal_registry::runtime_value::RuntimeValue,
+            graphcal_registry::declared_type::DeclaredType,
         ),
     >,
 }
@@ -280,12 +280,13 @@ impl TIR {
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<HashMap<String, crate::dim_check::DeclaredType>, GraphcalError> {
+    ) -> Result<HashMap<String, graphcal_registry::declared_type::DeclaredType>, GraphcalError>
+    {
         let mut declared_types = HashMap::new();
-        for name in crate::builtins::builtin_constants().keys() {
+        for name in graphcal_registry::builtins::builtin_constants().keys() {
             declared_types.insert(
                 (*name).to_string(),
-                crate::dim_check::DeclaredType::Scalar(Dimension::dimensionless()),
+                graphcal_registry::declared_type::DeclaredType::Scalar(Dimension::dimensionless()),
             );
         }
         for (name, resolved) in &self.resolved_decl_types {
@@ -336,13 +337,13 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         let dim_params: Vec<GenericParamName> = fn_def
             .generic_params
             .iter()
-            .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Dim)
+            .filter(|g| g.constraint == graphcal_registry::registry::FnGenericConstraint::Dim)
             .map(|g| g.name.clone())
             .collect();
         let index_params: Vec<GenericParamName> = fn_def
             .generic_params
             .iter()
-            .filter(|g| g.constraint == crate::registry::FnGenericConstraint::Index)
+            .filter(|g| g.constraint == graphcal_registry::registry::FnGenericConstraint::Index)
             .map(|g| g.name.clone())
             .collect();
 
@@ -411,8 +412,8 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
 pub fn resolved_to_declared_type(
     resolved: &ResolvedTypeExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::dim_check::DeclaredType, GraphcalError> {
-    use crate::dim_check::DeclaredType;
+) -> Result<graphcal_registry::declared_type::DeclaredType, GraphcalError> {
+    use graphcal_registry::declared_type::DeclaredType;
 
     match resolved {
         ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
@@ -912,7 +913,7 @@ fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> 
             }
         }
         InferredType::Datetime(scale) => {
-            if *scale == crate::time_scale::TimeScale::UTC {
+            if *scale == graphcal_registry::time_scale::TimeScale::UTC {
                 "Datetime".to_string()
             } else {
                 format!("Datetime<{scale}>")
@@ -986,7 +987,10 @@ pub fn resolve_type_expr(
 
                 // Check named index → Label type
                 if let Some(idx_def) = registry.indexes.get_index(name)
-                    && matches!(idx_def.kind, crate::registry::IndexKind::Named { .. })
+                    && matches!(
+                        idx_def.kind,
+                        graphcal_registry::registry::IndexKind::Named { .. }
+                    )
                 {
                     return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
                 }
@@ -1181,8 +1185,8 @@ mod tests {
         reason = "test code"
     )]
     use super::*;
-    use crate::prelude::load_prelude;
-    use crate::registry::RegistryBuilder;
+    use graphcal_registry::prelude::load_prelude;
+    use graphcal_registry::registry::RegistryBuilder;
     use graphcal_syntax::dimension::BaseDimId;
     use graphcal_syntax::parser::Parser;
 
@@ -1217,18 +1221,18 @@ mod tests {
     fn make_registry_with_struct() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
-        b.register_type(crate::registry::TypeDef {
+        b.register_type(graphcal_registry::registry::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
-            variants: vec![crate::registry::VariantDef {
+            variants: vec![graphcal_registry::registry::VariantDef {
                 name: graphcal_syntax::names::VariantName::new("TransferResult"),
                 fields: vec![
-                    crate::registry::StructField {
+                    graphcal_registry::registry::StructField {
                         name: graphcal_syntax::names::FieldName::new("dv1"),
                         type_ann: make_dim_type_expr("Velocity"),
                     },
-                    crate::registry::StructField {
+                    graphcal_registry::registry::StructField {
                         name: graphcal_syntax::names::FieldName::new("dv2"),
                         type_ann: make_dim_type_expr("Velocity"),
                     },
@@ -1241,9 +1245,9 @@ mod tests {
     fn make_registry_with_index() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
-        b.register_index(crate::registry::IndexDef {
+        b.register_index(graphcal_registry::registry::IndexDef {
             name: IndexName::new("Maneuver"),
-            kind: crate::registry::IndexKind::Named {
+            kind: graphcal_registry::registry::IndexKind::Named {
                 variants: vec![
                     graphcal_syntax::names::VariantName::new("Departure"),
                     graphcal_syntax::names::VariantName::new("Insertion"),
@@ -1463,7 +1467,7 @@ mod tests {
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let file = Parser::new(source).parse_file().unwrap();
         let src = NamedSource::new("test", Arc::new(source.to_string()));
-        let ir = crate::ir::lower(&file, &src)?;
+        let ir = graphcal_ir::ir::lower(&file, &src)?;
         type_resolve(ir, &src)
     }
 
@@ -1611,7 +1615,7 @@ mod tests {
 
     // --- resolved_to_declared_type() tests ---
 
-    use crate::dim_check::DeclaredType;
+    use graphcal_registry::declared_type::DeclaredType;
 
     #[test]
     fn convert_dimensionless() {

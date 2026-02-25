@@ -15,17 +15,16 @@ use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DeclName, DimName, FnName};
 use graphcal_syntax::span::Span;
 
-use crate::dim_check::DeclaredType;
-use crate::error::GraphcalError;
-use crate::eval::format_unit_expr;
-use crate::eval_expr::RuntimeValue;
-use crate::prelude::load_prelude;
-use crate::registry::{self, Registry, RegistryBuilder};
 use crate::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
-#[cfg(test)]
 use crate::resolve::{ImportedNames, resolve_with_imports};
+use graphcal_registry::declared_type::DeclaredType;
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::format::format_unit_expr;
+use graphcal_registry::prelude::load_prelude;
+use graphcal_registry::registry::{self, Registry, RegistryBuilder};
+use graphcal_registry::runtime_value::RuntimeValue;
 
 /// Intermediate Representation produced by [`lower`].
 ///
@@ -78,7 +77,6 @@ pub struct IR {
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
-#[cfg(test)]
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
     lower_with_imports(ast, src, &ImportedNames::default())
 }
@@ -91,7 +89,6 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
-#[cfg(test)]
 fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -110,7 +107,6 @@ fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
-#[cfg(test)]
 pub fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -227,6 +223,10 @@ pub fn lower_to_builder(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
 pub fn lower_to_builder_with_imported_values(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -566,6 +566,10 @@ impl UnfrozenIR {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
 pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
     match &mut expr.kind {
         ExprKind::GraphRef(ident) | ExprKind::ConstRef(ident) => {
@@ -771,6 +775,10 @@ pub fn register_file_declarations(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
 pub fn register_selected_declarations(
     file: &File,
     registry: &mut RegistryBuilder,

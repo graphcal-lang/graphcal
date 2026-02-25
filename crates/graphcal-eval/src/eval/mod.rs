@@ -11,7 +11,6 @@ mod tests;
 mod types;
 
 pub use format::format_number;
-pub(crate) use format::format_unit_expr;
 pub use project::{
     compile_and_eval_from_project, compile_and_eval_project, compile_to_tir,
     compile_to_tir_from_project, compile_to_tir_project,

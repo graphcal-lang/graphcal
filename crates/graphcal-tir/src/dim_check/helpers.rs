@@ -7,8 +7,8 @@ use graphcal_syntax::ast::Expr;
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{GenericParamName, IndexName, VariantName};
 
-use crate::error::GraphcalError;
-use crate::registry::Registry;
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::registry::Registry;
 
 use super::{DeclaredType, InferredType};
 
@@ -136,12 +136,12 @@ pub(super) fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
 /// with the corresponding concrete type args.
 pub(super) fn resolve_field_type(
     field_type_ann: &graphcal_syntax::ast::TypeExpr,
-    type_def: &crate::registry::TypeDef,
+    type_def: &graphcal_registry::registry::TypeDef,
     type_args: &[InferredType],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::registry::TypeGenericConstraint;
+    use graphcal_registry::registry::TypeGenericConstraint;
 
     if type_def.generic_params.is_empty() {
         // Non-generic type: resolve the field type_ann using the registry
