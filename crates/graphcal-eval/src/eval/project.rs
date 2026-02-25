@@ -1272,6 +1272,7 @@ fn evaluate_project_perfile(
                 assertions: all_assertions,
                 assumes_map: eval_result.assumes_map,
                 base_dim_symbols: eval_result.base_dim_symbols,
+                domain_constraints: eval_result.domain_constraints,
             });
         }
 

@@ -705,6 +705,7 @@ mod tests {
                 }],
                 span: Span::new(0, 0),
             }),
+            constraints: vec![],
             span: Span::new(0, 0),
         }
     }

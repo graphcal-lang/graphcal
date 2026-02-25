@@ -426,3 +426,33 @@ fn error_datetime_extract_non_datetime() {
     let rendered = render_error(source, "datetime_extract_non_datetime.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Domain constraint error tests ---
+
+#[test]
+fn error_domain_violation() {
+    let source = include_str!("../../../tests/fixtures/errors/domain_violation.gcl");
+    let rendered = render_node_error(source, "domain_violation.gcl", "mass");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_min_exceeds_max() {
+    let source = include_str!("../../../tests/fixtures/errors/domain_min_exceeds_max.gcl");
+    let rendered = render_error(source, "domain_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_on_bool() {
+    let source = include_str!("../../../tests/fixtures/errors/domain_on_bool.gcl");
+    let rendered = render_error(source, "domain_on_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_invalid_key() {
+    let source = include_str!("../../../tests/fixtures/errors/domain_invalid_key.gcl");
+    let rendered = render_error(source, "domain_invalid_key.gcl");
+    insta::assert_snapshot!(rendered);
+}

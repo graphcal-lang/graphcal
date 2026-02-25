@@ -28,6 +28,14 @@ Parameters are the inputs to your computation graph. A param with a default valu
 
 When any override is provided (via `--set`, `--input`, or parameterized import binding), **all** params must be explicitly provided by default. This strict mode prevents accidentally relying on stale defaults. Use `--allow-defaults` (CLI) or `#[allow_defaults]` (import attribute) to opt out. See [CLI Reference](../cli-reference.md#strict-parameter-override-mode) and [Multi-File Projects](multi-file.md#strict-binding-mode) for details.
 
+Parameters (and nodes) can carry **domain constraints** that declare valid value ranges, checked at runtime:
+
+```
+param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
+```
+
+See [Type System — Domain Constraints](type-system.md#domain-constraints) for details.
+
 ### Nodes
 
 ```

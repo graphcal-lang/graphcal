@@ -1,0 +1,2 @@
+// domain_on_bool.gcl -- constraint on unsupported type
+param flag: Bool(min: 0.0) = true;

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown domain constraint key `step`
+    Diagnostic severity: error
+Begin snippet for domain_invalid_key.gcl starting at line 1, column 1
+
+snippet line 1: // domain_invalid_key.gcl -- unknown constraint key
+snippet line 2: param mass: Mass(step: 10.0 kg) = 500.0 kg;
+    label at line 2, columns 18 to 21: unknown key
+diagnostic help: valid domain constraint keys are `min` and `max`
+diagnostic code: graphcal::C005

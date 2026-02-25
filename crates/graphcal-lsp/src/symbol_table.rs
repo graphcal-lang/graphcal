@@ -3,13 +3,15 @@
 use std::collections::HashMap;
 
 use graphcal_syntax::ast::{
-    DeclKind, DimExpr, ExprKind, FnBody, IndexDeclKind, PatternBinding, TypeExprKind, UnitExpr,
+    DeclKind, DimExpr, DomainBound, ExprKind, FnBody, IndexDeclKind, PatternBinding, TypeExpr,
+    TypeExprKind, UnitExpr,
 };
 use graphcal_syntax::span::Span;
 
 use graphcal_eval::builtins::{builtin_constants, builtin_functions};
-use graphcal_eval::registry::IndexKind;
-use graphcal_eval::tir::TIR;
+use graphcal_eval::eval::format_number;
+use graphcal_eval::registry::{IndexKind, Registry};
+use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
 
 /// The category of a symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -857,6 +859,23 @@ fn collect_type_expr_refs(type_expr: &graphcal_syntax::ast::TypeExpr, table: &mu
             }
         }
     }
+    // Collect references from domain constraint bound expressions (e.g., unit names in `100 kg`).
+    for bound in &type_expr.constraints {
+        collect_constraint_expr_refs(&bound.value, table);
+    }
+}
+
+/// Collect references from a constraint bound expression (limited walk for unit names).
+fn collect_constraint_expr_refs(expr: &graphcal_syntax::ast::Expr, table: &mut SymbolTable) {
+    match &expr.kind {
+        ExprKind::UnitLiteral { unit, .. } => {
+            collect_unit_expr_refs(unit, table);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            collect_constraint_expr_refs(operand, table);
+        }
+        _ => {}
+    }
 }
 
 /// Collect references from a dimension expression.
@@ -879,6 +898,112 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
     }
 }
 
+/// Format a domain bound expression as a human-readable string.
+///
+/// Handles the common cases: number literals, unit-annotated literals, and negated forms.
+fn format_bound_expr(expr: &graphcal_syntax::ast::Expr) -> String {
+    match &expr.kind {
+        ExprKind::Number(v) => format_number(*v),
+        ExprKind::Integer(v) => v.to_string(),
+        ExprKind::UnitLiteral { value, unit } => {
+            let num = format_number(*value);
+            let unit_str = format_unit_expr_inline(unit);
+            format!("{num} {unit_str}")
+        }
+        ExprKind::UnaryOp {
+            op: graphcal_syntax::ast::UnaryOp::Neg,
+            operand,
+        } => {
+            format!("-{}", format_bound_expr(operand))
+        }
+        // For complex expressions, fall back to "..."
+        _ => "...".to_string(),
+    }
+}
+
+/// Format a `UnitExpr` as a human-readable label (inline version for LSP).
+fn format_unit_expr_inline(expr: &UnitExpr) -> String {
+    use graphcal_syntax::ast::MulDivOp;
+
+    let mut numerator = Vec::new();
+    let mut denominator = Vec::new();
+
+    for item in &expr.terms {
+        let mut part = item.name.value.to_string();
+        if let Some(pow) = item.power
+            && pow != 1
+        {
+            part = format!("{part}^{pow}");
+        }
+        match item.op {
+            MulDivOp::Mul => numerator.push(part),
+            MulDivOp::Div => denominator.push(part),
+        }
+    }
+
+    if denominator.is_empty() {
+        numerator.join(" * ")
+    } else if numerator.len() == 1 && denominator.len() == 1 {
+        format!("{}/{}", numerator[0], denominator[0])
+    } else {
+        let num = numerator.join(" * ");
+        let den = denominator.join(" * ");
+        format!("{num} / ({den})")
+    }
+}
+
+/// Format a constraint clause from domain bounds.
+///
+/// Returns a string like `(min: 100 kg, max: 2000 kg)` or an empty string if no constraints.
+fn format_constraints(constraints: &[DomainBound]) -> String {
+    if constraints.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = constraints
+        .iter()
+        .map(|b| format!("{}: {}", b.name.name, format_bound_expr(&b.value)))
+        .collect();
+    format!("({})", parts.join(", "))
+}
+
+/// Format a resolved type expression with domain constraints.
+///
+/// For indexed types like `Velocity[Maneuver]`, inserts the constraint clause
+/// between the base type and the index suffix: `Velocity(min: 0 m/s)[Maneuver]`.
+fn format_type_with_constraints(
+    resolved: &ResolvedTypeExpr,
+    constraints: &[DomainBound],
+    registry: &Registry,
+) -> String {
+    let constraint_str = format_constraints(constraints);
+    if let ResolvedTypeExpr::Indexed { base, indexes } = resolved {
+        let base_str = base.format(registry);
+        let idx_strs: Vec<String> = indexes
+            .iter()
+            .map(|i| match i {
+                ResolvedIndex::Concrete(name, _) => name.to_string(),
+                ResolvedIndex::GenericParam(name, _) => name.to_string(),
+            })
+            .collect();
+        format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
+    } else {
+        let type_str = resolved.format(registry);
+        format!("{type_str}{constraint_str}")
+    }
+}
+
+/// Extract domain constraints from a `TypeExpr`, looking through `Indexed` wrappers.
+fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
+    if !type_expr.constraints.is_empty() {
+        return &type_expr.constraints;
+    }
+    // For indexed types, the constraints are on the base type
+    if let TypeExprKind::Indexed { base, .. } = &type_expr.kind {
+        return &base.constraints;
+    }
+    &[]
+}
+
 /// Enrich a symbol table with type information from a TIR.
 #[expect(
     clippy::too_many_lines,
@@ -887,10 +1012,35 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     let registry = &tir.registry;
 
-    // Enrich param/node/const declarations with resolved types.
+    // Build a map from declaration name to its AST TypeExpr constraints.
+    let mut decl_constraints: HashMap<&str, &[DomainBound]> = HashMap::new();
+    for (name, type_ann, _, _) in &tir.params {
+        let constraints = extract_constraints(type_ann);
+        if !constraints.is_empty() {
+            decl_constraints.insert(name, constraints);
+        }
+    }
+    for (name, type_ann, _, _) in &tir.nodes {
+        let constraints = extract_constraints(type_ann);
+        if !constraints.is_empty() {
+            decl_constraints.insert(name, constraints);
+        }
+    }
+    for (name, type_ann, _, _) in &tir.consts {
+        let constraints = extract_constraints(type_ann);
+        if !constraints.is_empty() {
+            decl_constraints.insert(name, constraints);
+        }
+    }
+
+    // Enrich param/node/const declarations with resolved types + constraints.
     for (name, resolved_type) in &tir.resolved_decl_types {
         if let Some(def) = table.definitions.get_mut(name) {
-            def.type_description = Some(resolved_type.format(registry));
+            let type_desc = decl_constraints.get(name.as_str()).map_or_else(
+                || resolved_type.format(registry),
+                |constraints| format_type_with_constraints(resolved_type, constraints, registry),
+            );
+            def.type_description = Some(type_desc);
         }
     }
 

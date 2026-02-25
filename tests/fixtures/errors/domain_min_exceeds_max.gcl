@@ -1,0 +1,2 @@
+// domain_min_exceeds_max.gcl -- min > max
+param mass: Mass(min: 2000.0 kg, max: 100.0 kg) = 500.0 kg;

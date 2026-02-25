@@ -426,11 +426,27 @@ impl Ident {
 
 // --- Type expressions ---
 
+/// A domain constraint bound on a type expression: `min: expr` or `max: expr`.
+///
+/// Used in `Type(min: 100 kg, max: 2000 kg)` to declare valid value ranges.
+#[derive(Debug, Clone)]
+pub struct DomainBound {
+    /// The bound name (must be `min` or `max`).
+    pub name: Ident,
+    /// The bound value expression.
+    pub value: Expr,
+    pub span: Span,
+}
+
 /// A type expression (dimension annotation on declarations).
 /// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
+///
+/// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
 #[derive(Debug, Clone)]
 pub struct TypeExpr {
     pub kind: TypeExprKind,
+    /// Optional domain constraints on the type.
+    pub constraints: Vec<DomainBound>,
     pub span: Span,
 }
 
@@ -782,6 +798,7 @@ mod tests {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {
                         kind: TypeExprKind::Dimensionless,
+                        constraints: vec![],
                         span: Span::new(9, 15),
                     },
                     value: Some(Expr {
@@ -825,6 +842,7 @@ mod tests {
                         }],
                         span: s,
                     }),
+                    constraints: vec![],
                     span: s,
                 },
             }],
@@ -843,6 +861,7 @@ mod tests {
                     }],
                     span: s,
                 }),
+                constraints: vec![],
                 span: s,
             },
             body: FnBody::Short(Expr {
@@ -881,11 +900,13 @@ mod tests {
                 },
                 type_ann: TypeExpr {
                     kind: TypeExprKind::Dimensionless,
+                    constraints: vec![],
                     span: s,
                 },
             }],
             return_type: TypeExpr {
                 kind: TypeExprKind::Dimensionless,
+                constraints: vec![],
                 span: s,
             },
             body: FnBody::Block {
