@@ -6,12 +6,13 @@
 mod commands;
 mod format;
 mod graph;
+mod highlight;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
-use rustyline::DefaultEditor;
+use rustyline::Editor;
 use rustyline::error::ReadlineError;
 
 use graphcal_eval::eval::{
@@ -122,13 +123,14 @@ pub fn run_shell(file: Option<&Path>, overrides: HashMap<DeclName, graphcal_synt
         }
     }
 
-    let mut editor = match DefaultEditor::new() {
+    let mut editor = match Editor::new() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("error: failed to initialize editor: {e}");
             return;
         }
     };
+    editor.set_helper(Some(highlight::ShellHelper));
 
     let prompt = "graphcal> ";
     let continuation_prompt = "    ...> ";
