@@ -149,13 +149,25 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::RParen) {
                 break;
             }
-            let name = self.parse_any_ident()?;
-            let name_span = name.span;
+            let ident = self.parse_any_ident()?;
+            let kind_span = ident.span;
+            let kind = match ident.name.as_str() {
+                "min" => crate::ast::DomainBoundKind::Min,
+                "max" => crate::ast::DomainBoundKind::Max,
+                _ => {
+                    return Err(ParseError::InvalidDomainBoundKey {
+                        key: ident.name,
+                        src: self.named_source(),
+                        span: kind_span.into(),
+                    });
+                }
+            };
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
-            let bound_span = name_span.merge(value.span);
+            let bound_span = kind_span.merge(value.span);
             constraints.push(crate::ast::DomainBound {
-                name,
+                kind,
+                kind_span,
                 value,
                 span: bound_span,
             });
@@ -623,8 +635,14 @@ mod tests {
             DeclKind::Param(p) => {
                 assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
                 assert_eq!(p.type_ann.constraints.len(), 2);
-                assert_eq!(p.type_ann.constraints[0].name.name, "min");
-                assert_eq!(p.type_ann.constraints[1].name.name, "max");
+                assert_eq!(
+                    p.type_ann.constraints[0].kind,
+                    crate::ast::DomainBoundKind::Min
+                );
+                assert_eq!(
+                    p.type_ann.constraints[1].kind,
+                    crate::ast::DomainBoundKind::Max
+                );
             }
             _ => panic!("expected param"),
         }
@@ -637,7 +655,10 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
                 assert_eq!(p.type_ann.constraints.len(), 1);
-                assert_eq!(p.type_ann.constraints[0].name.name, "min");
+                assert_eq!(
+                    p.type_ann.constraints[0].kind,
+                    crate::ast::DomainBoundKind::Min
+                );
             }
             _ => panic!("expected param"),
         }
@@ -651,7 +672,10 @@ mod tests {
             DeclKind::Param(p) => {
                 assert!(matches!(&p.type_ann.kind, TypeExprKind::Dimensionless));
                 assert_eq!(p.type_ann.constraints.len(), 1);
-                assert_eq!(p.type_ann.constraints[0].name.name, "max");
+                assert_eq!(
+                    p.type_ann.constraints[0].kind,
+                    crate::ast::DomainBoundKind::Max
+                );
             }
             _ => panic!("expected param"),
         }
@@ -666,8 +690,8 @@ mod tests {
                 TypeExprKind::Indexed { base, indexes } => {
                     // Constraints are on the base type, not the outer Indexed
                     assert_eq!(base.constraints.len(), 2);
-                    assert_eq!(base.constraints[0].name.name, "min");
-                    assert_eq!(base.constraints[1].name.name, "max");
+                    assert_eq!(base.constraints[0].kind, crate::ast::DomainBoundKind::Min);
+                    assert_eq!(base.constraints[1].kind, crate::ast::DomainBoundKind::Max);
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(indexes[0].name, "Maneuver");
                 }
@@ -685,8 +709,14 @@ mod tests {
             DeclKind::Param(p) => {
                 assert!(matches!(&p.type_ann.kind, TypeExprKind::Int));
                 assert_eq!(p.type_ann.constraints.len(), 2);
-                assert_eq!(p.type_ann.constraints[0].name.name, "min");
-                assert_eq!(p.type_ann.constraints[1].name.name, "max");
+                assert_eq!(
+                    p.type_ann.constraints[0].kind,
+                    crate::ast::DomainBoundKind::Min
+                );
+                assert_eq!(
+                    p.type_ann.constraints[1].kind,
+                    crate::ast::DomainBoundKind::Max
+                );
             }
             _ => panic!("expected param"),
         }

@@ -5494,7 +5494,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "domain_bound_key",
             "named": true
           }
         ]
@@ -6380,6 +6380,10 @@
   },
   {
     "type": "dimensionless",
+    "named": true
+  },
+  {
+    "type": "domain_bound_key",
     "named": true
   },
   {

@@ -273,15 +273,6 @@ fn resolve_domain_constraints(
         let mut constraint_span = domain_bounds[0].span;
 
         for bound in domain_bounds {
-            let key = &bound.name.name;
-            if key != "min" && key != "max" {
-                return Err(GraphcalError::DomainInvalidKey {
-                    key: key.clone(),
-                    src: src.clone(),
-                    span: bound.name.span.into(),
-                });
-            }
-
             // Evaluate the bound expression.
             let rv = eval_expr(
                 &bound.value,
@@ -303,7 +294,8 @@ fn resolve_domain_constraints(
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "domain constraint `{key}` must evaluate to a scalar value"
+                            "domain constraint `{}` must evaluate to a scalar value",
+                            bound.kind,
                         ),
                         src: src.clone(),
                         span: bound.value.span.into(),
@@ -321,7 +313,7 @@ fn resolve_domain_constraints(
                     return Err(GraphcalError::DomainDimensionMismatch {
                         name: name.clone(),
                         type_dim: tir.registry.dimensions.format_dimension(expected),
-                        bound_name: key.clone(),
+                        bound_name: bound.kind.to_string(),
                         bound_dim: tir.registry.dimensions.format_dimension(bd),
                         src: src.clone(),
                         span: bound.span.into(),
@@ -334,12 +326,15 @@ fn resolve_domain_constraints(
 
             constraint_span = constraint_span.merge(bound.span);
 
-            if key == "min" {
-                min_val = Some(si_value);
-                min_display = Some(display_text);
-            } else {
-                max_val = Some(si_value);
-                max_display = Some(display_text);
+            match bound.kind {
+                graphcal_syntax::ast::DomainBoundKind::Min => {
+                    min_val = Some(si_value);
+                    min_display = Some(display_text);
+                }
+                graphcal_syntax::ast::DomainBoundKind::Max => {
+                    max_val = Some(si_value);
+                    max_display = Some(display_text);
+                }
             }
         }
 

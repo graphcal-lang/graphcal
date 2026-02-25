@@ -849,17 +849,4 @@ pub enum GraphcalError {
         #[label("constraints not valid here")]
         span: SourceSpan,
     },
-
-    #[error("unknown domain constraint key `{key}`")]
-    #[diagnostic(
-        code(graphcal::C005),
-        help("valid domain constraint keys are `min` and `max`")
-    )]
-    DomainInvalidKey {
-        key: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("unknown key")]
-        span: SourceSpan,
-    },
 }

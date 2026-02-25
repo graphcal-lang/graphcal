@@ -389,10 +389,12 @@ module.exports = grammar({
     ),
 
     type_constraint: $ => seq(
-      field("name", $.identifier),
+      field("name", alias(choice("min", "max"), $.domain_bound_key)),
       ":",
       field("value", $._expr),
     ),
+
+    domain_bound_key: _$ => choice("min", "max"),
 
     // Generic type application: Vec3<Length, ECI>
     // Uses dynamic precedence to prefer type_application over parsing `<` as

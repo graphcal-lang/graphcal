@@ -961,7 +961,7 @@ fn format_constraints(constraints: &[DomainBound]) -> String {
     }
     let parts: Vec<String> = constraints
         .iter()
-        .map(|b| format!("{}: {}", b.name.name, format_bound_expr(&b.value)))
+        .map(|b| format!("{}: {}", b.kind, format_bound_expr(&b.value)))
         .collect();
     format!("({})", parts.join(", "))
 }
