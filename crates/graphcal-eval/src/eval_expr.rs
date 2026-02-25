@@ -320,9 +320,9 @@ pub fn eval_expr(
                         BinOp::Le => li <= ri,
                         BinOp::Ge => li >= ri,
                         _ => {
-                            return Err(GraphcalError::EvalError {
+                            return Err(GraphcalError::InternalError {
                                 message: format!(
-                                    "internal: unexpected operator {op:?} in integer comparison"
+                                    "unexpected operator {op:?} in integer comparison"
                                 ),
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -338,9 +338,9 @@ pub fn eval_expr(
                         BinOp::Le => le <= re,
                         BinOp::Ge => le >= re,
                         _ => {
-                            return Err(GraphcalError::EvalError {
+                            return Err(GraphcalError::InternalError {
                                 message: format!(
-                                    "internal: unexpected operator {op:?} in datetime comparison"
+                                    "unexpected operator {op:?} in datetime comparison"
                                 ),
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -585,11 +585,8 @@ pub fn eval_expr(
                             RuntimeValue::Scalar(n)
                         }
                         _ => {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "internal: unexpected aggregate function `{}`",
-                                    name.value
-                                ),
+                            return Err(GraphcalError::InternalError {
+                                message: format!("unexpected aggregate function `{}`", name.value),
                                 src: src.clone(),
                                 span: expr.span.into(),
                             });
@@ -611,8 +608,8 @@ pub fn eval_expr(
                     src,
                 )?;
                 let RuntimeValue::Int(i) = arg else {
-                    return Err(GraphcalError::EvalError {
-                        message: "internal: to_float() received non-Int argument (should have been caught by dim_check)".to_string(),
+                    return Err(GraphcalError::InternalError {
+                        message: "to_float() received non-Int argument".to_string(),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
@@ -678,8 +675,8 @@ pub fn eval_expr(
             // datetime(string_literal, timezone_string) -> Datetime(UTC)
             if name.value.as_str() == "datetime" {
                 let ExprKind::StringLiteral(s) = &args[0].kind else {
-                    return Err(GraphcalError::EvalError {
-                        message: "internal: datetime() received non-string argument".to_string(),
+                    return Err(GraphcalError::InternalError {
+                        message: "datetime() received non-string argument".to_string(),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
@@ -687,9 +684,8 @@ pub fn eval_expr(
                 let epoch = if args.len() == 2 {
                     // Two-arg form: datetime("2024-11-05T10:00", "Asia/Tokyo")
                     let ExprKind::StringLiteral(tz_name) = &args[1].kind else {
-                        return Err(GraphcalError::EvalError {
-                            message: "internal: datetime() received non-string timezone argument"
-                                .to_string(),
+                        return Err(GraphcalError::InternalError {
+                            message: "datetime() received non-string timezone argument".to_string(),
                             src: src.clone(),
                             span: args[1].span.into(),
                         });
@@ -715,16 +711,15 @@ pub fn eval_expr(
             // epoch(string_literal, TimeScale) -> Datetime in specified scale
             if name.value.as_str() == "epoch" {
                 let ExprKind::StringLiteral(s) = &args[0].kind else {
-                    return Err(GraphcalError::EvalError {
-                        message: "internal: epoch() received non-string first argument".to_string(),
+                    return Err(GraphcalError::InternalError {
+                        message: "epoch() received non-string first argument".to_string(),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
                 };
                 let ExprKind::ConstRef(scale_ident) = &args[1].kind else {
-                    return Err(GraphcalError::EvalError {
-                        message: "internal: epoch() received non-identifier second argument"
-                            .to_string(),
+                    return Err(GraphcalError::InternalError {
+                        message: "epoch() received non-identifier second argument".to_string(),
                         src: src.clone(),
                         span: args[1].span.into(),
                     });
@@ -755,11 +750,8 @@ pub fn eval_expr(
                     src,
                 )?;
                 let RuntimeValue::Datetime(epoch) = arg else {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "internal: {}() received non-Datetime argument",
-                            name.value
-                        ),
+                    return Err(GraphcalError::InternalError {
+                        message: format!("{}() received non-Datetime argument", name.value),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
@@ -780,11 +772,8 @@ pub fn eval_expr(
                     src,
                 )?;
                 let RuntimeValue::Datetime(epoch) = arg_val else {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "internal: {}() received non-Datetime argument",
-                            name.value
-                        ),
+                    return Err(GraphcalError::InternalError {
+                        message: format!("{}() received non-Datetime argument", name.value),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
@@ -840,11 +829,8 @@ pub fn eval_expr(
                     )]
                     RuntimeValue::Int(v) => v as f64,
                     _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "internal: {}() received non-numeric argument",
-                                name.value
-                            ),
+                        return Err(GraphcalError::InternalError {
+                            message: format!("{}() received non-numeric argument", name.value),
                             src: src.clone(),
                             span: args[0].span.into(),
                         });
@@ -877,11 +863,8 @@ pub fn eval_expr(
                     src,
                 )?;
                 let RuntimeValue::Datetime(epoch) = arg_val else {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "internal: {}() received non-Datetime argument",
-                            name.value
-                        ),
+                    return Err(GraphcalError::InternalError {
+                        message: format!("{}() received non-Datetime argument", name.value),
                         src: src.clone(),
                         span: args[0].span.into(),
                     });
@@ -1461,10 +1444,8 @@ fn eval_map_literal(
     let idx_def = registry
         .indexes
         .get_index(idx_name.as_str())
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
-            ),
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("unknown index `{idx_name}`"),
             src: src.clone(),
             span: entries[0].keys[0].index.span.into(),
         })?;
@@ -1518,10 +1499,8 @@ fn eval_for_comp(
     let idx_def = registry
         .indexes
         .get_index(idx_name.as_str())
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "internal: unknown index `{idx_name}` (should have been caught by dim_check)"
-            ),
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("unknown index `{idx_name}`"),
             src: src.clone(),
             span: binding.index.span.into(),
         })?;
@@ -1541,9 +1520,9 @@ fn eval_for_comp(
                     .as_str()
                     .strip_prefix('#')
                     .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or_else(|| GraphcalError::EvalError {
+                    .ok_or_else(|| GraphcalError::InternalError {
                         message: format!(
-                            "internal: range variant `{variant}` has unexpected format (expected #N)"
+                            "range variant `{variant}` has unexpected format (expected #N)"
                         ),
                         src: src.clone(),
                         span: binding.index.span.into(),
@@ -1551,10 +1530,8 @@ fn eval_for_comp(
                 RuntimeValue::RangeLabel {
                     step_index,
                     value: idx_def.step_value(step_index).map_err(|e| {
-                        GraphcalError::EvalError {
-                            message: format!(
-                                "internal: range index step {step_index} out of bounds: {e}"
-                            ),
+                        GraphcalError::InternalError {
+                            message: format!("range index step {step_index} out of bounds: {e}"),
                             src: src.clone(),
                             span: binding.index.span.into(),
                         }
@@ -1658,8 +1635,8 @@ fn eval_comparison(
         BinOp::Gt => Ok(l > r),
         BinOp::Le => Ok(l <= r),
         BinOp::Ge => Ok(l >= r),
-        _ => Err(GraphcalError::EvalError {
-            message: format!("internal: unexpected operator {op:?} in comparison"),
+        _ => Err(GraphcalError::InternalError {
+            message: format!("unexpected operator {op:?} in comparison"),
             src: src.clone(),
             span: span.into(),
         }),
@@ -1714,8 +1691,8 @@ fn eval_int_binop(
             l.checked_pow(exp)
         }
         _ => {
-            return Err(GraphcalError::EvalError {
-                message: format!("internal: unexpected operator {op:?} in integer arithmetic"),
+            return Err(GraphcalError::InternalError {
+                message: format!("unexpected operator {op:?} in integer arithmetic"),
                 src: src.clone(),
                 span: span.into(),
             });
@@ -1752,8 +1729,8 @@ fn eval_binop(
         }
         BinOp::Pow => l.powf(r),
         _ => {
-            return Err(GraphcalError::EvalError {
-                message: format!("internal: unexpected operator {op:?} in arithmetic"),
+            return Err(GraphcalError::InternalError {
+                message: format!("unexpected operator {op:?} in arithmetic"),
                 src: src.clone(),
                 span: span.into(),
             });
