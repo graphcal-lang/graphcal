@@ -484,6 +484,7 @@ name = "graphcal"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "graphcal-dag",
  "graphcal-eval",
  "graphcal-fmt",
  "graphcal-lsp",
@@ -496,6 +497,14 @@ dependencies = [
  "serde_json",
  "tabled",
  "tokio",
+]
+
+[[package]]
+name = "graphcal-dag"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "petgraph",
 ]
 
 [[package]]

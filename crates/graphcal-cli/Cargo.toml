@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+graphcal-dag = { workspace = true }
 graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-lsp = { workspace = true }

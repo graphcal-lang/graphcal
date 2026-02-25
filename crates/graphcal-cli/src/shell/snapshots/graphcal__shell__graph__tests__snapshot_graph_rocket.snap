@@ -2,15 +2,12 @@
 source: crates/graphcal-cli/src/shell/graph.rs
 expression: rendered
 ---
-  const G0      param dry_mass      param fuel_mass      param isp
-    │
-    param dry_mass -> node mass_ratio
-    param fuel_mass -> node mass_ratio
-    param isp -> node v_exhaust
-
-  node mass_ratio      node v_exhaust
-    │
-    node mass_ratio -> node delta_v
-    node v_exhaust -> node delta_v
-
-  node delta_v
+    const G0        param dry_mass    param fuel_mass    param isp
+                           │                 │               │
+                        ┌──┴───────────────┬─┴───────────────┘
+                        │                  │
+                 node mass_ratio    node v_exhaust
+                        │                  │
+                        └────────┬─────────┘
+                                 │
+                           node delta_v

@@ -1,6 +1,6 @@
 ---
-source: crates/graphcal-cli/src/shell/graph.rs
-expression: rendered
+source: crates/graphcal-dag/src/lib.rs
+expression: render(&g)
 ---
  param x
     │

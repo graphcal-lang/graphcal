@@ -2,4 +2,4 @@
 source: crates/graphcal-cli/src/shell/graph.rs
 expression: rendered
 ---
-  param x      param y
+ param x    param y
