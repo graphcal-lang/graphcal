@@ -1,4 +1,5 @@
 mod json_input;
+mod shell;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeMap;
@@ -60,6 +61,20 @@ enum Commands {
     },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
+    /// Start an interactive shell (REPL)
+    Shell {
+        /// Path to a .gcl file to pre-load
+        file: Option<PathBuf>,
+        /// Override a param value: --set 'name=expr'
+        #[arg(long)]
+        set: Vec<String>,
+        /// JSON input file for param values
+        #[arg(long)]
+        input: Option<PathBuf>,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
 }
 
 #[derive(ValueEnum, Clone)]
@@ -106,6 +121,74 @@ fn main() {
                 .build()
                 .expect("failed to build tokio runtime")
                 .block_on(graphcal_lsp::run());
+        }
+        Commands::Shell {
+            file,
+            set,
+            input,
+            root: _root,
+        } => {
+            // Parse --set overrides
+            let mut overrides = std::collections::HashMap::new();
+            for s in &set {
+                let Some((name, value_str)) = s.split_once('=') else {
+                    eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
+                    process::exit(1);
+                };
+                let name = name.trim();
+                let value_str = value_str.trim();
+                match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
+                    Ok(expr) => {
+                        overrides.insert(DeclName::new(name), expr);
+                    }
+                    Err(e) => {
+                        eprintln!("error: failed to parse --set value for `{name}`: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
+
+            // Parse --input JSON file
+            if let Some(input_path) = &input {
+                if let Some(file_path) = &file {
+                    let source = std::fs::read_to_string(file_path).unwrap_or_else(|e| {
+                        eprintln!("error: cannot read {}: {e}", file_path.display());
+                        process::exit(1);
+                    });
+                    let ast = graphcal_syntax::parser::Parser::with_name(
+                        &source,
+                        &file_path.to_string_lossy(),
+                    )
+                    .parse_file()
+                    .unwrap_or_else(|e| {
+                        eprintln!("error: failed to parse {}: {e}", file_path.display());
+                        process::exit(1);
+                    });
+
+                    let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
+                        eprintln!(
+                            "error: cannot read input file {}: {e}",
+                            input_path.display()
+                        );
+                        process::exit(1);
+                    });
+
+                    let json_overrides = json_input::json_to_overrides(&json_str, &ast)
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(1);
+                        });
+
+                    for (name, expr) in json_overrides {
+                        overrides.entry(name).or_insert(expr);
+                    }
+                } else {
+                    eprintln!("error: --input requires a file argument");
+                    process::exit(1);
+                }
+            }
+
+            shell::run_shell(file.as_deref(), overrides);
         }
         Commands::Eval {
             file,
