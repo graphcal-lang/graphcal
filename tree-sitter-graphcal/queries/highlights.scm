@@ -132,6 +132,9 @@
 ; Indexed type index names: Velocity[Maneuver], Mass[Phase, Maneuver]
 (indexed_type (identifier) @type)
 
+; Domain constraint names: min, max in Type(min: expr, max: expr)
+(type_constraint name: (identifier) @attribute)
+
 ; Builtin type keywords in type positions
 (dimensionless) @type.builtin
 (bool_type) @type.builtin

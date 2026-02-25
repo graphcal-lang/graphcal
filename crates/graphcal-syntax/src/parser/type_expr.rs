@@ -12,6 +12,10 @@ impl Parser<'_> {
     // --- Type expressions ---
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "type expression parser handles many keyword cases"
+    )]
     pub(super) fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
         // Parse the base type first
         let mut base = if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
@@ -20,18 +24,21 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Dimensionless,
+                    constraints: vec![],
                     span,
                 }
             } else if text == "Bool" {
                 let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Bool,
+                    constraints: vec![],
                     span,
                 }
             } else if text == "Int" {
                 let (_, span) = self.advance()?;
                 TypeExpr {
                     kind: TypeExprKind::Int,
+                    constraints: vec![],
                     span,
                 }
             } else if text == "Datetime" {
@@ -46,12 +53,14 @@ impl Parser<'_> {
                             name: ident,
                             type_args,
                         },
+                        constraints: vec![],
                         span,
                     }
                 } else {
                     // Bare Datetime (= Datetime<UTC>)
                     TypeExpr {
                         kind: TypeExprKind::Datetime,
+                        constraints: vec![],
                         span: ident.span,
                     }
                 }
@@ -66,6 +75,7 @@ impl Parser<'_> {
                         name: ident,
                         type_args,
                     },
+                    constraints: vec![],
                     span,
                 }
             } else {
@@ -73,6 +83,7 @@ impl Parser<'_> {
                 let span = dim_expr.span;
                 TypeExpr {
                     kind: TypeExprKind::DimExpr(dim_expr),
+                    constraints: vec![],
                     span,
                 }
             }
@@ -81,9 +92,19 @@ impl Parser<'_> {
             let span = dim_expr.span;
             TypeExpr {
                 kind: TypeExprKind::DimExpr(dim_expr),
+                constraints: vec![],
                 span,
             }
         };
+
+        // Check for optional domain constraints: `(min: expr, max: expr)`
+        if self.lexer.peek() == Some(&Token::LParen) {
+            let constraints = self.parse_domain_constraints()?;
+            if let Some(last) = constraints.last() {
+                base.span = base.span.merge(last.span);
+            }
+            base.constraints = constraints;
+        }
 
         // Check for optional `[Index, ...]` suffix
         if self.lexer.peek() == Some(&Token::LBracket) {
@@ -109,11 +130,51 @@ impl Parser<'_> {
                     base: Box::new(base),
                     indexes,
                 },
+                constraints: vec![],
                 span,
             };
         }
 
         Ok(base)
+    }
+
+    /// Parse domain constraints: `(min: expr, max: expr)`.
+    ///
+    /// Called when `(` is peeked after a base type expression.
+    /// Each constraint is `name: expr` where `name` is an identifier like `min` or `max`.
+    fn parse_domain_constraints(&mut self) -> Result<Vec<crate::ast::DomainBound>, ParseError> {
+        let (_, _lparen_span) = self.expect(Token::LParen)?;
+        let mut constraints = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RParen) {
+                break;
+            }
+            let name = self.parse_any_ident()?;
+            let name_span = name.span;
+            self.expect(Token::Colon)?;
+            let value = self.parse_expr()?;
+            let bound_span = name_span.merge(value.span);
+            constraints.push(crate::ast::DomainBound {
+                name,
+                value,
+                span: bound_span,
+            });
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        let (_, rparen_span) = self.expect(Token::RParen)?;
+        // Update span of last constraint to include rparen for better error reporting
+        if constraints.is_empty() {
+            return Err(self.unexpected_token(
+                "at least one domain constraint (e.g., `min: 0`)",
+                ")",
+                rparen_span,
+            ));
+        }
+        Ok(constraints)
     }
 
     /// Parse a dimension expression: `DimTermOrGroup (("*" | "/") DimTermOrGroup)*`
@@ -550,6 +611,95 @@ mod tests {
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_with_min_max() {
+        let source = "param m: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
+                assert_eq!(p.type_ann.constraints.len(), 2);
+                assert_eq!(p.type_ann.constraints[0].name.name, "min");
+                assert_eq!(p.type_ann.constraints[1].name.name, "max");
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_with_min_only() {
+        let source = "param f: Force(min: 0.01 N) = 0.5 N;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.type_ann.constraints.len(), 1);
+                assert_eq!(p.type_ann.constraints[0].name.name, "min");
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_dimensionless_with_constraint() {
+        let source = "param e: Dimensionless(max: 1.0) = 0.85;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::Dimensionless));
+                assert_eq!(p.type_ann.constraints.len(), 1);
+                assert_eq!(p.type_ann.constraints[0].name.name, "max");
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_constrained_indexed_type() {
+        let source = "param dv: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = 1.0 m/s;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::Indexed { base, indexes } => {
+                    // Constraints are on the base type, not the outer Indexed
+                    assert_eq!(base.constraints.len(), 2);
+                    assert_eq!(base.constraints[0].name.name, "min");
+                    assert_eq!(base.constraints[1].name.name, "max");
+                    assert_eq!(indexes.len(), 1);
+                    assert_eq!(indexes[0].name, "Maneuver");
+                }
+                other => panic!("expected Indexed type, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_int_with_constraints() {
+        let source = "param n: Int(min: 1, max: 100) = 10;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::Int));
+                assert_eq!(p.type_ann.constraints.len(), 2);
+                assert_eq!(p.type_ann.constraints[0].name.name, "min");
+                assert_eq!(p.type_ann.constraints[1].name.name, "max");
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_no_constraints_still_works() {
+        let source = "param m: Mass = 1.0 kg;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(p.type_ann.constraints.is_empty());
+            }
             _ => panic!("expected param"),
         }
     }

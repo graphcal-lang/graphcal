@@ -164,6 +164,78 @@ node matrix: Dimensionless[Row, Col] = for r, c { ... };  // Multi-indexed Value
 
 `T[I]` is a type constructor that lifts a ValueType into a total map from index labels to values. Multi-indexing `T[I, J]` is a flat product-key map (not nested). Axis order is significant: `T[I, J]` and `T[J, I]` are different types.
 
+## Domain Constraints
+
+Type expressions can carry **domain constraints** that declare valid value ranges. Constraints are written as `(min: expr, max: expr)` after the base type:
+
+```
+param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
+param thrust: Force(min: 0.01 N) = 0.5 N;           // min only
+param efficiency: Dimensionless(max: 1.0) = 0.85;    // max only
+param count: Int(min: 1, max: 100) = 10;             // Int constraints
+```
+
+### Syntax
+
+The constraint clause goes between the base type and the optional `[Index]` suffix:
+
+```
+Type(min: expr, max: expr)           // both bounds
+Type(min: expr)                      // lower bound only
+Type(max: expr)                      // upper bound only
+Type(min: expr, max: expr)[Index]    // constrained indexed type (element-wise)
+```
+
+Both `min` and `max` are optional — you can specify one or both. The bound expressions must evaluate to a value compatible with the type's dimension.
+
+### Supported Types
+
+Domain constraints are valid on:
+
+- **Scalar types** (any dimension): `Mass(min: ...)`, `Velocity(max: ...)`, etc.
+- **`Dimensionless`**: `Dimensionless(min: 0.0, max: 1.0)`
+- **`Int`**: `Int(min: 1, max: 100)`
+
+Domain constraints are **not** valid on `Bool`, `Datetime`, struct types, or tagged union types. Attempting to use constraints on these types is a compile error.
+
+### Indexed Types
+
+For indexed types, constraints apply **element-wise** to each entry:
+
+```
+param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
+    Maneuver::Departure: 3200.0 m/s,
+    Maneuver::Correction: 500.0 m/s,
+    Maneuver::Insertion: 1800.0 m/s,
+};
+```
+
+Each entry in the indexed value is independently checked against the constraint bounds.
+
+### Runtime Checking
+
+Domain constraints are checked at **runtime** after evaluation. They are not enforced at compile time because parameter values are not known until runtime.
+
+- If a value violates its constraint, it is reported as a per-node error (similar to division by zero or other runtime errors).
+- The constraint check occurs after the value is computed, before it is used by downstream nodes.
+
+### Compile-Time Validation
+
+The following are caught at compile time:
+
+- **Invalid target type**: Constraint on an unsupported type (e.g., `Bool(min: 0)`)
+- **Invalid key**: Unknown constraint key (e.g., `Mass(step: 10)` — only `min` and `max` are valid)
+- **Min exceeds max**: When both bounds are specified and `min > max`
+- **Dimension mismatch**: When the bound's dimension doesn't match the type's dimension (e.g., `Mass(min: 1.0 m)`)
+
+### Use Cases
+
+Domain constraints are useful for:
+
+- **Parameter sweeping/sampling**: Declaring valid ranges for design space exploration
+- **Input validation**: Catching obviously wrong parameter values before they propagate through the graph
+- **Documentation**: Making valid ranges explicit in the type annotation, visible in LSP hover
+
 ## Indexes and Indexed Types
 
 An index declares a finite, ordered set of labels usable as collection axes in `T[I]`. Two flavors exist.

@@ -369,7 +369,7 @@
     },
 
     "type-annotation": {
-      "comment": "Type annotation after ':' — matches ': Type', ': Type[Index, ...]', ': Dimensionless[...]'",
+      "comment": "Type annotation after ':' — matches ': Type', ': Type[Index, ...]', ': Type(min: expr, max: expr)'",
       "begin": "(?<=\\w)\\s*(:)\\s*(?=[A-Z])",
       "end": "(?=[=;,){])",
       "beginCaptures": {
@@ -377,6 +377,7 @@
       },
       "patterns": [
         { "include": "#builtin-types" },
+        { "include": "#type-constraints" },
         {
           "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
           "name": "entity.name.type.graphcal"
@@ -394,6 +395,36 @@
           "name": "keyword.operator.arithmetic.graphcal"
         },
         { "include": "#numbers" }
+      ]
+    },
+
+    "type-constraints": {
+      "comment": "Domain constraints on type: (min: expr, max: expr)",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": { "name": "punctuation.brackets.round.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.brackets.round.graphcal" }
+      },
+      "patterns": [
+        {
+          "comment": "Constraint key: min or max",
+          "match": "\\b(min|max)\\s*(:)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.graphcal" },
+            "2": { "name": "punctuation.separator.colon.graphcal" }
+          }
+        },
+        { "include": "#numbers" },
+        { "include": "#builtin-types" },
+        { "include": "#pascal-type" },
+        { "include": "#operators" },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.graphcal"
+        }
       ]
     },
 

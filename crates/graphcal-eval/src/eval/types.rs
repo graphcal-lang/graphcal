@@ -287,6 +287,9 @@ pub struct EvalResult {
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
     pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
+    pub domain_constraints:
+        std::collections::HashMap<DeclName, crate::tir::ResolvedDomainConstraint>,
 }
 
 impl EvalResult {

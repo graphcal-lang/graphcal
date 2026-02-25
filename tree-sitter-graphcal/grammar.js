@@ -361,6 +361,7 @@ module.exports = grammar({
 
     type_expr: $ => choice(
       $.indexed_type,
+      $.constrained_type,
       $._type_expr_base,
     ),
 
@@ -371,6 +372,26 @@ module.exports = grammar({
       $.datetime_type,
       $.type_application,
       $.dim_expr,
+    ),
+
+    // Constrained type: Mass(min: 100 kg, max: 2000 kg)
+    constrained_type: $ => seq(
+      field("base", $._type_expr_base),
+      $.type_constraints,
+    ),
+
+    type_constraints: $ => seq(
+      "(",
+      $.type_constraint,
+      repeat(seq(",", $.type_constraint)),
+      optional(","),
+      ")",
+    ),
+
+    type_constraint: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("value", $._expr),
     ),
 
     // Generic type application: Vec3<Length, ECI>
@@ -390,9 +411,9 @@ module.exports = grammar({
     int_type: $ => "Int",
     datetime_type: $ => "Datetime",
 
-    // Indexed type: Velocity[Maneuver] or Dimensionless[A, B]
+    // Indexed type: Velocity[Maneuver] or Velocity(min: 0)[Maneuver]
     indexed_type: $ => seq(
-      field("base", $._type_expr_base),
+      field("base", choice($.constrained_type, $._type_expr_base)),
       "[",
       $.identifier,
       repeat(seq(",", $.identifier)),

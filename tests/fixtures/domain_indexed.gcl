@@ -1,0 +1,11 @@
+// domain_indexed.gcl -- indexed param with constrained base type (element-wise)
+dimension Velocity = Length / Time;
+
+index Maneuver = { Departure, Arrival }
+
+param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
+    Maneuver::Departure: 3200.0 m/s,
+    Maneuver::Arrival: 1800.0 m/s,
+};
+
+node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });

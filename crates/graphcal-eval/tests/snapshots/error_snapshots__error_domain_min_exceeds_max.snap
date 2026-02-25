@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain constraint on `mass`: min (2000 kg) exceeds max (100 kg)
+    Diagnostic severity: error
+Begin snippet for domain_min_exceeds_max.gcl starting at line 1, column 1
+
+snippet line 1: // domain_min_exceeds_max.gcl -- min > max
+snippet line 2: param mass: Mass(min: 2000.0 kg, max: 100.0 kg) = 500.0 kg;
+    label at line 2, columns 18 to 46: min > max
+diagnostic help: the min bound must be less than or equal to the max bound
+diagnostic code: graphcal::C003

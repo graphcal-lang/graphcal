@@ -195,6 +195,28 @@ pub struct ResolvedFnParam {
 }
 
 // ---------------------------------------------------------------------------
+// Resolved domain constraints
+// ---------------------------------------------------------------------------
+
+/// A resolved domain constraint with evaluated SI-unit bounds.
+///
+/// Produced during `type_resolve()` by evaluating the bound expressions
+/// in `DomainBound` to concrete f64 values (in SI units).
+#[derive(Debug, Clone)]
+pub struct ResolvedDomainConstraint {
+    /// Minimum bound in SI units, or `None` if no `min:` was specified.
+    pub min: Option<f64>,
+    /// Maximum bound in SI units, or `None` if no `max:` was specified.
+    pub max: Option<f64>,
+    /// Original min expression text for diagnostics (e.g., `"100 kg"`).
+    pub min_display: Option<String>,
+    /// Original max expression text for diagnostics (e.g., `"2000 kg"`).
+    pub max_display: Option<String>,
+    /// Span covering the entire constraint clause for error reporting.
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
 // TIR struct
 // ---------------------------------------------------------------------------
 
@@ -232,6 +254,8 @@ pub struct TIR {
     pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
     pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
+    /// Resolved domain constraints for declarations that have them.
+    pub domain_constraints: HashMap<String, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
     pub imported_values: HashMap<
@@ -365,6 +389,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         expected_fail: ir.expected_fail,
         resolved_decl_types,
         resolved_fn_sigs,
+        domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
     })
 }
@@ -1184,6 +1209,7 @@ mod tests {
                 }],
                 span: Span::new(0, 0),
             }),
+            constraints: vec![],
             span: Span::new(0, 0),
         }
     }

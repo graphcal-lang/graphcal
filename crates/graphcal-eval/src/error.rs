@@ -785,4 +785,81 @@ pub enum GraphcalError {
     #[error("failed to parse graphcal.toml: {message}")]
     #[diagnostic(code(graphcal::M015))]
     ManifestError { message: String },
+
+    // --- Domain constraint errors ---
+    #[error("domain violation: `{name}` value {value} is {violation}")]
+    #[diagnostic(
+        code(graphcal::C001),
+        help("the value must satisfy the domain constraints declared on the type")
+    )]
+    DomainViolation {
+        name: String,
+        value: String,
+        violation: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("value out of declared domain")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "domain bound dimension mismatch on `{name}`: type has dimension {type_dim}, but {bound_name} bound has dimension {bound_dim}"
+    )]
+    #[diagnostic(
+        code(graphcal::C002),
+        help("domain bounds must have the same dimension as the constrained type")
+    )]
+    DomainDimensionMismatch {
+        name: String,
+        type_dim: String,
+        bound_name: String,
+        bound_dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("dimension mismatch in domain bound")]
+        span: SourceSpan,
+    },
+
+    #[error("domain constraint on `{name}`: min ({min}) exceeds max ({max})")]
+    #[diagnostic(
+        code(graphcal::C003),
+        help("the min bound must be less than or equal to the max bound")
+    )]
+    DomainMinExceedsMax {
+        name: String,
+        min: String,
+        max: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("min > max")]
+        span: SourceSpan,
+    },
+
+    #[error("domain constraints are not valid on `{type_kind}` types")]
+    #[diagnostic(
+        code(graphcal::C004),
+        help(
+            "domain constraints (min/max) are only valid on scalar, Dimensionless, and Int types"
+        )
+    )]
+    InvalidDomainTarget {
+        type_kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("constraints not valid here")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown domain constraint key `{key}`")]
+    #[diagnostic(
+        code(graphcal::C005),
+        help("valid domain constraint keys are `min` and `max`")
+    )]
+    DomainInvalidKey {
+        key: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown key")]
+        span: SourceSpan,
+    },
 }
