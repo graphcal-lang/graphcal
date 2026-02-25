@@ -244,18 +244,31 @@ enum DeclResult {
 }
 
 /// Try to add a declaration to the state.
+///
+/// If parsing fails with "unexpected end of file" and the input doesn't end
+/// with `;`, we auto-append `;` and retry — making the trailing semicolon
+/// optional in the REPL. If that still fails, we report `Incomplete` so the
+/// shell can prompt for continuation lines.
 fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
     // Parse as a file to validate syntax.
-    let parse_result = graphcal_syntax::parser::Parser::new(input).parse_file();
-    let ast = match parse_result {
-        Ok(ast) => ast,
+    // If the input is missing a trailing `;`, auto-append one and retry.
+    let (ast, source) = match graphcal_syntax::parser::Parser::new(input).parse_file() {
+        Ok(ast) => (ast, input.to_string()),
         Err(e) => {
-            // Check if it's an unexpected EOF (incomplete input).
             let err_str = format!("{e}");
             if err_str.contains("unexpected end of file") {
-                return DeclResult::Incomplete;
+                // Auto-append `;` and retry — makes semicolons optional in the REPL.
+                if input.trim_end().ends_with(';') {
+                    return DeclResult::Incomplete;
+                }
+                let with_semi = format!("{input};");
+                match graphcal_syntax::parser::Parser::new(&with_semi).parse_file() {
+                    Ok(ast) => (ast, with_semi),
+                    Err(_) => return DeclResult::Incomplete,
+                }
+            } else {
+                return DeclResult::Error(format!("{e}"));
             }
-            return DeclResult::Error(format!("{e}"));
         }
     };
 
@@ -269,7 +282,7 @@ fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
         // For declarations without a name we can extract (like import),
         // just use the raw input as the key.
         let key = format!("__import_{}", state.user_decls.len());
-        return try_add_with_key(&key, input, state);
+        return try_add_with_key(&key, &source, state);
     };
 
     // Check for duplicate names.
@@ -285,7 +298,7 @@ fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
         ));
     }
 
-    try_add_with_key(&decl_name, input, state)
+    try_add_with_key(&decl_name, &source, state)
 }
 
 /// Add a declaration to the state with a given key.
