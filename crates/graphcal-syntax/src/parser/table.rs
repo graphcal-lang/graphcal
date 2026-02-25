@@ -308,7 +308,7 @@ mod tests {
         let source = "param dv: Velocity[Maneuver] = { Maneuver::Departure: 2.0 km/s, Maneuver::Correction: 0.05 km/s };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.value.kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
                     assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
@@ -331,7 +331,7 @@ mod tests {
     };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.value.kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::TableLiteral { indexes, entries } => {
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(indexes[0].value.as_str(), "Maneuver");
@@ -358,7 +358,7 @@ mod tests {
     };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.value.kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::TableLiteral { indexes, entries } => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(indexes[0].value.as_str(), "Phase");
@@ -394,7 +394,7 @@ mod tests {
     };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.value.kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::TableLiteral { indexes, entries } => {
                     assert_eq!(indexes.len(), 3);
                     assert_eq!(indexes[0].value.as_str(), "Time");

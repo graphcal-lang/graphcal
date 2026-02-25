@@ -47,7 +47,7 @@ graphcal eval [OPTIONS] <FILE>
 | Option | Description |
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
-| `--set <SET>` | Override a param value: `--set 'name=expr'` (repeatable) |
+| `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
 | `--no-assert` | Skip assertion checking |
 
@@ -85,6 +85,11 @@ G0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.916667
 delta_v    = 4284.300858 m/s
+```
+
+```bash
+# Provide a required param (param declared without a default value)
+$ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
 ```
 
 ```bash

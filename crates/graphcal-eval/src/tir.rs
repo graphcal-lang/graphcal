@@ -208,8 +208,8 @@ pub struct TIR {
     pub registry: Registry,
     /// Const declarations in source order: (name, `type_ann`, expr, span).
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Param declarations in source order: (name, `type_ann`, expr, span).
-    pub params: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Param declarations in source order: (name, `type_ann`, optional default expr, span).
+    pub params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
@@ -295,11 +295,12 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
     let no_index_params: &[GenericParamName] = &[];
 
     // Resolve type annotations for all consts/params/nodes (no generic params in scope).
-    for (name, type_ann, _, _) in ir
+    for (name, type_ann) in ir
         .consts
         .iter()
-        .chain(ir.params.iter())
-        .chain(ir.nodes.iter())
+        .map(|(n, t, _, _)| (n, t))
+        .chain(ir.params.iter().map(|(n, t, _, _)| (n, t)))
+        .chain(ir.nodes.iter().map(|(n, t, _, _)| (n, t)))
     {
         let resolved =
             resolve_type_expr(type_ann, &ir.registry, no_dim_params, no_index_params, src)?;

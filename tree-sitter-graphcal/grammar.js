@@ -88,13 +88,13 @@ module.exports = grammar({
     ),
 
     // param dry_mass: Mass = 1200 kg;
+    // param dry_mass: Mass;  (required param, no default)
     param_declaration: $ => seq(
       repeat($.attribute),
       "param",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
-      "=",
-      field("value", $._expr),
+      optional(seq("=", field("value", $._expr))),
       ";",
     ),
 

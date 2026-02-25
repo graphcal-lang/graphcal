@@ -89,7 +89,7 @@ node transfer_time: Time = @storage / @rate;
 
 ### Reactive computation graph
 
-Three declaration kinds -- `param` (inputs), `node` (computed), `const` (compile-time) -- form a DAG that is automatically evaluated in dependency order. Override any `param` at the command line with `--set` or `--input`.
+Three declaration kinds -- `param` (inputs), `node` (computed), `const` (compile-time) -- form a DAG that is automatically evaluated in dependency order. A `param` can have a default value or be **required** (no `= value`), in which case it must be provided via `--set`, `--input`, or a parameterized import binding. Override any `param` at the command line with `--set` or `--input`.
 
 ```sh
 graphcal eval rocket.gcl --set 'isp=450.0 s'

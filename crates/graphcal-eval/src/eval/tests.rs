@@ -682,6 +682,28 @@ fn override_unknown_param_errors() {
 }
 
 #[test]
+fn required_param_without_override_errors() {
+    let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
+    let result = compile_and_eval_with_overrides(source, "test", &HashMap::new());
+    match result {
+        Err(CompileError::Eval(GraphcalError::RequiredParamNotProvided { name, .. })) => {
+            assert_eq!(name, "x");
+        }
+        other => panic!("expected RequiredParamNotProvided, got {other:?}"),
+    }
+}
+
+#[test]
+fn required_param_with_override_succeeds() {
+    let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("x"), parse_expr("42.0"));
+    let result = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
+    let y = find_value(&result, "y");
+    assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
+}
+
+#[test]
 fn project_multi_file_rocket() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/rocket_split/main.gcl");
@@ -1221,4 +1243,20 @@ mod prop {
             prop_assert!(y.is_finite(), "exp produced non-finite: {y}");
         }
     }
+}
+
+// --- Required param (no default) import tests ---
+
+#[test]
+fn project_required_param_import() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/required_param_import/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None).unwrap();
+    // radius = 6371 km, circumference = 2 * PI * radius
+    let expected = 2.0 * std::f64::consts::PI * 6_371_000.0; // in metres (SI)
+    let circumference = find_value(&result, "circumference");
+    assert!(
+        (circumference - expected).abs() < 1.0,
+        "circumference = {circumference}, expected = {expected}"
+    );
 }

@@ -201,7 +201,8 @@ impl ImportItem {
 pub struct ParamDecl {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
-    pub value: Expr,
+    /// The default value expression. `None` for required params (no default).
+    pub value: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -783,10 +784,10 @@ mod tests {
                         kind: TypeExprKind::Dimensionless,
                         span: Span::new(9, 15),
                     },
-                    value: Expr {
+                    value: Some(Expr {
                         kind: ExprKind::Number(1.0),
                         span: Span::new(27, 3),
-                    },
+                    }),
                 }),
                 span: Span::new(0, 31),
             }],

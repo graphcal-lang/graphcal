@@ -226,18 +226,54 @@ The dependency's computation graph is merged into the importer's DAG, so the top
 
 ### Partial overrides
 
-You only need to override the params you want to change. Unspecified params keep their default values:
+You only need to override the params you want to change. Unspecified params with default values keep their defaults:
 
 ```
-// rocket.gcl has params: dry_mass, fuel_mass, isp
-// Only override dry_mass; fuel_mass and isp keep defaults
+// rocket.gcl has params: dry_mass (required), fuel_mass (default), isp (default)
+// Provide the required dry_mass; fuel_mass and isp keep defaults
 import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
 ```
+
+### Required parameters
+
+A param declared without a default value is **required** — it must be provided by the importer via a parameterized import binding. This is the primary mechanism for creating reusable "library" files:
+
+```
+// library: rocket_engine.gcl
+param dry_mass: Mass;                     // required — must be provided
+param isp: Velocity = 320.0 s;           // optional — has default
+
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+```
+
+```
+// consumer: main.gcl
+import "./rocket_engine.gcl"(dry_mass = 800.0 kg) as engine;
+
+node dv: Velocity = @engine::delta_v;
+```
+
+If a required param is not provided, the compiler emits error `O003`:
+
+```
+error[graphcal::O003]: required param `dry_mass` has no value
+  ┌─ rocket_engine.gcl:2:1
+  │
+2 │ param dry_mass: Mass;
+  │ ^^^^^^^^^^^^^^^^^^^^^ declared here without a default value
+  │
+  = help: provide a value via `--set 'dry_mass=<value>'`, `--input`,
+          or a parameterized import binding
+```
+
+Required params can also be satisfied from the command line with `--set` or `--input`, which is useful for top-level entry-point files.
 
 ### Validation
 
 - Binding names must be `param` declarations in the imported file
 - Binding a `node`, `const`, or unknown name is a compile error
+- All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
 - Dimension mismatches are caught by the normal dimension checker after merging
 
 ## Circular Import Detection
@@ -276,6 +312,37 @@ project/
     orbital.gcl   -- reusable orbital mechanics functions
     thermal.gcl   -- thermal analysis functions
   main.gcl        -- application-specific graph
+```
+
+### Reusable Templates with Required Parameters
+
+Use required params to create library files that must be instantiated with specific values:
+
+```
+project/
+  lib/
+    rocket.gcl    -- template with required params (dry_mass, fuel_mass)
+  main.gcl        -- instantiates rocket.gcl with different param values
+```
+
+```
+// lib/rocket.gcl
+param dry_mass: Mass;     // required
+param fuel_mass: Mass;    // required
+param isp: Time = 320 s;  // optional default
+
+const G0: Acceleration = 9.80665 m/s^2;
+node v_exhaust: Velocity = @isp * G0;
+node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
+```
+
+```
+// main.gcl
+import "./lib/rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2000.0 kg) as stage_1;
+import "./lib/rocket.gcl"(dry_mass = 500.0 kg, fuel_mass = 1200.0 kg) as stage_2;
+
+node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
 
 ## Assertions in Imported Files

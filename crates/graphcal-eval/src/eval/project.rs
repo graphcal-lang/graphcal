@@ -662,7 +662,11 @@ fn compile_single_file_in_project(
         for decl in &mut ast.declarations {
             match &mut decl.kind {
                 DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
-                DeclKind::Param(p) => rewrite_qualified_refs(&mut p.value),
+                DeclKind::Param(p) => {
+                    if let Some(ref mut value) = p.value {
+                        rewrite_qualified_refs(value);
+                    }
+                }
                 DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
                 DeclKind::Assert(a) => match &mut a.body {
                     graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
@@ -1073,6 +1077,19 @@ fn evaluate_project_perfile(
             &override_targets,
         )?;
 
+        // Files with required params (no default) cannot be evaluated standalone.
+        // They are only consumed via instantiated imports where `merge_dependency`
+        // provides the bindings. Skip standalone evaluation for these files.
+        let has_required_params = compiled
+            .tir
+            .params
+            .iter()
+            .any(|(_, _, expr_opt, _)| expr_opt.is_none());
+
+        if !is_root && has_required_params {
+            continue;
+        }
+
         if is_root {
             let file_src = &project.files[file_path].named_source;
             let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
@@ -1244,6 +1261,16 @@ fn compile_to_tir_project_perfile(
 
         if is_root {
             return Ok(compiled.tir);
+        }
+
+        // Skip standalone evaluation for files with required params (no default).
+        let has_required_params = compiled
+            .tir
+            .params
+            .iter()
+            .any(|(_, _, expr_opt, _)| expr_opt.is_none());
+        if has_required_params {
+            continue;
         }
 
         let file_src = &project.files[file_path].named_source;
@@ -1438,8 +1465,8 @@ fn extract_runtime_values(
     let local_runtime_names: HashSet<&str> = tir
         .params
         .iter()
-        .chain(tir.nodes.iter())
         .map(|(n, _, _, _)| n.as_str())
+        .chain(tir.nodes.iter().map(|(n, _, _, _)| n.as_str()))
         .collect();
 
     values
@@ -1525,14 +1552,14 @@ pub(super) fn apply_overrides(
         }
 
         if let Some(entry) = ir.params.iter_mut().find(|(n, _, _, _)| n == name_str) {
-            entry.2 = override_expr.clone();
+            entry.2 = Some(override_expr.clone());
         }
 
         let all_runtime: std::collections::HashSet<&str> = ir
             .params
             .iter()
-            .chain(ir.nodes.iter())
             .map(|(n, _, _, _)| n.as_str())
+            .chain(ir.nodes.iter().map(|(n, _, _, _)| n.as_str()))
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
