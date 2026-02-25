@@ -15,6 +15,7 @@ use indexmap::IndexMap;
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 
+use graphcal_eval::builtins::builtin_constants;
 use graphcal_eval::eval::{
     AssertResult, CompileError, EvalResult, NodeError, Value, compile_and_eval_from_project,
     compile_to_tir_from_project,
@@ -23,6 +24,7 @@ use graphcal_eval::loader::LoadedProject;
 use graphcal_eval::tir::TIR;
 use graphcal_syntax::ast::DeclKind;
 use graphcal_syntax::names::DeclName;
+use graphcal_syntax::parser::Parser;
 
 use commands::{Command, HELP_TEXT, parse_command};
 use format::{format_value_changed, format_value_line};
@@ -188,10 +190,13 @@ pub fn run_shell(file: Option<&Path>, overrides: HashMap<DeclName, graphcal_synt
             continue;
         }
 
-        // Try as a name query (bare identifier).
-        let query_name = trimmed.trim_end_matches(';');
-        if is_valid_identifier(query_name) {
-            handle_name_query(query_name, &state);
+        // Try as a name query (bare identifier) or a compound expression
+        // (unit like `m/s` or dimension like `Length / Time`).
+        let query = trimmed.trim_end_matches(';');
+        if is_valid_identifier(query) {
+            handle_name_query(query, &state);
+        } else if looks_like_compound_expr(query) {
+            handle_compound_query(query, &state);
         } else {
             eprintln!("  error: unrecognized input. Enter a declaration, a name, or :help");
         }
@@ -627,31 +632,107 @@ fn handle_type(name: &str, state: &ShellState) {
 }
 
 /// Handle a bare name query.
+///
+/// Lookup order: declared values → builtin constants → units → dimensions.
 #[expect(clippy::print_stdout, reason = "interactive shell output")]
 #[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_name_query(name: &str, state: &ShellState) {
-    let Some(result) = &state.prev_result else {
-        eprintln!("  error: `{name}` not found (no declarations)");
+    // 1. Search in declared values.
+    if let Some(result) = &state.prev_result {
+        let found = result.all.iter().find(|(n, _, _)| n.as_str() == name);
+        match found {
+            Some((_, Ok(value), _)) => {
+                println!(
+                    "{}",
+                    format_value_line(name, value, &result.base_dim_symbols)
+                );
+                return;
+            }
+            Some((_, Err(err), _)) => {
+                println!("  {name} = ERROR: {err}");
+                return;
+            }
+            None => {}
+        }
+    }
+
+    // 2. Builtin constants (PI, E, TAU, etc.)
+    let constants = builtin_constants();
+    if let Some(&value) = constants.get(name) {
+        println!("  {name} = {value} (builtin constant, Dimensionless)");
+        return;
+    }
+
+    // 3. Units (from TIR registry).
+    if let Some(tir) = &state.prev_tir
+        && let Some(info) = tir.registry.units.get_unit(name)
+    {
+        let dim_str = tir.registry.dimensions.format_dimension(&info.dimension);
+        println!("  {name}: unit of {dim_str} (scale: {})", info.scale);
+        return;
+    }
+
+    // 4. Dimensions (from TIR registry).
+    if let Some(tir) = &state.prev_tir
+        && let Some(dim) = tir.registry.dimensions.get_dimension(name)
+    {
+        let formatted = tir.registry.dimensions.format_dimension(dim);
+        if formatted == name {
+            // Base dimension — just confirm it exists.
+            println!("  {name}: dimension (base)");
+        } else {
+            // Derived dimension — show its expansion.
+            println!("  {name} = {formatted} (dimension)");
+        }
+        return;
+    }
+
+    eprintln!("  error: `{name}` not found");
+}
+
+/// Check if input looks like a compound unit or dimension expression
+/// (contains `/`, `*`, or `^` operators between identifiers).
+fn looks_like_compound_expr(s: &str) -> bool {
+    // Must contain at least one operator and consist of identifiers + operators + whitespace
+    let has_operator = s.contains('/') || s.contains('*') || s.contains('^');
+    if !has_operator {
+        return false;
+    }
+    // All chars should be alphanumeric, underscore, whitespace, or operators
+    s.chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '/' || c == '*' || c == '^' || c == ' ')
+}
+
+/// Handle a compound expression query (e.g., `m/s`, `Length / Time`).
+///
+/// Tries to parse as a unit expression first, then as a dimension expression.
+#[expect(clippy::print_stdout, reason = "interactive shell output")]
+#[expect(clippy::print_stderr, reason = "interactive shell error output")]
+fn handle_compound_query(input: &str, state: &ShellState) {
+    let Some(tir) = &state.prev_tir else {
+        eprintln!("  error: no declarations loaded (cannot resolve units/dimensions)");
         return;
     };
 
-    // Search in all values.
-    let found = result.all.iter().find(|(n, _, _)| n.as_str() == name);
-
-    match found {
-        Some((_, Ok(value), _)) => {
-            println!(
-                "{}",
-                format_value_line(name, value, &result.base_dim_symbols)
-            );
-        }
-        Some((_, Err(err), _)) => {
-            println!("  {name} = ERROR: {err}");
-        }
-        None => {
-            eprintln!("  error: `{name}` not found");
-        }
+    // Try as a unit expression (e.g., `m/s`, `kg * m / s^2`).
+    if let Ok(unit_expr) = Parser::new(input).parse_standalone_unit_expr()
+        && let Some((dim, scale)) = tir.registry.units.resolve_unit_expr(&unit_expr)
+    {
+        let dim_str = tir.registry.dimensions.format_dimension(&dim);
+        println!("  {input}: unit of {dim_str} (scale: {scale})");
+        return;
     }
+
+    // Try as a dimension expression (e.g., `Length / Time`).
+    if let Ok(dim_expr) = Parser::new(input).parse_standalone_dim_expr()
+        && let Some(dim) = tir.registry.dimensions.resolve_dim_expr(&dim_expr)
+    {
+        let formatted = tir.registry.dimensions.format_dimension(&dim);
+        println!("  {input} = {formatted} (dimension)");
+        return;
+    }
+
+    eprintln!("  error: `{input}` is not a recognized unit or dimension expression");
 }
 
 /// Load a base file and evaluate it.
