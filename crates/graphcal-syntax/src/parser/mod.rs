@@ -147,6 +147,40 @@ impl<'src> Parser<'src> {
         Ok(expr)
     }
 
+    /// Parse a standalone unit expression (e.g., `m/s^2`, `kg * m / s^2`).
+    ///
+    /// Expects the entire input to be consumed; returns an error if there
+    /// are trailing tokens after the unit expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParseError`] if the source is not a valid unit expression.
+    pub fn parse_standalone_unit_expr(&mut self) -> Result<crate::ast::UnitExpr, ParseError> {
+        let expr = self.parse_unit_expr()?;
+        if let Some((tok, span)) = self.lexer.peek_with_span() {
+            let tok = tok.clone();
+            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+        }
+        Ok(expr)
+    }
+
+    /// Parse a standalone dimension expression (e.g., `Length / Time`).
+    ///
+    /// Expects the entire input to be consumed; returns an error if there
+    /// are trailing tokens after the dimension expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParseError`] if the source is not a valid dimension expression.
+    pub fn parse_standalone_dim_expr(&mut self) -> Result<crate::ast::DimExpr, ParseError> {
+        let expr = self.parse_dim_expr()?;
+        if let Some((tok, span)) = self.lexer.peek_with_span() {
+            let tok = tok.clone();
+            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+        }
+        Ok(expr)
+    }
+
     /// Parse the full source file into a [`File`](crate::ast::File) AST node.
     ///
     /// # Errors

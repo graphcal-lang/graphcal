@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-dag/src/lib.rs
+expression: render(&g)
+---
+ param dry_mass     param fuel_mass    const G0    param isp
+        │                  │               │           │
+        └───────────┬──────┴───────────┬───┴───────────┘
+                    │                  │
+             node mass_ratio    node v_exhaust
+                    │                  │
+                    └─────────┬────────┘
+                              │
+                        node delta_v

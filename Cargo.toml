@@ -19,6 +19,7 @@ categories = ["compilers", "science"]
 clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
+graphcal-dag = { path = "crates/graphcal-dag", version = "0.1.0" }
 graphcal-eval = { path = "crates/graphcal-eval", version = "0.1.0" }
 hifitime = "4.2.4"
 jiff = "0.2.21"
@@ -38,6 +39,7 @@ thiserror = "2.0.18"
 tokio = { version = "1", features = ["full"] }
 toml-spanner = "0.4.0"
 tower-lsp = "0.20"
+rustyline = { version = "17.0.2", features = ["derive"] }
 
 [workspace.lints.clippy]
 all = "warn"
