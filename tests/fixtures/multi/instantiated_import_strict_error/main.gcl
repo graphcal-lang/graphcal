@@ -1,7 +1,6 @@
-// main.gcl -- instantiated import: override one param, selective import
+// main.gcl -- partial binding WITHOUT #[allow_defaults] → should error
 dimension Velocity = Length / Time;
 
-#[allow_defaults]
 import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };
 
 node result: Velocity = @delta_v;

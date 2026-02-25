@@ -224,15 +224,31 @@ import "./rocket.gcl"(dry_mass = @my_mass) { delta_v };
 
 The dependency's computation graph is merged into the importer's DAG, so the topological sort naturally handles evaluation order.
 
-### Partial overrides
+### Strict Binding Mode
 
-You only need to override the params you want to change. Unspecified params with default values keep their defaults:
+When a parameterized import has **any** param bindings, **all** params (including those with defaults) must be explicitly bound. This prevents accidentally relying on stale default values when you intend to customize the module.
 
 ```
-// rocket.gcl has params: dry_mass (required), fuel_mass (default), isp (default)
-// Provide the required dry_mass; fuel_mass and isp keep defaults
+// rocket.gcl has params: dry_mass (default), fuel_mass (default), isp (default)
+
+// ERROR: only dry_mass is bound; fuel_mass and isp are not explicitly provided
 import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+
+// OK: all params are explicitly bound
+import "./rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2800.0 kg, isp = 320.0 s) as r;
 ```
+
+#### Opting out with `#[allow_defaults]`
+
+If you intentionally want to bind only some params and let the rest use their defaults, add the `#[allow_defaults]` attribute to the import:
+
+```
+#[allow_defaults]
+import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+// fuel_mass and isp keep their default values
+```
+
+The `#[allow_defaults]` attribute is only valid on `import` declarations with param bindings. Using it on other declarations (e.g., `param`, `node`) is a compile error.
 
 ### Required parameters
 
@@ -274,6 +290,7 @@ Required params can also be satisfied from the command line with `--set` or `--i
 - Binding names must be `param` declarations in the imported file
 - Binding a `node`, `const`, or unknown name is a compile error
 - All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
+- When any binding is provided, all params (including those with defaults) must be bound, unless `#[allow_defaults]` is present
 - Dimension mismatches are caught by the normal dimension checker after merging
 
 ## Circular Import Detection
@@ -339,8 +356,8 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 ```
 // main.gcl
-import "./lib/rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2000.0 kg) as stage_1;
-import "./lib/rocket.gcl"(dry_mass = 500.0 kg, fuel_mass = 1200.0 kg) as stage_2;
+import "./lib/rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2000.0 kg, isp = 320.0 s) as stage_1;
+import "./lib/rocket.gcl"(dry_mass = 500.0 kg, fuel_mass = 1200.0 kg, isp = 450.0 s) as stage_2;
 
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```

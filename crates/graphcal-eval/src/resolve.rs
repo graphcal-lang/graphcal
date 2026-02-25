@@ -655,6 +655,27 @@ pub fn resolve_with_imports(
                 "lazy" => {
                     // Recognized but semantics deferred — no validation needed
                 }
+                "allow_defaults" => {
+                    // #[allow_defaults] is only valid on import declarations
+                    let kind = match &decl.kind {
+                        DeclKind::Import(_) => continue,
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Assert(_) => "assert",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                    };
+                    return Err(GraphcalError::InvalidAttributeTarget {
+                        attr_name: "allow_defaults".to_string(),
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
                 _ => {
                     return Err(GraphcalError::UnknownAttribute {
                         name: attr_name.to_string(),
@@ -1029,6 +1050,26 @@ pub fn resolve_with_imported_values(
                     });
                 }
                 "lazy" => {}
+                "allow_defaults" => {
+                    let kind = match &decl.kind {
+                        DeclKind::Import(_) => continue,
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Assert(_) => "assert",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                    };
+                    return Err(GraphcalError::InvalidAttributeTarget {
+                        attr_name: "allow_defaults".to_string(),
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
                 _ => {
                     return Err(GraphcalError::UnknownAttribute {
                         name: attr_name.to_string(),

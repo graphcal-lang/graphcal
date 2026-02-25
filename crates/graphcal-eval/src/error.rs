@@ -673,6 +673,31 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("param `{name}` has a default value but was not explicitly provided")]
+    #[diagnostic(code(graphcal::O004), help("{help}"))]
+    DefaultParamNotProvided {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has default but not explicitly provided")]
+        span: SourceSpan,
+        help: String,
+    },
+
+    #[error("`#[{attr_name}]` is not valid on `{kind}` declarations")]
+    #[diagnostic(
+        code(graphcal::A012),
+        help("`#[{attr_name}]` is only valid on `import` declarations with param bindings")
+    )]
+    InvalidAttributeTarget {
+        attr_name: String,
+        kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not valid here")]
+        span: SourceSpan,
+    },
+
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
     #[diagnostic(
         code(graphcal::M009),

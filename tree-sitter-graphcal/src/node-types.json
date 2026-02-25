@@ -2082,6 +2082,10 @@
       "required": false,
       "types": [
         {
+          "type": "attribute",
+          "named": true
+        },
+        {
           "type": "import_item",
           "named": true
         }

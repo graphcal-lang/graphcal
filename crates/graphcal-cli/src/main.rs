@@ -38,6 +38,9 @@ enum Commands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Allow params with default values to keep their defaults when using --set/--input
+        #[arg(long)]
+        allow_defaults: bool,
     },
     /// Format .gcl files
     Format {
@@ -111,6 +114,7 @@ fn main() {
             input,
             no_assert,
             root,
+            allow_defaults,
         } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
@@ -166,7 +170,7 @@ fn main() {
                 }
             }
 
-            match compile_and_eval_project(&file, &overrides, root.as_deref()) {
+            match compile_and_eval_project(&file, &overrides, root.as_deref(), allow_defaults) {
                 Ok(result) => {
                     match format {
                         OutputFormat::Text => print_text(&result, no_assert),

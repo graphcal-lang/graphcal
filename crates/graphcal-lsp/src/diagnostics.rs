@@ -190,7 +190,7 @@ mod tests {
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
-        match compile_and_eval_project(path, &HashMap::new(), None) {
+        match compile_and_eval_project(path, &HashMap::new(), None, true) {
             Ok(result) => eval_result_to_diagnostics(&result, source),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }

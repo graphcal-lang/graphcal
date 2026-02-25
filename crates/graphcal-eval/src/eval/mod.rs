@@ -30,7 +30,7 @@ pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
 ///
 /// Returns a [`CompileError`] if parsing or evaluation fails.
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
-    compile_and_eval_with_overrides(source, name, &HashMap::new())
+    compile_and_eval_with_overrides(source, name, &HashMap::new(), true)
 }
 
 /// Full pipeline with parameter overrides.
@@ -50,7 +50,8 @@ pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::LoadedProject::from_source(source, name)?;
-    compile_and_eval_from_project(&project, overrides)
+    compile_and_eval_from_project(&project, overrides, allow_defaults)
 }

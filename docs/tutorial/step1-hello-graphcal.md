@@ -89,10 +89,10 @@ The `@` prefix is how you reference values in the computation graph:
 
 ## Overriding Parameters
 
-You can override parameter values from the command line using `--set`:
+You can override parameter values from the command line using `--set`. When you use `--set`, you must provide values for **all** parameters (or use `--allow-defaults` to keep unspecified defaults):
 
 ```bash
-$ graphcal eval mass_budget.gcl --set 'fuel_mass=3500.0'
+$ graphcal eval mass_budget.gcl --set 'dry_mass=1200.0' --set 'fuel_mass=3500.0'
 dry_mass         = 1200
 fuel_mass        = 3500
 MARGIN_FACTOR    = 1.1

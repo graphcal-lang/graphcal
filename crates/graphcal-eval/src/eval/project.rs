@@ -499,6 +499,33 @@ fn compile_single_file_in_project(
                     }
                 };
 
+                // Strict check: when any binding is provided, ALL params of the
+                // imported file must be explicitly bound unless #[allow_defaults].
+                let allow_defaults = decl
+                    .attributes
+                    .iter()
+                    .any(|a| a.name.name == "allow_defaults");
+                if !allow_defaults {
+                    for dep_decl in &dep_loaded.ast.declarations {
+                        if let DeclKind::Param(p) = &dep_decl.kind
+                            && p.value.is_some()
+                            && !bindings.contains_key(p.name.value.as_str())
+                        {
+                            return Err(CompileError::Eval(
+                                GraphcalError::DefaultParamNotProvided {
+                                    name: p.name.value.to_string(),
+                                    src: file_src.clone(),
+                                    span: import_decl.path.span().into(),
+                                    help: format!(
+                                        "provide `{name} = <value>` in the import binding or add `#[allow_defaults]` to the import",
+                                        name = p.name.value,
+                                    ),
+                                },
+                            ));
+                        }
+                    }
+                }
+
                 deferred_instantiated.push(DeferredInstantiatedImport {
                     dep_path: import_canonical,
                     prefix,
@@ -1057,13 +1084,96 @@ fn evaluate_and_store_file(
 /// from dependency files into the importing file's scope.
 ///
 /// All assertions in all files are evaluated and aggregated.
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential per-file evaluation steps"
+)]
 fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     // Pre-compute override routing: map each override name to the file that owns
     // the param. Walk root file's imports to find the owning file for each override.
     let override_targets = route_overrides_to_files(project, overrides)?;
+
+    // Strict param check: when overrides are provided and --allow-defaults is not set,
+    // all overridable params (root file + selectively imported) must be explicitly provided.
+    if !overrides.is_empty() && !allow_defaults {
+        let root_file = &project.files[&project.root];
+        let root_dir = project.root.parent().unwrap_or_else(|| Path::new("."));
+        let root_src = &root_file.named_source;
+
+        // Check root file's own params
+        for decl in &root_file.ast.declarations {
+            if let DeclKind::Param(p) = &decl.kind
+                && p.value.is_some()
+            {
+                let is_overridden = override_targets.values().any(|(target_path, orig_name)| {
+                    *target_path == project.root && orig_name.as_str() == p.name.value.as_str()
+                });
+                if !is_overridden {
+                    return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
+                        name: p.name.value.to_string(),
+                        src: root_src.clone(),
+                        span: decl.span.into(),
+                        help: format!(
+                            "provide via `--set '{name}=<value>'` or use `--allow-defaults`",
+                            name = p.name.value,
+                        ),
+                    }));
+                }
+            }
+        }
+
+        // Check params from non-parameterized selective imports
+        for decl in &root_file.ast.declarations {
+            if let DeclKind::Import(import_decl) = &decl.kind {
+                // Only check non-parameterized imports (parameterized have their own check)
+                if !import_decl.param_bindings.is_empty() {
+                    continue;
+                }
+                if let graphcal_syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                    let import_canonical = resolve_import_to_canonical(
+                        &import_decl.path,
+                        root_dir,
+                        project,
+                        root_src,
+                    )?;
+                    let dep_file = &project.files[&import_canonical];
+                    let dep_src = &dep_file.named_source;
+
+                    // For each param in the dep that is selectively imported
+                    for item in names {
+                        let orig_name = item.name.name.as_str();
+                        // Find the param declaration in the dep
+                        for dep_decl in &dep_file.ast.declarations {
+                            if let DeclKind::Param(p) = &dep_decl.kind
+                                && p.name.value.as_str() == orig_name
+                                && p.value.is_some()
+                            {
+                                let local_name = item.local_name();
+                                let is_overridden =
+                                    overrides.keys().any(|k| k.as_str() == local_name);
+                                if !is_overridden {
+                                    return Err(CompileError::Eval(
+                                        GraphcalError::DefaultParamNotProvided {
+                                            name: local_name.to_string(),
+                                            src: dep_src.clone(),
+                                            span: dep_decl.span.into(),
+                                            help: format!(
+                                                "provide via `--set '{local_name}=<value>'` or use `--allow-defaults`",
+                                            ),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let mut evaluated_files: HashMap<PathBuf, EvaluatedFile> = HashMap::new();
 
@@ -1600,8 +1710,9 @@ pub fn compile_to_tir_from_project(
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
-    evaluate_project_perfile(project, overrides)
+    evaluate_project_perfile(project, overrides, allow_defaults)
 }
 
 // ---------------------------------------------------------------------------
@@ -1624,9 +1735,10 @@ pub fn compile_and_eval_project(
     root_path: &Path,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
     project_root: Option<&Path>,
+    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::load_project(root_path, project_root)?;
-    compile_and_eval_from_project(&project, overrides)
+    compile_and_eval_from_project(&project, overrides, allow_defaults)
 }
 
 /// Compile source to TIR without evaluating.

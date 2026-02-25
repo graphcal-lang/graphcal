@@ -1,6 +1,7 @@
 // main.gcl -- instantiated module import (access everything via prefix)
 dimension Velocity = Length / Time;
 
+#[allow_defaults]
 import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
 
 node dv: Velocity = @r::delta_v;
