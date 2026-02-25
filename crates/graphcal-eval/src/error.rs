@@ -802,6 +802,21 @@ pub enum GraphcalError {
     ManifestError { message: String },
 
     // --- Domain constraint errors ---
+    #[error("unknown timezone `{timezone}`")]
+    #[diagnostic(
+        code(graphcal::D007),
+        help(
+            "use a valid IANA timezone name like \"UTC\", \"America/New_York\", or \"Asia/Tokyo\""
+        )
+    )]
+    InvalidTimezone {
+        timezone: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a recognized IANA timezone")]
+        span: SourceSpan,
+    },
+
     #[error("domain violation: `{name}` value {value} is {violation}")]
     #[diagnostic(
         code(graphcal::C001),

@@ -427,6 +427,20 @@ fn error_datetime_extract_non_datetime() {
     insta::assert_snapshot!(rendered);
 }
 
+#[test]
+fn error_datetime_timezone_non_datetime() {
+    let source = include_str!("../../../tests/fixtures/errors/datetime_timezone_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_timezone_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_invalid_timezone() {
+    let source = include_str!("../../../tests/fixtures/errors/invalid_timezone.gcl");
+    let rendered = render_error(source, "invalid_timezone.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Domain constraint error tests ---
 
 #[test]

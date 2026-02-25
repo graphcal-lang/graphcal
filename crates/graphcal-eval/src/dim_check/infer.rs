@@ -1070,6 +1070,14 @@ pub(super) fn infer_type(
                     ),
                 });
             }
+            // Validate timezone string is a valid IANA timezone
+            if jiff::tz::TimeZone::get(timezone).is_err() {
+                return Err(GraphcalError::InvalidTimezone {
+                    timezone: timezone.clone(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
             Ok(inner_type)
         }
 

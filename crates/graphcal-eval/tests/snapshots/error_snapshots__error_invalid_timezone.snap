@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown timezone `Not/A_Timezone`
+    Diagnostic severity: error
+Begin snippet for invalid_timezone.gcl starting at line 2, column 1
+
+snippet line 2: param t: Datetime = datetime("2024-01-01T12:00:00 UTC");
+snippet line 3: node display: Datetime = @t -> "Not/A_Timezone";
+    label at line 3, columns 26 to 47: not a recognized IANA timezone
+diagnostic help: use a valid IANA timezone name like "UTC", "America/New_York", or "Asia/Tokyo"
+diagnostic code: graphcal::D007
