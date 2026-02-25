@@ -727,7 +727,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.value.kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 400.0).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 1);

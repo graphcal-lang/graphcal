@@ -236,9 +236,19 @@ fn format_attribute_arg(arg: &graphcal_syntax::ast::AttributeArg) -> RcDoc<'stat
     }
 }
 
-/// `param name: Type = expr;`
+/// `param name: Type = expr;` or `param name: Type;` (required param)
 fn format_param_decl(fmt: &mut Formatter<'_>, d: &ParamDecl) -> RcDoc<'static> {
-    format_value_decl(fmt, "param", &d.name.value, &d.type_ann, &d.value)
+    d.value.as_ref().map_or_else(
+        || {
+            RcDoc::text("param")
+                .append(RcDoc::text(" "))
+                .append(RcDoc::text(d.name.value.as_str().to_string()))
+                .append(RcDoc::text(": "))
+                .append(format_type_expr_inline(&d.type_ann))
+                .append(RcDoc::text(";"))
+        },
+        |value| format_value_decl(fmt, "param", &d.name.value, &d.type_ann, value),
+    )
 }
 
 /// `node name: Type = expr;`

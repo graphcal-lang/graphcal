@@ -658,6 +658,21 @@ pub enum GraphcalError {
     )]
     OverrideUnknownParam { name: DeclName },
 
+    #[error("required param `{name}` has no value")]
+    #[diagnostic(
+        code(graphcal::O003),
+        help(
+            "provide a value via `--set '{name}=<value>'`, `--input`, or a parameterized import binding"
+        )
+    )]
+    RequiredParamNotProvided {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("declared here without a default value")]
+        span: SourceSpan,
+    },
+
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
     #[diagnostic(
         code(graphcal::M009),

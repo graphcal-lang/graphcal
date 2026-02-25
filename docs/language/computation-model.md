@@ -12,7 +12,7 @@ Every top-level declaration belongs to one of four kinds:
 
 | Kind | Keyword | Semantics | In DAG? |
 |------|---------|-----------|---------|
-| Parameter | `param` | User-supplied input with a default value | Yes |
+| Parameter | `param` | User-supplied input, optionally with a default value | Yes |
 | Node | `node` | Computed value derived from other values | Yes |
 | Constant | `const` | Compile-time immutable value | No |
 | Assertion | `assert` | Post-evaluation boolean check | No |
@@ -20,10 +20,11 @@ Every top-level declaration belongs to one of four kinds:
 ### Parameters
 
 ```
-param dry_mass: Mass = 1200.0 kg;
+param dry_mass: Mass = 1200.0 kg;  // optional param (has default)
+param fuel_mass: Mass;              // required param (no default)
 ```
 
-Parameters are the inputs to your computation graph. They have default values but can be overridden at runtime via `--set` or `--input`.
+Parameters are the inputs to your computation graph. A param with a default value (`= expr`) can be overridden at runtime via `--set` or `--input`. A param without a default value is **required** — it must be provided via `--set`, `--input`, or a parameterized import binding. Evaluating a file with an unsatisfied required param is a compile error.
 
 ### Nodes
 

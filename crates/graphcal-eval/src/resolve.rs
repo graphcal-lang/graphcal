@@ -168,8 +168,8 @@ pub enum ExpectedFail {
 pub struct ResolvedFile {
     /// Const declarations in source order: (name, expr, span).
     pub consts: Vec<(String, Expr, Span)>,
-    /// Param declarations in source order: (name, expr, span).
-    pub params: Vec<(String, Expr, Span)>,
+    /// Param declarations in source order: (name, optional default expr, span).
+    pub params: Vec<(String, Option<Expr>, Span)>,
     /// Node declarations in source order: (name, expr, span).
     pub nodes: Vec<(String, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
@@ -425,18 +425,22 @@ pub fn resolve_with_imports(
                 consts.push((cname, c.value.clone(), decl.span));
             }
             DeclKind::Param(p) => {
-                check_no_assert_graph_refs(&p.value, &assert_names, src)?;
-                let (graph_refs, _const_refs) = extract_all_refs(
-                    &p.value,
-                    &all_runtime_names,
-                    &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
-                    &user_fn_names,
-                    src,
-                )?;
                 let pname = p.name.value.to_string();
-                runtime_deps.insert(pname.clone(), graph_refs);
+                if let Some(ref value) = p.value {
+                    check_no_assert_graph_refs(value, &assert_names, src)?;
+                    let (graph_refs, _const_refs) = extract_all_refs(
+                        value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    runtime_deps.insert(pname.clone(), graph_refs);
+                } else {
+                    runtime_deps.insert(pname.clone(), HashSet::new());
+                }
                 params.push((pname, p.value.clone(), decl.span));
             }
             DeclKind::Node(n) => {
@@ -513,10 +517,10 @@ pub fn resolve_with_imports(
         .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
         .collect();
     all_consts.extend(consts);
-    let mut all_params: Vec<(String, Expr, Span)> = imported
+    let mut all_params: Vec<(String, Option<Expr>, Span)> = imported
         .params
         .iter()
-        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .map(|(name, _, expr, span)| (name.clone(), Some(expr.clone()), *span))
         .collect();
     all_params.extend(params);
     let mut all_nodes: Vec<(String, Expr, Span)> = imported
@@ -882,18 +886,22 @@ pub fn resolve_with_imported_values(
                 consts.push((cname, c.value.clone(), decl.span));
             }
             DeclKind::Param(p) => {
-                check_no_assert_graph_refs(&p.value, &assert_names, src)?;
-                let (graph_refs, _const_refs) = extract_all_refs(
-                    &p.value,
-                    &all_runtime_names,
-                    &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
-                    &user_fn_names,
-                    src,
-                )?;
                 let pname = p.name.value.to_string();
-                runtime_deps.insert(pname.clone(), graph_refs);
+                if let Some(ref value) = p.value {
+                    check_no_assert_graph_refs(value, &assert_names, src)?;
+                    let (graph_refs, _const_refs) = extract_all_refs(
+                        value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    runtime_deps.insert(pname.clone(), graph_refs);
+                } else {
+                    runtime_deps.insert(pname.clone(), HashSet::new());
+                }
                 params.push((pname, p.value.clone(), decl.span));
             }
             DeclKind::Node(n) => {

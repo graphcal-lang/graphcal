@@ -162,8 +162,12 @@ impl Parser<'_> {
             .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
-        self.expect(Token::Eq)?;
-        let value = self.parse_expr()?;
+        let value = if self.lexer.peek() == Some(&Token::Eq) {
+            self.expect(Token::Eq)?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
@@ -806,7 +810,7 @@ mod tests {
                 assert_eq!(p.name.value.as_str(), "x");
                 assert!(matches!(p.type_ann.kind, TypeExprKind::Dimensionless));
                 assert!(
-                    matches!(p.value.kind, ExprKind::Number(n) if (n - 42.0).abs() < f64::EPSILON)
+                    matches!(p.value.as_ref().unwrap().kind, ExprKind::Number(n) if (n - 42.0).abs() < f64::EPSILON)
                 );
             }
             _ => panic!("expected param"),
@@ -828,7 +832,30 @@ mod tests {
                     }
                     other => panic!("expected DimExpr, got {other:?}"),
                 }
-                assert!(matches!(p.value.kind, ExprKind::UnitLiteral { .. }));
+                assert!(matches!(
+                    p.value.as_ref().unwrap().kind,
+                    ExprKind::UnitLiteral { .. }
+                ));
+            }
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_param_required() {
+        let file = Parser::new("param dry_mass: Mass;").parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 1);
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert_eq!(p.name.value.as_str(), "dry_mass");
+                match &p.type_ann.kind {
+                    TypeExprKind::DimExpr(d) => {
+                        assert_eq!(d.terms.len(), 1);
+                        assert_eq!(d.terms[0].term.name.name, "Mass");
+                    }
+                    other => panic!("expected DimExpr, got {other:?}"),
+                }
+                assert!(p.value.is_none());
             }
             _ => panic!("expected param"),
         }

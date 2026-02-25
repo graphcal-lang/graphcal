@@ -393,9 +393,17 @@ pub(super) fn evaluate_plan(
     let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = tir
         .consts
         .iter()
-        .chain(tir.params.iter())
-        .chain(tir.nodes.iter())
         .map(|(name, _, expr, _)| (name.as_str(), expr))
+        .chain(
+            tir.params
+                .iter()
+                .filter_map(|(name, _, expr_opt, _)| expr_opt.as_ref().map(|e| (name.as_str(), e))),
+        )
+        .chain(
+            tir.nodes
+                .iter()
+                .map(|(name, _, expr, _)| (name.as_str(), expr)),
+        )
         .collect();
 
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {

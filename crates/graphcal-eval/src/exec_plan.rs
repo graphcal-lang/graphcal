@@ -153,10 +153,21 @@ fn build_runtime_dag(
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
     let mut expressions: HashMap<String, Expr> = HashMap::new();
 
-    for (name, _, expr, _) in &tir.params {
+    for (name, _, expr_opt, span) in &tir.params {
         let idx = graph.add_node(name.clone());
         index_map.insert(name.clone(), idx);
-        expressions.insert(name.clone(), expr.clone());
+        match expr_opt {
+            Some(expr) => {
+                expressions.insert(name.clone(), expr.clone());
+            }
+            None => {
+                return Err(GraphcalError::RequiredParamNotProvided {
+                    name: name.clone(),
+                    src: src.clone(),
+                    span: (*span).into(),
+                });
+            }
+        }
     }
     for (name, _, expr, _) in &tir.nodes {
         let idx = graph.add_node(name.clone());
@@ -179,9 +190,10 @@ fn build_runtime_dag(
         let span = tir
             .nodes
             .iter()
-            .chain(tir.params.iter())
-            .find(|(n, _, _, _)| n == cycle_node)
-            .map_or_else(|| Span::new(0, 0), |(_, _, _, s)| *s);
+            .map(|(n, _, _, s)| (n, *s))
+            .chain(tir.params.iter().map(|(n, _, _, s)| (n, *s)))
+            .find(|(n, _)| *n == cycle_node)
+            .map_or_else(|| Span::new(0, 0), |(_, s)| s);
         GraphcalError::CyclicDependency {
             name: cycle_node.clone().into(),
             src: src.clone(),

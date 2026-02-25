@@ -203,7 +203,9 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                     },
                 );
                 collect_type_expr_refs(&p.type_ann, &mut table);
-                collect_expr_refs(&p.value, &mut table, &mut scopes);
+                if let Some(ref value) = p.value {
+                    collect_expr_refs(value, &mut table, &mut scopes);
+                }
             }
             DeclKind::Node(n) => {
                 let name = n.name.value.to_string();

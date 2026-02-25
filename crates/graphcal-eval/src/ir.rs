@@ -41,8 +41,8 @@ pub struct IR {
     pub registry: Registry,
     /// Const declarations in source order: (name, `type_ann`, expr, span).
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Param declarations in source order: (name, `type_ann`, expr, span).
-    pub params: Vec<(String, TypeExpr, Expr, Span)>,
+    /// Param declarations in source order: (name, `type_ann`, optional default expr, span).
+    pub params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
     /// Node declarations in source order: (name, `type_ann`, expr, span).
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
@@ -325,7 +325,7 @@ pub fn lower_to_builder_with_imported_values(
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 pub struct UnfrozenIR {
     consts: Vec<(String, TypeExpr, Expr, Span)>,
-    params: Vec<(String, TypeExpr, Expr, Span)>,
+    params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
     nodes: Vec<(String, TypeExpr, Expr, Span)>,
     asserts: Vec<(String, graphcal_syntax::ast::AssertBody, Span)>,
     runtime_deps: HashMap<String, HashSet<String>>,
@@ -440,17 +440,22 @@ impl UnfrozenIR {
         }
 
         // Merge params — replace defaults with bindings where provided
-        for (name, type_ann, mut expr, span) in dep.params {
+        for (name, type_ann, mut expr_opt, span) in dep.params {
             let prefixed = format!("{prefix}::{name}");
             if let Some(binding_expr) = bindings.get(&name) {
                 // Use the binding expression (from the importer's scope, no prefixing needed
                 // for refs that belong to the importer — only dep-internal refs get prefixed)
-                expr = binding_expr.clone();
-            } else {
+                expr_opt = Some(binding_expr.clone());
+            } else if let Some(ref mut expr) = expr_opt {
                 // Keep default, but prefix internal refs
-                prefix_expr_refs(&mut expr, prefix, dep_names);
+                prefix_expr_refs(expr, prefix, dep_names);
+            } else {
+                // Required param without binding — stays None, caught later in exec_plan
             }
-            self.params.push((prefixed.clone(), type_ann, expr, span));
+            // If expr_opt is still None, this is a required param without a binding.
+            // It will be caught as an error in exec_plan compilation.
+            self.params
+                .push((prefixed.clone(), type_ann, expr_opt, span));
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = HashSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&name) {
