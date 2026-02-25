@@ -26,6 +26,8 @@ param fuel_mass: Mass;              // required param (no default)
 
 Parameters are the inputs to your computation graph. A param with a default value (`= expr`) can be overridden at runtime via `--set` or `--input`. A param without a default value is **required** — it must be provided via `--set`, `--input`, or a parameterized import binding. Evaluating a file with an unsatisfied required param is a compile error.
 
+When any override is provided (via `--set`, `--input`, or parameterized import binding), **all** params must be explicitly provided by default. This strict mode prevents accidentally relying on stale defaults. Use `--allow-defaults` (CLI) or `#[allow_defaults]` (import attribute) to opt out. See [CLI Reference](../cli-reference.md#strict-parameter-override-mode) and [Multi-File Projects](multi-file.md#strict-binding-mode) for details.
+
 ### Nodes
 
 ```

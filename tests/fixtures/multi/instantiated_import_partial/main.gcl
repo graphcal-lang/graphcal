@@ -1,6 +1,7 @@
 // main.gcl -- partial override: only override dry_mass, keep other defaults
 dimension Velocity = Length / Time;
 
+#[allow_defaults]
 import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
 
 node result: Velocity = @r::delta_v;

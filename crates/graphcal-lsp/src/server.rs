@@ -230,7 +230,7 @@ fn run_eval_from_project(
     project: &LoadedProject,
     text: &str,
 ) -> (Vec<Diagnostic>, HashMap<String, String>) {
-    match compile_and_eval_from_project(project, &HashMap::new()) {
+    match compile_and_eval_from_project(project, &HashMap::new(), true) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text);
             let values = format_eval_values(&result);

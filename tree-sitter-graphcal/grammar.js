@@ -275,6 +275,7 @@ module.exports = grammar({
     // import nasa/rocket { delta_v };                     -- bare module path
     // import nasa/rocket as r;                            -- bare module path with alias
     import_declaration: $ => seq(
+      repeat($.attribute),
       "import",
       field("path", choice($.string_literal, $.bare_module_path)),
       optional(field("param_bindings", $.import_param_bindings)),

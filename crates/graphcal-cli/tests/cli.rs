@@ -190,7 +190,13 @@ fn eval_invalid_syntax_fails() {
 #[test]
 fn eval_with_set_flag() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "isp=450.0 s",
+            "--allow-defaults",
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -225,6 +231,7 @@ fn eval_with_multiple_set() {
             "isp=450.0 s",
             "--set",
             "dry_mass=1500.0 kg",
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -252,7 +259,13 @@ fn eval_with_multiple_set() {
 #[test]
 fn eval_set_invalid_param() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "nonexistent=100"])
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "nonexistent=100",
+            "--allow-defaults",
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -292,7 +305,13 @@ fn eval_user_defined_dimensions() {
 #[test]
 fn eval_set_node_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "delta_v=100.0 m/s"])
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "delta_v=100.0 m/s",
+            "--allow-defaults",
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -307,7 +326,13 @@ fn eval_set_node_error() {
 #[test]
 fn eval_set_bad_value() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=???"])
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "isp=???",
+            "--allow-defaults",
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -354,6 +379,7 @@ fn eval_multi_file_with_set() {
             &fixture("multi/rocket_split/main.gcl"),
             "--set",
             "isp=450.0 s",
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -513,6 +539,7 @@ fn eval_with_input_json() {
             &fixture("rocket.gcl"),
             "--input",
             &fixture("input_rocket.json"),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -550,6 +577,7 @@ fn eval_input_json_set_precedence() {
             &fixture("input_rocket.json"),
             "--set",
             "isp=500.0 s",
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -584,6 +612,7 @@ fn eval_input_json_indexed() {
             &fixture("indexed.gcl"),
             "--input",
             &fixture("input_indexed.json"),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -611,6 +640,7 @@ fn eval_input_json_tagged_union() {
             &fixture("tagged_union_param.gcl"),
             "--input",
             &fixture("input_tagged_union.json"),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -650,6 +680,7 @@ fn eval_input_json_unknown_param() {
             &fixture("rocket.gcl"),
             "--input",
             json_path.to_str().unwrap(),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -677,6 +708,7 @@ fn eval_input_json_invalid_json() {
             &fixture("rocket.gcl"),
             "--input",
             json_path.to_str().unwrap(),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -699,6 +731,7 @@ fn eval_input_json_with_hohmann() {
             &fixture("hohmann.gcl"),
             "--input",
             &fixture("input_struct.json"),
+            "--allow-defaults",
         ])
         .output()
         .expect("failed to run graphcal");
@@ -2154,5 +2187,86 @@ fn eval_instantiated_import_graph_ref() {
             .lines()
             .any(|l| l.contains("result") && l.contains("4719")),
         "expected result ~4719 in output: {stdout}"
+    );
+}
+
+// --- Strict param defaults CLI tests ---
+
+#[test]
+fn eval_strict_partial_set_errors() {
+    // Using --set without --allow-defaults and not overriding all params should error
+    let output = graphcal_bin()
+        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "partial --set without --allow-defaults should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("O004") || stderr.contains("not explicitly provided"),
+        "expected O004 error in stderr: {stderr}"
+    );
+}
+
+#[test]
+fn eval_strict_all_set_succeeds() {
+    // Using --set for ALL params without --allow-defaults should succeed
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "dry_mass=800.0 kg",
+            "--set",
+            "fuel_mass=3200.0 kg",
+            "--set",
+            "isp=450.0 s",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "all params set should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn eval_strict_allow_defaults_flag() {
+    // Using --set with --allow-defaults should succeed even with partial overrides
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("rocket.gcl"),
+            "--set",
+            "isp=450.0 s",
+            "--allow-defaults",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "partial set with --allow-defaults should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn eval_no_overrides_defaults_freely() {
+    // No --set or --input at all → defaults used freely, no error
+    let output = graphcal_bin()
+        .args(["eval", &fixture("rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "no overrides should use defaults freely: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
