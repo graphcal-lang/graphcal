@@ -426,13 +426,31 @@ impl Ident {
 
 // --- Type expressions ---
 
+/// The kind of a domain constraint bound: `min` or `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainBoundKind {
+    Min,
+    Max,
+}
+
+impl std::fmt::Display for DomainBoundKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Min => write!(f, "min"),
+            Self::Max => write!(f, "max"),
+        }
+    }
+}
+
 /// A domain constraint bound on a type expression: `min: expr` or `max: expr`.
 ///
 /// Used in `Type(min: 100 kg, max: 2000 kg)` to declare valid value ranges.
 #[derive(Debug, Clone)]
 pub struct DomainBound {
-    /// The bound name (must be `min` or `max`).
-    pub name: Ident,
+    /// The bound kind (`min` or `max`).
+    pub kind: DomainBoundKind,
+    /// The span of the keyword (`min` or `max`).
+    pub kind_span: Span,
     /// The bound value expression.
     pub value: Expr,
     pub span: Span,

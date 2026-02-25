@@ -133,7 +133,7 @@
 (indexed_type (identifier) @type)
 
 ; Domain constraint names: min, max in Type(min: expr, max: expr)
-(type_constraint name: (identifier) @attribute)
+(type_constraint name: (domain_bound_key) @attribute)
 
 ; Builtin type keywords in type positions
 (dimensionless) @type.builtin

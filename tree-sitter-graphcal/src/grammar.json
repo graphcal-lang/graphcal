@@ -1655,8 +1655,22 @@
           "type": "FIELD",
           "name": "name",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "ALIAS",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "min"
+                },
+                {
+                  "type": "STRING",
+                  "value": "max"
+                }
+              ]
+            },
+            "named": true,
+            "value": "domain_bound_key"
           }
         },
         {
@@ -1670,6 +1684,19 @@
             "type": "SYMBOL",
             "name": "_expr"
           }
+        }
+      ]
+    },
+    "domain_bound_key": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "min"
+        },
+        {
+          "type": "STRING",
+          "value": "max"
         }
       ]
     },

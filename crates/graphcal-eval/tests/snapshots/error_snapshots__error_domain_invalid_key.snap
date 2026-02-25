@@ -10,4 +10,4 @@ snippet line 1: // domain_invalid_key.gcl -- unknown constraint key
 snippet line 2: param mass: Mass(step: 10.0 kg) = 500.0 kg;
     label at line 2, columns 18 to 21: unknown key
 diagnostic help: valid domain constraint keys are `min` and `max`
-diagnostic code: graphcal::C005
+diagnostic code: graphcal::P005

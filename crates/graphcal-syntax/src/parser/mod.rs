@@ -59,6 +59,19 @@ pub enum ParseError {
         #[label("this row has {got} value(s)")]
         span: SourceSpan,
     },
+
+    #[error("unknown domain constraint key `{key}`")]
+    #[diagnostic(
+        code(graphcal::P005),
+        help("valid domain constraint keys are `min` and `max`")
+    )]
+    InvalidDomainBoundKey {
+        key: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown key")]
+        span: SourceSpan,
+    },
 }
 
 pub struct Parser<'src> {
