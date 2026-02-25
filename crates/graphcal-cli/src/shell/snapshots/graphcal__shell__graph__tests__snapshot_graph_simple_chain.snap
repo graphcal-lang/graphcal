@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-cli/src/shell/graph.rs
+expression: rendered
+---
+  param x
+    │
+    param x -> node y
+
+  node y
+    │
+    node y -> node z
+
+  node z

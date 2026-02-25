@@ -489,6 +489,7 @@ dependencies = [
  "graphcal-lsp",
  "graphcal-syntax",
  "indexmap",
+ "insta",
  "miette",
  "petgraph",
  "rustyline",

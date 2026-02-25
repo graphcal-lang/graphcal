@@ -138,10 +138,11 @@ fn render_edges(graph: &DiGraph<String, ()>, current_nodes: &[NodeIndex]) -> Vec
         }
 
         let from_label = &graph[node];
-        let to_labels: Vec<&str> = graph
+        let mut to_labels: Vec<&str> = graph
             .neighbors_directed(node, petgraph::Direction::Outgoing)
             .map(|s| graph[s].as_str())
             .collect();
+        to_labels.sort_unstable();
         let to_str = to_labels.join(", ");
         edge_strs.push(format!("    {from_label} -> {to_str}"));
     }
@@ -182,4 +183,84 @@ pub fn direct_dependents(tir: &TIR, name: &str) -> HashSet<String> {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "test code")]
+
+    use graphcal_eval::eval::compile_to_tir;
+
+    use super::*;
+
+    #[test]
+    fn snapshot_graph_rocket() {
+        let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+        let tir = compile_to_tir(source, "rocket.gcl").unwrap();
+        let rendered = render_graph(&tir);
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_graph_simple_chain() {
+        let source = "\
+param x: Dimensionless = 1.0;
+node y: Dimensionless = @x * 2.0;
+node z: Dimensionless = @y + 1.0;
+";
+        let tir = compile_to_tir(source, "<test>").unwrap();
+        let rendered = render_graph(&tir);
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_graph_diamond() {
+        let source = "\
+param a: Dimensionless = 1.0;
+node b: Dimensionless = @a * 2.0;
+node c: Dimensionless = @a + 3.0;
+node d: Dimensionless = @b + @c;
+";
+        let tir = compile_to_tir(source, "<test>").unwrap();
+        let rendered = render_graph(&tir);
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn snapshot_graph_no_deps() {
+        let source = "\
+param x: Dimensionless = 1.0;
+param y: Dimensionless = 2.0;
+";
+        let tir = compile_to_tir(source, "<test>").unwrap();
+        let rendered = render_graph(&tir);
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn transitive_dependents_finds_chain() {
+        let source = "\
+param x: Dimensionless = 1.0;
+node y: Dimensionless = @x * 2.0;
+node z: Dimensionless = @y + 1.0;
+";
+        let tir = compile_to_tir(source, "<test>").unwrap();
+        let deps = transitive_dependents(&tir, "x");
+        assert!(deps.contains("y"));
+        assert!(deps.contains("z"));
+        assert!(!deps.contains("x"));
+    }
+
+    #[test]
+    fn direct_dependents_does_not_include_transitive() {
+        let source = "\
+param x: Dimensionless = 1.0;
+node y: Dimensionless = @x * 2.0;
+node z: Dimensionless = @y + 1.0;
+";
+        let tir = compile_to_tir(source, "<test>").unwrap();
+        let deps = direct_dependents(&tir, "x");
+        assert!(deps.contains("y"));
+        assert!(!deps.contains("z"));
+    }
 }
