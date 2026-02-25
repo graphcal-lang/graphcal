@@ -1,7 +1,9 @@
 //! Display unit resolution: attaching human-readable unit labels to computed values,
 //! formatting range steps, and converting unit expressions to strings.
 
-use graphcal_syntax::ast::ExprKind;
+use graphcal_syntax::ast::{ExprKind, MapEntryKey};
+use graphcal_syntax::names::VariantName;
+use indexmap::IndexMap;
 
 use crate::registry::Registry;
 
@@ -29,7 +31,8 @@ pub(super) fn attach_display_units(
                 }
             }
         }
-        // Map/table literal: recurse into each entry
+        // Map/table literal: recurse into each entry, walking through nested
+        // Indexed values for multi-axis maps.
         (
             Value::Indexed { entries, .. },
             ExprKind::MapLiteral {
@@ -41,8 +44,8 @@ pub(super) fn attach_display_units(
             },
         ) => {
             for map_entry in map_entries {
-                if let Some(entry_val) = entries.get_mut(&map_entry.keys[0].variant.value) {
-                    attach_display_units(entry_val, &map_entry.value, registry);
+                if let Some(target) = walk_indexed_keys(entries, &map_entry.keys) {
+                    attach_display_units(target, &map_entry.value, registry);
                 }
             }
         }
@@ -183,5 +186,24 @@ pub fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
         let num = numerator.join(" * ");
         let den = denominator.join(" * ");
         format!("{num}/{den}")
+    }
+}
+
+/// Walk through nested `Indexed` entries using successive map entry keys.
+///
+/// For a single-axis map (`keys.len() == 1`), returns the entry matching `keys[0]`.
+/// For multi-axis maps, drills into nested `Value::Indexed` using each key in turn.
+fn walk_indexed_keys<'a>(
+    entries: &'a mut IndexMap<VariantName, Value>,
+    keys: &[MapEntryKey],
+) -> Option<&'a mut Value> {
+    let (first, rest) = keys.split_first()?;
+    let value = entries.get_mut(&first.variant.value)?;
+    if rest.is_empty() {
+        Some(value)
+    } else if let Value::Indexed { entries: inner, .. } = value {
+        walk_indexed_keys(inner, rest)
+    } else {
+        None
     }
 }
