@@ -1,5 +1,4 @@
 // plot_basic.gcl -- Basic plot declaration tests
-
 index Step = { First, Second, Third, Fourth }
 
 param x0: Dimensionless = 1.0;

@@ -1,0 +1,26 @@
+// plot_bar.gcl -- Bar chart with categorical data
+//
+// Demonstrates a bar chart comparing power consumption across
+// operating modes, using sum aggregation over subsystems.
+
+index Subsystem = { Comms, Thermal, Payload, Attitude }
+index OpMode = { Safe, Nominal, Science }
+
+param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
+               Safe, Nominal, Science;
+    Comms:    2.0 W,   5.0 W,   3.0 W;
+    Thermal:  8.0 W,   5.0 W,   5.0 W;
+    Payload:  0.0 W,   0.0 W,  35.0 W;
+    Attitude: 0.0 W,  12.0 W,  12.0 W;
+};
+
+node total_power: Power[OpMode] = for m: OpMode {
+    sum(for s: Subsystem { @power_draw[s, m] })
+};
+
+plot power_by_mode = bar {
+    x: for m: OpMode { @total_power[m] },
+    y: for m: OpMode { @total_power[m] },
+    title: "Total Power by Operating Mode",
+    y_label: "Power",
+};
