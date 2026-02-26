@@ -9,6 +9,7 @@ use graphcal_registry::resolve_types::{
     is_datetime_from_fn, is_datetime_to_fn, is_time_scale_name,
 };
 use graphcal_syntax::ast::{Expr, ExprKind};
+use graphcal_syntax::visitor::ExprVisitor;
 
 /// Extract const references from a const expression.
 pub(super) fn extract_const_refs(
@@ -734,6 +735,34 @@ fn collect_all_refs(
     }
 }
 
+/// Visitor that collects known graph references.
+struct KnownGraphRefCollector<'a> {
+    all_runtime_names: &'a HashSet<&'a str>,
+    refs: &'a mut HashSet<String>,
+}
+
+impl ExprVisitor for KnownGraphRefCollector<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::GraphRef(ident) = &expr.kind
+            && self.all_runtime_names.contains(ident.value.as_str())
+        {
+            self.refs.insert(ident.value.to_string());
+        }
+        Ok(())
+    }
+
+    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
+            && self.all_runtime_names.contains(ident.value.as_str())
+        {
+            self.refs.insert(ident.value.to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Collect `@`-references (graph refs) from an expression.
 ///
 /// This is a lightweight version of `collect_all_refs` used for re-extracting
@@ -748,87 +777,9 @@ pub fn collect_graph_refs(
     all_runtime_names: &HashSet<&str>,
     refs: &mut HashSet<String>,
 ) {
-    match &expr.kind {
-        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
-            if all_runtime_names.contains(ident.value.as_str()) {
-                refs.insert(ident.value.to_string());
-            }
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_graph_refs(lhs, all_runtime_names, refs);
-            collect_graph_refs(rhs, all_runtime_names, refs);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            collect_graph_refs(operand, all_runtime_names, refs);
-        }
-        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
-            for arg in args {
-                collect_graph_refs(arg, all_runtime_names, refs);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_graph_refs(condition, all_runtime_names, refs);
-            collect_graph_refs(then_branch, all_runtime_names, refs);
-            collect_graph_refs(else_branch, all_runtime_names, refs);
-        }
-        ExprKind::Convert { expr: inner, .. }
-        | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. } => {
-            collect_graph_refs(inner, all_runtime_names, refs);
-        }
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                collect_graph_refs(&stmt.value, all_runtime_names, refs);
-            }
-            collect_graph_refs(expr, all_runtime_names, refs);
-        }
-        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
-            collect_graph_refs(expr, all_runtime_names, refs);
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(val) = &field.value {
-                    collect_graph_refs(val, all_runtime_names, refs);
-                }
-            }
-        }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            for entry in entries {
-                collect_graph_refs(&entry.value, all_runtime_names, refs);
-            }
-        }
-        ExprKind::ForComp { body, .. } => {
-            collect_graph_refs(body, all_runtime_names, refs);
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_graph_refs(source, all_runtime_names, refs);
-            collect_graph_refs(init, all_runtime_names, refs);
-            collect_graph_refs(body, all_runtime_names, refs);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            collect_graph_refs(init, all_runtime_names, refs);
-            collect_graph_refs(body, all_runtime_names, refs);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_graph_refs(scrutinee, all_runtime_names, refs);
-            for arm in arms {
-                collect_graph_refs(&arm.body, all_runtime_names, refs);
-            }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
-    }
+    let mut collector = KnownGraphRefCollector {
+        all_runtime_names,
+        refs,
+    };
+    let _ = collector.visit_expr(expr);
 }

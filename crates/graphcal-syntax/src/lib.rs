@@ -12,3 +12,4 @@ pub mod names;
 pub mod parser;
 pub mod span;
 pub mod token;
+pub mod visitor;

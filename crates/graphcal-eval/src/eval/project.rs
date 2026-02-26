@@ -10,6 +10,7 @@ use miette::NamedSource;
 use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
 use graphcal_syntax::names::{DeclName, FnName, Spanned};
 use graphcal_syntax::span::Span;
+use graphcal_syntax::visitor::ExprVisitorMut;
 
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
@@ -163,129 +164,75 @@ fn derive_module_name_from_import_path(
     }
 }
 
+/// Visitor that rewrites qualified references to flat names.
+struct QualifiedRefRewriter;
+
+impl ExprVisitorMut for QualifiedRefRewriter {
+    type Error = std::convert::Infallible;
+
+    fn visit_qualified_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
+        expr.kind = match old_kind {
+            ExprKind::QualifiedGraphRef { module, name } => {
+                let flat = DeclName::new(format!("{}::{}", module.name, name.value));
+                ExprKind::GraphRef(Spanned {
+                    value: flat,
+                    span: name.span,
+                })
+            }
+            other => other,
+        };
+        Ok(())
+    }
+
+    fn visit_qualified_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
+        expr.kind = match old_kind {
+            ExprKind::QualifiedConstRef { module, name } => {
+                let flat = DeclName::new(format!("{}::{}", module.name, name.value));
+                ExprKind::ConstRef(Spanned {
+                    value: flat,
+                    span: name.span,
+                })
+            }
+            other => other,
+        };
+        Ok(())
+    }
+
+    fn visit_qualified_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        // First recurse into args
+        if let ExprKind::QualifiedFnCall { args, .. } = &mut expr.kind {
+            for arg in args {
+                self.visit_expr_mut(arg)?;
+            }
+        }
+        // Then rewrite the node itself
+        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
+        expr.kind = match old_kind {
+            ExprKind::QualifiedFnCall { module, name, args } => {
+                let flat = FnName::new(format!("{}::{}", module.name, name.value));
+                ExprKind::FnCall {
+                    name: Spanned {
+                        value: flat,
+                        span: name.span,
+                    },
+                    args,
+                }
+            }
+            other => other,
+        };
+        Ok(())
+    }
+}
+
 /// Rewrite qualified references to flat names in-place.
 ///
 /// Replaces `QualifiedGraphRef { module: "m", name: "x" }` with `GraphRef("m::x")`,
 /// `QualifiedConstRef` with `ConstRef`, and `QualifiedFnCall` with `FnCall`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single match over all ExprKind variants plus rewrite logic"
-)]
 pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
-    // First, rewrite children recursively
-    match &mut expr.kind {
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            rewrite_qualified_refs(lhs);
-            rewrite_qualified_refs(rhs);
-        }
-        ExprKind::UnaryOp { operand, .. } => rewrite_qualified_refs(operand),
-        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
-            for arg in args {
-                rewrite_qualified_refs(arg);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            rewrite_qualified_refs(condition);
-            rewrite_qualified_refs(then_branch);
-            rewrite_qualified_refs(else_branch);
-        }
-        ExprKind::Convert { expr: inner, .. }
-        | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. } => {
-            rewrite_qualified_refs(inner);
-        }
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                rewrite_qualified_refs(&mut stmt.value);
-            }
-            rewrite_qualified_refs(expr);
-        }
-        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
-            rewrite_qualified_refs(expr);
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(val) = &mut field.value {
-                    rewrite_qualified_refs(val);
-                }
-            }
-        }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            for entry in entries {
-                rewrite_qualified_refs(&mut entry.value);
-            }
-        }
-        ExprKind::ForComp { body, .. } => rewrite_qualified_refs(body),
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            rewrite_qualified_refs(source);
-            rewrite_qualified_refs(init);
-            rewrite_qualified_refs(body);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            rewrite_qualified_refs(init);
-            rewrite_qualified_refs(body);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            rewrite_qualified_refs(scrutinee);
-            for arm in arms {
-                rewrite_qualified_refs(&mut arm.body);
-            }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::GraphRef(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedGraphRef { .. }
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
-    }
-
-    // Now rewrite the current node if it's a qualified ref.
-    // For QualifiedFnCall we need to move args out, so we use mem::replace.
-    match &expr.kind {
-        ExprKind::QualifiedGraphRef { .. }
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::QualifiedFnCall { .. } => {}
-        _ => return,
-    }
-    let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
-    expr.kind = match old_kind {
-        ExprKind::QualifiedGraphRef { module, name } => {
-            let flat = DeclName::new(format!("{}::{}", module.name, name.value));
-            ExprKind::GraphRef(Spanned {
-                value: flat,
-                span: name.span,
-            })
-        }
-        ExprKind::QualifiedConstRef { module, name } => {
-            let flat = DeclName::new(format!("{}::{}", module.name, name.value));
-            ExprKind::ConstRef(Spanned {
-                value: flat,
-                span: name.span,
-            })
-        }
-        ExprKind::QualifiedFnCall { module, name, args } => {
-            let flat = FnName::new(format!("{}::{}", module.name, name.value));
-            ExprKind::FnCall {
-                name: Spanned {
-                    value: flat,
-                    span: name.span,
-                },
-                args,
-            }
-        }
-        other => other,
-    };
+    let mut rewriter = QualifiedRefRewriter;
+    let _ = rewriter.visit_expr_mut(expr);
 }
 
 // ---------------------------------------------------------------------------

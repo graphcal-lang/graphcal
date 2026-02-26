@@ -16,6 +16,7 @@ use graphcal_syntax::ast::{
 use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DeclName, DimName, FnName};
 use graphcal_syntax::span::Span;
+use graphcal_syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 use crate::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
@@ -815,6 +816,48 @@ impl UnfrozenIR {
     }
 }
 
+/// Visitor that prefixes references to dependency declarations.
+struct RefPrefixer<'a> {
+    prefix: &'a str,
+    dep_names: &'a HashSet<String>,
+}
+
+impl ExprVisitorMut for RefPrefixer<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::GraphRef(ident) = &mut expr.kind
+            && self.dep_names.contains(ident.value.as_str())
+        {
+            ident.value = DeclName::new(format!("{}::{}", self.prefix, ident.value));
+        }
+        Ok(())
+    }
+
+    fn visit_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::ConstRef(ident) = &mut expr.kind
+            && self.dep_names.contains(ident.value.as_str())
+        {
+            ident.value = DeclName::new(format!("{}::{}", self.prefix, ident.value));
+        }
+        Ok(())
+    }
+
+    fn visit_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::FnCall { name, args } = &mut expr.kind {
+            if self.dep_names.contains(name.value.as_str()) {
+                name.value = FnName::new(format!("{}::{}", self.prefix, name.value));
+            }
+            for arg in args {
+                self.visit_expr_mut(arg)?;
+            }
+        }
+        Ok(())
+    }
+
+    // Qualified refs and leaf nodes don't need rewriting (handled by default no-ops)
+}
+
 /// Rewrite `@`-references and const/fn references within an expression to use
 /// prefixed names, but only for names that belong to the dependency.
 ///
@@ -827,92 +870,30 @@ impl UnfrozenIR {
     reason = "internal API always uses default hasher"
 )]
 pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
-    match &mut expr.kind {
-        ExprKind::GraphRef(ident) | ExprKind::ConstRef(ident) => {
-            if dep_names.contains(ident.value.as_str()) {
-                ident.value = DeclName::new(format!("{prefix}::{}", ident.value));
-            }
+    let mut prefixer = RefPrefixer { prefix, dep_names };
+    let _ = prefixer.visit_expr_mut(expr);
+}
+
+/// Visitor that collects graph references from expressions.
+struct GraphRefCollector<'a> {
+    refs: &'a mut HashSet<String>,
+}
+
+impl ExprVisitor for GraphRefCollector<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::GraphRef(ident) = &expr.kind {
+            self.refs.insert(ident.value.to_string());
         }
-        ExprKind::FnCall { name, args } => {
-            if dep_names.contains(name.value.as_str()) {
-                name.value = FnName::new(format!("{prefix}::{}", name.value));
-            }
-            for arg in args {
-                prefix_expr_refs(arg, prefix, dep_names);
-            }
+        Ok(())
+    }
+
+    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::QualifiedGraphRef { module, name } = &expr.kind {
+            self.refs.insert(format!("{}::{}", module.name, name.value));
         }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            prefix_expr_refs(lhs, prefix, dep_names);
-            prefix_expr_refs(rhs, prefix, dep_names);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            prefix_expr_refs(operand, prefix, dep_names);
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            prefix_expr_refs(condition, prefix, dep_names);
-            prefix_expr_refs(then_branch, prefix, dep_names);
-            prefix_expr_refs(else_branch, prefix, dep_names);
-        }
-        ExprKind::Convert { expr, .. }
-        | ExprKind::DisplayTimezone { expr, .. }
-        | ExprKind::AsCast { expr, .. }
-        | ExprKind::FieldAccess { expr, .. }
-        | ExprKind::IndexAccess { expr, .. } => {
-            prefix_expr_refs(expr, prefix, dep_names);
-        }
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                prefix_expr_refs(&mut stmt.value, prefix, dep_names);
-            }
-            prefix_expr_refs(expr, prefix, dep_names);
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(val) = &mut field.value {
-                    prefix_expr_refs(val, prefix, dep_names);
-                }
-            }
-        }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            for entry in entries {
-                prefix_expr_refs(&mut entry.value, prefix, dep_names);
-            }
-        }
-        ExprKind::ForComp { body, .. } => {
-            prefix_expr_refs(body, prefix, dep_names);
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            prefix_expr_refs(source, prefix, dep_names);
-            prefix_expr_refs(init, prefix, dep_names);
-            prefix_expr_refs(body, prefix, dep_names);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            prefix_expr_refs(init, prefix, dep_names);
-            prefix_expr_refs(body, prefix, dep_names);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            prefix_expr_refs(scrutinee, prefix, dep_names);
-            for arm in arms {
-                prefix_expr_refs(&mut arm.body, prefix, dep_names);
-            }
-        }
-        // Qualified refs (rewritten before merging) and leaf nodes need no rewriting.
-        ExprKind::QualifiedGraphRef { .. }
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::QualifiedFnCall { .. }
-        | ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
+        Ok(())
     }
 }
 
@@ -922,89 +903,8 @@ pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<Strin
 /// arbitrary expressions without requiring a known-names set. Used for building
 /// runtime deps from binding expressions.
 fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<String>) {
-    match &expr.kind {
-        ExprKind::GraphRef(ident) => {
-            refs.insert(ident.value.to_string());
-        }
-        ExprKind::QualifiedGraphRef { module, name } => {
-            refs.insert(format!("{}::{}", module.name, name.value));
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_graph_refs_from_expr(lhs, refs);
-            collect_graph_refs_from_expr(rhs, refs);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            collect_graph_refs_from_expr(operand, refs);
-        }
-        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
-            for arg in args {
-                collect_graph_refs_from_expr(arg, refs);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_graph_refs_from_expr(condition, refs);
-            collect_graph_refs_from_expr(then_branch, refs);
-            collect_graph_refs_from_expr(else_branch, refs);
-        }
-        ExprKind::Convert { expr, .. }
-        | ExprKind::DisplayTimezone { expr, .. }
-        | ExprKind::AsCast { expr, .. }
-        | ExprKind::FieldAccess { expr, .. }
-        | ExprKind::IndexAccess { expr, .. } => {
-            collect_graph_refs_from_expr(expr, refs);
-        }
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                collect_graph_refs_from_expr(&stmt.value, refs);
-            }
-            collect_graph_refs_from_expr(expr, refs);
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(val) = &field.value {
-                    collect_graph_refs_from_expr(val, refs);
-                }
-            }
-        }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            for entry in entries {
-                collect_graph_refs_from_expr(&entry.value, refs);
-            }
-        }
-        ExprKind::ForComp { body, .. } => {
-            collect_graph_refs_from_expr(body, refs);
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_graph_refs_from_expr(source, refs);
-            collect_graph_refs_from_expr(init, refs);
-            collect_graph_refs_from_expr(body, refs);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            collect_graph_refs_from_expr(init, refs);
-            collect_graph_refs_from_expr(body, refs);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_graph_refs_from_expr(scrutinee, refs);
-            for arm in arms {
-                collect_graph_refs_from_expr(&arm.body, refs);
-            }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
-    }
+    let mut collector = GraphRefCollector { refs };
+    let _ = collector.visit_expr(expr);
 }
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
