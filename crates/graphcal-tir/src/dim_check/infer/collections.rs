@@ -525,11 +525,16 @@ pub(super) fn infer_scan(
 }
 
 /// Infer the type of an unfold expression.
+///
+/// `owner_decl_name` is the name of the node/const/param that contains this
+/// unfold expression. It is used to look up the correct range index from the
+/// owning declaration's type, rather than scanning all declared types.
 pub(super) fn infer_unfold(
     init: &Expr,
     prev_name: &graphcal_syntax::ast::Ident,
     curr_name: &graphcal_syntax::ast::Ident,
     body: &Expr,
+    owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
@@ -547,37 +552,43 @@ pub(super) fn infer_unfold(
         src,
     )?;
 
-    // Look up the declared type to find the range index and its dimension.
-    // For now, bind them as Dimensionless scalars — they will be refined
-    // when the range index dimension is known from context.
+    // Look up the owning declaration's type to find the range index and its
+    // dimension. This is precise — it uses the specific node's declared type
+    // rather than scanning all declared types (which would pick an arbitrary
+    // range index if multiple exist).
     let mut scan_locals = local_types.clone();
-    scan_locals.insert(
-        prev_name.name.clone(),
-        InferredType::Scalar(graphcal_syntax::dimension::Dimension::dimensionless()),
-    );
-    scan_locals.insert(
-        curr_name.name.clone(),
-        InferredType::Scalar(graphcal_syntax::dimension::Dimension::dimensionless()),
-    );
-
-    // Try to find the range index dimension from the declared types context.
-    for dt in declared_types.values() {
-        if let DeclaredType::Indexed { index, .. } = dt
-            && let Some(idx_def) = registry.indexes.get_index(index.as_str())
-            && idx_def.is_range()
-        {
-            if let graphcal_registry::registry::IndexKind::Range { dimension, .. } = &idx_def.kind {
-                scan_locals.insert(
-                    prev_name.name.clone(),
-                    InferredType::Scalar(dimension.clone()),
-                );
-                scan_locals.insert(
-                    curr_name.name.clone(),
-                    InferredType::Scalar(dimension.clone()),
-                );
+    let owner_range_index = owner_decl_name.and_then(|name| {
+        let dt = declared_types.get(name)?;
+        if let DeclaredType::Indexed { index, .. } = dt {
+            let idx_def = registry.indexes.get_index(index.as_str())?;
+            if idx_def.is_range() {
+                return Some((index.clone(), idx_def));
             }
-            break;
         }
+        None
+    });
+
+    if let Some((_index_name, idx_def)) = &owner_range_index {
+        if let graphcal_registry::registry::IndexKind::Range { dimension, .. } = &idx_def.kind {
+            scan_locals.insert(
+                prev_name.name.clone(),
+                InferredType::Scalar(dimension.clone()),
+            );
+            scan_locals.insert(
+                curr_name.name.clone(),
+                InferredType::Scalar(dimension.clone()),
+            );
+        }
+    } else {
+        // Fallback: dimensionless when owner is unknown or not an indexed range type
+        scan_locals.insert(
+            prev_name.name.clone(),
+            InferredType::Scalar(graphcal_syntax::dimension::Dimension::dimensionless()),
+        );
+        scan_locals.insert(
+            curr_name.name.clone(),
+            InferredType::Scalar(graphcal_syntax::dimension::Dimension::dimensionless()),
+        );
     }
 
     let body_type = infer_type(
@@ -600,17 +611,11 @@ pub(super) fn infer_unfold(
     }
 
     // The result type is Indexed { element: init_type, index: <range_index> }
-    // We need to find the range index name from the declared type context.
-    for dt in declared_types.values() {
-        if let DeclaredType::Indexed { index, .. } = dt
-            && let Some(idx_def) = registry.indexes.get_index(index.as_str())
-            && idx_def.is_range()
-        {
-            return Ok(InferredType::Indexed {
-                element: Box::new(init_type),
-                index: index.clone(),
-            });
-        }
+    if let Some((index_name, _)) = owner_range_index {
+        return Ok(InferredType::Indexed {
+            element: Box::new(init_type),
+            index: index_name,
+        });
     }
 
     // Fallback: return init_type (will fail annotation check if declared as indexed)

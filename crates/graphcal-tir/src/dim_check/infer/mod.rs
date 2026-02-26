@@ -26,8 +26,37 @@ use super::helpers::declared_to_inferred;
 use super::{DeclaredType, InferredType};
 
 /// Infer the type (dimension or struct) of an expression.
+///
+/// `owner_decl_name` is the name of the top-level declaration (node/const/param)
+/// that contains this expression. It is threaded through to `infer_unfold` so
+/// the unfold can look up the owning declaration's range index precisely.
+/// Pass `None` when the owner is not known (e.g., in override dimension checks).
 pub(super) fn infer_type(
     expr: &Expr,
+    declared_types: &HashMap<String, DeclaredType>,
+    local_types: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, graphcal_registry::builtins::BuiltinFunction>,
+    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    infer_type_with_owner(
+        expr,
+        None,
+        declared_types,
+        local_types,
+        registry,
+        builtin_fns,
+        resolved_fn_sigs,
+        src,
+    )
+}
+
+/// Infer the type of an expression, with the owning declaration name for
+/// precise unfold range-index lookup.
+pub(super) fn infer_type_with_owner(
+    expr: &Expr,
+    owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
@@ -319,6 +348,7 @@ pub(super) fn infer_type(
             prev_name,
             curr_name,
             body,
+            owner_decl_name,
             declared_types,
             local_types,
             registry,
