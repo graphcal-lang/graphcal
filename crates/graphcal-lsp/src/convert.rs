@@ -6,19 +6,13 @@ use tower_lsp::lsp_types::{Position, Range};
 /// Convert a byte offset in `source` to an LSP `Position` (0-based line and character).
 pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
     let offset = offset.min(source.len());
-    let mut line = 0u32;
-    let mut col = 0u32;
-    for (i, ch) in source.char_indices() {
-        if i >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
+    let (line, col) = source.char_indices().take_while(|(i, _)| *i < offset).fold(
+        (0u32, 0u32),
+        |(line, col), (_, ch)| match ch {
+            '\n' => (line + 1, 0),
+            _ => (line, col + 1),
+        },
+    );
     Position {
         line,
         character: col,
@@ -29,26 +23,26 @@ pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
 pub fn position_to_byte_offset(source: &str, position: Position) -> usize {
     let mut line = 0u32;
     let mut col = 0u32;
-    for (i, ch) in source.char_indices() {
-        if line == position.line && col == position.character {
-            return i;
-        }
-        if ch == '\n' {
-            if line == position.line {
-                // Past end of target line
-                return i;
+    source
+        .char_indices()
+        .find_map(|(i, ch)| {
+            if line == position.line && col == position.character {
+                return Some(i);
             }
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-    // Handle position at end of file
-    if line == position.line && col == position.character {
-        return source.len();
-    }
-    source.len()
+            match ch {
+                '\n' if line == position.line => Some(i),
+                '\n' => {
+                    line += 1;
+                    col = 0;
+                    None
+                }
+                _ => {
+                    col += 1;
+                    None
+                }
+            }
+        })
+        .unwrap_or(source.len())
 }
 
 /// Convert a `Span` to an LSP `Range`.
@@ -114,11 +108,11 @@ mod tests {
     #[test]
     fn offset_round_trip() {
         let source = "hello\nworld\nfoo";
-        for offset in 0..source.len() {
+        (0..source.len()).for_each(|offset| {
             let pos = byte_offset_to_position(source, offset);
             let back = position_to_byte_offset(source, pos);
             assert_eq!(back, offset, "round-trip failed for offset {offset}");
-        }
+        });
     }
 
     #[test]

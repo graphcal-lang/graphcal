@@ -42,11 +42,8 @@ fn resolve_local_definition(
     if matches!(
         definition.category,
         SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-    ) {
-        return None;
-    }
-    // Skip synthetic definitions (zero-length span).
-    if definition.name_span.is_empty() {
+    ) || definition.name_span.is_empty()
+    {
         return None;
     }
     let range = span_to_range(source, definition.name_span);
@@ -63,10 +60,8 @@ fn resolve_imported_definition(
     if matches!(
         imported.definition.category,
         SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-    ) {
-        return None;
-    }
-    if imported.definition.name_span.is_empty() {
+    ) || imported.definition.name_span.is_empty()
+    {
         return None;
     }
     let range = span_to_range(&imported.source, imported.definition.name_span);

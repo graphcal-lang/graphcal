@@ -20,59 +20,59 @@ pub(super) fn parse_expected_fail_args(
         return Ok(ExpectedFail::All);
     }
 
-    let mut keys: Vec<ExpectedFailKey> = Vec::new();
-
-    for arg in args {
-        match arg {
+    let keys: Vec<ExpectedFailKey> = args
+        .iter()
+        .map(|arg| match arg {
             AttributeArg::Path { segments, span } => {
                 // Must be exactly 2 segments: Index::Variant
-                if segments.len() != 2 {
-                    return Err(GraphcalError::ExpectedFailInvalidArg {
+                match segments.as_slice() {
+                    [index, variant] => Ok(vec![(
+                        IndexName::new(&index.name),
+                        VariantName::new(&variant.name),
+                    )]),
+                    _ => Err(GraphcalError::ExpectedFailInvalidArg {
                         src: src.clone(),
                         span: (*span).into(),
-                    });
+                    }),
                 }
-                let index_name = IndexName::new(&segments[0].name);
-                let variant_name = VariantName::new(&segments[1].name);
-                keys.push(vec![(index_name, variant_name)]);
             }
             AttributeArg::Group { elements, span } => {
                 // Each element must be a 2-segment Path
-                let mut key: ExpectedFailKey = Vec::new();
-                for elem in elements {
-                    match elem {
+                let key: Result<ExpectedFailKey, GraphcalError> = elements
+                    .iter()
+                    .map(|elem| match elem {
                         AttributeArg::Path {
                             segments,
                             span: elem_span,
-                        } => {
-                            if segments.len() != 2 {
-                                return Err(GraphcalError::ExpectedFailInvalidArg {
-                                    src: src.clone(),
-                                    span: (*elem_span).into(),
-                                });
+                        } => match segments.as_slice() {
+                            [index, variant] => {
+                                Ok((IndexName::new(&index.name), VariantName::new(&variant.name)))
                             }
-                            let index_name = IndexName::new(&segments[0].name);
-                            let variant_name = VariantName::new(&segments[1].name);
-                            key.push((index_name, variant_name));
-                        }
+                            _ => Err(GraphcalError::ExpectedFailInvalidArg {
+                                src: src.clone(),
+                                span: (*elem_span).into(),
+                            }),
+                        },
                         AttributeArg::Group { span: g_span, .. } => {
-                            return Err(GraphcalError::ExpectedFailInvalidArg {
+                            Err(GraphcalError::ExpectedFailInvalidArg {
                                 src: src.clone(),
                                 span: (*g_span).into(),
-                            });
+                            })
                         }
-                    }
-                }
+                    })
+                    .collect();
+                let key = key?;
                 if key.is_empty() {
-                    return Err(GraphcalError::ExpectedFailInvalidArg {
+                    Err(GraphcalError::ExpectedFailInvalidArg {
                         src: src.clone(),
                         span: (*span).into(),
-                    });
+                    })
+                } else {
+                    Ok(key)
                 }
-                keys.push(key);
             }
-        }
-    }
+        })
+        .collect::<Result<_, _>>()?;
 
     Ok(ExpectedFail::Variants(keys))
 }
