@@ -1,7 +1,9 @@
 //! Convert a JSON input file into parameter overrides (`HashMap<DeclName, Expr>`).
 //!
-//! The JSON schema (Option E) uses expression strings for scalar leaves and
+//! The JSON schema uses expression strings for scalar leaves and
 //! JSON objects for structs, tagged unions, and named-label indexed params.
+//! All type information is provided explicitly in the JSON — no AST lookup is needed.
+//! Type and dimension validation is deferred to the evaluator.
 //!
 //! ## Schema
 //!
@@ -12,15 +14,13 @@
 //! | `number` (integer) | `ExprKind::Integer` |
 //! | `number` (float) | `ExprKind::Number` (dimensionless) |
 //! | `object` with `"variant"` | Tagged union variant (+ optional `"fields"`) |
-//! | `object` with `"fields"` (no `"variant"`) | Single-variant struct |
-//! | `object` (other keys) | Named-label indexed param |
+//! | `object` with `"type"` and `"fields"` | Single-variant struct |
+//! | `object` with `"index"` and `"entries"` | Named-label indexed param |
 
 use std::collections::HashMap;
 use std::fmt;
 
-use graphcal_syntax::ast::{
-    self, DeclKind, Expr, ExprKind, FieldInit, IndexDeclKind, MapEntry, MapEntryKey, TypeExprKind,
-};
+use graphcal_syntax::ast::{Expr, ExprKind, FieldInit, MapEntry, MapEntryKey};
 use graphcal_syntax::names::{
     DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName,
 };
@@ -48,18 +48,20 @@ pub enum JsonInputError {
     InvalidNumber { param: String },
     /// An unsupported JSON type was encountered (null or array).
     UnsupportedJsonType { param: String, kind: &'static str },
-    /// A structured object was used but the param has no type annotation in the AST.
-    MissingTypeAnnotation { param: String },
-    /// The type annotation cannot be resolved to a struct type name.
-    CannotInferTypeName { param: String },
-    /// Attempted to override a range-indexed param, which is not supported.
-    RangeIndexNotSupported { param: String, index: String },
     /// The `"variant"` field is not a string.
     InvalidVariant { param: String },
     /// The `"fields"` field is not an object.
     InvalidFields { param: String },
-    /// The type annotation is not an indexed type.
-    NotAnIndexedType { param: String },
+    /// The `"type"` field is not a string.
+    InvalidType { param: String },
+    /// A struct object has `"fields"` but no `"type"` key.
+    MissingTypeKey { param: String },
+    /// The `"index"` field is not a string.
+    InvalidIndex { param: String },
+    /// The `"entries"` field is not an object.
+    InvalidEntries { param: String },
+    /// A JSON object has unrecognized structure.
+    AmbiguousObject { param: String },
 }
 
 impl fmt::Display for JsonInputError {
@@ -77,34 +79,35 @@ impl fmt::Display for JsonInputError {
             Self::UnsupportedJsonType { param, kind } => {
                 write!(f, "unsupported JSON type `{kind}` for `{param}`")
             }
-            Self::MissingTypeAnnotation { param } => {
-                write!(
-                    f,
-                    "param `{param}` not found in .gcl file (needed for structured JSON input)"
-                )
-            }
-            Self::CannotInferTypeName { param } => {
-                write!(
-                    f,
-                    "cannot determine struct type name from type annotation of `{param}`"
-                )
-            }
-            Self::RangeIndexNotSupported { param, index } => {
-                write!(
-                    f,
-                    "overriding range-indexed param `{param}` (index `{index}`) is not supported"
-                )
-            }
             Self::InvalidVariant { param } => {
                 write!(f, "`variant` field for `{param}` must be a string")
             }
             Self::InvalidFields { param } => {
                 write!(f, "`fields` field for `{param}` must be an object")
             }
-            Self::NotAnIndexedType { param } => {
+            Self::InvalidType { param } => {
+                write!(f, "`type` field for `{param}` must be a string")
+            }
+            Self::MissingTypeKey { param } => {
                 write!(
                     f,
-                    "param `{param}` is not an indexed type but JSON value looks like a map"
+                    "struct object for `{param}` has `fields` but no `type` key; \
+                     add `\"type\": \"TypeName\"` to specify the struct type"
+                )
+            }
+            Self::InvalidIndex { param } => {
+                write!(f, "`index` field for `{param}` must be a string")
+            }
+            Self::InvalidEntries { param } => {
+                write!(f, "`entries` field for `{param}` must be an object")
+            }
+            Self::AmbiguousObject { param } => {
+                write!(
+                    f,
+                    "unrecognized JSON object shape for `{param}`; expected one of: \
+                     {{\"variant\": ..., \"fields\": ...}}, \
+                     {{\"type\": ..., \"fields\": ...}}, or \
+                     {{\"index\": ..., \"entries\": ...}}"
                 )
             }
         }
@@ -126,54 +129,20 @@ impl From<serde_json::Error> for JsonInputError {
 }
 
 // ---------------------------------------------------------------------------
-// AST info extraction
-// ---------------------------------------------------------------------------
-
-/// Extract param name → type annotation from a parsed AST.
-fn extract_param_type_anns(file: &ast::File) -> HashMap<&str, &ast::TypeExpr> {
-    let mut map = HashMap::new();
-    for decl in &file.declarations {
-        if let DeclKind::Param(p) = &decl.kind {
-            map.insert(p.name.value.as_str(), &p.type_ann);
-        }
-    }
-    map
-}
-
-/// Extract index name → `is_range` from a parsed AST.
-fn extract_index_kinds(file: &ast::File) -> HashMap<&str, bool> {
-    let mut map = HashMap::new();
-    for decl in &file.declarations {
-        if let DeclKind::Index(idx) = &decl.kind {
-            let is_range = matches!(idx.kind, IndexDeclKind::Range { .. });
-            map.insert(idx.name.value.as_str(), is_range);
-        }
-    }
-    map
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /// Convert a JSON input string into a `HashMap` of parameter overrides.
 ///
-/// The `ast` is the parsed `.gcl` file, used to extract type annotations
-/// for struct type names and index names.
-pub fn json_to_overrides(
-    json_str: &str,
-    ast: &ast::File,
-) -> Result<HashMap<DeclName, Expr>, JsonInputError> {
+/// All type information (struct type names, index names) must be provided
+/// explicitly in the JSON. Type and dimension validation is deferred to the evaluator.
+pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, JsonInputError> {
     let json: serde_json::Value = serde_json::from_str(json_str)?;
     let obj = json.as_object().ok_or(JsonInputError::TopLevelNotObject)?;
 
-    let type_anns = extract_param_type_anns(ast);
-    let index_kinds = extract_index_kinds(ast);
-
     let mut overrides = HashMap::new();
     for (name, value) in obj {
-        let type_ann = type_anns.get(name.as_str()).copied();
-        let expr = convert_value(value, type_ann, &index_kinds, name)?;
+        let expr = convert_value(value, name)?;
         overrides.insert(DeclName::new(name), expr);
     }
     Ok(overrides)
@@ -184,17 +153,12 @@ pub fn json_to_overrides(
 // ---------------------------------------------------------------------------
 
 /// Convert a single JSON value into an AST `Expr`.
-fn convert_value(
-    value: &serde_json::Value,
-    type_ann: Option<&ast::TypeExpr>,
-    index_kinds: &HashMap<&str, bool>,
-    param_name: &str,
-) -> Result<Expr, JsonInputError> {
+fn convert_value(value: &serde_json::Value, param_name: &str) -> Result<Expr, JsonInputError> {
     match value {
         serde_json::Value::String(s) => convert_string(s, param_name),
         serde_json::Value::Bool(b) => Ok(synth_expr(ExprKind::Bool(*b))),
         serde_json::Value::Number(n) => convert_number(n, param_name),
-        serde_json::Value::Object(obj) => convert_object(obj, type_ann, index_kinds, param_name),
+        serde_json::Value::Object(obj) => convert_object(obj, param_name),
         serde_json::Value::Null => Err(JsonInputError::UnsupportedJsonType {
             param: param_name.to_string(),
             kind: "null",
@@ -236,16 +200,22 @@ fn convert_number(n: &serde_json::Number, param_name: &str) -> Result<Expr, Json
 /// Dispatch a JSON object to the appropriate converter.
 fn convert_object(
     obj: &serde_json::Map<String, serde_json::Value>,
-    type_ann: Option<&ast::TypeExpr>,
-    index_kinds: &HashMap<&str, bool>,
     param_name: &str,
 ) -> Result<Expr, JsonInputError> {
     if obj.contains_key("variant") {
         convert_tagged_union(obj, param_name)
+    } else if obj.contains_key("type") && obj.contains_key("fields") {
+        convert_struct(obj, param_name)
     } else if obj.contains_key("fields") {
-        convert_struct(obj, type_ann, index_kinds, param_name)
+        Err(JsonInputError::MissingTypeKey {
+            param: param_name.to_string(),
+        })
+    } else if obj.contains_key("index") && obj.contains_key("entries") {
+        convert_indexed(obj, param_name)
     } else {
-        convert_indexed(obj, type_ann, index_kinds, param_name)
+        Err(JsonInputError::AmbiguousObject {
+            param: param_name.to_string(),
+        })
     }
 }
 
@@ -280,23 +250,20 @@ fn convert_tagged_union(
     }))
 }
 
-/// Convert `{"fields": {"x": "...", ...}}` to a `StructConstruction` expr.
+/// Convert `{"type": "TypeName", "fields": {"x": "...", ...}}` to a `StructConstruction` expr.
 ///
-/// Requires the param's type annotation to determine the struct type name.
+/// The struct type name is provided explicitly via the `"type"` key.
 fn convert_struct(
     obj: &serde_json::Map<String, serde_json::Value>,
-    type_ann: Option<&ast::TypeExpr>,
-    index_kinds: &HashMap<&str, bool>,
     param_name: &str,
 ) -> Result<Expr, JsonInputError> {
-    let type_ann = type_ann.ok_or_else(|| JsonInputError::MissingTypeAnnotation {
-        param: param_name.to_string(),
-    })?;
+    let type_name_str = obj["type"]
+        .as_str()
+        .ok_or_else(|| JsonInputError::InvalidType {
+            param: param_name.to_string(),
+        })?;
 
-    let (type_name_str, type_args) = extract_struct_type_name(type_ann, index_kinds, param_name)?;
-
-    let fields_val = &obj["fields"];
-    let fields_obj = fields_val
+    let fields_obj = obj["fields"]
         .as_object()
         .ok_or_else(|| JsonInputError::InvalidFields {
             param: param_name.to_string(),
@@ -305,46 +272,37 @@ fn convert_struct(
 
     Ok(synth_expr(ExprKind::StructConstruction {
         type_name: Spanned::new(StructTypeName::new(type_name_str), SYNTH_SPAN),
-        type_args,
+        type_args: Vec::new(),
         fields,
     }))
 }
 
-/// Convert a plain JSON object to a `MapLiteral` expr (named-label indexed param).
+/// Convert `{"index": "IndexName", "entries": {"Variant": ..., ...}}` to a `MapLiteral` expr.
+///
+/// The index name is provided explicitly via the `"index"` key.
 fn convert_indexed(
     obj: &serde_json::Map<String, serde_json::Value>,
-    type_ann: Option<&ast::TypeExpr>,
-    index_kinds: &HashMap<&str, bool>,
     param_name: &str,
 ) -> Result<Expr, JsonInputError> {
-    let type_ann = type_ann.ok_or_else(|| JsonInputError::MissingTypeAnnotation {
-        param: param_name.to_string(),
-    })?;
-
-    let index_name = extract_index_name(type_ann, param_name)?;
-
-    // Reject range indexes
-    if let Some(&is_range) = index_kinds.get(index_name.as_str())
-        && is_range
-    {
-        return Err(JsonInputError::RangeIndexNotSupported {
+    let index_name = obj["index"]
+        .as_str()
+        .ok_or_else(|| JsonInputError::InvalidIndex {
             param: param_name.to_string(),
-            index: index_name.clone(),
-        });
-    }
+        })?;
 
-    let entries = obj
+    let entries_obj = obj["entries"]
+        .as_object()
+        .ok_or_else(|| JsonInputError::InvalidEntries {
+            param: param_name.to_string(),
+        })?;
+
+    let entries = entries_obj
         .iter()
         .map(|(variant, value)| {
-            let value_expr = convert_value(
-                value,
-                None,
-                index_kinds,
-                &format!("{param_name}[{variant}]"),
-            )?;
+            let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
             Ok(MapEntry {
                 keys: vec![MapEntryKey {
-                    index: Spanned::new(IndexName::new(&index_name), SYNTH_SPAN),
+                    index: Spanned::new(IndexName::new(index_name), SYNTH_SPAN),
                     variant: Spanned::new(VariantName::new(variant), SYNTH_SPAN),
                 }],
                 value: value_expr,
@@ -367,71 +325,13 @@ fn convert_field_inits(
     fields_obj
         .iter()
         .map(|(field_name, field_val)| {
-            let field_expr = convert_value(
-                field_val,
-                None,
-                &HashMap::new(),
-                &format!("{param_name}.{field_name}"),
-            )?;
+            let field_expr = convert_value(field_val, &format!("{param_name}.{field_name}"))?;
             Ok(FieldInit {
                 name: Spanned::new(FieldName::new(field_name), SYNTH_SPAN),
                 value: Some(field_expr),
             })
         })
         .collect()
-}
-
-/// Extract the struct type name and type args from a type annotation.
-///
-/// Handles:
-/// - `TypeApplication { name: "Vec3", type_args: [Length, Eci] }` → generic struct
-/// - `DimExpr` with a single term (e.g., `TransferResult`) → simple struct name
-fn extract_struct_type_name(
-    type_ann: &ast::TypeExpr,
-    index_kinds: &HashMap<&str, bool>,
-    param_name: &str,
-) -> Result<(String, Vec<ast::TypeExpr>), JsonInputError> {
-    match &type_ann.kind {
-        TypeExprKind::TypeApplication { name, type_args } => {
-            Ok((name.name.clone(), type_args.clone()))
-        }
-        TypeExprKind::DimExpr(dim_expr)
-            if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
-        {
-            let name = &dim_expr.terms[0].term.name.name;
-            // Make sure this isn't actually an index name (which would be an indexed param,
-            // not a struct).
-            if index_kinds.contains_key(name.as_str()) {
-                return Err(JsonInputError::CannotInferTypeName {
-                    param: param_name.to_string(),
-                });
-            }
-            Ok((name.clone(), Vec::new()))
-        }
-        _ => Err(JsonInputError::CannotInferTypeName {
-            param: param_name.to_string(),
-        }),
-    }
-}
-
-/// Extract the index name from an indexed type annotation like `Velocity[Maneuver]`.
-fn extract_index_name(
-    type_ann: &ast::TypeExpr,
-    param_name: &str,
-) -> Result<String, JsonInputError> {
-    match &type_ann.kind {
-        TypeExprKind::Indexed { indexes, .. } => indexes.first().map_or_else(
-            || {
-                Err(JsonInputError::NotAnIndexedType {
-                    param: param_name.to_string(),
-                })
-            },
-            |first| Ok(first.name.clone()),
-        ),
-        _ => Err(JsonInputError::NotAnIndexedType {
-            param: param_name.to_string(),
-        }),
-    }
 }
 
 /// Create an `Expr` with a synthetic span.
@@ -457,17 +357,10 @@ mod tests {
     )]
 
     use super::*;
-    use graphcal_syntax::parser::Parser;
-
-    /// Parse a `.gcl` source into an AST for test use.
-    fn parse_gcl(source: &str) -> ast::File {
-        Parser::new(source).parse_file().unwrap()
-    }
 
     #[test]
     fn scalar_with_units() {
-        let ast = parse_gcl("param dry_mass: Mass = 1200.0 kg;");
-        let overrides = json_to_overrides(r#"{"dry_mass": "1500.0 kg"}"#, &ast).unwrap();
+        let overrides = json_to_overrides(r#"{"dry_mass": "1500.0 kg"}"#).unwrap();
         assert!(overrides.contains_key(&DeclName::new("dry_mass")));
         let expr = &overrides[&DeclName::new("dry_mass")];
         assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
@@ -475,39 +368,29 @@ mod tests {
 
     #[test]
     fn bool_value() {
-        let ast = parse_gcl("param enabled: Bool = true;");
-        let overrides = json_to_overrides(r#"{"enabled": false}"#, &ast).unwrap();
+        let overrides = json_to_overrides(r#"{"enabled": false}"#).unwrap();
         let expr = &overrides[&DeclName::new("enabled")];
         assert!(matches!(expr.kind, ExprKind::Bool(false)));
     }
 
     #[test]
     fn integer_value() {
-        let ast = parse_gcl("param count: Int = 10;");
-        let overrides = json_to_overrides(r#"{"count": 42}"#, &ast).unwrap();
+        let overrides = json_to_overrides(r#"{"count": 42}"#).unwrap();
         let expr = &overrides[&DeclName::new("count")];
         assert!(matches!(expr.kind, ExprKind::Integer(42)));
     }
 
     #[test]
     fn dimensionless_float() {
-        let ast = parse_gcl("param ratio: Dimensionless = 1.0;");
-        let overrides = json_to_overrides(r#"{"ratio": 3.33}"#, &ast).unwrap();
+        let overrides = json_to_overrides(r#"{"ratio": 3.33}"#).unwrap();
         let expr = &overrides[&DeclName::new("ratio")];
         assert!(matches!(expr.kind, ExprKind::Number(f) if (f - 3.33).abs() < f64::EPSILON));
     }
 
     #[test]
     fn struct_single_variant() {
-        let ast = parse_gcl(
-            r"
-            dimension Velocity = Length / Time;
-            type TransferResult { dv1: Velocity, dv2: Velocity }
-            param transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s };
-            ",
-        );
-        let json = r#"{"transfer": {"fields": {"dv1": "150.0 m/s", "dv2": "250.0 m/s"}}}"#;
-        let overrides = json_to_overrides(json, &ast).unwrap();
+        let json = r#"{"transfer": {"type": "TransferResult", "fields": {"dv1": "150.0 m/s", "dv2": "250.0 m/s"}}}"#;
+        let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("transfer")];
         match &expr.kind {
             ExprKind::StructConstruction {
@@ -521,20 +404,21 @@ mod tests {
     }
 
     #[test]
-    fn tagged_union_with_fields() {
-        let ast = parse_gcl(
-            r"
-            dimension Velocity = Length / Time;
-            dimension Force = Mass * Length / Time^2;
-            type ManeuverKind {
-                Impulsive { delta_v: Velocity }
-                LowThrust { thrust: Force, duration: Time }
-            }
-            param maneuver: ManeuverKind = Impulsive { delta_v: 100.0 m/s };
-            ",
+    fn struct_missing_type_key() {
+        let json = r#"{"transfer": {"fields": {"dv1": "150.0 m/s"}}}"#;
+        let result = json_to_overrides(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, JsonInputError::MissingTypeKey { .. }),
+            "expected MissingTypeKey, got {err}"
         );
+    }
+
+    #[test]
+    fn tagged_union_with_fields() {
         let json = r#"{"maneuver": {"variant": "LowThrust", "fields": {"thrust": "0.5 N", "duration": "3600.0 s"}}}"#;
-        let overrides = json_to_overrides(json, &ast).unwrap();
+        let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("maneuver")];
         match &expr.kind {
             ExprKind::StructConstruction {
@@ -549,14 +433,8 @@ mod tests {
 
     #[test]
     fn bare_variant_object() {
-        let ast = parse_gcl(
-            r"
-            type Status { Nominal  Warning { code: Dimensionless } }
-            param status: Status = Nominal;
-            ",
-        );
         let json = r#"{"status": {"variant": "Nominal"}}"#;
-        let overrides = json_to_overrides(json, &ast).unwrap();
+        let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("status")];
         match &expr.kind {
             ExprKind::StructConstruction {
@@ -571,34 +449,17 @@ mod tests {
 
     #[test]
     fn bare_variant_string() {
-        let ast = parse_gcl(
-            r"
-            type Status { Nominal  Warning { code: Dimensionless } }
-            param status: Status = Nominal;
-            ",
-        );
         // String "Nominal" is parsed as a GCL expression, which produces a ConstRef
         // (PascalCase identifier). The evaluator handles this as a bare variant.
         let json = r#"{"status": "Nominal"}"#;
-        let overrides = json_to_overrides(json, &ast).unwrap();
+        let overrides = json_to_overrides(json).unwrap();
         assert!(overrides.contains_key(&DeclName::new("status")));
     }
 
     #[test]
     fn named_label_indexed() {
-        let ast = parse_gcl(
-            r"
-            dimension Velocity = Length / Time;
-            index Maneuver = { Departure, Correction, Insertion }
-            param delta_v: Velocity[Maneuver] = {
-                Maneuver::Departure: 2.46 km/s,
-                Maneuver::Correction: 0.12 km/s,
-                Maneuver::Insertion: 1.83 km/s,
-            };
-            ",
-        );
-        let json = r#"{"delta_v": {"Departure": "3.0 km/s", "Correction": "0.2 km/s", "Insertion": "2.0 km/s"}}"#;
-        let overrides = json_to_overrides(json, &ast).unwrap();
+        let json = r#"{"delta_v": {"index": "Maneuver", "entries": {"Departure": "3.0 km/s", "Correction": "0.2 km/s", "Insertion": "2.0 km/s"}}}"#;
+        let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("delta_v")];
         match &expr.kind {
             ExprKind::MapLiteral { entries } => {
@@ -610,48 +471,39 @@ mod tests {
     }
 
     #[test]
-    fn range_index_rejected() {
-        let ast = parse_gcl(
-            r"
-            index Step = range(0.0 s, 1.0 s, step: 0.25 s);
-            param y: Dimensionless[Step] = unfold(10.0, |prev_t, t| 0.0);
-            ",
-        );
-        let json = r#"{"y": {"0 s": "10.0", "0.25 s": "9.5"}}"#;
-        let result = json_to_overrides(json, &ast);
+    fn ambiguous_object_rejected() {
+        // A plain object with unrecognized keys should be rejected
+        let json = r#"{"y": {"Departure": "10.0", "Correction": "9.5"}}"#;
+        let result = json_to_overrides(json);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, JsonInputError::RangeIndexNotSupported { .. }),
-            "expected RangeIndexNotSupported, got {err}"
+            matches!(err, JsonInputError::AmbiguousObject { .. }),
+            "expected AmbiguousObject, got {err}"
         );
     }
 
     #[test]
     fn unsupported_null() {
-        let ast = parse_gcl("param x: Dimensionless = 1.0;");
-        let result = json_to_overrides(r#"{"x": null}"#, &ast);
+        let result = json_to_overrides(r#"{"x": null}"#);
         assert!(result.is_err());
     }
 
     #[test]
     fn unsupported_array() {
-        let ast = parse_gcl("param x: Dimensionless = 1.0;");
-        let result = json_to_overrides(r#"{"x": [1, 2, 3]}"#, &ast);
+        let result = json_to_overrides(r#"{"x": [1, 2, 3]}"#);
         assert!(result.is_err());
     }
 
     #[test]
     fn top_level_not_object() {
-        let ast = parse_gcl("param x: Dimensionless = 1.0;");
-        let result = json_to_overrides(r#""not an object""#, &ast);
+        let result = json_to_overrides(r#""not an object""#);
         assert!(matches!(result, Err(JsonInputError::TopLevelNotObject)));
     }
 
     #[test]
     fn expression_string_with_arithmetic() {
-        let ast = parse_gcl("param x: Dimensionless = 1.0;");
-        let overrides = json_to_overrides(r#"{"x": "2.0 + 3.0"}"#, &ast).unwrap();
+        let overrides = json_to_overrides(r#"{"x": "2.0 + 3.0"}"#).unwrap();
         let expr = &overrides[&DeclName::new("x")];
         assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
     }
