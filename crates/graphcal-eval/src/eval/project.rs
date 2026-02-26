@@ -1494,15 +1494,21 @@ fn route_overrides_to_files(
             // in the root file to provide a better error message.
             for decl in &root_file.ast.declarations {
                 let kind = match &decl.kind {
-                    DeclKind::Node(n) if n.name.value.as_str() == name_str => Some("node"),
-                    DeclKind::Const(c) if c.name.value.as_str() == name_str => Some("const"),
-                    DeclKind::Assert(a) if a.name.value.as_str() == name_str => Some("assert"),
+                    DeclKind::Node(n) if n.name.value.as_str() == name_str => {
+                        Some(DeclCategory::Node)
+                    }
+                    DeclKind::Const(c) if c.name.value.as_str() == name_str => {
+                        Some(DeclCategory::Const)
+                    }
+                    DeclKind::Assert(a) if a.name.value.as_str() == name_str => {
+                        Some(DeclCategory::Assert)
+                    }
                     _ => None,
                 };
                 if let Some(actual_kind) = kind {
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
-                        actual_kind: actual_kind.to_string(),
+                        actual_kind,
                     }));
                 }
             }
@@ -1571,8 +1577,8 @@ fn extract_runtime_values(
                 curr_name,
                 body,
                 &mut values,
-                &builtin_consts,
-                &builtin_fns,
+                builtin_consts,
+                builtin_fns,
                 &tir.registry,
                 declared_types,
                 src,
@@ -1582,8 +1588,8 @@ fn extract_runtime_values(
                 expr,
                 &values,
                 &empty_locals,
-                &builtin_consts,
-                &builtin_fns,
+                builtin_consts,
+                builtin_fns,
                 &tir.registry,
                 src,
             )
@@ -1659,34 +1665,10 @@ pub(super) fn apply_overrides(
         if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
             match cat {
                 DeclCategory::Param => {}
-                DeclCategory::Const => {
+                non_param_cat => {
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
-                        actual_kind: "const".to_string(),
-                    }));
-                }
-                DeclCategory::Node => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "node".to_string(),
-                    }));
-                }
-                DeclCategory::Assert => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "assert".to_string(),
-                    }));
-                }
-                DeclCategory::Plot => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "plot".to_string(),
-                    }));
-                }
-                DeclCategory::Figure => {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: "figure".to_string(),
+                        actual_kind: *non_param_cat,
                     }));
                 }
             }

@@ -389,18 +389,16 @@ impl fmt::Display for DimensionDisplay<'_> {
     }
 }
 
-impl std::ops::Mul for Dimension {
-    type Output = Self;
-    /// Multiply two dimensions (add exponents).
-    #[expect(
-        clippy::suspicious_arithmetic_impl,
-        reason = "dimension multiplication adds exponents"
-    )]
-    fn mul(self, other: Self) -> Self {
+impl Dimension {
+    /// Combine two dimensions by adding or subtracting exponents.
+    ///
+    /// If `negate` is false, exponents are added (multiplication).
+    /// If `negate` is true, exponents are subtracted (division).
+    fn combine(self, other: &Self, negate: bool) -> Self {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
             let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
-            *entry = *entry + *exp;
+            *entry = if negate { *entry - *exp } else { *entry + *exp };
             if entry.is_zero() {
                 exponents.remove(id);
             }
@@ -409,23 +407,19 @@ impl std::ops::Mul for Dimension {
     }
 }
 
+impl std::ops::Mul for Dimension {
+    type Output = Self;
+    /// Multiply two dimensions (add exponents).
+    fn mul(self, other: Self) -> Self {
+        self.combine(&other, false)
+    }
+}
+
 impl std::ops::Div for Dimension {
     type Output = Self;
     /// Divide two dimensions (subtract exponents).
-    #[expect(
-        clippy::suspicious_arithmetic_impl,
-        reason = "dimension division subtracts exponents"
-    )]
     fn div(self, other: Self) -> Self {
-        let mut exponents = self.exponents;
-        for (id, exp) in &other.exponents {
-            let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
-            *entry = *entry - *exp;
-            if entry.is_zero() {
-                exponents.remove(id);
-            }
-        }
-        Self { exponents }
+        self.combine(&other, true)
     }
 }
 

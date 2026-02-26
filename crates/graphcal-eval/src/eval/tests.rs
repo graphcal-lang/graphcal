@@ -667,7 +667,7 @@ fn override_node_errors() {
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "delta_v");
-            assert_eq!(actual_kind, "node");
+            assert_eq!(actual_kind.to_string(), "node");
         }
         other => panic!("expected OverrideNotAParam, got {other:?}"),
     }
@@ -682,7 +682,7 @@ fn override_const_errors() {
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "G0");
-            assert_eq!(actual_kind, "const");
+            assert_eq!(actual_kind.to_string(), "const");
         }
         other => panic!("expected OverrideNotAParam, got {other:?}"),
     }

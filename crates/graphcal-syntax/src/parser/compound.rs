@@ -7,6 +7,7 @@ use crate::names::{DeclName, FieldName, IndexName, Spanned, StructTypeName, Vari
 use crate::span::Span;
 use crate::token::Token;
 
+use super::expr::token_to_comparison_op;
 use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case};
 
 impl Parser<'_> {
@@ -607,15 +608,7 @@ impl Parser<'_> {
         }
         // Handle binary operators (comparison, arithmetic, logical).
         // Check for comparison operators (==, !=, <, >, <=, >=).
-        let op = match self.lexer.peek() {
-            Some(Token::EqEq) => Some(BinOp::Eq),
-            Some(Token::BangEq) => Some(BinOp::Ne),
-            Some(Token::Lt) => Some(BinOp::Lt),
-            Some(Token::Gt) => Some(BinOp::Gt),
-            Some(Token::LtEq) => Some(BinOp::Le),
-            Some(Token::GtEq) => Some(BinOp::Ge),
-            _ => None,
-        };
+        let op = self.lexer.peek().and_then(token_to_comparison_op);
         if let Some(op) = op {
             self.lexer.next_token();
             let rhs = self.parse_expr()?;

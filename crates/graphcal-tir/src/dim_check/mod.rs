@@ -14,9 +14,8 @@ use graphcal_registry::builtins::builtin_functions;
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::registry::Registry;
 
-use helpers::{
-    expect_scalar, format_declared_type, format_inferred_type, is_bool_type, types_match,
-};
+pub use helpers::format_inferred_type;
+use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
 use infer::{infer_type, infer_type_with_owner};
 
 mod builtins;
@@ -94,7 +93,7 @@ pub fn check_dimensions_tir(
             &declared_types,
             &empty_locals,
             &tir.registry,
-            &builtin_fns,
+            builtin_fns,
             &tir.resolved_fn_sigs,
             src,
         )?;
@@ -118,7 +117,7 @@ pub fn check_dimensions_tir(
             &declared_types,
             &empty_locals,
             &tir.registry,
-            &builtin_fns,
+            builtin_fns,
             &tir.resolved_fn_sigs,
             src,
         )?;
@@ -145,7 +144,7 @@ pub fn check_dimensions_tir(
             &declared_types,
             &empty_locals,
             &tir.registry,
-            &builtin_fns,
+            builtin_fns,
             &tir.resolved_fn_sigs,
             src,
         )?;
@@ -171,7 +170,7 @@ pub fn check_dimensions_tir(
                     &declared_types,
                     &empty_locals,
                     &tir.registry,
-                    &builtin_fns,
+                    builtin_fns,
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
@@ -195,7 +194,7 @@ pub fn check_dimensions_tir(
                     &declared_types,
                     &empty_locals,
                     &tir.registry,
-                    &builtin_fns,
+                    builtin_fns,
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
@@ -204,7 +203,7 @@ pub fn check_dimensions_tir(
                     &declared_types,
                     &empty_locals,
                     &tir.registry,
-                    &builtin_fns,
+                    builtin_fns,
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
@@ -213,7 +212,7 @@ pub fn check_dimensions_tir(
                     &declared_types,
                     &empty_locals,
                     &tir.registry,
-                    &builtin_fns,
+                    builtin_fns,
                     &tir.resolved_fn_sigs,
                     src,
                 )?;
@@ -297,7 +296,7 @@ pub fn check_override_dimension(
         declared_types,
         &empty_locals,
         registry,
-        &builtin_fns,
+        builtin_fns,
         resolved_fn_sigs,
         src,
     )?;

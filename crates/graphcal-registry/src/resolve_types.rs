@@ -148,6 +148,19 @@ pub enum DeclCategory {
     Figure,
 }
 
+impl std::fmt::Display for DeclCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Const => write!(f, "const"),
+            Self::Param => write!(f, "param"),
+            Self::Node => write!(f, "node"),
+            Self::Assert => write!(f, "assert"),
+            Self::Plot => write!(f, "plot"),
+            Self::Figure => write!(f, "figure"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry types for resolved declarations
 // ---------------------------------------------------------------------------

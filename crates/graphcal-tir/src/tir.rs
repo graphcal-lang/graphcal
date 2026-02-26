@@ -537,7 +537,7 @@ pub fn unify_resolved_type(
                 else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed type".to_string(),
-                        found: format_inferred(current, registry),
+                        found: crate::dim_check::format_inferred_type(current, registry),
                         src: src.clone(),
                         span: span.into(),
                         help: "expected an indexed value".to_string(),
@@ -578,7 +578,7 @@ pub fn unify_resolved_type(
             if *actual != InferredType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Bool argument".to_string(),
@@ -591,7 +591,7 @@ pub fn unify_resolved_type(
             if *actual != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Int argument".to_string(),
@@ -609,7 +609,7 @@ pub fn unify_resolved_type(
                 };
                 return Err(GraphcalError::DimensionMismatch {
                     expected: expected_str,
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: "expected Datetime argument".to_string(),
@@ -622,7 +622,7 @@ pub fn unify_resolved_type(
             let InferredType::Label(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format!("Label({expected_index})"),
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: format!("expected a label of index `{expected_index}`"),
@@ -674,7 +674,7 @@ pub fn unify_resolved_type(
             let InferredType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: format!("expected struct type `{name}`"),
@@ -683,7 +683,7 @@ pub fn unify_resolved_type(
             if *name != *actual_name {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
-                    found: format_inferred(actual, registry),
+                    found: crate::dim_check::format_inferred_type(actual, registry),
                     src: src.clone(),
                     span: span.into(),
                     help: format!("expected struct type `{name}`"),
@@ -912,41 +912,11 @@ fn expect_scalar_from_inferred(
         crate::dim_check::InferredType::Scalar(d) => Ok(d.clone()),
         other => Err(GraphcalError::DimensionMismatch {
             expected: "scalar dimension".to_string(),
-            found: format_inferred(other, registry),
+            found: crate::dim_check::format_inferred_type(other, registry),
             src: src.clone(),
             span: span.into(),
             help: "expected a scalar value, not a struct or indexed type".to_string(),
         }),
-    }
-}
-
-/// Format an inferred type for diagnostics.
-fn format_inferred(it: &crate::dim_check::InferredType, registry: &Registry) -> String {
-    use crate::dim_check::InferredType;
-    match it {
-        InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-        InferredType::Bool => "Bool".to_string(),
-        InferredType::Int => "Int".to_string(),
-        InferredType::Label(index) => format!("Label({index})"),
-        InferredType::Struct(name, args) => {
-            if args.is_empty() {
-                name.to_string()
-            } else {
-                let args_str: Vec<String> =
-                    args.iter().map(|a| format_inferred(a, registry)).collect();
-                format!("{name}<{}>", args_str.join(", "))
-            }
-        }
-        InferredType::Datetime(scale) => {
-            if *scale == graphcal_registry::time_scale::TimeScale::UTC {
-                "Datetime".to_string()
-            } else {
-                format!("Datetime<{scale}>")
-            }
-        }
-        InferredType::Indexed { element, index } => {
-            format!("{}[{index}]", format_inferred(element, registry))
-        }
     }
 }
 

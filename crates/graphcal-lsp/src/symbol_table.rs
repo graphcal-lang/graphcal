@@ -30,6 +30,8 @@ pub enum SymbolCategory {
     BuiltinFn,
     BuiltinConst,
     Assert,
+    Plot,
+    Figure,
 }
 
 /// Information about a symbol definition.
@@ -162,7 +164,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
     }
 
     // Add builtin functions as definitions.
-    for (name, f) in &builtin_functions() {
+    for (name, f) in builtin_functions() {
         table.definitions.insert(
             (*name).to_string(),
             DefinitionInfo {
@@ -449,7 +451,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                     name.clone(),
                     DefinitionInfo {
                         name: name.clone(),
-                        category: SymbolCategory::Assert, // reuse Assert category for plots
+                        category: SymbolCategory::Plot,
                         name_span: p.name.span,
                         decl_span: decl.span,
                         type_description: Some(format!("plot ({})", p.chart_type)),
@@ -466,7 +468,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                     name.clone(),
                     DefinitionInfo {
                         name: name.clone(),
-                        category: SymbolCategory::Assert, // reuse Assert category for figures
+                        category: SymbolCategory::Figure,
                         name_span: f.name.span,
                         decl_span: decl.span,
                         type_description: Some("figure".to_string()),

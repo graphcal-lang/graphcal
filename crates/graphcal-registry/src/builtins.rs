@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use graphcal_syntax::dimension::{BaseDimId, Dimension, Rational};
 
@@ -172,12 +173,7 @@ impl BuiltinFunction {
     }
 }
 
-#[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "declarative list of built-in functions"
-)]
-pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
+static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     // Root functions
     m.insert(
@@ -411,10 +407,14 @@ pub fn builtin_functions() -> HashMap<&'static str, BuiltinFunction> {
         },
     );
     m
-}
+});
 
 #[must_use]
-pub fn builtin_constants() -> HashMap<&'static str, f64> {
+pub fn builtin_functions() -> &'static HashMap<&'static str, BuiltinFunction> {
+    &BUILTIN_FUNCTIONS
+}
+
+static BUILTIN_CONSTANTS: LazyLock<HashMap<&'static str, f64>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert("PI", std::f64::consts::PI);
     m.insert("E", std::f64::consts::E);
@@ -423,6 +423,11 @@ pub fn builtin_constants() -> HashMap<&'static str, f64> {
     m.insert("LN2", std::f64::consts::LN_2);
     m.insert("LN10", std::f64::consts::LN_10);
     m
+});
+
+#[must_use]
+pub fn builtin_constants() -> &'static HashMap<&'static str, f64> {
+    &BUILTIN_CONSTANTS
 }
 
 #[cfg(test)]
@@ -478,7 +483,7 @@ mod tests {
     #[test]
     fn all_builtins_have_correct_arity() {
         let fns = builtin_functions();
-        for (name, f) in &fns {
+        for (name, f) in fns {
             match f.arity() {
                 1 => assert!(
                     [

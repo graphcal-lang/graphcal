@@ -280,7 +280,7 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
     let mut sigs = HashMap::new();
 
     // Builtin functions — always available.
-    for (name, f) in &builtin_functions() {
+    for (name, f) in builtin_functions() {
         let (params, ret) = builtin_signature_parts(&f.dim_sig);
         let params_str = params.join(", ");
         let label = format!("fn {name}({params_str}) -> {ret}");
