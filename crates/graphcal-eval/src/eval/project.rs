@@ -1522,83 +1522,16 @@ fn route_overrides_to_files(
 }
 
 /// Extract `RuntimeValue`s from a plan evaluation for passing to downstream files.
+///
+/// Delegates to the shared [`run_eval_loop`](super::runtime::run_eval_loop) and
+/// filters the result to only locally-defined param/node values.
 fn extract_runtime_values(
     tir: &crate::tir::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> HashMap<String, RuntimeValue> {
-    let builtin_consts = crate::builtins::builtin_constants();
-    let builtin_fns = crate::builtins::builtin_functions();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-
-    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
-
-    // Insert imported values.
-    // ScopedName → String: the runtime values map uses flat strings.
-    for (name, val) in &plan.imported_values {
-        values.insert(name.to_string(), val.clone());
-    }
-
-    // Insert const values.
-    for (name, val) in &plan.const_values {
-        values.insert(name.clone(), val.clone());
-    }
-
-    // Evaluate in topological order.
-    for name in &plan.topo_order {
-        if values.contains_key(name) {
-            continue;
-        }
-
-        // Check if any dependency has failed — skip if so.
-        let has_failed_dep = tir
-            .runtime_deps
-            .get(name)
-            .is_some_and(|deps| deps.iter().any(|dep| !values.contains_key(dep)));
-
-        if has_failed_dep {
-            continue;
-        }
-
-        let expr = &plan.expressions[name];
-
-        let result = if let graphcal_syntax::ast::ExprKind::Unfold {
-            init,
-            prev_name,
-            curr_name,
-            body,
-        } = &expr.kind
-        {
-            super::runtime::eval_unfold(
-                name,
-                init,
-                prev_name,
-                curr_name,
-                body,
-                &mut values,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                declared_types,
-                src,
-            )
-        } else {
-            crate::eval_expr::eval_expr(
-                expr,
-                &values,
-                &empty_locals,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                src,
-            )
-        };
-
-        if let Ok(val) = result {
-            values.insert(name.clone(), val);
-        }
-    }
+    let result = super::runtime::run_eval_loop(plan, tir, declared_types, src);
 
     // Return only locally-defined param/node values (not imported, not consts).
     let local_runtime_names: HashSet<&str> = tir
@@ -1608,7 +1541,8 @@ fn extract_runtime_values(
         .chain(tir.nodes.iter().map(|e| e.name.as_str()))
         .collect();
 
-    values
+    result
+        .values
         .into_iter()
         .filter(|(name, _)| local_runtime_names.contains(name.as_str()))
         .collect()
