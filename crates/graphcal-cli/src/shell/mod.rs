@@ -262,8 +262,7 @@ fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
     let (ast, source) = match graphcal_syntax::parser::Parser::new(input).parse_file() {
         Ok(ast) => (ast, input.to_string()),
         Err(e) => {
-            let err_str = format!("{e}");
-            if err_str.contains("unexpected end of file") {
+            if matches!(e, graphcal_syntax::parser::ParseError::UnexpectedEof { .. }) {
                 // Auto-append `;` and retry — makes semicolons optional in the REPL.
                 if input.trim_end().ends_with(';') {
                     return DeclResult::Incomplete;

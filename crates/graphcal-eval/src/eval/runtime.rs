@@ -284,20 +284,25 @@ pub(super) fn eval_unfold(
     })
 }
 
-/// Evaluate using TIR + `ExecPlan` (new linear pipeline).
+/// Result of running the core eval loop: successfully evaluated values and per-node errors.
+pub(super) struct EvalLoopResult {
+    pub values: HashMap<String, RuntimeValue>,
+    pub errors: HashMap<String, NodeError>,
+}
+
+/// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
 ///
-/// Runtime errors are contained per-node: if a node fails, independent nodes
-/// still evaluate, and dependent nodes receive a `DependencyFailed` error.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear evaluation pipeline is clearest as a single function"
-)]
-pub(super) fn evaluate_plan(
-    tir: &crate::tir::TIR,
+/// Inserts imported and const values, then iterates in topological order.
+/// Unfold expressions receive special handling (incremental partial results).
+/// Domain constraints are checked after successful evaluation.
+///
+/// Returns all computed values and any per-node errors.
+pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
+    tir: &crate::tir::TIR,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
-) -> EvalResult {
+) -> EvalLoopResult {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -397,6 +402,29 @@ pub(super) fn evaluate_plan(
             }
         }
     }
+
+    EvalLoopResult { values, errors }
+}
+
+/// Evaluate using TIR + `ExecPlan` (new linear pipeline).
+///
+/// Runtime errors are contained per-node: if a node fails, independent nodes
+/// still evaluate, and dependent nodes receive a `DependencyFailed` error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear evaluation pipeline is clearest as a single function"
+)]
+pub(super) fn evaluate_plan(
+    tir: &crate::tir::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+) -> EvalResult {
+    let builtin_consts = builtin_constants();
+    let builtin_fns = builtin_functions();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    let EvalLoopResult { values, errors } = run_eval_loop(plan, tir, declared_types, src);
 
     // Build a map from name -> expression for display unit extraction
     let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = tir

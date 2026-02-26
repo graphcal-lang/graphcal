@@ -276,9 +276,8 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse postfix operators (field access `.field`, index access `[i]`).
-    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_atom()?;
+    /// Apply postfix operators (field access `.field`, index access `[i]`) to an already-parsed expression.
+    pub(super) fn apply_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
         loop {
             match self.lexer.peek() {
                 Some(Token::Dot) => {
@@ -323,69 +322,15 @@ impl Parser<'_> {
         Ok(expr)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one match arm per atom kind; splitting would obscure"
-    )]
+    /// Parse postfix operators (field access `.field`, index access `[i]`).
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_atom()?;
+        self.apply_postfix(expr)
+    }
+
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
-            Some(Token::Number) => {
-                let (_, span) = self.advance()?;
-                let text = self.lexer.slice_at(span).replace('_', "");
-                let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
-
-                if is_integer {
-                    // Integer literal: no decimal point or scientific notation
-                    if self.lexer.peek() == Some(&Token::Ident) {
-                        // Integer followed by unit is an error: must use float
-                        return Err(ParseError::InvalidNumber {
-                            reason: format!(
-                                "integer literal cannot have units; write `{text}.0` instead"
-                            ),
-                            src: self.named_source(),
-                            span: span.into(),
-                        });
-                    }
-                    let value: i64 = text.parse().map_err(|e: std::num::ParseIntError| {
-                        ParseError::InvalidNumber {
-                            reason: e.to_string(),
-                            src: self.named_source(),
-                            span: span.into(),
-                        }
-                    })?;
-                    Ok(Expr {
-                        kind: ExprKind::Integer(value),
-                        span,
-                    })
-                } else {
-                    // Float literal: has decimal point or scientific notation
-                    let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
-                        ParseError::InvalidNumber {
-                            reason: e.to_string(),
-                            src: self.named_source(),
-                            span: span.into(),
-                        }
-                    })?;
-
-                    // Check if followed by an identifier (unit literal): `400.0 km`
-                    if self.lexer.peek() == Some(&Token::Ident) {
-                        let unit_expr = self.parse_unit_expr()?;
-                        let full_span = span.merge(unit_expr.span);
-                        Ok(Expr {
-                            kind: ExprKind::UnitLiteral {
-                                value,
-                                unit: unit_expr,
-                            },
-                            span: full_span,
-                        })
-                    } else {
-                        Ok(Expr {
-                            kind: ExprKind::Number(value),
-                            span,
-                        })
-                    }
-                }
-            }
+            Some(Token::Number) => self.parse_number_expr(),
             Some(Token::True) => {
                 let (_, span) = self.advance()?;
                 Ok(Expr {
@@ -435,194 +380,12 @@ impl Parser<'_> {
                     })
                 }
             }
-            Some(Token::Ident) => {
-                let (_, span) = self.advance()?;
-                let name = self.lexer.slice_at(span).to_string();
-
-                if is_upper_snake_case(&name) {
-                    // Const reference: PI, E, G0, UPPER_NAME
-                    Ok(Expr {
-                        kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
-                        span,
-                    })
-                } else if is_pascal_case(&name)
-                    && self.lexer.peek() == Some(&Token::Lt)
-                    && self.is_type_args_followed_by_brace()
-                {
-                    // Generic struct construction: Vec3<Length, ECI> { x: 1 km, ... }
-                    let type_args = self.parse_type_arg_list()?;
-                    self.parse_struct_construction_with_type_args(
-                        Spanned::new(StructTypeName::new(name), span),
-                        type_args,
-                    )
-                } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
-                    // Struct/variant construction with fields: TypeName { field1: expr, field2 }
-                    self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
-                } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
-                    // Qualified variant literal: Maneuver::Departure
-                    self.lexer.next_token(); // consume '::'
-                    let variant = self
-                        .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                        .into_spanned::<VariantName>();
-                    let full_span = span.merge(variant.span);
-                    Ok(Expr {
-                        kind: ExprKind::VariantLiteral {
-                            index: Spanned::new(IndexName::new(name), span),
-                            variant,
-                        },
-                        span: full_span,
-                    })
-                } else if is_pascal_case(&name) {
-                    // Bare variant construction (no fields): `Nominal`
-                    Ok(Expr {
-                        kind: ExprKind::StructConstruction {
-                            type_name: Spanned::new(StructTypeName::new(name), span),
-                            type_args: Vec::new(),
-                            fields: Vec::new(),
-                        },
-                        span,
-                    })
-                } else if is_lower_snake_case(&name)
-                    && self.lexer.peek() == Some(&Token::ColonColon)
-                {
-                    // Module-qualified reference: module::CONST or module::fn(args)
-                    self.lexer.next_token(); // consume '::'
-                    let member_ident = self.parse_any_ident()?;
-                    let member = member_ident.name.clone();
-                    if is_upper_snake_case(&member) {
-                        // module::CONST_NAME
-                        let full_span = span.merge(member_ident.span);
-                        Ok(Expr {
-                            kind: ExprKind::QualifiedConstRef {
-                                module: crate::ast::Ident { name, span },
-                                name: Spanned::new(DeclName::new(member), member_ident.span),
-                            },
-                            span: full_span,
-                        })
-                    } else if is_lower_snake_case(&member)
-                        && self.lexer.peek() == Some(&Token::LParen)
-                    {
-                        // module::fn_name(args...)
-                        self.lexer.next_token(); // consume '('
-                        let args = self.parse_arg_list()?;
-                        let (_, rparen_span) = self.expect(Token::RParen)?;
-                        let call_span = span.merge(rparen_span);
-                        Ok(Expr {
-                            kind: ExprKind::QualifiedFnCall {
-                                module: crate::ast::Ident { name, span },
-                                name: Spanned::new(FnName::new(member), member_ident.span),
-                                args,
-                            },
-                            span: call_span,
-                        })
-                    } else {
-                        Err(self.unexpected_token(
-                            "a CONST_NAME or function_name after `::`",
-                            &member,
-                            member_ident.span,
-                        ))
-                    }
-                } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
-                    // Scan expression: scan(source, init, |acc, val| body)
-                    self.parse_scan(&crate::ast::Ident { name, span })
-                } else if name == "unfold" && self.lexer.peek() == Some(&Token::LParen) {
-                    // Unfold expression: unfold(init, |prev_i, i| body)
-                    self.parse_unfold(&crate::ast::Ident { name, span })
-                } else if self.lexer.peek() == Some(&Token::LParen) {
-                    // Function call: name(args...)
-                    self.lexer.next_token(); // consume '('
-                    let args = self.parse_arg_list()?;
-                    let (_, rparen_span) = self.expect(Token::RParen)?;
-                    let call_span = span.merge(rparen_span);
-                    Ok(Expr {
-                        kind: ExprKind::FnCall {
-                            name: Spanned::new(FnName::new(name), span),
-                            args,
-                        },
-                        span: call_span,
-                    })
-                } else {
-                    // Bare lowercase identifier -> LocalRef (let binding reference)
-                    // Semantic validation happens in resolve/dim_check.
-                    Ok(Expr {
-                        kind: ExprKind::LocalRef(crate::ast::Ident { name, span }),
-                        span,
-                    })
-                }
-            }
+            Some(Token::Ident) => self.parse_identifier_expr(),
             Some(Token::For) => {
                 // For comprehension: for m: Maneuver { expr }
                 self.parse_for_comp()
             }
-            Some(Token::LBrace) => {
-                // Disambiguate: map literal vs block expression
-                // Consume '{' and peek at what follows
-                let (_, start_span) = self.advance()?;
-                if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
-                    let text = self.lexer.slice_at(ident_span);
-                    if is_pascal_case(text) {
-                        // Could be map literal (PascalCase :: ...) or struct in block
-                        // Save the ident text to check further
-                        let saved_text = text.to_string();
-                        // Consume the ident to peek at what's next
-                        let (_, saved_span) = self.advance()?;
-                        if self.lexer.peek() == Some(&Token::ColonColon) {
-                            // Could be map literal or VariantLiteral in block.
-                            // Consume `::` and variant, then check next token.
-                            self.lexer.next_token(); // consume '::'
-                            let variant_ident =
-                                self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
-                            if self.lexer.peek() == Some(&Token::Colon) {
-                                // Map literal: { Index::Variant: expr, ... }
-                                self.parse_map_literal_after_first_entry(
-                                    start_span,
-                                    Spanned::new(IndexName::new(saved_text), saved_span),
-                                    variant_ident.into_spanned::<VariantName>(),
-                                )
-                            } else {
-                                // Block containing a VariantLiteral expression
-                                let variant_span = variant_ident.span;
-                                let variant = variant_ident.into_spanned::<VariantName>();
-                                let full_span = saved_span.merge(variant_span);
-                                let first_expr = Expr {
-                                    kind: ExprKind::VariantLiteral {
-                                        index: Spanned::new(IndexName::new(saved_text), saved_span),
-                                        variant,
-                                    },
-                                    span: full_span,
-                                };
-                                let expr = self.continue_parsing_expr(first_expr)?;
-                                let (_, end_span) = self.expect(Token::RBrace)?;
-                                let span = start_span.merge(end_span);
-                                Ok(Expr {
-                                    kind: ExprKind::Block {
-                                        stmts: vec![],
-                                        expr: Box::new(expr),
-                                    },
-                                    span,
-                                })
-                            }
-                        } else {
-                            // Not a map literal — reparse as block with already-consumed tokens
-                            // The consumed ident is the start of an expression in the block
-                            self.parse_block_after_open_brace_and_ident(
-                                start_span,
-                                &saved_text,
-                                saved_span,
-                            )
-                        }
-                    } else {
-                        // lowercase ident or other — block expression
-                        self.parse_block_after_open_brace(start_span)
-                    }
-                } else if self.lexer.peek() == Some(&Token::LParen) {
-                    // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
-                    self.parse_tuple_key_map_literal(start_span)
-                } else {
-                    // Not an ident after { — could be `{ let ...` or `{ expr }`
-                    self.parse_block_after_open_brace(start_span)
-                }
-            }
+            Some(Token::LBrace) => self.parse_brace_expr(),
             Some(Token::Table) => self.parse_table_expr(),
             Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LParen) => {
@@ -636,6 +399,243 @@ impl Parser<'_> {
                 Err(self.unexpected_token("expression", &tok.to_string(), span))
             }
             None => Err(self.unexpected_eof("expression")),
+        }
+    }
+
+    /// Parse a number literal: integer, float, or float with unit.
+    fn parse_number_expr(&mut self) -> Result<Expr, ParseError> {
+        let (_, span) = self.advance()?;
+        let text = self.lexer.slice_at(span).replace('_', "");
+        let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
+
+        if is_integer {
+            // Integer literal: no decimal point or scientific notation
+            if self.lexer.peek() == Some(&Token::Ident) {
+                // Integer followed by unit is an error: must use float
+                return Err(ParseError::InvalidNumber {
+                    reason: format!("integer literal cannot have units; write `{text}.0` instead"),
+                    src: self.named_source(),
+                    span: span.into(),
+                });
+            }
+            let value: i64 =
+                text.parse()
+                    .map_err(|e: std::num::ParseIntError| ParseError::InvalidNumber {
+                        reason: e.to_string(),
+                        src: self.named_source(),
+                        span: span.into(),
+                    })?;
+            Ok(Expr {
+                kind: ExprKind::Integer(value),
+                span,
+            })
+        } else {
+            // Float literal: has decimal point or scientific notation
+            let value: f64 =
+                text.parse()
+                    .map_err(|e: std::num::ParseFloatError| ParseError::InvalidNumber {
+                        reason: e.to_string(),
+                        src: self.named_source(),
+                        span: span.into(),
+                    })?;
+
+            // Check if followed by an identifier (unit literal): `400.0 km`
+            if self.lexer.peek() == Some(&Token::Ident) {
+                let unit_expr = self.parse_unit_expr()?;
+                let full_span = span.merge(unit_expr.span);
+                Ok(Expr {
+                    kind: ExprKind::UnitLiteral {
+                        value,
+                        unit: unit_expr,
+                    },
+                    span: full_span,
+                })
+            } else {
+                Ok(Expr {
+                    kind: ExprKind::Number(value),
+                    span,
+                })
+            }
+        }
+    }
+
+    /// Parse an identifier-based expression (const ref, struct, variant, fn call, qualified ref, etc.).
+    fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
+        let (_, span) = self.advance()?;
+        let name = self.lexer.slice_at(span).to_string();
+
+        if is_upper_snake_case(&name) {
+            // Const reference: PI, E, G0, UPPER_NAME
+            Ok(Expr {
+                kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
+                span,
+            })
+        } else if is_pascal_case(&name)
+            && self.lexer.peek() == Some(&Token::Lt)
+            && self.is_type_args_followed_by_brace()
+        {
+            // Generic struct construction: Vec3<Length, ECI> { x: 1 km, ... }
+            let type_args = self.parse_type_arg_list()?;
+            self.parse_struct_construction_with_type_args(
+                Spanned::new(StructTypeName::new(name), span),
+                type_args,
+            )
+        } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
+            // Struct/variant construction with fields: TypeName { field1: expr, field2 }
+            self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
+        } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
+            // Qualified variant literal: Maneuver::Departure
+            self.lexer.next_token(); // consume '::'
+            let variant = self
+                .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                .into_spanned::<VariantName>();
+            let full_span = span.merge(variant.span);
+            Ok(Expr {
+                kind: ExprKind::VariantLiteral {
+                    index: Spanned::new(IndexName::new(name), span),
+                    variant,
+                },
+                span: full_span,
+            })
+        } else if is_pascal_case(&name) {
+            // Bare variant construction (no fields): `Nominal`
+            Ok(Expr {
+                kind: ExprKind::StructConstruction {
+                    type_name: Spanned::new(StructTypeName::new(name), span),
+                    type_args: Vec::new(),
+                    fields: Vec::new(),
+                },
+                span,
+            })
+        } else if is_lower_snake_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
+            // Module-qualified reference: module::CONST or module::fn(args)
+            self.lexer.next_token(); // consume '::'
+            let member_ident = self.parse_any_ident()?;
+            let member = member_ident.name.clone();
+            if is_upper_snake_case(&member) {
+                // module::CONST_NAME
+                let full_span = span.merge(member_ident.span);
+                Ok(Expr {
+                    kind: ExprKind::QualifiedConstRef {
+                        module: crate::ast::Ident { name, span },
+                        name: Spanned::new(DeclName::new(member), member_ident.span),
+                    },
+                    span: full_span,
+                })
+            } else if is_lower_snake_case(&member) && self.lexer.peek() == Some(&Token::LParen) {
+                // module::fn_name(args...)
+                self.lexer.next_token(); // consume '('
+                let args = self.parse_arg_list()?;
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                let call_span = span.merge(rparen_span);
+                Ok(Expr {
+                    kind: ExprKind::QualifiedFnCall {
+                        module: crate::ast::Ident { name, span },
+                        name: Spanned::new(FnName::new(member), member_ident.span),
+                        args,
+                    },
+                    span: call_span,
+                })
+            } else {
+                Err(self.unexpected_token(
+                    "a CONST_NAME or function_name after `::`",
+                    &member,
+                    member_ident.span,
+                ))
+            }
+        } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
+            // Scan expression: scan(source, init, |acc, val| body)
+            self.parse_scan(&crate::ast::Ident { name, span })
+        } else if name == "unfold" && self.lexer.peek() == Some(&Token::LParen) {
+            // Unfold expression: unfold(init, |prev_i, i| body)
+            self.parse_unfold(&crate::ast::Ident { name, span })
+        } else if self.lexer.peek() == Some(&Token::LParen) {
+            // Function call: name(args...)
+            self.lexer.next_token(); // consume '('
+            let args = self.parse_arg_list()?;
+            let (_, rparen_span) = self.expect(Token::RParen)?;
+            let call_span = span.merge(rparen_span);
+            Ok(Expr {
+                kind: ExprKind::FnCall {
+                    name: Spanned::new(FnName::new(name), span),
+                    args,
+                },
+                span: call_span,
+            })
+        } else {
+            // Bare lowercase identifier -> LocalRef (let binding reference)
+            // Semantic validation happens in resolve/dim_check.
+            Ok(Expr {
+                kind: ExprKind::LocalRef(crate::ast::Ident { name, span }),
+                span,
+            })
+        }
+    }
+
+    /// Parse a brace-delimited expression (map literal or block).
+    fn parse_brace_expr(&mut self) -> Result<Expr, ParseError> {
+        // Disambiguate: map literal vs block expression
+        // Consume '{' and peek at what follows
+        let (_, start_span) = self.advance()?;
+        if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
+            let text = self.lexer.slice_at(ident_span);
+            if is_pascal_case(text) {
+                // Could be map literal (PascalCase :: ...) or struct in block
+                // Save the ident text to check further
+                let saved_text = text.to_string();
+                // Consume the ident to peek at what's next
+                let (_, saved_span) = self.advance()?;
+                if self.lexer.peek() == Some(&Token::ColonColon) {
+                    // Could be map literal or VariantLiteral in block.
+                    // Consume `::` and variant, then check next token.
+                    self.lexer.next_token(); // consume '::'
+                    let variant_ident =
+                        self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+                    if self.lexer.peek() == Some(&Token::Colon) {
+                        // Map literal: { Index::Variant: expr, ... }
+                        self.parse_map_literal_after_first_entry(
+                            start_span,
+                            Spanned::new(IndexName::new(saved_text), saved_span),
+                            variant_ident.into_spanned::<VariantName>(),
+                        )
+                    } else {
+                        // Block containing a VariantLiteral expression
+                        let variant_span = variant_ident.span;
+                        let variant = variant_ident.into_spanned::<VariantName>();
+                        let full_span = saved_span.merge(variant_span);
+                        let first_expr = Expr {
+                            kind: ExprKind::VariantLiteral {
+                                index: Spanned::new(IndexName::new(saved_text), saved_span),
+                                variant,
+                            },
+                            span: full_span,
+                        };
+                        let expr = self.continue_parsing_expr(first_expr)?;
+                        let (_, end_span) = self.expect(Token::RBrace)?;
+                        let span = start_span.merge(end_span);
+                        Ok(Expr {
+                            kind: ExprKind::Block {
+                                stmts: vec![],
+                                expr: Box::new(expr),
+                            },
+                            span,
+                        })
+                    }
+                } else {
+                    // Not a map literal — reparse as block with already-consumed tokens
+                    // The consumed ident is the start of an expression in the block
+                    self.parse_block_after_open_brace_and_ident(start_span, &saved_text, saved_span)
+                }
+            } else {
+                // lowercase ident or other — block expression
+                self.parse_block_after_open_brace(start_span)
+            }
+        } else if self.lexer.peek() == Some(&Token::LParen) {
+            // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
+            self.parse_tuple_key_map_literal(start_span)
+        } else {
+            // Not an ident after { — could be `{ let ...` or `{ expr }`
+            self.parse_block_after_open_brace(start_span)
         }
     }
 
