@@ -30,23 +30,9 @@ fn build_graph(tir: &TIR) -> DiGraph<String, ()> {
     let mut graph = DiGraph::<String, ()>::new();
     let mut name_to_idx = HashMap::new();
 
-    // Build sets for category lookup.
-    let const_names: HashSet<&str> = tir.consts.iter().map(|e| e.name.as_str()).collect();
-    let param_names: HashSet<&str> = tir.params.iter().map(|e| e.name.as_str()).collect();
-    let assert_names: &HashSet<String> = &tir.assert_names;
-
-    // Add all declarations as nodes.
-    for (name, _) in &tir.source_order {
-        let prefix = if const_names.contains(name.as_str()) {
-            "const"
-        } else if param_names.contains(name.as_str()) {
-            "param"
-        } else if assert_names.contains(name) {
-            "assert"
-        } else {
-            "node"
-        };
-        let label = format!("{prefix} {name}");
+    // Add all declarations as nodes, using the category from source_order directly.
+    for (name, category) in &tir.source_order {
+        let label = format!("{category} {name}");
         let idx = graph.add_node(label);
         name_to_idx.insert(name.clone(), idx);
     }
