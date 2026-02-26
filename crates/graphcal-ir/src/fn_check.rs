@@ -130,11 +130,10 @@ fn collect_fn_calls_in_expr(
             collect_fn_calls_in_expr(expr, user_fns, calls);
         }
         ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(val) = &field.value {
-                    collect_fn_calls_in_expr(val, user_fns, calls);
-                }
-            }
+            fields
+                .iter()
+                .filter_map(|field| field.value.as_ref())
+                .for_each(|val| collect_fn_calls_in_expr(val, user_fns, calls));
         }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
