@@ -739,16 +739,7 @@ fn check_indexed_assert_with_expected_fail(
             let mut unexpected_fails = Vec::new();
 
             for path in &paths {
-                // Convert the string path back to (IndexName, VariantName) pairs
-                let key: Vec<(IndexName, VariantName)> = path
-                    .iter()
-                    .filter_map(|label| {
-                        let (idx, var) = label.split_once("::")?;
-                        Some((IndexName::new(idx), VariantName::new(var)))
-                    })
-                    .collect();
-
-                let is_expected_fail_key = keys.contains(&key);
+                let is_expected_fail_key = keys.contains(path);
                 if is_expected_fail_key {
                     // This was an expected-fail key but the value is false after inversion,
                     // meaning the original was true → unexpected pass
@@ -765,10 +756,21 @@ fn check_indexed_assert_with_expected_fail(
                 let formatted: Vec<String> = if is_multi_index {
                     unexpected_passes
                         .iter()
-                        .map(|p| format!("({})", p.join(", ")))
+                        .map(|p| {
+                            format!(
+                                "({})",
+                                p.iter()
+                                    .map(|(idx, var)| format!("{idx}::{var}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
                         .collect()
                 } else {
-                    unexpected_passes.iter().map(|p| p[0].clone()).collect()
+                    unexpected_passes
+                        .iter()
+                        .map(|p| format!("{}::{}", p[0].0, p[0].1))
+                        .collect()
                 };
                 parts.push(format!("unexpected pass at {}", formatted.join(", ")));
             }
@@ -777,10 +779,21 @@ fn check_indexed_assert_with_expected_fail(
                 let formatted: Vec<String> = if is_multi_index {
                     unexpected_fails
                         .iter()
-                        .map(|p| format!("({})", p.join(", ")))
+                        .map(|p| {
+                            format!(
+                                "({})",
+                                p.iter()
+                                    .map(|(idx, var)| format!("{idx}::{var}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
                         .collect()
                 } else {
-                    unexpected_fails.iter().map(|p| p[0].clone()).collect()
+                    unexpected_fails
+                        .iter()
+                        .map(|p| format!("{}::{}", p[0].0, p[0].1))
+                        .collect()
                 };
                 parts.push(format!("failed at {}", formatted.join(", ")));
             }
@@ -813,10 +826,21 @@ pub(super) fn check_indexed_assert(
             let formatted: Vec<String> = if is_multi_index {
                 paths
                     .iter()
-                    .map(|p| format!("({})", p.join(", ")))
+                    .map(|p| {
+                        format!(
+                            "({})",
+                            p.iter()
+                                .map(|(idx, var)| format!("{idx}::{var}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
                     .collect()
             } else {
-                paths.iter().map(|p| p[0].clone()).collect()
+                paths
+                    .iter()
+                    .map(|p| format!("{}::{}", p[0].0, p[0].1))
+                    .collect()
             };
             AssertResult::Fail {
                 message: format!("failed at {}", formatted.join(", ")),
@@ -828,19 +852,19 @@ pub(super) fn check_indexed_assert(
 
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
-/// Each path is a `Vec<String>` of variant labels from outermost to innermost index.
-/// For example, `vec!["Phase::Launch", "Maneuver::Correction"]` for a 2D failure.
+/// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
+/// For example, `vec![(IndexName::new("Phase"), VariantName::new("Launch")), (IndexName::new("Maneuver"), VariantName::new("Correction"))]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexName,
     entries: &IndexMap<VariantName, RuntimeValue>,
-) -> Result<Vec<Vec<String>>, String> {
+) -> Result<Vec<Vec<(IndexName, VariantName)>>, String> {
     let mut paths = Vec::new();
     for (variant, value) in entries {
-        let label = format!("{index_name}::{variant}");
+        let key = (index_name.clone(), variant.clone());
         match value {
             RuntimeValue::Bool(true) => {}
             RuntimeValue::Bool(false) => {
-                paths.push(vec![label]);
+                paths.push(vec![key]);
             }
             RuntimeValue::Indexed {
                 index_name: inner_index,
@@ -848,7 +872,7 @@ fn collect_failing_paths(
             } => {
                 // Recurse into nested dimension, prepending current variant to each path
                 for mut inner_path in collect_failing_paths(inner_index, inner_entries)? {
-                    inner_path.insert(0, label.clone());
+                    inner_path.insert(0, key.clone());
                     paths.push(inner_path);
                 }
             }

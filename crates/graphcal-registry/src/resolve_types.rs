@@ -37,6 +37,45 @@ pub const DATETIME_EXTRACT_FNS: &[&str] = &[
     "day_of_year",
 ];
 
+/// Classification of special built-in functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecialFnKind {
+    /// Aggregation functions: `sum`, `min`, `max`, `mean`, `count`.
+    Aggregation,
+    /// Conversion functions: `to_float`, `to_int`, `to_utc`, etc.
+    Conversion,
+    /// Constructor functions: `datetime`, `epoch`.
+    Constructor,
+    /// Datetime extraction functions: `year`, `month`, `day`, etc.
+    DatetimeExtract,
+    /// Datetime-from-numeric functions: `from_jd`, `from_mjd`, `from_unix`.
+    DatetimeFrom,
+    /// Datetime-to-numeric functions: `to_jd`, `to_mjd`, `to_unix`.
+    DatetimeTo,
+}
+
+/// Classify a function name as a special built-in function.
+///
+/// Returns `None` if the name is not a recognized special function.
+#[must_use]
+pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
+    if AGGREGATION_FNS.contains(&name) {
+        Some(SpecialFnKind::Aggregation)
+    } else if CONVERSION_FNS.contains(&name) {
+        Some(SpecialFnKind::Conversion)
+    } else if CONSTRUCTOR_FNS.contains(&name) {
+        Some(SpecialFnKind::Constructor)
+    } else if DATETIME_EXTRACT_FNS.contains(&name) {
+        Some(SpecialFnKind::DatetimeExtract)
+    } else if DATETIME_FROM_FNS.contains(&name) {
+        Some(SpecialFnKind::DatetimeFrom)
+    } else if DATETIME_TO_FNS.contains(&name) {
+        Some(SpecialFnKind::DatetimeTo)
+    } else {
+        None
+    }
+}
+
 /// Returns `true` if `name` is a built-in aggregation function (`sum`, `min`, etc.).
 #[must_use]
 pub fn is_aggregation_fn(name: &str) -> bool {
