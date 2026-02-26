@@ -1,6 +1,6 @@
 use crate::ast::TypeExpr;
 use crate::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, LetBinding, MatchArm, MatchPattern,
+    BinOp, Expr, ExprKind, FieldInit, ForBinding, LetBinding, MatchArm, MatchPattern,
     PatternBinding,
 };
 use crate::names::{DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName};
@@ -412,7 +412,9 @@ impl Parser<'_> {
     // --- Scan expression ---
 
     /// Parse a scan expression: `scan(source, init, |acc, val| body)` → `ExprKind::Scan`
-    pub(super) fn parse_scan(&mut self, name_ident: &Ident) -> Result<Expr, ParseError> {
+    ///
+    /// The `scan` keyword has already been consumed; `keyword_span` is its span.
+    pub(super) fn parse_scan(&mut self, keyword_span: Span) -> Result<Expr, ParseError> {
         self.expect(Token::LParen)?;
         let first_expr = self.parse_expr()?;
         self.expect(Token::Comma)?;
@@ -426,7 +428,7 @@ impl Parser<'_> {
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
-        let span = name_ident.span.merge(end_span);
+        let span = keyword_span.merge(end_span);
         Ok(Expr {
             kind: ExprKind::Scan {
                 source: Box::new(first_expr),
@@ -442,7 +444,9 @@ impl Parser<'_> {
     // --- Unfold expression ---
 
     /// Parse an unfold expression: `unfold(init, |prev_i, i| body)` → `ExprKind::Unfold`
-    pub(super) fn parse_unfold(&mut self, name_ident: &Ident) -> Result<Expr, ParseError> {
+    ///
+    /// The `unfold` keyword has already been consumed; `keyword_span` is its span.
+    pub(super) fn parse_unfold(&mut self, keyword_span: Span) -> Result<Expr, ParseError> {
         self.expect(Token::LParen)?;
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
@@ -453,7 +457,7 @@ impl Parser<'_> {
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
-        let span = name_ident.span.merge(end_span);
+        let span = keyword_span.merge(end_span);
         Ok(Expr {
             kind: ExprKind::Unfold {
                 init: Box::new(init),

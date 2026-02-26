@@ -380,6 +380,14 @@ impl Parser<'_> {
                     })
                 }
             }
+            Some(Token::Scan) => {
+                let (_, span) = self.advance()?;
+                self.parse_scan(span)
+            }
+            Some(Token::Unfold) => {
+                let (_, span) = self.advance()?;
+                self.parse_unfold(span)
+            }
             Some(Token::Ident) => self.parse_identifier_expr(),
             Some(Token::For) => {
                 // For comprehension: for m: Maneuver { expr }
@@ -543,12 +551,6 @@ impl Parser<'_> {
                     member_ident.span,
                 ))
             }
-        } else if name == "scan" && self.lexer.peek() == Some(&Token::LParen) {
-            // Scan expression: scan(source, init, |acc, val| body)
-            self.parse_scan(&crate::ast::Ident { name, span })
-        } else if name == "unfold" && self.lexer.peek() == Some(&Token::LParen) {
-            // Unfold expression: unfold(init, |prev_i, i| body)
-            self.parse_unfold(&crate::ast::Ident { name, span })
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Function call: name(args...)
             self.lexer.next_token(); // consume '('

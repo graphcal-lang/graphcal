@@ -47,6 +47,14 @@ pub enum Token {
     Plot,
     #[token("figure")]
     Figure,
+    #[token("scan")]
+    Scan,
+    #[token("unfold")]
+    Unfold,
+    #[token("range")]
+    Range,
+    #[token("step")]
+    Step,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -163,6 +171,10 @@ impl std::fmt::Display for Token {
             Self::Table => write!(f, "table"),
             Self::Plot => write!(f, "plot"),
             Self::Figure => write!(f, "figure"),
+            Self::Scan => write!(f, "scan"),
+            Self::Unfold => write!(f, "unfold"),
+            Self::Range => write!(f, "range"),
+            Self::Step => write!(f, "step"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -426,7 +438,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn index for import match as assert table plot",
+            "param node const if else dimension unit type let fn index for import match as assert table plot figure scan unfold range step",
         );
         assert_eq!(
             tokens,
@@ -449,8 +461,23 @@ mod tests {
                 Token::Assert,
                 Token::Table,
                 Token::Plot,
+                Token::Figure,
+                Token::Scan,
+                Token::Unfold,
+                Token::Range,
+                Token::Step,
             ]
         );
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_new_keywords() {
+        // "scanner" should be Ident, not Scan + "ner"
+        for word in ["scanner", "unfolder", "ranger", "stepped"] {
+            let mut lexer = Token::lexer(word);
+            assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+            assert_eq!(lexer.slice(), word);
+        }
     }
 
     #[test]

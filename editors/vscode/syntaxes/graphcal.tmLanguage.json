@@ -22,7 +22,6 @@
     { "include": "#for-binding" },
     { "include": "#as-keyword" },
     { "include": "#control-keywords" },
-    { "include": "#scan-keyword" },
     { "include": "#generic-params" },
     { "include": "#return-type" },
     { "include": "#type-annotation" },
@@ -318,15 +317,8 @@
     },
 
     "control-keywords": {
-      "match": "\\b(if|else|for|match|table)\\b",
+      "match": "\\b(if|else|for|match|table|scan|unfold|range|step)\\b",
       "name": "keyword.control.graphcal"
-    },
-
-    "scan-keyword": {
-      "match": "\\b(scan)\\s*(?=\\()",
-      "captures": {
-        "1": { "name": "support.function.graphcal" }
-      }
     },
 
     "generic-params": {
