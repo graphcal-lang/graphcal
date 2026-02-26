@@ -304,8 +304,8 @@ struct EvaluatedFile {
     assertions: HashMap<DeclName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
-    /// Functions declared in this file: (name, decl, span).
-    functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
+    /// Functions declared in this file.
+    functions: Vec<graphcal_ir::ir::FunctionEntry>,
 }
 
 impl EvaluatedFile {
@@ -636,12 +636,16 @@ fn compile_single_file_in_project(
                             );
                             imported_source_order.push((scoped.clone(), DeclCategory::Param));
                             imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some((_, fn_decl, fn_span)) =
-                            dep.functions.iter().find(|(n, _, _)| n == orig_name)
+                        } else if let Some(fn_entry) =
+                            dep.functions.iter().find(|entry| entry.name == *orig_name)
                         {
-                            imported_names
-                                .functions
-                                .push((local_name, fn_decl.clone(), *fn_span));
+                            imported_names.functions.push(
+                                graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                                    name: local_name,
+                                    decl: fn_entry.decl.clone(),
+                                    span: fn_entry.span,
+                                },
+                            );
                         } else if dep.has_assert(orig_name) {
                             // Assert is already evaluated in the dep file.
                             // We just need to make the name visible for #[assumes].
@@ -727,11 +731,15 @@ fn compile_single_file_in_project(
                         imported_source_order.push((scoped.clone(), DeclCategory::Param));
                         imported_values.insert(scoped, (rv.clone(), dt));
                     }
-                    for (name, fn_decl, fn_span) in &dep.functions {
-                        let flat = format!("{module_name}::{name}");
-                        imported_names
-                            .functions
-                            .push((flat, fn_decl.clone(), *fn_span));
+                    for fn_entry in &dep.functions {
+                        let flat = format!("{module_name}::{}", fn_entry.name);
+                        imported_names.functions.push(
+                            graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                                name: flat,
+                                decl: fn_entry.decl.clone(),
+                                span: fn_entry.span,
+                            },
+                        );
                     }
                     // Import all type-system declarations from dep's registry.
                     extra_registry_builders.push(&dep.registry);
@@ -842,8 +850,8 @@ fn compile_single_file_in_project(
             dep_names.insert(name.clone());
         }
         // Also include function names.
-        for (name, _, _) in &dep_unfrozen.functions {
-            dep_names.insert(name.clone());
+        for fn_entry in &dep_unfrozen.functions {
+            dep_names.insert(fn_entry.name.clone());
         }
 
         // Merge the dependency's IR into the importer's IR.
@@ -1042,12 +1050,18 @@ fn build_dep_imported_values(
                                 ),
                             );
                             imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some((_, fn_decl, fn_span)) =
-                            trans_dep.functions.iter().find(|(n, _, _)| n == orig_name)
+                        } else if let Some(fn_entry) = trans_dep
+                            .functions
+                            .iter()
+                            .find(|entry| entry.name == *orig_name)
                         {
-                            imported_names
-                                .functions
-                                .push((local_name, fn_decl.clone(), *fn_span));
+                            imported_names.functions.push(
+                                graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                                    name: local_name,
+                                    decl: fn_entry.decl.clone(),
+                                    span: fn_entry.span,
+                                },
+                            );
                         } else {
                             // Type-system declarations are handled by the registry, not imported_values.
                         }
@@ -1092,11 +1106,15 @@ fn build_dep_imported_values(
                         );
                         imported_values.insert(scoped, (rv.clone(), dt));
                     }
-                    for (name, fn_decl, fn_span) in &trans_dep.functions {
-                        let flat = format!("{module_name}::{name}");
-                        imported_names
-                            .functions
-                            .push((flat, fn_decl.clone(), *fn_span));
+                    for fn_entry in &trans_dep.functions {
+                        let flat = format!("{module_name}::{}", fn_entry.name);
+                        imported_names.functions.push(
+                            graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                                name: flat,
+                                decl: fn_entry.decl.clone(),
+                                span: fn_entry.span,
+                            },
+                        );
                     }
                 }
             }
@@ -1253,7 +1271,7 @@ fn evaluate_project_perfile(
             .tir
             .params
             .iter()
-            .any(|(_, _, expr_opt, _)| expr_opt.is_none());
+            .any(|entry| entry.default_expr.is_none());
 
         if !is_root && has_required_params {
             continue;
@@ -1436,11 +1454,7 @@ fn compile_to_tir_project_perfile(
         }
 
         // Skip standalone evaluation for files with required params (no default).
-        let has_required_params = compiled
-            .tir
-            .params
-            .iter()
-            .any(|(_, _, expr_opt, _)| expr_opt.is_none());
+        let has_required_params = compiled.tir.params.iter().any(|e| e.default_expr.is_none());
         if has_required_params {
             continue;
         }
@@ -1637,8 +1651,8 @@ fn extract_runtime_values(
     let local_runtime_names: HashSet<&str> = tir
         .params
         .iter()
-        .map(|(n, _, _, _)| n.as_str())
-        .chain(tir.nodes.iter().map(|(n, _, _, _)| n.as_str()))
+        .map(|e| e.name.as_str())
+        .chain(tir.nodes.iter().map(|e| e.name.as_str()))
         .collect();
 
     values
@@ -1735,15 +1749,15 @@ pub(super) fn apply_overrides(
             }));
         }
 
-        if let Some(entry) = ir.params.iter_mut().find(|(n, _, _, _)| n == name_str) {
-            entry.2 = Some(override_expr.clone());
+        if let Some(entry) = ir.params.iter_mut().find(|e| e.name == name_str) {
+            entry.default_expr = Some(override_expr.clone());
         }
 
         let all_runtime: std::collections::HashSet<&str> = ir
             .params
             .iter()
-            .map(|(n, _, _, _)| n.as_str())
-            .chain(ir.nodes.iter().map(|(n, _, _, _)| n.as_str()))
+            .map(|e| e.name.as_str())
+            .chain(ir.nodes.iter().map(|e| e.name.as_str()))
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);

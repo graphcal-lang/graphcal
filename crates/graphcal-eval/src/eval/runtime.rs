@@ -402,17 +402,13 @@ pub(super) fn evaluate_plan(
     let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = tir
         .consts
         .iter()
-        .map(|(name, _, expr, _)| (name.as_str(), expr))
+        .map(|e| (e.name.as_str(), &e.expr))
         .chain(
             tir.params
                 .iter()
-                .filter_map(|(name, _, expr_opt, _)| expr_opt.as_ref().map(|e| (name.as_str(), e))),
+                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.as_str(), ex))),
         )
-        .chain(
-            tir.nodes
-                .iter()
-                .map(|(name, _, expr, _)| (name.as_str(), expr)),
-        )
+        .chain(tir.nodes.iter().map(|e| (e.name.as_str(), &e.expr)))
         .collect();
 
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
@@ -433,20 +429,20 @@ pub(super) fn evaluate_plan(
     let consts = tir
         .consts
         .iter()
-        .map(|(name, _, _, _)| {
-            let val = make_value(name, &plan.const_values[name]);
-            (DeclName::new(name), val)
+        .map(|e| {
+            let val = make_value(&e.name, &plan.const_values[&e.name]);
+            (DeclName::new(&e.name), val)
         })
         .collect();
     let params = tir
         .params
         .iter()
-        .map(|(name, _, _, _)| (DeclName::new(name), make_result(name)))
+        .map(|e| (DeclName::new(&e.name), make_result(&e.name)))
         .collect();
     let nodes = tir
         .nodes
         .iter()
-        .map(|(name, _, _, _)| (DeclName::new(name), make_result(name)))
+        .map(|e| (DeclName::new(&e.name), make_result(&e.name)))
         .collect();
 
     let all = tir
@@ -472,10 +468,10 @@ pub(super) fn evaluate_plan(
     let assertions: Vec<(DeclName, AssertResult, Span)> = plan
         .assert_bodies
         .iter()
-        .map(|(name, body, span)| {
-            let ef = plan.expected_fail.get(name);
+        .map(|entry| {
+            let ef = plan.expected_fail.get(&entry.name);
             let assert_result = evaluate_assert_with_expected_fail(
-                body,
+                &entry.body,
                 ef,
                 &values,
                 &empty_locals,
@@ -484,7 +480,7 @@ pub(super) fn evaluate_plan(
                 &tir.registry,
                 src,
             );
-            (DeclName::new(name), assert_result, *span)
+            (DeclName::new(&entry.name), assert_result, entry.span)
         })
         .collect();
 
@@ -492,11 +488,11 @@ pub(super) fn evaluate_plan(
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
         .iter()
-        .filter_map(|(name, decl, _span, hidden)| {
+        .filter_map(|entry| {
             evaluate_plot(
-                decl,
-                name,
-                *hidden,
+                &entry.decl,
+                &entry.name,
+                entry.hidden,
                 &values,
                 &empty_locals,
                 &builtin_consts,
@@ -511,7 +507,8 @@ pub(super) fn evaluate_plan(
     let figures: Vec<super::types::FigureSpec> = plan
         .figure_bodies
         .iter()
-        .map(|(name, decl, _span)| {
+        .map(|entry| {
+            let (name, decl) = (&entry.name, &entry.decl);
             let mut fields = Vec::new();
             for field in &decl.fields {
                 if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {

@@ -132,7 +132,7 @@ pub struct ImportedValueNames {
     /// Imported node names.
     pub node_names: Vec<(ScopedName, Span)>,
     /// Imported function declarations (still need AST for compilation).
-    pub functions: Vec<(String, FnDecl, Span)>,
+    pub functions: Vec<ResolvedFunctionEntry>,
     /// Imported assert names (for `#[assumes]` validation).
     pub assert_names: Vec<(String, Span)>,
 }
@@ -146,6 +146,67 @@ pub enum DeclCategory {
     Assert,
     Plot,
     Figure,
+}
+
+// ---------------------------------------------------------------------------
+// Entry types for resolved declarations
+// ---------------------------------------------------------------------------
+
+/// A resolved const declaration (before type annotation is added).
+#[derive(Debug)]
+pub struct ResolvedConstEntry {
+    pub name: String,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+/// A resolved param declaration (before type annotation is added).
+#[derive(Debug)]
+pub struct ResolvedParamEntry {
+    pub name: String,
+    pub default_expr: Option<Expr>,
+    pub span: Span,
+}
+
+/// A resolved node declaration (before type annotation is added).
+#[derive(Debug)]
+pub struct ResolvedNodeEntry {
+    pub name: String,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+/// A resolved assert declaration.
+#[derive(Debug)]
+pub struct ResolvedAssertEntry {
+    pub name: String,
+    pub body: AssertBody,
+    pub span: Span,
+}
+
+/// A resolved plot declaration.
+#[derive(Debug)]
+pub struct ResolvedPlotEntry {
+    pub name: String,
+    pub decl: PlotDecl,
+    pub span: Span,
+    pub hidden: bool,
+}
+
+/// A resolved figure declaration.
+#[derive(Debug)]
+pub struct ResolvedFigureEntry {
+    pub name: String,
+    pub decl: FigureDecl,
+    pub span: Span,
+}
+
+/// A resolved function declaration.
+#[derive(Debug, Clone)]
+pub struct ResolvedFunctionEntry {
+    pub name: String,
+    pub decl: FnDecl,
+    pub span: Span,
 }
 
 /// A single expected-fail key: a list of `(IndexName, VariantName)` pairs.
@@ -166,26 +227,26 @@ pub enum ExpectedFail {
 /// The result of name resolution: declarations separated by category with dependency info.
 #[derive(Debug)]
 pub struct ResolvedFile {
-    /// Const declarations in source order: (name, expr, span).
-    pub consts: Vec<(String, Expr, Span)>,
-    /// Param declarations in source order: (name, optional default expr, span).
-    pub params: Vec<(String, Option<Expr>, Span)>,
-    /// Node declarations in source order: (name, expr, span).
-    pub nodes: Vec<(String, Expr, Span)>,
-    /// Assert declarations in source order: (name, body, span).
-    pub asserts: Vec<(String, AssertBody, Span)>,
-    /// Plot declarations in source order: (name, decl, span, hidden).
-    pub plots: Vec<(String, PlotDecl, Span, bool)>,
-    /// Figure declarations in source order: (name, decl, span).
-    pub figures: Vec<(String, FigureDecl, Span)>,
+    /// Const declarations in source order.
+    pub consts: Vec<ResolvedConstEntry>,
+    /// Param declarations in source order.
+    pub params: Vec<ResolvedParamEntry>,
+    /// Node declarations in source order.
+    pub nodes: Vec<ResolvedNodeEntry>,
+    /// Assert declarations in source order.
+    pub asserts: Vec<ResolvedAssertEntry>,
+    /// Plot declarations in source order.
+    pub plots: Vec<ResolvedPlotEntry>,
+    /// Figure declarations in source order.
+    pub figures: Vec<ResolvedFigureEntry>,
     /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of `CONST_REF` references (const deps).
     pub const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
-    /// User-defined function declarations: (name, decl, span).
-    pub functions: Vec<(String, FnDecl, Span)>,
+    /// User-defined function declarations.
+    pub functions: Vec<ResolvedFunctionEntry>,
     /// Set of all assert names (for checking `@assert_name` errors).
     pub assert_names: HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.

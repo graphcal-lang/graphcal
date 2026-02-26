@@ -28,6 +28,70 @@ use graphcal_registry::prelude::load_prelude;
 use graphcal_registry::registry::{self, Registry, RegistryBuilder};
 use graphcal_registry::runtime_value::RuntimeValue;
 
+// ---------------------------------------------------------------------------
+// Entry types for IR declarations
+// ---------------------------------------------------------------------------
+
+/// A const declaration with type annotation.
+#[derive(Debug, Clone)]
+pub struct ConstEntry {
+    pub name: String,
+    pub type_ann: TypeExpr,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+/// A param declaration with type annotation.
+#[derive(Debug, Clone)]
+pub struct ParamEntry {
+    pub name: String,
+    pub type_ann: TypeExpr,
+    pub default_expr: Option<Expr>,
+    pub span: Span,
+}
+
+/// A node declaration with type annotation.
+#[derive(Debug, Clone)]
+pub struct NodeEntry {
+    pub name: String,
+    pub type_ann: TypeExpr,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+/// An assert declaration.
+#[derive(Debug, Clone)]
+pub struct AssertEntry {
+    pub name: String,
+    pub body: AssertBody,
+    pub span: Span,
+}
+
+/// A plot declaration.
+#[derive(Debug, Clone)]
+pub struct PlotEntry {
+    pub name: String,
+    pub decl: PlotDecl,
+    pub span: Span,
+    pub hidden: bool,
+}
+
+/// A figure declaration.
+#[derive(Debug, Clone)]
+pub struct FigureEntry {
+    pub name: String,
+    pub decl: FigureDecl,
+    pub span: Span,
+}
+
+/// A function declaration.
+#[derive(Debug, Clone)]
+pub struct FunctionEntry {
+    pub name: String,
+    pub decl: FnDecl,
+    pub span: Span,
+}
+
 /// Intermediate Representation produced by [`lower`].
 ///
 /// Contains everything downstream stages need:
@@ -40,26 +104,26 @@ use graphcal_registry::runtime_value::RuntimeValue;
 pub struct IR {
     /// The type/unit/dimension/index/struct/function registry.
     pub registry: Registry,
-    /// Const declarations in source order: (name, `type_ann`, expr, span).
-    pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Param declarations in source order: (name, `type_ann`, optional default expr, span).
-    pub params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
-    /// Node declarations in source order: (name, `type_ann`, expr, span).
-    pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Assert declarations in source order: (name, body, span).
-    pub asserts: Vec<(String, AssertBody, Span)>,
-    /// Plot declarations in source order: (name, decl, span, hidden).
-    pub plots: Vec<(String, PlotDecl, Span, bool)>,
-    /// Figure declarations in source order: (name, decl, span).
-    pub figures: Vec<(String, FigureDecl, Span)>,
+    /// Const declarations in source order.
+    pub consts: Vec<ConstEntry>,
+    /// Param declarations in source order.
+    pub params: Vec<ParamEntry>,
+    /// Node declarations in source order.
+    pub nodes: Vec<NodeEntry>,
+    /// Assert declarations in source order.
+    pub asserts: Vec<AssertEntry>,
+    /// Plot declarations in source order.
+    pub plots: Vec<PlotEntry>,
+    /// Figure declarations in source order.
+    pub figures: Vec<FigureEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of const-references (const deps).
     pub const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
-    /// User-defined function declarations: (name, decl, span).
-    pub functions: Vec<(String, FnDecl, Span)>,
+    /// User-defined function declarations.
+    pub functions: Vec<FunctionEntry>,
     /// Set of all assert names.
     pub assert_names: HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.
@@ -113,6 +177,10 @@ fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "will be decomposed in a later refactor phase"
+)]
 pub fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -160,43 +228,61 @@ pub fn lower_to_builder(
     let consts = resolved
         .consts
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(ConstEntry {
+                name: entry.name,
+                type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let params = resolved
         .params
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(ParamEntry {
+                name: entry.name,
+                type_ann,
+                default_expr: entry.default_expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let nodes = resolved
         .nodes
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(NodeEntry {
+                name: entry.name,
+                type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
 
@@ -204,13 +290,46 @@ pub fn lower_to_builder(
         consts,
         params,
         nodes,
-        asserts: resolved.asserts,
-        plots: resolved.plots,
-        figures: resolved.figures,
+        asserts: resolved
+            .asserts
+            .into_iter()
+            .map(|entry| AssertEntry {
+                name: entry.name,
+                body: entry.body,
+                span: entry.span,
+            })
+            .collect(),
+        plots: resolved
+            .plots
+            .into_iter()
+            .map(|entry| PlotEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+                hidden: entry.hidden,
+            })
+            .collect(),
+        figures: resolved
+            .figures
+            .into_iter()
+            .map(|entry| FigureEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
-        functions: resolved.functions,
+        functions: resolved
+            .functions
+            .into_iter()
+            .map(|entry| FunctionEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
         expected_fail: resolved.expected_fail,
@@ -234,6 +353,10 @@ pub fn lower_to_builder(
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "will be decomposed in a later refactor phase"
 )]
 pub fn lower_to_builder_with_imported_values(
     ast: &File,
@@ -272,43 +395,61 @@ pub fn lower_to_builder_with_imported_values(
     let consts = resolved
         .consts
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(ConstEntry {
+                name: entry.name,
+                type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let params = resolved
         .params
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(ParamEntry {
+                name: entry.name,
+                type_ann,
+                default_expr: entry.default_expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let nodes = resolved
         .nodes
         .into_iter()
-        .map(|(name, expr, span)| {
-            let type_ann = type_anns
-                .remove(&name)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("internal: missing type annotation for `{name}`"),
-                    src: src.clone(),
-                    span: span.into(),
-                })?;
-            Ok((name, type_ann, expr, span))
+        .map(|entry| {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("internal: missing type annotation for `{}`", entry.name),
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
+            Ok(NodeEntry {
+                name: entry.name,
+                type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
 
@@ -316,13 +457,46 @@ pub fn lower_to_builder_with_imported_values(
         consts,
         params,
         nodes,
-        asserts: resolved.asserts,
-        plots: resolved.plots,
-        figures: resolved.figures,
+        asserts: resolved
+            .asserts
+            .into_iter()
+            .map(|entry| AssertEntry {
+                name: entry.name,
+                body: entry.body,
+                span: entry.span,
+            })
+            .collect(),
+        plots: resolved
+            .plots
+            .into_iter()
+            .map(|entry| PlotEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+                hidden: entry.hidden,
+            })
+            .collect(),
+        figures: resolved
+            .figures
+            .into_iter()
+            .map(|entry| FigureEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
-        functions: resolved.functions,
+        functions: resolved
+            .functions
+            .into_iter()
+            .map(|entry| FunctionEntry {
+                name: entry.name,
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         assert_names: resolved.assert_names,
         assumes_map: resolved.assumes_map,
         expected_fail: resolved.expected_fail,
@@ -334,18 +508,18 @@ pub fn lower_to_builder_with_imported_values(
 
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 pub struct UnfrozenIR {
-    consts: Vec<(String, TypeExpr, Expr, Span)>,
-    params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
-    nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    asserts: Vec<(String, graphcal_syntax::ast::AssertBody, Span)>,
-    plots: Vec<(String, PlotDecl, Span, bool)>,
-    figures: Vec<(String, FigureDecl, Span)>,
+    consts: Vec<ConstEntry>,
+    params: Vec<ParamEntry>,
+    nodes: Vec<NodeEntry>,
+    asserts: Vec<AssertEntry>,
+    plots: Vec<PlotEntry>,
+    figures: Vec<FigureEntry>,
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
-    /// User-defined function declarations: (name, decl, span).
-    pub functions: Vec<(String, graphcal_syntax::ast::FnDecl, Span)>,
+    /// User-defined function declarations.
+    pub functions: Vec<FunctionEntry>,
     assert_names: HashSet<String>,
     assumes_map: HashMap<String, Vec<String>>,
     expected_fail: HashMap<String, ExpectedFail>,
@@ -389,7 +563,12 @@ impl UnfrozenIR {
         let mut deps = HashSet::new();
         deps.insert(target);
         self.const_deps.insert(name.clone(), deps);
-        self.consts.push((name.clone(), type_ann, expr, span));
+        self.consts.push(ConstEntry {
+            name: name.clone(),
+            type_ann,
+            expr,
+            span,
+        });
         self.source_order.push((name, DeclCategory::Const));
     }
 
@@ -407,7 +586,12 @@ impl UnfrozenIR {
         let mut deps = HashSet::new();
         deps.insert(target);
         self.runtime_deps.insert(name.clone(), deps);
-        self.nodes.push((name.clone(), type_ann, expr, span));
+        self.nodes.push(NodeEntry {
+            name: name.clone(),
+            type_ann,
+            expr,
+            span,
+        });
         self.source_order.push((name, DeclCategory::Node));
     }
 
@@ -432,12 +616,11 @@ impl UnfrozenIR {
         dep_names: &HashSet<String>,
     ) {
         // Merge consts
-        for (name, type_ann, mut expr, span) in dep.consts {
-            prefix_expr_refs(&mut expr, prefix, dep_names);
-            let prefixed = format!("{prefix}::{name}");
-            self.consts.push((prefixed.clone(), type_ann, expr, span));
+        for mut entry in dep.consts {
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            let prefixed = format!("{prefix}::{}", entry.name);
             // Prefix const deps
-            if let Some(deps) = dep.const_deps.get(&name) {
+            if let Some(deps) = dep.const_deps.get(&entry.name) {
                 let prefixed_deps = deps
                     .iter()
                     .map(|d| {
@@ -450,30 +633,32 @@ impl UnfrozenIR {
                     .collect();
                 self.const_deps.insert(prefixed.clone(), prefixed_deps);
             }
+            self.consts.push(ConstEntry {
+                name: prefixed.clone(),
+                type_ann: entry.type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            });
             self.source_order.push((prefixed, DeclCategory::Const));
         }
 
         // Merge params — replace defaults with bindings where provided
-        for (name, type_ann, mut expr_opt, span) in dep.params {
-            let prefixed = format!("{prefix}::{name}");
-            if let Some(binding_expr) = bindings.get(&name) {
+        for mut entry in dep.params {
+            let prefixed = format!("{prefix}::{}", entry.name);
+            if let Some(binding_expr) = bindings.get(&entry.name) {
                 // Use the binding expression (from the importer's scope, no prefixing needed
                 // for refs that belong to the importer — only dep-internal refs get prefixed)
-                expr_opt = Some(binding_expr.clone());
-            } else if let Some(ref mut expr) = expr_opt {
+                entry.default_expr = Some(binding_expr.clone());
+            } else if let Some(ref mut expr) = entry.default_expr {
                 // Keep default, but prefix internal refs
                 prefix_expr_refs(expr, prefix, dep_names);
             } else {
                 // Required param without binding — stays None, caught later in exec_plan
             }
-            // If expr_opt is still None, this is a required param without a binding.
-            // It will be caught as an error in exec_plan compilation.
-            self.params
-                .push((prefixed.clone(), type_ann, expr_opt, span));
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = HashSet::new();
-            if let Some(orig_deps) = dep.runtime_deps.get(&name) {
-                if bindings.contains_key(&name) {
+            if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
+                if bindings.contains_key(&entry.name) {
                     // Binding expression — deps are already in the importer's namespace.
                     // We'll recompute deps from the binding expression below.
                 } else {
@@ -487,20 +672,25 @@ impl UnfrozenIR {
                     }
                 }
             }
-            if let Some(binding_expr) = bindings.get(&name) {
+            if let Some(binding_expr) = bindings.get(&entry.name) {
                 // Collect graph refs from the binding expression
                 collect_graph_refs_from_expr(binding_expr, &mut graph_refs);
             }
             self.runtime_deps.insert(prefixed.clone(), graph_refs);
+            self.params.push(ParamEntry {
+                name: prefixed.clone(),
+                type_ann: entry.type_ann,
+                default_expr: entry.default_expr,
+                span: entry.span,
+            });
             self.source_order.push((prefixed, DeclCategory::Param));
         }
 
         // Merge nodes
-        for (name, type_ann, mut expr, span) in dep.nodes {
-            prefix_expr_refs(&mut expr, prefix, dep_names);
-            let prefixed = format!("{prefix}::{name}");
-            self.nodes.push((prefixed.clone(), type_ann, expr, span));
-            if let Some(deps) = dep.runtime_deps.get(&name) {
+        for mut entry in dep.nodes {
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            let prefixed = format!("{prefix}::{}", entry.name);
+            if let Some(deps) = dep.runtime_deps.get(&entry.name) {
                 let prefixed_deps = deps
                     .iter()
                     .map(|d| {
@@ -513,12 +703,18 @@ impl UnfrozenIR {
                     .collect();
                 self.runtime_deps.insert(prefixed.clone(), prefixed_deps);
             }
+            self.nodes.push(NodeEntry {
+                name: prefixed.clone(),
+                type_ann: entry.type_ann,
+                expr: entry.expr,
+                span: entry.span,
+            });
             self.source_order.push((prefixed, DeclCategory::Node));
         }
 
         // Merge asserts
-        for (name, mut body, span) in dep.asserts {
-            match &mut body {
+        for mut entry in dep.asserts {
+            match &mut entry.body {
                 graphcal_syntax::ast::AssertBody::Expr(e) => {
                     prefix_expr_refs(e, prefix, dep_names);
                 }
@@ -533,29 +729,38 @@ impl UnfrozenIR {
                     prefix_expr_refs(tolerance, prefix, dep_names);
                 }
             }
-            let prefixed = format!("{prefix}::{name}");
-            self.asserts.push((prefixed.clone(), body, span));
+            let prefixed = format!("{prefix}::{}", entry.name);
+            self.asserts.push(AssertEntry {
+                name: prefixed.clone(),
+                body: entry.body,
+                span: entry.span,
+            });
             self.assert_names.insert(prefixed.clone());
             self.source_order.push((prefixed, DeclCategory::Assert));
         }
 
         // Merge plots
-        for (name, mut plot_decl, span, hidden) in dep.plots {
-            for field in &mut plot_decl.fields {
+        for mut entry in dep.plots {
+            for field in &mut entry.decl.fields {
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
-            let prefixed = format!("{prefix}::{name}");
-            self.plots.push((prefixed.clone(), plot_decl, span, hidden));
+            let prefixed = format!("{prefix}::{}", entry.name);
+            self.plots.push(PlotEntry {
+                name: prefixed.clone(),
+                decl: entry.decl,
+                span: entry.span,
+                hidden: entry.hidden,
+            });
             self.source_order.push((prefixed, DeclCategory::Plot));
         }
 
         // Merge figures
-        for (name, mut figure_decl, span) in dep.figures {
-            for field in &mut figure_decl.fields {
+        for mut entry in dep.figures {
+            for field in &mut entry.decl.fields {
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             // Prefix plot names referenced by the figure
-            for plot_name in &mut figure_decl.plot_names {
+            for plot_name in &mut entry.decl.plot_names {
                 if dep_names.contains(plot_name.value.as_str()) {
                     plot_name.value = graphcal_syntax::names::DeclName::new(format!(
                         "{prefix}::{}",
@@ -563,14 +768,18 @@ impl UnfrozenIR {
                     ));
                 }
             }
-            let prefixed = format!("{prefix}::{name}");
-            self.figures.push((prefixed.clone(), figure_decl, span));
+            let prefixed = format!("{prefix}::{}", entry.name);
+            self.figures.push(FigureEntry {
+                name: prefixed.clone(),
+                decl: entry.decl,
+                span: entry.span,
+            });
             self.source_order.push((prefixed, DeclCategory::Figure));
         }
 
         // Merge functions
-        for (name, mut fn_decl, span) in dep.functions {
-            match &mut fn_decl.body {
+        for mut entry in dep.functions {
+            match &mut entry.decl.body {
                 graphcal_syntax::ast::FnBody::Short(e) => {
                     prefix_expr_refs(e, prefix, dep_names);
                 }
@@ -581,8 +790,12 @@ impl UnfrozenIR {
                     prefix_expr_refs(expr, prefix, dep_names);
                 }
             }
-            let prefixed = format!("{prefix}::{name}");
-            self.functions.push((prefixed, fn_decl, span));
+            let prefixed = format!("{prefix}::{}", entry.name);
+            self.functions.push(FunctionEntry {
+                name: prefixed,
+                decl: entry.decl,
+                span: entry.span,
+            });
         }
 
         // Merge assumes_map and expected_fail
@@ -1116,10 +1329,11 @@ fn register_functions(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for (name, fn_decl, span) in &resolved.functions {
+    for entry in &resolved.functions {
         registry.register_function(registry::FnDef {
-            name: FnName::new(name),
-            generic_params: fn_decl
+            name: FnName::new(&entry.name),
+            generic_params: entry
+                .decl
                 .generic_params
                 .iter()
                 .map(|g| {
@@ -1147,7 +1361,8 @@ fn register_functions(
                     })
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()?,
-            params: fn_decl
+            params: entry
+                .decl
                 .params
                 .iter()
                 .map(|p| registry::FnParamDef {
@@ -1155,9 +1370,9 @@ fn register_functions(
                     type_expr: p.type_ann.clone(),
                 })
                 .collect(),
-            return_type_expr: fn_decl.return_type.clone(),
-            body: fn_decl.body.clone(),
-            span: *span,
+            return_type_expr: entry.decl.return_type.clone(),
+            body: entry.decl.body.clone(),
+            span: entry.span,
         });
     }
     Ok(())

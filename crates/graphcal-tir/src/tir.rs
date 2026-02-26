@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{
-    AssertBody, Expr, FigureDecl, FnDecl, MulDivOp, PlotDecl, TypeExpr, TypeExprKind,
-};
+use graphcal_syntax::ast::{MulDivOp, TypeExpr, TypeExprKind};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
 use graphcal_syntax::span::Span;
@@ -230,26 +228,26 @@ pub struct ResolvedDomainConstraint {
 pub struct TIR {
     /// The type/unit/dimension/index/struct/function registry.
     pub registry: Registry,
-    /// Const declarations in source order: (name, `type_ann`, expr, span).
-    pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Param declarations in source order: (name, `type_ann`, optional default expr, span).
-    pub params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
-    /// Node declarations in source order: (name, `type_ann`, expr, span).
-    pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    /// Assert declarations in source order: (name, body, span).
-    pub asserts: Vec<(String, AssertBody, Span)>,
-    /// Plot declarations in source order: (name, decl, span, hidden).
-    pub plots: Vec<(String, PlotDecl, Span, bool)>,
-    /// Figure declarations in source order: (name, decl, span).
-    pub figures: Vec<(String, FigureDecl, Span)>,
+    /// Const declarations in source order.
+    pub consts: Vec<graphcal_ir::ir::ConstEntry>,
+    /// Param declarations in source order.
+    pub params: Vec<graphcal_ir::ir::ParamEntry>,
+    /// Node declarations in source order.
+    pub nodes: Vec<graphcal_ir::ir::NodeEntry>,
+    /// Assert declarations in source order.
+    pub asserts: Vec<graphcal_ir::ir::AssertEntry>,
+    /// Plot declarations in source order.
+    pub plots: Vec<graphcal_ir::ir::PlotEntry>,
+    /// Figure declarations in source order.
+    pub figures: Vec<graphcal_ir::ir::FigureEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
     /// For each const, the set of const-references (const deps).
     pub const_deps: HashMap<String, std::collections::HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
-    /// User-defined function declarations: (name, decl, span).
-    pub functions: Vec<(String, FnDecl, Span)>,
+    /// User-defined function declarations.
+    pub functions: Vec<graphcal_ir::ir::FunctionEntry>,
     /// Set of all assert names.
     pub assert_names: std::collections::HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.
@@ -326,16 +324,35 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
     let no_index_params: &[GenericParamName] = &[];
 
     // Resolve type annotations for all consts/params/nodes (no generic params in scope).
-    for (name, type_ann) in ir
-        .consts
-        .iter()
-        .map(|(n, t, _, _)| (n, t))
-        .chain(ir.params.iter().map(|(n, t, _, _)| (n, t)))
-        .chain(ir.nodes.iter().map(|(n, t, _, _)| (n, t)))
-    {
-        let resolved =
-            resolve_type_expr(type_ann, &ir.registry, no_dim_params, no_index_params, src)?;
-        resolved_decl_types.insert(name.clone(), resolved);
+    for entry in &ir.consts {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            &ir.registry,
+            no_dim_params,
+            no_index_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
+    }
+    for entry in &ir.params {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            &ir.registry,
+            no_dim_params,
+            no_index_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
+    }
+    for entry in &ir.nodes {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            &ir.registry,
+            no_dim_params,
+            no_index_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
     // Resolve function signatures from the registry (which has FnDef with TypeExpr).

@@ -194,10 +194,11 @@ mod tests {
         let resolved = crate::resolve::resolve(&file, &src).unwrap();
         let mut builder = RegistryBuilder::new();
         load_prelude(&mut builder);
-        for (name, fn_decl, span) in &resolved.functions {
+        for entry in &resolved.functions {
             builder.register_function(FnDef {
-                name: FnName::new(name),
-                generic_params: fn_decl
+                name: FnName::new(&entry.name),
+                generic_params: entry
+                    .decl
                     .generic_params
                     .iter()
                     .map(|g| graphcal_registry::registry::FnGenericParam {
@@ -217,7 +218,8 @@ mod tests {
                         },
                     })
                     .collect(),
-                params: fn_decl
+                params: entry
+                    .decl
                     .params
                     .iter()
                     .map(|p| graphcal_registry::registry::FnParamDef {
@@ -225,9 +227,9 @@ mod tests {
                         type_expr: p.type_ann.clone(),
                     })
                     .collect(),
-                return_type_expr: fn_decl.return_type.clone(),
-                body: fn_decl.body.clone(),
-                span: *span,
+                return_type_expr: entry.decl.return_type.clone(),
+                body: entry.decl.body.clone(),
+                span: entry.span,
             });
         }
         let registry = builder.build();
