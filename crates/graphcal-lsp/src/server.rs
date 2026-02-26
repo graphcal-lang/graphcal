@@ -297,31 +297,12 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
     if let Some(tir) = tir {
         let registry = &tir.registry;
         for (fn_name, sig) in &tir.resolved_fn_sigs {
+            let label = symbol_table::format_fn_signature(fn_name.as_str(), sig, registry);
             let param_strs: Vec<String> = sig
                 .params
                 .iter()
                 .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
                 .collect();
-
-            let generics =
-                if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
-                    String::new()
-                } else {
-                    let all: Vec<String> = sig
-                        .generic_dim_params
-                        .iter()
-                        .map(|p| format!("{p}: Dim"))
-                        .chain(
-                            sig.generic_index_params
-                                .iter()
-                                .map(|p| format!("{p}: Index")),
-                        )
-                        .collect();
-                    format!("<{}>", all.join(", "))
-                };
-
-            let ret = sig.return_type.format(registry);
-            let label = format!("fn {fn_name}{generics}({}) -> {ret}", param_strs.join(", "));
             sigs.insert(
                 fn_name.as_str().to_string(),
                 FnSignatureInfo {

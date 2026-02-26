@@ -96,6 +96,56 @@ enum PlotOutput {
     Json,
 }
 
+/// Parse `--set` overrides and `--input` JSON file into a combined overrides map.
+///
+/// `--set` values take precedence over `--input` values for the same name.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn parse_overrides(
+    set: &[String],
+    input: Option<&std::path::Path>,
+) -> std::collections::HashMap<DeclName, graphcal_syntax::ast::Expr> {
+    let mut overrides = std::collections::HashMap::new();
+    for s in set {
+        let Some((name, value_str)) = s.split_once('=') else {
+            eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
+            process::exit(1);
+        };
+        let name = name.trim();
+        let value_str = value_str.trim();
+        match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
+            Ok(expr) => {
+                overrides.insert(DeclName::new(name), expr);
+            }
+            Err(e) => {
+                eprintln!("error: failed to parse --set value for `{name}`: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    if let Some(input_path) = input {
+        let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
+            eprintln!(
+                "error: cannot read input file {}: {e}",
+                input_path.display()
+            );
+            process::exit(1);
+        });
+        let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            process::exit(1);
+        });
+        for (name, expr) in json_overrides {
+            overrides.entry(name).or_insert(expr);
+        }
+    }
+
+    overrides
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "CLI binary, stderr output is expected for errors"
@@ -145,46 +195,7 @@ fn main() {
             input,
             root: _root,
         } => {
-            // Parse --set overrides
-            let mut overrides = std::collections::HashMap::new();
-            for s in &set {
-                let Some((name, value_str)) = s.split_once('=') else {
-                    eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
-                    process::exit(1);
-                };
-                let name = name.trim();
-                let value_str = value_str.trim();
-                match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
-                    Ok(expr) => {
-                        overrides.insert(DeclName::new(name), expr);
-                    }
-                    Err(e) => {
-                        eprintln!("error: failed to parse --set value for `{name}`: {e}");
-                        process::exit(1);
-                    }
-                }
-            }
-
-            // Parse --input JSON file
-            if let Some(input_path) = &input {
-                let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
-                    eprintln!(
-                        "error: cannot read input file {}: {e}",
-                        input_path.display()
-                    );
-                    process::exit(1);
-                });
-
-                let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                });
-
-                for (name, expr) in json_overrides {
-                    overrides.entry(name).or_insert(expr);
-                }
-            }
-
+            let overrides = parse_overrides(&set, input.as_deref());
             shell::run_shell(file.as_deref(), overrides);
         }
         Commands::Eval {
@@ -197,46 +208,7 @@ fn main() {
             allow_defaults,
             plot: plot_output,
         } => {
-            // Parse --set overrides
-            let mut overrides = std::collections::HashMap::new();
-            for s in &set {
-                let Some((name, value_str)) = s.split_once('=') else {
-                    eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
-                    process::exit(1);
-                };
-                let name = name.trim();
-                let value_str = value_str.trim();
-                match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
-                    Ok(expr) => {
-                        overrides.insert(DeclName::new(name), expr);
-                    }
-                    Err(e) => {
-                        eprintln!("error: failed to parse --set value for `{name}`: {e}");
-                        process::exit(1);
-                    }
-                }
-            }
-
-            // Parse --input JSON file
-            if let Some(input_path) = &input {
-                let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
-                    eprintln!(
-                        "error: cannot read input file {}: {e}",
-                        input_path.display()
-                    );
-                    process::exit(1);
-                });
-
-                let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                });
-
-                // Merge: --set takes precedence over --input
-                for (name, expr) in json_overrides {
-                    overrides.entry(name).or_insert(expr);
-                }
-            }
+            let overrides = parse_overrides(&set, input.as_deref());
 
             match compile_and_eval_project(
                 &file,

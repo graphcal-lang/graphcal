@@ -3,6 +3,7 @@
 use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, Url};
 
 use crate::convert::span_to_range;
+use crate::resolve::{SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_table::SymbolCategory;
 
@@ -12,24 +13,11 @@ pub fn goto_definition(
     uri: &Url,
     offset: usize,
 ) -> Option<GotoDefinitionResponse> {
-    // First check if cursor is on a reference.
-    if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
-        // Try local definitions first.
-        if let Some(definition) = analysis.symbol_table.definitions.get(&reference.target) {
-            return resolve_local_definition(definition, uri, &analysis.source);
-        }
-        // Try imported definitions (cross-file).
-        if let Some(imported) = analysis.imported_definitions.get(&reference.target) {
-            return resolve_imported_definition(imported);
-        }
+    let resolved = resolve_symbol_at(analysis, offset)?;
+    match &resolved.location {
+        SymbolLocation::Local(def) => resolve_local_definition(def, uri, &analysis.source),
+        SymbolLocation::Imported(imported) => resolve_imported_definition(imported),
     }
-
-    // Then check if cursor is on a definition name itself.
-    if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        return resolve_local_definition(definition, uri, &analysis.source);
-    }
-
-    None
 }
 
 /// Resolve a definition within the current file.
