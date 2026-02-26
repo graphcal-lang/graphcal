@@ -217,6 +217,63 @@ impl IndexDef {
 }
 
 // ---------------------------------------------------------------------------
+// Private helper functions for resolution logic
+// ---------------------------------------------------------------------------
+
+/// Shared implementation for resolving a `DimExpr` to a concrete `Dimension`.
+fn resolve_dim_expr_impl(
+    dimensions: &HashMap<DimName, Dimension>,
+    expr: &DimExpr,
+) -> Option<Dimension> {
+    expr.terms
+        .iter()
+        .try_fold(Dimension::dimensionless(), |result, item| {
+            let base = dimensions.get(item.term.name.name.as_str())?;
+            let exp = item.term.power.unwrap_or(1);
+            let powered = base.pow(Rational::from_int(exp));
+            Some(match item.op {
+                MulDivOp::Mul => result * powered,
+                MulDivOp::Div => result / powered,
+            })
+        })
+}
+
+/// Shared implementation for resolving a `TypeExpr` to a concrete `Dimension`.
+fn resolve_type_expr_impl(
+    dimensions: &HashMap<DimName, Dimension>,
+    type_expr: &TypeExpr,
+) -> Option<Dimension> {
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
+        TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::TypeApplication { .. } => None,
+        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr_impl(dimensions, dim_expr),
+        TypeExprKind::Indexed { base, .. } => resolve_type_expr_impl(dimensions, base),
+    }
+}
+
+/// Shared implementation for resolving a `UnitExpr` to its dimension and scale factor.
+fn resolve_unit_expr_impl(
+    units: &HashMap<UnitName, UnitInfo>,
+    expr: &UnitExpr,
+) -> Option<(Dimension, f64)> {
+    expr.terms
+        .iter()
+        .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
+            let info = units.get(item.name.value.as_str())?;
+            let exp = item.power.unwrap_or(1);
+            let powered_dim = info.dimension.pow(Rational::from_int(exp));
+            let powered_scale = info.scale.powi(exp);
+            Some(match item.op {
+                MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
+                MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
+            })
+        })
+}
+
+// ---------------------------------------------------------------------------
 // Domain-specific registries (frozen / read-only)
 // ---------------------------------------------------------------------------
 
@@ -268,17 +325,7 @@ impl DimensionRegistry {
     /// Returns `None` if any dimension name is unknown.
     #[must_use]
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
-        expr.terms
-            .iter()
-            .try_fold(Dimension::dimensionless(), |result, item| {
-                let base = self.dimensions.get(item.term.name.name.as_str())?;
-                let exp = item.term.power.unwrap_or(1);
-                let powered = base.pow(Rational::from_int(exp));
-                Some(match item.op {
-                    MulDivOp::Mul => result * powered,
-                    MulDivOp::Div => result / powered,
-                })
-            })
+        resolve_dim_expr_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -286,15 +333,7 @@ impl DimensionRegistry {
     /// Returns `None` if the type references unknown dimensions.
     #[must_use]
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
-        match &type_expr.kind {
-            TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
-            TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime
-            | TypeExprKind::TypeApplication { .. } => None,
-            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
-            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
-        }
+        resolve_type_expr_impl(&self.dimensions, type_expr)
     }
 }
 
@@ -323,18 +362,7 @@ impl UnitRegistry {
     /// Returns `None` if any unit name is unknown.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
-        expr.terms
-            .iter()
-            .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
-                let info = self.units.get(item.name.value.as_str())?;
-                let exp = item.power.unwrap_or(1);
-                let powered_dim = info.dimension.pow(Rational::from_int(exp));
-                let powered_scale = info.scale.powi(exp);
-                Some(match item.op {
-                    MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
-                    MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
-                })
-            })
+        resolve_unit_expr_impl(&self.units, expr)
     }
 }
 
@@ -587,17 +615,7 @@ impl RegistryBuilder {
     /// Returns `None` if any dimension name is unknown.
     #[must_use]
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
-        expr.terms
-            .iter()
-            .try_fold(Dimension::dimensionless(), |result, item| {
-                let base = self.dimensions.get(item.term.name.name.as_str())?;
-                let exp = item.term.power.unwrap_or(1);
-                let powered = base.pow(Rational::from_int(exp));
-                Some(match item.op {
-                    MulDivOp::Mul => result * powered,
-                    MulDivOp::Div => result / powered,
-                })
-            })
+        resolve_dim_expr_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -605,15 +623,7 @@ impl RegistryBuilder {
     /// Returns `None` if the type references unknown dimensions.
     #[must_use]
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
-        match &type_expr.kind {
-            TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
-            TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime
-            | TypeExprKind::TypeApplication { .. } => None,
-            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
-            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
-        }
+        resolve_type_expr_impl(&self.dimensions, type_expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound scale factor.
@@ -621,18 +631,7 @@ impl RegistryBuilder {
     /// Returns `None` if any unit name is unknown.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
-        expr.terms
-            .iter()
-            .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
-                let info = self.units.get(item.name.value.as_str())?;
-                let exp = item.power.unwrap_or(1);
-                let powered_dim = info.dimension.pow(Rational::from_int(exp));
-                let powered_scale = info.scale.powi(exp);
-                Some(match item.op {
-                    MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
-                    MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
-                })
-            })
+        resolve_unit_expr_impl(&self.units, expr)
     }
 }
 

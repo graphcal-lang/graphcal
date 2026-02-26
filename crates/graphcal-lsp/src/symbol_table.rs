@@ -10,6 +10,7 @@ use graphcal_syntax::span::Span;
 
 use graphcal_eval::builtins::{builtin_constants, builtin_functions};
 use graphcal_eval::eval::format_number;
+use graphcal_eval::format::format_unit_expr_with_config;
 use graphcal_eval::registry::{IndexKind, Registry};
 use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
 
@@ -943,7 +944,7 @@ fn format_bound_expr(expr: &graphcal_syntax::ast::Expr) -> String {
         ExprKind::Integer(v) => v.to_string(),
         ExprKind::UnitLiteral { value, unit } => {
             let num = format_number(*value);
-            let unit_str = format_unit_expr_inline(unit);
+            let unit_str = format_unit_expr_with_config(unit, true);
             format!("{num} {unit_str}")
         }
         ExprKind::UnaryOp {
@@ -954,37 +955,6 @@ fn format_bound_expr(expr: &graphcal_syntax::ast::Expr) -> String {
         }
         // For complex expressions, fall back to "..."
         _ => "...".to_string(),
-    }
-}
-
-/// Format a `UnitExpr` as a human-readable label (inline version for LSP).
-fn format_unit_expr_inline(expr: &UnitExpr) -> String {
-    use graphcal_syntax::ast::MulDivOp;
-
-    let mut numerator = Vec::new();
-    let mut denominator = Vec::new();
-
-    for item in &expr.terms {
-        let mut part = item.name.value.to_string();
-        if let Some(pow) = item.power
-            && pow != 1
-        {
-            part = format!("{part}^{pow}");
-        }
-        match item.op {
-            MulDivOp::Mul => numerator.push(part),
-            MulDivOp::Div => denominator.push(part),
-        }
-    }
-
-    if denominator.is_empty() {
-        numerator.join(" * ")
-    } else if numerator.len() == 1 && denominator.len() == 1 {
-        format!("{}/{}", numerator[0], denominator[0])
-    } else {
-        let num = numerator.join(" * ");
-        let den = denominator.join(" * ");
-        format!("{num} / ({den})")
     }
 }
 

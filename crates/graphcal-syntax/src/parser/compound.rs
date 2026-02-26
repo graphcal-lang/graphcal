@@ -315,45 +315,7 @@ impl Parser<'_> {
         &mut self,
         type_name: Spanned<StructTypeName>,
     ) -> Result<Expr, ParseError> {
-        self.expect(Token::LBrace)?;
-        let mut fields = Vec::new();
-
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-            let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
-
-            // Check for `:` (explicit value) or shorthand (just name)
-            let value = if self.lexer.peek() == Some(&Token::Colon) {
-                self.lexer.next_token(); // consume ':'
-                Some(self.parse_expr()?)
-            } else {
-                None // shorthand: field name matches variable name
-            };
-
-            fields.push(FieldInit {
-                name: field_name,
-                value,
-            });
-
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
-
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = type_name.span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::StructConstruction {
-                type_name,
-                type_args: Vec::new(),
-                fields,
-            },
-            span,
-        })
+        self.parse_struct_construction_with_type_args(type_name, Vec::new())
     }
 
     /// Parse struct construction with explicit type args: `Vec3<Length, ECI> { x: 1 km, ... }`
@@ -372,11 +334,12 @@ impl Parser<'_> {
             }
             let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
 
+            // Check for `:` (explicit value) or shorthand (just name)
             let value = if self.lexer.peek() == Some(&Token::Colon) {
-                self.lexer.next_token();
+                self.lexer.next_token(); // consume ':'
                 Some(self.parse_expr()?)
             } else {
-                None
+                None // shorthand: field name matches variable name
             };
 
             fields.push(FieldInit {
