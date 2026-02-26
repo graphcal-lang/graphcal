@@ -145,12 +145,25 @@ impl Backend {
 /// Build a `LoadedProject` from a URI and in-memory text.
 ///
 /// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file. For untitled/non-file URIs, builds a single-file
-/// project from the in-memory text alone.
+/// overlaid on the root file via [`graphcal_io::OverlayFileSystem`].
+/// For untitled/non-file URIs, builds a single-file project from the
+/// in-memory text alone.
 fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
-        Ok(path) => LoadedProject::load_with_overlay(&path, (&path, text), None).map_err(Box::new),
+        Ok(path) => {
+            use graphcal_eval::io::FileSystemReader as _;
+            let base_fs = graphcal_io::RealFileSystem;
+            let canonical = base_fs.canonicalize(&path).map_err(|_| {
+                Box::new(CompileError::Eval(
+                    graphcal_eval::error::GraphcalError::FileNotFound {
+                        path: path.display().to_string(),
+                    },
+                ))
+            })?;
+            let fs = graphcal_io::OverlayFileSystem::new(base_fs, canonical, text.to_string());
+            graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
+        }
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
     }
 }

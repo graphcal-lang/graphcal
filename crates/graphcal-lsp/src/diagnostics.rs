@@ -190,6 +190,7 @@ mod tests {
     use std::collections::HashMap;
 
     use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
+    use graphcal_io::RealFileSystem;
 
     use super::*;
 
@@ -201,7 +202,7 @@ mod tests {
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
-        match compile_and_eval_project(path, &HashMap::new(), None, true) {
+        match compile_and_eval_project(path, &HashMap::new(), None, true, &RealFileSystem) {
             Ok(result) => eval_result_to_diagnostics(&result, source),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }

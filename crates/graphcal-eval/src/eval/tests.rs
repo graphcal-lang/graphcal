@@ -8,6 +8,27 @@
 use super::*;
 use crate::error::GraphcalError;
 
+/// Test-only real filesystem implementation (avoids circular dev-dependency on `graphcal-io`).
+#[derive(Debug, Clone, Copy)]
+struct TestRealFs;
+
+impl crate::io::FileSystemReader for TestRealFs {
+    fn read_to_string(&self, path: &std::path::Path) -> Result<String, std::io::Error> {
+        std::fs::read_to_string(path)
+    }
+    fn canonicalize(&self, path: &std::path::Path) -> Result<std::path::PathBuf, std::io::Error> {
+        path.canonicalize()
+    }
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        path.is_file()
+    }
+    fn exists(&self, path: &std::path::Path) -> bool {
+        path.exists()
+    }
+}
+
+const FS: TestRealFs = TestRealFs;
+
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first (they are not wrapped in Result)
@@ -707,7 +728,7 @@ fn required_param_with_override_succeeds() {
 fn project_multi_file_rocket() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/rocket_split/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
@@ -720,7 +741,7 @@ fn project_multi_file_rocket() {
 fn project_import_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -729,7 +750,7 @@ fn project_import_alias() {
 fn project_import_alias_conflict_resolution() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias_conflict/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let sum = find_value(&result, "sum");
     assert!(
         (sum - 3.0).abs() < f64::EPSILON,
@@ -743,7 +764,7 @@ fn project_import_alias_conflict_resolution() {
 fn project_module_import_const() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -752,7 +773,7 @@ fn project_module_import_const() {
 fn project_module_import_const_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -761,7 +782,7 @@ fn project_module_import_const_alias() {
 fn project_module_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let total = find_value(&result, "total_mass");
     assert!(
         (total - 4000.0).abs() < f64::EPSILON,
@@ -773,7 +794,7 @@ fn project_module_import_graph_ref() {
 fn project_module_import_fn_call() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
 }
@@ -782,7 +803,7 @@ fn project_module_import_fn_call() {
 fn project_module_import_mixed() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_mixed/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
@@ -1045,7 +1066,7 @@ fn eval_int_with_unit_parse_error() {
 fn project_instantiated_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // dry_mass overridden to 800 kg, fuel_mass default 2800 kg, isp default 320 s
     // delta_v = 320 * 9.80665 * ln((800 + 2800) / 800) = 3138.128 * ln(4.5)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1060,7 +1081,7 @@ fn project_instantiated_import_selective() {
 fn project_instantiated_import_multi() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_multi/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // stage_1: dry_mass=800, fuel_mass=2800 (default), isp=320
     // stage_1::delta_v = 320 * 9.80665 * ln(3600/800)
     let dv_stage1 = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1079,7 +1100,7 @@ fn project_instantiated_import_multi() {
 fn project_instantiated_import_partial() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_partial/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // dry_mass overridden to 800, fuel_mass and isp keep defaults (2800 kg, 320 s)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
     let result_val = find_value(&result, "result");
@@ -1093,7 +1114,7 @@ fn project_instantiated_import_partial() {
 fn project_instantiated_import_module() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_module/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // dry_mass overridden to 800, fuel_mass default 2800, isp default 320
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
     let dv = find_value(&result, "dv");
@@ -1109,7 +1130,7 @@ fn project_instantiated_import_module() {
 fn project_instantiated_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // my_mass = 800 kg, passed as dry_mass binding via @my_mass
     // delta_v = 320 * 9.80665 * ln(3600/800)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1126,7 +1147,7 @@ fn project_instantiated_import_graph_ref() {
 fn project_bare_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_selective/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let total_mass = find_value(&result, "total_mass");
     assert!(
         (total_mass - 4000.0).abs() < f64::EPSILON,
@@ -1138,7 +1159,7 @@ fn project_bare_import_selective() {
 fn project_bare_import_module() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_module/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-10, "g = {g}, expected 9.80665");
 }
@@ -1147,7 +1168,7 @@ fn project_bare_import_module() {
 fn project_bare_import_nested() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_nested/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let dv = find_value(&result, "dv");
     assert!((dv - 2460.0).abs() < 0.01, "dv = {dv}, expected 2460.0");
 }
@@ -1156,7 +1177,7 @@ fn project_bare_import_nested() {
 fn project_bare_import_instantiated() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_instantiated/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // dry_mass = 800 kg, fuel_mass = 3200 kg, isp = 320 s
     // delta_v = 320 * 9.80665 * ln(4000/800)
     let expected_dv = 320.0 * 9.80665 * (4000.0_f64 / 800.0).ln();
@@ -1171,7 +1192,7 @@ fn project_bare_import_instantiated() {
 fn project_bare_import_mixed() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_mixed/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let v_exhaust = find_value(&result, "v_exhaust");
     let expected = 320.0 * 9.80665;
     assert!(
@@ -1184,7 +1205,7 @@ fn project_bare_import_mixed() {
 fn project_bare_import_custom_src() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_custom_src/lib/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -1311,7 +1332,7 @@ fn import_strict_partial_binding_errors() {
     // Parameterized import without #[allow_defaults] and partial binding → error
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_strict_error/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
     match result {
         Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided { name, .. })) => {
             // Should error on one of the unbound default params (fuel_mass or isp)
@@ -1329,7 +1350,7 @@ fn import_with_allow_defaults_succeeds() {
     // Parameterized import WITH #[allow_defaults] and partial binding → success
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
     assert!(
         result.is_ok(),
         "import with #[allow_defaults] should succeed: {result:?}"
@@ -1374,7 +1395,7 @@ fn allow_defaults_on_param_errors() {
 fn project_required_param_import() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/required_param_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
     // radius = 6371 km, circumference = 2 * PI * radius
     let expected = 2.0 * std::f64::consts::PI * 6_371_000.0; // in metres (SI)
     let circumference = find_value(&result, "circumference");
