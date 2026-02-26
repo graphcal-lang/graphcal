@@ -1048,22 +1048,22 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
 
     // Build a map from declaration name to its AST TypeExpr constraints.
     let mut decl_constraints: HashMap<&str, &[DomainBound]> = HashMap::new();
-    for (name, type_ann, _, _) in &tir.params {
-        let constraints = extract_constraints(type_ann);
+    for e in &tir.params {
+        let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(name, constraints);
+            decl_constraints.insert(&e.name, constraints);
         }
     }
-    for (name, type_ann, _, _) in &tir.nodes {
-        let constraints = extract_constraints(type_ann);
+    for e in &tir.nodes {
+        let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(name, constraints);
+            decl_constraints.insert(&e.name, constraints);
         }
     }
-    for (name, type_ann, _, _) in &tir.consts {
-        let constraints = extract_constraints(type_ann);
+    for e in &tir.consts {
+        let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(name, constraints);
+            decl_constraints.insert(&e.name, constraints);
         }
     }
 

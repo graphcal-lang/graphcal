@@ -133,7 +133,7 @@ fn resolve_fn_collected() {
     ";
     let resolved = parse_and_resolve(source).unwrap();
     assert_eq!(resolved.functions.len(), 1);
-    assert_eq!(resolved.functions[0].0, "double");
+    assert_eq!(resolved.functions[0].name, "double");
 }
 
 #[test]

@@ -85,12 +85,12 @@ pub fn check_dimensions_tir(
     // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
-    // Check consts and nodes (always have expressions)
-    for (name, type_ann, value_expr, _span) in tir.consts.iter().chain(tir.nodes.iter()) {
-        let declared = &declared_types[name.as_str()];
+    // Check consts (always have expressions)
+    for entry in &tir.consts {
+        let declared = &declared_types[entry.name.as_str()];
         let inferred = infer_type_with_owner(
-            value_expr,
-            Some(name.as_str()),
+            &entry.expr,
+            Some(entry.name.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
@@ -104,20 +104,44 @@ pub fn check_dimensions_tir(
                 declared: format_declared_type(declared, &tir.registry),
                 inferred: format_inferred_type(&inferred, &tir.registry),
                 src: src.clone(),
-                span: type_ann.span.into(),
+                span: entry.type_ann.span.into(),
+            });
+        }
+    }
+
+    // Check nodes (always have expressions)
+    for entry in &tir.nodes {
+        let declared = &declared_types[entry.name.as_str()];
+        let inferred = infer_type_with_owner(
+            &entry.expr,
+            Some(entry.name.as_str()),
+            &declared_types,
+            &empty_locals,
+            &tir.registry,
+            &builtin_fns,
+            &tir.resolved_fn_sigs,
+            src,
+        )?;
+
+        if !types_match(declared, &inferred) {
+            return Err(GraphcalError::DimensionMismatchInAnnotation {
+                declared: format_declared_type(declared, &tir.registry),
+                inferred: format_inferred_type(&inferred, &tir.registry),
+                src: src.clone(),
+                span: entry.type_ann.span.into(),
             });
         }
     }
 
     // Check params (may be required with no default expression to check)
-    for (name, type_ann, value_expr_opt, _span) in &tir.params {
-        let Some(value_expr) = value_expr_opt else {
+    for entry in &tir.params {
+        let Some(ref value_expr) = entry.default_expr else {
             continue;
         };
-        let declared = &declared_types[name.as_str()];
+        let declared = &declared_types[entry.name.as_str()];
         let inferred = infer_type_with_owner(
             value_expr,
-            Some(name.as_str()),
+            Some(entry.name.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
@@ -131,13 +155,15 @@ pub fn check_dimensions_tir(
                 declared: format_declared_type(declared, &tir.registry),
                 inferred: format_inferred_type(&inferred, &tir.registry),
                 src: src.clone(),
-                span: type_ann.span.into(),
+                span: entry.type_ann.span.into(),
             });
         }
     }
 
     // Validate assert bodies
-    for (_name, body, span) in &tir.asserts {
+    for entry in &tir.asserts {
+        let body = &entry.body;
+        let span = entry.span;
         match body {
             graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
                 let inferred = infer_type(
@@ -154,7 +180,7 @@ pub fn check_dimensions_tir(
                     return Err(GraphcalError::AssertBodyNotBool {
                         found: format_inferred_type(&inferred, &tir.registry),
                         src: src.clone(),
-                        span: (*span).into(),
+                        span: span.into(),
                     });
                 }
             }

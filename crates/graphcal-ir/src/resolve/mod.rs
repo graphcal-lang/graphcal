@@ -15,6 +15,10 @@ use graphcal_syntax::span::Span;
 
 use graphcal_registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_registry::error::GraphcalError;
+use graphcal_registry::resolve_types::{
+    ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedFunctionEntry,
+    ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
+};
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use graphcal_registry::resolve_types::{
@@ -260,7 +264,11 @@ pub fn resolve_with_imports(
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
                 }
                 let aname = a.name.value.to_string();
-                asserts.push((aname, a.body.clone(), decl.span));
+                asserts.push(ResolvedAssertEntry {
+                    name: aname,
+                    body: a.body.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Plot(p) => {
                 // Validate references in plot field expressions (plots CAN use @)
@@ -278,7 +286,12 @@ pub fn resolve_with_imports(
                 }
                 let pname = p.name.value.to_string();
                 let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
-                plots.push((pname, p.clone(), decl.span, hidden));
+                plots.push(ResolvedPlotEntry {
+                    name: pname,
+                    decl: p.clone(),
+                    span: decl.span,
+                    hidden,
+                });
             }
             DeclKind::Figure(f) => {
                 // Validate references in figure field expressions (figures CAN use @)
@@ -295,12 +308,20 @@ pub fn resolve_with_imports(
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
                 }
                 let fname = f.name.value.to_string();
-                figures.push((fname, f.clone(), decl.span));
+                figures.push(ResolvedFigureEntry {
+                    name: fname,
+                    decl: f.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
-                functions.push((f.name.value.to_string(), f.clone(), decl.span));
+                functions.push(ResolvedFunctionEntry {
+                    name: f.name.value.to_string(),
+                    decl: f.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
@@ -314,7 +335,11 @@ pub fn resolve_with_imports(
                 )?;
                 let cname = c.name.value.to_string();
                 const_deps.insert(cname.clone(), deps);
-                consts.push((cname, c.value.clone(), decl.span));
+                consts.push(ResolvedConstEntry {
+                    name: cname,
+                    expr: c.value.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Param(p) => {
                 let pname = p.name.value.to_string();
@@ -333,7 +358,11 @@ pub fn resolve_with_imports(
                 } else {
                     runtime_deps.insert(pname.clone(), HashSet::new());
                 }
-                params.push((pname, p.value.clone(), decl.span));
+                params.push(ResolvedParamEntry {
+                    name: pname,
+                    default_expr: p.value.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
@@ -354,7 +383,11 @@ pub fn resolve_with_imports(
                     graph_refs.remove(&nname);
                 }
                 runtime_deps.insert(nname.clone(), graph_refs);
-                nodes.push((nname, n.value.clone(), decl.span));
+                nodes.push(ResolvedNodeEntry {
+                    name: nname,
+                    expr: n.value.clone(),
+                    span: decl.span,
+                });
             }
         }
     }
@@ -402,28 +435,56 @@ pub fn resolve_with_imports(
     }
 
     // Prepend imported declarations so they appear before local ones in eval order.
-    // Strip TypeExpr from imported tuples since ResolvedFile uses 3-tuples.
-    let mut all_consts: Vec<(String, Expr, Span)> = imported
+    // Strip TypeExpr from imported tuples and convert to entry types.
+    let mut all_consts: Vec<ResolvedConstEntry> = imported
         .consts
         .iter()
-        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .map(|(name, _, expr, span)| ResolvedConstEntry {
+            name: name.clone(),
+            expr: expr.clone(),
+            span: *span,
+        })
         .collect();
     all_consts.extend(consts);
-    let mut all_params: Vec<(String, Option<Expr>, Span)> = imported
+    let mut all_params: Vec<ResolvedParamEntry> = imported
         .params
         .iter()
-        .map(|(name, _, expr, span)| (name.clone(), Some(expr.clone()), *span))
+        .map(|(name, _, expr, span)| ResolvedParamEntry {
+            name: name.clone(),
+            default_expr: Some(expr.clone()),
+            span: *span,
+        })
         .collect();
     all_params.extend(params);
-    let mut all_nodes: Vec<(String, Expr, Span)> = imported
+    let mut all_nodes: Vec<ResolvedNodeEntry> = imported
         .nodes
         .iter()
-        .map(|(name, _, expr, span)| (name.clone(), expr.clone(), *span))
+        .map(|(name, _, expr, span)| ResolvedNodeEntry {
+            name: name.clone(),
+            expr: expr.clone(),
+            span: *span,
+        })
         .collect();
     all_nodes.extend(nodes);
-    let mut all_functions = imported.functions.clone();
+    let mut all_functions: Vec<ResolvedFunctionEntry> = imported
+        .functions
+        .iter()
+        .map(|(name, decl, span)| ResolvedFunctionEntry {
+            name: name.clone(),
+            decl: decl.clone(),
+            span: *span,
+        })
+        .collect();
     all_functions.extend(functions);
-    let mut all_asserts: Vec<(String, AssertBody, Span)> = imported.asserts.clone();
+    let mut all_asserts: Vec<ResolvedAssertEntry> = imported
+        .asserts
+        .iter()
+        .map(|(name, body, span)| ResolvedAssertEntry {
+            name: name.clone(),
+            body: body.clone(),
+            span: *span,
+        })
+        .collect();
     all_asserts.extend(asserts);
 
     // Prepend imported source_order entries
@@ -676,9 +737,9 @@ pub fn resolve_with_imported_values(
     for (name, span) in &imported.node_names {
         names.insert(name.to_string(), *span);
     }
-    for (name, _, span) in &imported.functions {
-        names.insert(name.clone(), *span);
-        user_fn_names.insert(name.clone());
+    for entry in &imported.functions {
+        names.insert(entry.name.clone(), entry.span);
+        user_fn_names.insert(entry.name.clone());
     }
     for (name, span) in &imported.assert_names {
         names.insert(name.clone(), *span);
@@ -817,7 +878,11 @@ pub fn resolve_with_imported_values(
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
                 }
                 let aname = a.name.value.to_string();
-                asserts.push((aname, a.body.clone(), decl.span));
+                asserts.push(ResolvedAssertEntry {
+                    name: aname,
+                    body: a.body.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Plot(p) => {
                 for field in &p.fields {
@@ -834,7 +899,12 @@ pub fn resolve_with_imported_values(
                 }
                 let pname = p.name.value.to_string();
                 let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
-                plots.push((pname, p.clone(), decl.span, hidden));
+                plots.push(ResolvedPlotEntry {
+                    name: pname,
+                    decl: p.clone(),
+                    span: decl.span,
+                    hidden,
+                });
             }
             DeclKind::Figure(f) => {
                 for field in &f.fields {
@@ -850,11 +920,19 @@ pub fn resolve_with_imported_values(
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
                 }
                 let fname = f.name.value.to_string();
-                figures.push((fname, f.clone(), decl.span));
+                figures.push(ResolvedFigureEntry {
+                    name: fname,
+                    decl: f.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Fn(f) => {
                 check_no_graph_refs_in_fn(f, src)?;
-                functions.push((f.name.value.to_string(), f.clone(), decl.span));
+                functions.push(ResolvedFunctionEntry {
+                    name: f.name.value.to_string(),
+                    decl: f.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
@@ -868,7 +946,11 @@ pub fn resolve_with_imported_values(
                 )?;
                 let cname = c.name.value.to_string();
                 const_deps.insert(cname.clone(), deps);
-                consts.push((cname, c.value.clone(), decl.span));
+                consts.push(ResolvedConstEntry {
+                    name: cname,
+                    expr: c.value.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Param(p) => {
                 let pname = p.name.value.to_string();
@@ -887,7 +969,11 @@ pub fn resolve_with_imported_values(
                 } else {
                     runtime_deps.insert(pname.clone(), HashSet::new());
                 }
-                params.push((pname, p.value.clone(), decl.span));
+                params.push(ResolvedParamEntry {
+                    name: pname,
+                    default_expr: p.value.clone(),
+                    span: decl.span,
+                });
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
@@ -905,7 +991,11 @@ pub fn resolve_with_imported_values(
                     graph_refs.remove(&nname);
                 }
                 runtime_deps.insert(nname.clone(), graph_refs);
-                nodes.push((nname, n.value.clone(), decl.span));
+                nodes.push(ResolvedNodeEntry {
+                    name: nname,
+                    expr: n.value.clone(),
+                    span: decl.span,
+                });
             }
         }
     }

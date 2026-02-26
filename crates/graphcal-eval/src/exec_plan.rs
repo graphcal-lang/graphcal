@@ -18,6 +18,29 @@ use crate::error::GraphcalError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::tir::{ResolvedDomainConstraint, TIR};
 
+/// An assert body entry for execution.
+#[derive(Debug, Clone)]
+pub struct AssertBodyEntry {
+    pub name: String,
+    pub body: AssertBody,
+    pub span: Span,
+}
+
+/// A plot body entry for execution.
+#[derive(Debug, Clone)]
+pub struct PlotBodyEntry {
+    pub name: String,
+    pub decl: PlotDecl,
+    pub hidden: bool,
+}
+
+/// A figure body entry for execution.
+#[derive(Debug, Clone)]
+pub struct FigureBodyEntry {
+    pub name: String,
+    pub decl: FigureDecl,
+}
+
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
 pub struct ExecPlan {
@@ -30,12 +53,12 @@ pub struct ExecPlan {
     pub topo_order: Vec<String>,
     /// Runtime expressions keyed by declaration name (params + nodes).
     pub expressions: HashMap<String, Expr>,
-    /// Assert bodies in source order: (name, body, span).
-    pub assert_bodies: Vec<(String, AssertBody, Span)>,
-    /// Plot declarations in source order: (name, decl, span, hidden).
-    pub plot_bodies: Vec<(String, PlotDecl, Span, bool)>,
-    /// Figure declarations in source order: (name, decl, span).
-    pub figure_bodies: Vec<(String, FigureDecl, Span)>,
+    /// Assert bodies in source order.
+    pub assert_bodies: Vec<AssertBodyEntry>,
+    /// Plot declarations in source order.
+    pub plot_bodies: Vec<PlotBodyEntry>,
+    /// Figure declarations in source order.
+    pub figure_bodies: Vec<FigureBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -58,22 +81,33 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     let const_values = eval_consts_from_tir(tir, src)?;
     let (topo_order, expressions) = build_runtime_dag(tir, src)?;
 
-    let assert_bodies: Vec<(String, AssertBody, Span)> = tir
+    let assert_bodies: Vec<AssertBodyEntry> = tir
         .asserts
         .iter()
-        .map(|(name, body, span)| (name.clone(), body.clone(), *span))
+        .map(|entry| AssertBodyEntry {
+            name: entry.name.clone(),
+            body: entry.body.clone(),
+            span: entry.span,
+        })
         .collect();
 
-    let plot_bodies: Vec<(String, PlotDecl, Span, bool)> = tir
+    let plot_bodies: Vec<PlotBodyEntry> = tir
         .plots
         .iter()
-        .map(|(name, decl, span, hidden)| (name.clone(), decl.clone(), *span, *hidden))
+        .map(|entry| PlotBodyEntry {
+            name: entry.name.clone(),
+            decl: entry.decl.clone(),
+            hidden: entry.hidden,
+        })
         .collect();
 
-    let figure_bodies: Vec<(String, FigureDecl, Span)> = tir
+    let figure_bodies: Vec<FigureBodyEntry> = tir
         .figures
         .iter()
-        .map(|(name, decl, span)| (name.clone(), decl.clone(), *span))
+        .map(|entry| FigureBodyEntry {
+            name: entry.name.clone(),
+            decl: entry.decl.clone(),
+        })
         .collect();
 
     // Resolve domain constraints from type annotations.
@@ -112,14 +146,14 @@ fn eval_consts_from_tir(
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
 
-    for (name, _, _, _) in &tir.consts {
-        let idx = graph.add_node(name.clone());
-        index_map.insert(name.clone(), idx);
+    for entry in &tir.consts {
+        let idx = graph.add_node(entry.name.clone());
+        index_map.insert(entry.name.clone(), idx);
     }
 
-    for (name, _, _, _) in &tir.consts {
-        if let Some(deps) = tir.const_deps.get(name) {
-            let from = index_map[name];
+    for entry in &tir.consts {
+        if let Some(deps) = tir.const_deps.get(&entry.name) {
+            let from = index_map[&entry.name];
             for dep in deps {
                 let to = index_map[dep];
                 graph.add_edge(to, from, ());
@@ -132,8 +166,8 @@ fn eval_consts_from_tir(
         let span = tir
             .consts
             .iter()
-            .find(|(n, _, _, _)| n == cycle_node)
-            .map_or_else(|| Span::new(0, 0), |(_, _, _, s)| *s);
+            .find(|e| e.name == *cycle_node)
+            .map_or_else(|| Span::new(0, 0), |e| e.span);
         GraphcalError::CyclicDependency {
             name: cycle_node.clone().into(),
             src: src.clone(),
@@ -144,7 +178,7 @@ fn eval_consts_from_tir(
     let const_exprs: HashMap<&str, &Expr> = tir
         .consts
         .iter()
-        .map(|(name, _, expr, _)| (name.as_str(), expr))
+        .map(|entry| (entry.name.as_str(), &entry.expr))
         .collect();
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -177,26 +211,26 @@ fn build_runtime_dag(
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
     let mut expressions: HashMap<String, Expr> = HashMap::new();
 
-    for (name, _, expr_opt, span) in &tir.params {
-        let idx = graph.add_node(name.clone());
-        index_map.insert(name.clone(), idx);
-        match expr_opt {
+    for entry in &tir.params {
+        let idx = graph.add_node(entry.name.clone());
+        index_map.insert(entry.name.clone(), idx);
+        match &entry.default_expr {
             Some(expr) => {
-                expressions.insert(name.clone(), expr.clone());
+                expressions.insert(entry.name.clone(), expr.clone());
             }
             None => {
                 return Err(GraphcalError::RequiredParamNotProvided {
-                    name: name.clone(),
+                    name: entry.name.clone(),
                     src: src.clone(),
-                    span: (*span).into(),
+                    span: entry.span.into(),
                 });
             }
         }
     }
-    for (name, _, expr, _) in &tir.nodes {
-        let idx = graph.add_node(name.clone());
-        index_map.insert(name.clone(), idx);
-        expressions.insert(name.clone(), expr.clone());
+    for entry in &tir.nodes {
+        let idx = graph.add_node(entry.name.clone());
+        index_map.insert(entry.name.clone(), idx);
+        expressions.insert(entry.name.clone(), entry.expr.clone());
     }
 
     for (name, deps) in &tir.runtime_deps {
@@ -214,8 +248,8 @@ fn build_runtime_dag(
         let span = tir
             .nodes
             .iter()
-            .map(|(n, _, _, s)| (n, *s))
-            .chain(tir.params.iter().map(|(n, _, _, s)| (n, *s)))
+            .map(|e| (&e.name, e.span))
+            .chain(tir.params.iter().map(|e| (&e.name, e.span)))
             .find(|(n, _)| *n == cycle_node)
             .map_or_else(|| Span::new(0, 0), |(_, s)| s);
         GraphcalError::CyclicDependency {
@@ -256,12 +290,8 @@ fn resolve_domain_constraints(
     let decl_iter = tir
         .params
         .iter()
-        .map(|(name, type_ann, _, span)| (name, type_ann, *span))
-        .chain(
-            tir.nodes
-                .iter()
-                .map(|(name, type_ann, _, span)| (name, type_ann, *span)),
-        );
+        .map(|e| (&e.name, &e.type_ann, e.span))
+        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
 
     for (name, type_ann, decl_span) in decl_iter {
         // Get constraints from the type annotation (could be on base type if indexed).

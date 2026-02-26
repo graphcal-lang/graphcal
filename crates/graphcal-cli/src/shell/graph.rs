@@ -31,8 +31,8 @@ fn build_graph(tir: &TIR) -> DiGraph<String, ()> {
     let mut name_to_idx = HashMap::new();
 
     // Build sets for category lookup.
-    let const_names: HashSet<&str> = tir.consts.iter().map(|(n, _, _, _)| n.as_str()).collect();
-    let param_names: HashSet<&str> = tir.params.iter().map(|(n, _, _, _)| n.as_str()).collect();
+    let const_names: HashSet<&str> = tir.consts.iter().map(|e| e.name.as_str()).collect();
+    let param_names: HashSet<&str> = tir.params.iter().map(|e| e.name.as_str()).collect();
     let assert_names: &HashSet<String> = &tir.assert_names;
 
     // Add all declarations as nodes.
