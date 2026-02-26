@@ -35,6 +35,24 @@ impl Parser<'_> {
         self.parse_convert()
     }
 
+    /// Parse a comma-separated argument list: `(expr1, expr2, ...)`
+    /// Expects the opening `(` to have already been consumed.
+    /// Supports trailing commas.
+    fn parse_arg_list(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let mut args = Vec::new();
+        if self.lexer.peek() != Some(&Token::RParen) {
+            args.push(self.parse_expr()?);
+            while self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+                if self.lexer.peek() == Some(&Token::RParen) {
+                    break; // trailing comma
+                }
+                args.push(self.parse_expr()?);
+            }
+        }
+        Ok(args)
+    }
+
     /// Parse conversion: `expr -> unit_expr` (lowest precedence).
     fn parse_convert(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_conditional()?;
@@ -486,17 +504,7 @@ impl Parser<'_> {
                     {
                         // module::fn_name(args...)
                         self.lexer.next_token(); // consume '('
-                        let mut args = Vec::new();
-                        if self.lexer.peek() != Some(&Token::RParen) {
-                            args.push(self.parse_expr()?);
-                            while self.lexer.peek() == Some(&Token::Comma) {
-                                self.lexer.next_token();
-                                if self.lexer.peek() == Some(&Token::RParen) {
-                                    break; // trailing comma
-                                }
-                                args.push(self.parse_expr()?);
-                            }
-                        }
+                        let args = self.parse_arg_list()?;
                         let (_, rparen_span) = self.expect(Token::RParen)?;
                         let call_span = span.merge(rparen_span);
                         Ok(Expr {
@@ -523,17 +531,7 @@ impl Parser<'_> {
                 } else if self.lexer.peek() == Some(&Token::LParen) {
                     // Function call: name(args...)
                     self.lexer.next_token(); // consume '('
-                    let mut args = Vec::new();
-                    if self.lexer.peek() != Some(&Token::RParen) {
-                        args.push(self.parse_expr()?);
-                        while self.lexer.peek() == Some(&Token::Comma) {
-                            self.lexer.next_token();
-                            if self.lexer.peek() == Some(&Token::RParen) {
-                                break; // trailing comma
-                            }
-                            args.push(self.parse_expr()?);
-                        }
-                    }
+                    let args = self.parse_arg_list()?;
                     let (_, rparen_span) = self.expect(Token::RParen)?;
                     let call_span = span.merge(rparen_span);
                     Ok(Expr {

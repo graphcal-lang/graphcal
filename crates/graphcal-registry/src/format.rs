@@ -24,8 +24,14 @@ pub fn format_number(value: f64) -> String {
 
 /// Format a `UnitExpr` as a human-readable label.
 /// E.g., `m`, `km/hour`, `kg * m / s^2`
+///
+/// If `parenthesize_multi_denom` is true, multi-term denominators are wrapped in parentheses:
+/// `m / (s * kg)` instead of `m / s * kg`.
 #[must_use]
-pub fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
+pub fn format_unit_expr_with_config(
+    expr: &graphcal_syntax::ast::UnitExpr,
+    parenthesize_multi_denom: bool,
+) -> String {
     use graphcal_syntax::ast::MulDivOp;
 
     let mut numerator = Vec::new();
@@ -51,6 +57,17 @@ pub fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
     } else {
         let num = numerator.join(" * ");
         let den = denominator.join(" * ");
-        format!("{num}/{den}")
+        if parenthesize_multi_denom && denominator.len() > 1 {
+            format!("{num} / ({den})")
+        } else {
+            format!("{num}/{den}")
+        }
     }
+}
+
+/// Format a `UnitExpr` as a human-readable label.
+/// E.g., `m`, `km/hour`, `kg * m / s^2`
+#[must_use]
+pub fn format_unit_expr(expr: &graphcal_syntax::ast::UnitExpr) -> String {
+    format_unit_expr_with_config(expr, false)
 }
