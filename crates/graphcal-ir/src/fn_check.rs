@@ -6,6 +6,7 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use graphcal_syntax::ast::{Expr, ExprKind, FnBody};
+use graphcal_syntax::visitor::ExprVisitor;
 
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::registry::{FnDef, FunctionRegistry};
@@ -67,111 +68,61 @@ pub fn check_no_recursion(
     Ok(())
 }
 
+/// Visitor that collects user-defined function calls.
+struct FnCallCollector<'a> {
+    user_fns: &'a HashMap<FnName, petgraph::graph::NodeIndex>,
+    calls: Vec<FnName>,
+}
+
+impl ExprVisitor for FnCallCollector<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
+        if let ExprKind::FnCall { name, .. } = &expr.kind
+            && self.user_fns.contains_key(name.value.as_str())
+        {
+            self.calls.push(name.value.clone());
+        }
+        for arg in args {
+            self.visit_expr(arg)?;
+        }
+        Ok(())
+    }
+
+    fn visit_qualified_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
+        if let ExprKind::QualifiedFnCall { name, .. } = &expr.kind
+            && self.user_fns.contains_key(name.value.as_str())
+        {
+            self.calls.push(name.value.clone());
+        }
+        for arg in args {
+            self.visit_expr(arg)?;
+        }
+        Ok(())
+    }
+}
+
 /// Collect names of user-defined functions called from a function body.
 fn collect_fn_calls(
     body: &FnBody,
     user_fns: &HashMap<FnName, petgraph::graph::NodeIndex>,
 ) -> Vec<FnName> {
-    let mut calls = Vec::new();
+    let mut collector = FnCallCollector {
+        user_fns,
+        calls: Vec::new(),
+    };
     match body {
-        FnBody::Short(expr) => collect_fn_calls_in_expr(expr, user_fns, &mut calls),
+        FnBody::Short(expr) => {
+            let _ = collector.visit_expr(expr);
+        }
         FnBody::Block { stmts, expr } => {
             for stmt in stmts {
-                collect_fn_calls_in_expr(&stmt.value, user_fns, &mut calls);
+                let _ = collector.visit_expr(&stmt.value);
             }
-            collect_fn_calls_in_expr(expr, user_fns, &mut calls);
+            let _ = collector.visit_expr(expr);
         }
     }
-    calls
-}
-
-fn collect_fn_calls_in_expr(
-    expr: &Expr,
-    user_fns: &HashMap<FnName, petgraph::graph::NodeIndex>,
-    calls: &mut Vec<FnName>,
-) {
-    match &expr.kind {
-        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
-            if user_fns.contains_key(name.value.as_str()) {
-                calls.push(name.value.clone());
-            }
-            for arg in args {
-                collect_fn_calls_in_expr(arg, user_fns, calls);
-            }
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_fn_calls_in_expr(lhs, user_fns, calls);
-            collect_fn_calls_in_expr(rhs, user_fns, calls);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            collect_fn_calls_in_expr(operand, user_fns, calls);
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_fn_calls_in_expr(condition, user_fns, calls);
-            collect_fn_calls_in_expr(then_branch, user_fns, calls);
-            collect_fn_calls_in_expr(else_branch, user_fns, calls);
-        }
-        ExprKind::Convert { expr: inner, .. }
-        | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. } => {
-            collect_fn_calls_in_expr(inner, user_fns, calls);
-        }
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                collect_fn_calls_in_expr(&stmt.value, user_fns, calls);
-            }
-            collect_fn_calls_in_expr(expr, user_fns, calls);
-        }
-        ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
-            collect_fn_calls_in_expr(expr, user_fns, calls);
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            fields
-                .iter()
-                .filter_map(|field| field.value.as_ref())
-                .for_each(|val| collect_fn_calls_in_expr(val, user_fns, calls));
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::GraphRef(_)
-        | ExprKind::QualifiedGraphRef { .. }
-        | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            for entry in entries {
-                collect_fn_calls_in_expr(&entry.value, user_fns, calls);
-            }
-        }
-        ExprKind::ForComp { body, .. } => {
-            collect_fn_calls_in_expr(body, user_fns, calls);
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_fn_calls_in_expr(source, user_fns, calls);
-            collect_fn_calls_in_expr(init, user_fns, calls);
-            collect_fn_calls_in_expr(body, user_fns, calls);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            collect_fn_calls_in_expr(init, user_fns, calls);
-            collect_fn_calls_in_expr(body, user_fns, calls);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_fn_calls_in_expr(scrutinee, user_fns, calls);
-            for arm in arms {
-                collect_fn_calls_in_expr(&arm.body, user_fns, calls);
-            }
-        }
-    }
+    collector.calls
 }
 
 #[cfg(test)]
