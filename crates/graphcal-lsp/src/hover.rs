@@ -120,5 +120,12 @@ fn format_hover(def: &DefinitionInfo) -> String {
         SymbolCategory::Assert => {
             format!("```graphcal\nassert {}: Bool\n```", def.name)
         }
+        SymbolCategory::Plot => {
+            let type_str = def.type_description.as_deref().unwrap_or("plot");
+            format!("```graphcal\nplot {}\n```\n{}", def.name, type_str)
+        }
+        SymbolCategory::Figure => {
+            format!("```graphcal\nfigure {}\n```", def.name)
+        }
     }
 }

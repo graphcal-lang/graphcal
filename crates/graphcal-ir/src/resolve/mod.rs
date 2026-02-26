@@ -255,8 +255,8 @@ pub fn resolve_with_imports(
                         body_expr,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -277,8 +277,8 @@ pub fn resolve_with_imports(
                         &field.value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -300,8 +300,8 @@ pub fn resolve_with_imports(
                         &field.value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -328,8 +328,8 @@ pub fn resolve_with_imports(
                 let deps = extract_const_refs(
                     &c.value,
                     &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
+                    builtin_consts,
+                    builtin_fns,
                     &user_fn_names,
                     src,
                 )?;
@@ -349,8 +349,8 @@ pub fn resolve_with_imports(
                         value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -370,8 +370,8 @@ pub fn resolve_with_imports(
                     &n.value,
                     &all_runtime_names,
                     &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
+                    builtin_consts,
+                    builtin_fns,
                     &user_fn_names,
                     src,
                 )?;
@@ -399,8 +399,8 @@ pub fn resolve_with_imports(
         let deps = extract_const_refs(
             expr,
             &all_const_names,
-            &builtin_consts,
-            &builtin_fns,
+            builtin_consts,
+            builtin_fns,
             &user_fn_names,
             src,
         )?;
@@ -411,8 +411,8 @@ pub fn resolve_with_imports(
             expr,
             &all_runtime_names,
             &all_const_names,
-            &builtin_consts,
-            &builtin_fns,
+            builtin_consts,
+            builtin_fns,
             &user_fn_names,
             src,
         )?;
@@ -423,8 +423,8 @@ pub fn resolve_with_imports(
             expr,
             &all_runtime_names,
             &all_const_names,
-            &builtin_consts,
-            &builtin_fns,
+            builtin_consts,
+            builtin_fns,
             &user_fn_names,
             src,
         )?;
@@ -870,8 +870,8 @@ pub fn resolve_with_imported_values(
                         body_expr,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -890,8 +890,8 @@ pub fn resolve_with_imported_values(
                         &field.value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -912,8 +912,8 @@ pub fn resolve_with_imported_values(
                         &field.value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -939,8 +939,8 @@ pub fn resolve_with_imported_values(
                 let deps = extract_const_refs(
                     &c.value,
                     &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
+                    builtin_consts,
+                    builtin_fns,
                     &user_fn_names,
                     src,
                 )?;
@@ -960,8 +960,8 @@ pub fn resolve_with_imported_values(
                         value,
                         &all_runtime_names,
                         &all_const_names,
-                        &builtin_consts,
-                        &builtin_fns,
+                        builtin_consts,
+                        builtin_fns,
                         &user_fn_names,
                         src,
                     )?;
@@ -981,8 +981,8 @@ pub fn resolve_with_imported_values(
                     &n.value,
                     &all_runtime_names,
                     &all_const_names,
-                    &builtin_consts,
-                    &builtin_fns,
+                    builtin_consts,
+                    builtin_fns,
                     &user_fn_names,
                     src,
                 )?;

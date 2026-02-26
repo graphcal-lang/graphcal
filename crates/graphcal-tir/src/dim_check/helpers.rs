@@ -81,7 +81,8 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 }
 
 /// Format an inferred type for display in diagnostics.
-pub(super) fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
+#[must_use]
+pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
     match it {
         InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
         InferredType::Bool => "Bool".to_string(),

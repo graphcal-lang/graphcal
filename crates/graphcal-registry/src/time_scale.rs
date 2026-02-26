@@ -44,6 +44,22 @@ impl TimeScale {
         matches!(self, Self::UTC)
     }
 
+    /// Returns the string name of this time scale.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::UTC => "UTC",
+            Self::TAI => "TAI",
+            Self::TT => "TT",
+            Self::TDB => "TDB",
+            Self::ET => "ET",
+            Self::GPST => "GPST",
+            Self::GST => "GST",
+            Self::BDT => "BDT",
+            Self::QZSST => "QZSST",
+        }
+    }
+
     /// Convert to the corresponding `hifitime::TimeScale`.
     #[must_use]
     pub const fn to_hifitime(self) -> hifitime::TimeScale {
@@ -100,17 +116,7 @@ pub fn time_scale_from_conversion_fn(name: &str) -> Option<TimeScale> {
 
 impl fmt::Display for TimeScale {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UTC => write!(f, "UTC"),
-            Self::TAI => write!(f, "TAI"),
-            Self::TT => write!(f, "TT"),
-            Self::TDB => write!(f, "TDB"),
-            Self::ET => write!(f, "ET"),
-            Self::GPST => write!(f, "GPST"),
-            Self::GST => write!(f, "GST"),
-            Self::BDT => write!(f, "BDT"),
-            Self::QZSST => write!(f, "QZSST"),
-        }
+        f.write_str(self.name())
     }
 }
 
@@ -138,20 +144,28 @@ impl FromStr for TimeScale {
     type Err = ParseTimeScaleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "UTC" => Ok(Self::UTC),
-            "TAI" => Ok(Self::TAI),
-            "TT" => Ok(Self::TT),
-            "TDB" => Ok(Self::TDB),
-            "ET" => Ok(Self::ET),
-            "GPST" => Ok(Self::GPST),
-            "GST" => Ok(Self::GST),
-            "BDT" => Ok(Self::BDT),
-            "QZSST" => Ok(Self::QZSST),
-            _ => Err(ParseTimeScaleError {
-                input: s.to_string(),
-            }),
+        // Try matching against all variants
+        let variants = [
+            Self::UTC,
+            Self::TAI,
+            Self::TT,
+            Self::TDB,
+            Self::ET,
+            Self::GPST,
+            Self::GST,
+            Self::BDT,
+            Self::QZSST,
+        ];
+
+        for variant in variants {
+            if variant.name() == s {
+                return Ok(variant);
+            }
         }
+
+        Err(ParseTimeScaleError {
+            input: s.to_string(),
+        })
     }
 }
 

@@ -664,7 +664,10 @@ pub enum GraphcalError {
         code(graphcal::O001),
         help("only `param` declarations can be overridden with --set")
     )]
-    OverrideNotAParam { name: DeclName, actual_kind: String },
+    OverrideNotAParam {
+        name: DeclName,
+        actual_kind: crate::resolve_types::DeclCategory,
+    },
 
     #[error("unknown parameter `{name}` in --set override")]
     #[diagnostic(

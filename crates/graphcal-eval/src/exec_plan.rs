@@ -191,8 +191,8 @@ fn eval_consts_from_tir(
             expr,
             &values,
             &empty_locals,
-            &builtin_consts,
-            &builtin_fns,
+            builtin_consts,
+            builtin_fns,
             &tir.registry,
             src,
         )?;
@@ -326,8 +326,8 @@ fn resolve_domain_constraints(
                 &bound.value,
                 const_values,
                 &empty_locals,
-                &builtin_consts,
-                &builtin_fns,
+                builtin_consts,
+                builtin_fns,
                 &tir.registry,
                 src,
             )?;
@@ -540,8 +540,8 @@ fn format_bound_display(
                 expr,
                 &empty,
                 &empty,
-                &builtin_consts,
-                &builtin_fns,
+                builtin_consts,
+                builtin_fns,
                 registry,
                 &src,
             )

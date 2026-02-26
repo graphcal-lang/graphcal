@@ -4,6 +4,19 @@ use crate::token::Token;
 
 use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case, is_upper_snake_case};
 
+/// Map comparison tokens to their corresponding `BinOp`.
+pub(super) const fn token_to_comparison_op(token: &Token) -> Option<BinOp> {
+    match token {
+        Token::EqEq => Some(BinOp::Eq),
+        Token::BangEq => Some(BinOp::Ne),
+        Token::Lt => Some(BinOp::Lt),
+        Token::Gt => Some(BinOp::Gt),
+        Token::LtEq => Some(BinOp::Le),
+        Token::GtEq => Some(BinOp::Ge),
+        _ => None,
+    }
+}
+
 impl Parser<'_> {
     // --- Expression parsing ---
     // Precedence (lowest to highest):
@@ -130,15 +143,7 @@ impl Parser<'_> {
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
         let lhs = self.parse_add()?;
-        let op = match self.lexer.peek() {
-            Some(Token::EqEq) => Some(BinOp::Eq),
-            Some(Token::BangEq) => Some(BinOp::Ne),
-            Some(Token::Lt) => Some(BinOp::Lt),
-            Some(Token::Gt) => Some(BinOp::Gt),
-            Some(Token::LtEq) => Some(BinOp::Le),
-            Some(Token::GtEq) => Some(BinOp::Ge),
-            _ => None,
-        };
+        let op = self.lexer.peek().and_then(token_to_comparison_op);
         if let Some(op) = op {
             self.lexer.next_token();
             let rhs = self.parse_add()?;
