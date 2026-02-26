@@ -559,64 +559,44 @@ fn compile_single_file_in_project(
                         let orig_name = &import_item.name.name;
                         let local_name = import_item.local_name().to_string();
 
-                        // Check if it's a value (const/param/node) or type-system decl.
-                        if let Some(rv) = dep.const_values.get(orig_name) {
-                            let scoped = ScopedName::Local(local_name.clone());
-                            imported_names
-                                .const_names
-                                .push((scoped.clone(), import_item.name.span));
-                            let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
-                                DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ),
-                            );
-                            imported_source_order.push((scoped.clone(), DeclCategory::Const));
-                            imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some(rv) = dep.values.get(orig_name) {
-                            let scoped = ScopedName::Local(local_name.clone());
-                            let span = import_item.name.span;
-                            imported_names.param_names.push((scoped.clone(), span));
-                            let dt = dep.declared_types.get(orig_name).cloned().unwrap_or(
-                                DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ),
-                            );
-                            imported_source_order.push((scoped.clone(), DeclCategory::Param));
-                            imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some(fn_entry) =
-                            dep.functions.iter().find(|entry| entry.name == *orig_name)
-                        {
-                            imported_names.functions.push(
-                                graphcal_registry::resolve_types::ResolvedFunctionEntry {
-                                    name: local_name,
-                                    decl: fn_entry.decl.clone(),
-                                    span: fn_entry.span,
-                                },
-                            );
-                        } else if dep.has_assert(orig_name) {
-                            // Assert is already evaluated in the dep file.
-                            // We just need to make the name visible for #[assumes].
-                            imported_names
-                                .assert_names
-                                .push((local_name, import_item.name.span));
-                        } else {
-                            // Check if it's a type-system declaration in the dep's file.
-                            let dep_loaded = &project.files[&import_canonical];
-                            if file_has_declaration(&dep_loaded.ast, orig_name) {
-                                // Type-system declaration (dim/unit/index/type).
-                                imported_type_system_names
-                                    .entry(import_canonical.clone())
-                                    .or_default()
-                                    .insert(orig_name.clone());
-                            } else {
-                                return Err(CompileError::Eval(
-                                    GraphcalError::ImportNameNotFound {
-                                        name: orig_name.clone(),
-                                        file_path: import_decl.path.display_path(),
-                                        src: file_src.clone(),
-                                        span: import_item.name.span.into(),
-                                    },
-                                ));
+                        match import_selective_item(
+                            dep,
+                            orig_name,
+                            &local_name,
+                            import_item.name.span,
+                            &mut imported_names,
+                            &mut imported_values,
+                            Some(&mut imported_source_order),
+                        ) {
+                            SelectiveImportResult::Const
+                            | SelectiveImportResult::Runtime
+                            | SelectiveImportResult::Function => {}
+                            SelectiveImportResult::Assert => {
+                                // Assert is already evaluated in the dep file.
+                                // We just need to make the name visible for #[assumes].
+                                imported_names
+                                    .assert_names
+                                    .push((local_name, import_item.name.span));
+                            }
+                            SelectiveImportResult::NotFound => {
+                                // Check if it's a type-system declaration in the dep's file.
+                                let dep_loaded = &project.files[&import_canonical];
+                                if file_has_declaration(&dep_loaded.ast, orig_name) {
+                                    // Type-system declaration (dim/unit/index/type).
+                                    imported_type_system_names
+                                        .entry(import_canonical.clone())
+                                        .or_default()
+                                        .insert(orig_name.clone());
+                                } else {
+                                    return Err(CompileError::Eval(
+                                        GraphcalError::ImportNameNotFound {
+                                            name: orig_name.clone(),
+                                            file_path: import_decl.path.display_path(),
+                                            src: file_src.clone(),
+                                            span: import_item.name.span.into(),
+                                        },
+                                    ));
+                                }
                             }
                         }
                     }
@@ -642,52 +622,14 @@ fn compile_single_file_in_project(
 
                     // Import all values under module::name prefix.
                     let import_span = import_decl.path.span();
-                    for (name, rv) in &dep.const_values {
-                        let scoped = ScopedName::Qualified {
-                            module: module_name.clone(),
-                            member: name.clone(),
-                        };
-                        imported_names
-                            .const_names
-                            .push((scoped.clone(), import_span));
-                        let dt =
-                            dep.declared_types
-                                .get(name)
-                                .cloned()
-                                .unwrap_or(DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ));
-                        imported_source_order.push((scoped.clone(), DeclCategory::Const));
-                        imported_values.insert(scoped, (rv.clone(), dt));
-                    }
-                    for (name, rv) in &dep.values {
-                        let scoped = ScopedName::Qualified {
-                            module: module_name.clone(),
-                            member: name.clone(),
-                        };
-                        imported_names
-                            .param_names
-                            .push((scoped.clone(), import_span));
-                        let dt =
-                            dep.declared_types
-                                .get(name)
-                                .cloned()
-                                .unwrap_or(DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ));
-                        imported_source_order.push((scoped.clone(), DeclCategory::Param));
-                        imported_values.insert(scoped, (rv.clone(), dt));
-                    }
-                    for fn_entry in &dep.functions {
-                        let flat = format!("{module_name}::{}", fn_entry.name);
-                        imported_names.functions.push(
-                            graphcal_registry::resolve_types::ResolvedFunctionEntry {
-                                name: flat,
-                                decl: fn_entry.decl.clone(),
-                                span: fn_entry.span,
-                            },
-                        );
-                    }
+                    import_module_values(
+                        dep,
+                        &module_name,
+                        import_span,
+                        &mut imported_names,
+                        &mut imported_values,
+                        Some(&mut imported_source_order),
+                    );
                     // Import all type-system declarations from dep's registry.
                     extra_registry_builders.push(&dep.registry);
                 }
@@ -920,15 +862,148 @@ fn compile_single_file_in_project(
     })
 }
 
+/// Result of looking up a single selective import item in an `EvaluatedFile`.
+enum SelectiveImportResult {
+    /// A const value was found and registered.
+    Const,
+    /// A runtime value (param/node) was found and registered.
+    Runtime,
+    /// A function was found and registered.
+    Function,
+    /// An assert was found (caller must handle assert-specific registration).
+    Assert,
+    /// The name was not found in the evaluated file's values or functions.
+    NotFound,
+}
+
+/// Look up a single selective import item in an `EvaluatedFile` and register it.
+///
+/// Handles `const_values`, values (params/nodes), and functions.
+/// Returns what was found so the caller can handle assert and type-system fallbacks.
+fn import_selective_item(
+    dep: &EvaluatedFile,
+    orig_name: &str,
+    local_name: &str,
+    span: Span,
+    imported_names: &mut ImportedValueNames,
+    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
+) -> SelectiveImportResult {
+    if let Some(rv) = dep.const_values.get(orig_name) {
+        let scoped = ScopedName::Local(local_name.to_string());
+        imported_names.const_names.push((scoped.clone(), span));
+        let dt = dep
+            .declared_types
+            .get(orig_name)
+            .cloned()
+            .unwrap_or(DeclaredType::Scalar(
+                graphcal_syntax::dimension::Dimension::dimensionless(),
+            ));
+        if let Some(source_order) = imported_source_order {
+            source_order.push((scoped.clone(), DeclCategory::Const));
+        }
+        imported_values.insert(scoped, (rv.clone(), dt));
+        SelectiveImportResult::Const
+    } else if let Some(rv) = dep.values.get(orig_name) {
+        let scoped = ScopedName::Local(local_name.to_string());
+        imported_names.param_names.push((scoped.clone(), span));
+        let dt = dep
+            .declared_types
+            .get(orig_name)
+            .cloned()
+            .unwrap_or(DeclaredType::Scalar(
+                graphcal_syntax::dimension::Dimension::dimensionless(),
+            ));
+        if let Some(source_order) = imported_source_order {
+            source_order.push((scoped.clone(), DeclCategory::Param));
+        }
+        imported_values.insert(scoped, (rv.clone(), dt));
+        SelectiveImportResult::Runtime
+    } else if let Some(fn_entry) = dep.functions.iter().find(|entry| entry.name == orig_name) {
+        imported_names
+            .functions
+            .push(graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                name: local_name.to_string(),
+                decl: fn_entry.decl.clone(),
+                span: fn_entry.span,
+            });
+        SelectiveImportResult::Function
+    } else if dep.has_assert(orig_name) {
+        SelectiveImportResult::Assert
+    } else {
+        SelectiveImportResult::NotFound
+    }
+}
+
+/// Import all values from an `EvaluatedFile` under a module prefix.
+///
+/// Registers `const_values`, values (params/nodes), and functions with qualified
+/// `ScopedName::Qualified` names.
+fn import_module_values(
+    dep: &EvaluatedFile,
+    module_name: &str,
+    import_span: Span,
+    imported_names: &mut ImportedValueNames,
+    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
+) {
+    for (name, rv) in &dep.const_values {
+        let scoped = ScopedName::Qualified {
+            module: module_name.to_string(),
+            member: name.clone(),
+        };
+        imported_names
+            .const_names
+            .push((scoped.clone(), import_span));
+        let dt = dep
+            .declared_types
+            .get(name)
+            .cloned()
+            .unwrap_or(DeclaredType::Scalar(
+                graphcal_syntax::dimension::Dimension::dimensionless(),
+            ));
+        if let Some(ref mut source_order) = imported_source_order {
+            source_order.push((scoped.clone(), DeclCategory::Const));
+        }
+        imported_values.insert(scoped, (rv.clone(), dt));
+    }
+    for (name, rv) in &dep.values {
+        let scoped = ScopedName::Qualified {
+            module: module_name.to_string(),
+            member: name.clone(),
+        };
+        imported_names
+            .param_names
+            .push((scoped.clone(), import_span));
+        let dt = dep
+            .declared_types
+            .get(name)
+            .cloned()
+            .unwrap_or(DeclaredType::Scalar(
+                graphcal_syntax::dimension::Dimension::dimensionless(),
+            ));
+        if let Some(ref mut source_order) = imported_source_order {
+            source_order.push((scoped.clone(), DeclCategory::Param));
+        }
+        imported_values.insert(scoped, (rv.clone(), dt));
+    }
+    for fn_entry in &dep.functions {
+        let flat = format!("{module_name}::{}", fn_entry.name);
+        imported_names
+            .functions
+            .push(graphcal_registry::resolve_types::ResolvedFunctionEntry {
+                name: flat,
+                decl: fn_entry.decl.clone(),
+                span: fn_entry.span,
+            });
+    }
+}
+
 /// Build imported value names and values for a dependency file from its own transitive imports.
 ///
 /// This mirrors the import-processing logic in `compile_single_file_in_project` but
 /// only for non-instantiated imports (the dependency's own transitive deps are already
 /// evaluated and stored in `evaluated_files`).
-#[expect(
-    clippy::too_many_lines,
-    reason = "mirrors compile_single_file_in_project import logic for transitive deps"
-)]
 fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
     dep_path: &Path,
@@ -974,44 +1049,16 @@ fn build_dep_imported_values(
                     for import_item in names {
                         let orig_name = &import_item.name.name;
                         let local_name = import_item.local_name().to_string();
-
-                        if let Some(rv) = trans_dep.const_values.get(orig_name) {
-                            let scoped = ScopedName::Local(local_name);
-                            imported_names
-                                .const_names
-                                .push((scoped.clone(), import_item.name.span));
-                            let dt = trans_dep.declared_types.get(orig_name).cloned().unwrap_or(
-                                DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ),
-                            );
-                            imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some(rv) = trans_dep.values.get(orig_name) {
-                            let scoped = ScopedName::Local(local_name);
-                            imported_names
-                                .param_names
-                                .push((scoped.clone(), import_item.name.span));
-                            let dt = trans_dep.declared_types.get(orig_name).cloned().unwrap_or(
-                                DeclaredType::Scalar(
-                                    graphcal_syntax::dimension::Dimension::dimensionless(),
-                                ),
-                            );
-                            imported_values.insert(scoped, (rv.clone(), dt));
-                        } else if let Some(fn_entry) = trans_dep
-                            .functions
-                            .iter()
-                            .find(|entry| entry.name == *orig_name)
-                        {
-                            imported_names.functions.push(
-                                graphcal_registry::resolve_types::ResolvedFunctionEntry {
-                                    name: local_name,
-                                    decl: fn_entry.decl.clone(),
-                                    span: fn_entry.span,
-                                },
-                            );
-                        } else {
-                            // Type-system declarations are handled by the registry, not imported_values.
-                        }
+                        // Type-system declarations are handled by the registry, not imported_values.
+                        let _ = import_selective_item(
+                            trans_dep,
+                            orig_name,
+                            &local_name,
+                            import_item.name.span,
+                            &mut imported_names,
+                            &mut imported_values,
+                            None,
+                        );
                     }
                 }
                 graphcal_syntax::ast::ImportKind::Module { alias } => {
@@ -1023,46 +1070,14 @@ fn build_dep_imported_values(
                         |alias_ident| alias_ident.name.clone(),
                     );
                     let import_span = import_decl.path.span();
-                    for (name, rv) in &trans_dep.const_values {
-                        let scoped = ScopedName::Qualified {
-                            module: module_name.clone(),
-                            member: name.clone(),
-                        };
-                        imported_names
-                            .const_names
-                            .push((scoped.clone(), import_span));
-                        let dt = trans_dep.declared_types.get(name).cloned().unwrap_or(
-                            DeclaredType::Scalar(
-                                graphcal_syntax::dimension::Dimension::dimensionless(),
-                            ),
-                        );
-                        imported_values.insert(scoped, (rv.clone(), dt));
-                    }
-                    for (name, rv) in &trans_dep.values {
-                        let scoped = ScopedName::Qualified {
-                            module: module_name.clone(),
-                            member: name.clone(),
-                        };
-                        imported_names
-                            .param_names
-                            .push((scoped.clone(), import_span));
-                        let dt = trans_dep.declared_types.get(name).cloned().unwrap_or(
-                            DeclaredType::Scalar(
-                                graphcal_syntax::dimension::Dimension::dimensionless(),
-                            ),
-                        );
-                        imported_values.insert(scoped, (rv.clone(), dt));
-                    }
-                    for fn_entry in &trans_dep.functions {
-                        let flat = format!("{module_name}::{}", fn_entry.name);
-                        imported_names.functions.push(
-                            graphcal_registry::resolve_types::ResolvedFunctionEntry {
-                                name: flat,
-                                decl: fn_entry.decl.clone(),
-                                span: fn_entry.span,
-                            },
-                        );
-                    }
+                    import_module_values(
+                        trans_dep,
+                        &module_name,
+                        import_span,
+                        &mut imported_names,
+                        &mut imported_values,
+                        None,
+                    );
                 }
             }
         }
