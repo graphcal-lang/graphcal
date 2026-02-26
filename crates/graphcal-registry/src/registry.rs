@@ -268,17 +268,17 @@ impl DimensionRegistry {
     /// Returns `None` if any dimension name is unknown.
     #[must_use]
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
-        let mut result = Dimension::dimensionless();
-        for item in &expr.terms {
-            let base = self.dimensions.get(item.term.name.name.as_str())?;
-            let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp));
-            result = match item.op {
-                MulDivOp::Mul => result * powered,
-                MulDivOp::Div => result / powered,
-            };
-        }
-        Some(result)
+        expr.terms
+            .iter()
+            .try_fold(Dimension::dimensionless(), |result, item| {
+                let base = self.dimensions.get(item.term.name.name.as_str())?;
+                let exp = item.term.power.unwrap_or(1);
+                let powered = base.pow(Rational::from_int(exp));
+                Some(match item.op {
+                    MulDivOp::Mul => result * powered,
+                    MulDivOp::Div => result / powered,
+                })
+            })
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -323,25 +323,18 @@ impl UnitRegistry {
     /// Returns `None` if any unit name is unknown.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
-        let mut dim = Dimension::dimensionless();
-        let mut scale = 1.0;
-        for item in &expr.terms {
-            let info = self.units.get(item.name.value.as_str())?;
-            let exp = item.power.unwrap_or(1);
-            let powered_dim = info.dimension.pow(Rational::from_int(exp));
-            let powered_scale = info.scale.powi(exp);
-            match item.op {
-                MulDivOp::Mul => {
-                    dim = dim * powered_dim;
-                    scale *= powered_scale;
-                }
-                MulDivOp::Div => {
-                    dim = dim / powered_dim;
-                    scale /= powered_scale;
-                }
-            }
-        }
-        Some((dim, scale))
+        expr.terms
+            .iter()
+            .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
+                let info = self.units.get(item.name.value.as_str())?;
+                let exp = item.power.unwrap_or(1);
+                let powered_dim = info.dimension.pow(Rational::from_int(exp));
+                let powered_scale = info.scale.powi(exp);
+                Some(match item.op {
+                    MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
+                    MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
+                })
+            })
     }
 }
 
@@ -594,17 +587,17 @@ impl RegistryBuilder {
     /// Returns `None` if any dimension name is unknown.
     #[must_use]
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
-        let mut result = Dimension::dimensionless();
-        for item in &expr.terms {
-            let base = self.dimensions.get(item.term.name.name.as_str())?;
-            let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp));
-            result = match item.op {
-                MulDivOp::Mul => result * powered,
-                MulDivOp::Div => result / powered,
-            };
-        }
-        Some(result)
+        expr.terms
+            .iter()
+            .try_fold(Dimension::dimensionless(), |result, item| {
+                let base = self.dimensions.get(item.term.name.name.as_str())?;
+                let exp = item.term.power.unwrap_or(1);
+                let powered = base.pow(Rational::from_int(exp));
+                Some(match item.op {
+                    MulDivOp::Mul => result * powered,
+                    MulDivOp::Div => result / powered,
+                })
+            })
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -628,25 +621,18 @@ impl RegistryBuilder {
     /// Returns `None` if any unit name is unknown.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
-        let mut dim = Dimension::dimensionless();
-        let mut scale = 1.0;
-        for item in &expr.terms {
-            let info = self.units.get(item.name.value.as_str())?;
-            let exp = item.power.unwrap_or(1);
-            let powered_dim = info.dimension.pow(Rational::from_int(exp));
-            let powered_scale = info.scale.powi(exp);
-            match item.op {
-                MulDivOp::Mul => {
-                    dim = dim * powered_dim;
-                    scale *= powered_scale;
-                }
-                MulDivOp::Div => {
-                    dim = dim / powered_dim;
-                    scale /= powered_scale;
-                }
-            }
-        }
-        Some((dim, scale))
+        expr.terms
+            .iter()
+            .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
+                let info = self.units.get(item.name.value.as_str())?;
+                let exp = item.power.unwrap_or(1);
+                let powered_dim = info.dimension.pow(Rational::from_int(exp));
+                let powered_scale = info.scale.powi(exp);
+                Some(match item.op {
+                    MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
+                    MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
+                })
+            })
     }
 }
 

@@ -14,54 +14,65 @@ pub fn eval_result_to_diagnostics(
     result: &graphcal_eval::eval::EvalResult,
     source: &str,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
     // Node/param evaluation errors
-    for (name, r, _) in &result.all {
-        if let Err(err) = r {
-            diagnostics.push(Diagnostic {
+    let mut diagnostics: Vec<Diagnostic> = result
+        .all
+        .iter()
+        .filter_map(|(name, r, _)| match r {
+            Err(err) => Some(Diagnostic {
                 range: Range::default(),
                 severity: Some(DiagnosticSeverity::WARNING),
                 code: Some(NumberOrString::String("graphcal::E001".to_string())),
                 source: Some("graphcal".to_string()),
                 message: format!("{}: {err}", name.as_str()),
                 ..Default::default()
-            });
-        }
-    }
+            }),
+            Ok(_) => None,
+        })
+        .collect();
 
     // Assertion failures
-    for (name, assert_result, span) in &result.assertions {
-        use graphcal_eval::eval::AssertResult;
+    diagnostics.extend(
+        result
+            .assertions
+            .iter()
+            .filter_map(|(name, assert_result, span)| {
+                use graphcal_eval::eval::AssertResult;
 
-        let (message, severity) = match assert_result {
-            AssertResult::Pass => continue,
-            AssertResult::Fail { message } => {
-                let mut msg = format!("assertion `{}` failed: {message}", name.as_str());
-                if let Some(affected) = result.assumes_map.get(name.as_str()) {
-                    use std::fmt::Write;
-                    let _ = write!(msg, " (affected: {})", affected.join(", "));
-                }
-                (msg, DiagnosticSeverity::WARNING)
-            }
-            AssertResult::Error { message } => (
-                format!("assertion `{}` error: {message}", name.as_str()),
-                DiagnosticSeverity::WARNING,
-            ),
-        };
+                let (message, severity) = match assert_result {
+                    AssertResult::Pass => return None,
+                    AssertResult::Fail { message } => {
+                        let msg = result.assumes_map.get(name.as_str()).map_or_else(
+                            || format!("assertion `{}` failed: {message}", name.as_str()),
+                            |affected| {
+                                format!(
+                                    "assertion `{}` failed: {message} (affected: {})",
+                                    name.as_str(),
+                                    affected.join(", ")
+                                )
+                            },
+                        );
+                        (msg, DiagnosticSeverity::WARNING)
+                    }
+                    AssertResult::Error { message } => (
+                        format!("assertion `{}` error: {message}", name.as_str()),
+                        DiagnosticSeverity::WARNING,
+                    ),
+                };
 
-        let start = byte_offset_to_position(source, span.offset());
-        let end = byte_offset_to_position(source, span.offset() + span.len());
+                let start = byte_offset_to_position(source, span.offset());
+                let end = byte_offset_to_position(source, span.offset() + span.len());
 
-        diagnostics.push(Diagnostic {
-            range: Range { start, end },
-            severity: Some(severity),
-            code: Some(NumberOrString::String("graphcal::A001".to_string())),
-            source: Some("graphcal".to_string()),
-            message,
-            ..Default::default()
-        });
-    }
+                Some(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(severity),
+                    code: Some(NumberOrString::String("graphcal::A001".to_string())),
+                    source: Some("graphcal".to_string()),
+                    message,
+                    ..Default::default()
+                })
+            }),
+    );
 
     diagnostics
 }

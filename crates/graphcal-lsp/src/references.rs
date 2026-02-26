@@ -14,30 +14,32 @@ pub fn references(
     include_declaration: bool,
 ) -> Option<Vec<Location>> {
     // Determine the target name: either from a reference or a definition at cursor.
-    let target_name = if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
-        reference.target.clone()
-    } else if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        // Skip builtins -- they have no meaningful references to return.
-        if matches!(
-            definition.category,
-            SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-        ) {
+    let target_name = match (
+        analysis.symbol_table.find_reference_at(offset),
+        analysis.symbol_table.find_definition_at(offset),
+    ) {
+        (Some(reference), _) => reference.target.clone(),
+        (None, Some(definition))
+            if matches!(
+                definition.category,
+                SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
+            ) =>
+        {
             return None;
         }
-        definition.name.clone()
-    } else {
-        return None;
+        (None, Some(definition)) => definition.name.clone(),
+        (None, None) => return None,
     };
 
-    let mut locations = Vec::new();
-
-    // Collect all reference locations in the current file.
-    for r in analysis.symbol_table.find_all_references(&target_name) {
-        locations.push(Location {
+    let mut locations: Vec<Location> = analysis
+        .symbol_table
+        .find_all_references(&target_name)
+        .into_iter()
+        .map(|r| Location {
             uri: uri.clone(),
             range: span_to_range(&analysis.source, r.span),
-        });
-    }
+        })
+        .collect();
 
     // Include the definition location if requested.
     if include_declaration {

@@ -38,108 +38,96 @@ pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<Comple
 
 /// Complete param and node names (after `@`).
 fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items = Vec::new();
-
-    for def in analysis.symbol_table.definitions.values() {
-        if !matches!(def.category, SymbolCategory::Param | SymbolCategory::Node) {
-            continue;
-        }
-        // Skip builtins.
-        if def.name_span.is_empty() {
-            continue;
-        }
-        items.push(CompletionItem {
+    let mut items: Vec<CompletionItem> = analysis
+        .symbol_table
+        .definitions
+        .values()
+        .filter(|def| matches!(def.category, SymbolCategory::Param | SymbolCategory::Node))
+        .filter(|def| !def.name_span.is_empty())
+        .map(|def| CompletionItem {
             label: def.name.clone(),
             kind: Some(CompletionItemKind::VARIABLE),
             detail: def.type_description.clone(),
             ..Default::default()
-        });
-    }
+        })
+        .collect();
 
     // Include imported param/node definitions.
-    for (name, imported) in &analysis.imported_definitions {
-        if matches!(
-            imported.definition.category,
-            SymbolCategory::Param | SymbolCategory::Node
-        ) {
-            items.push(CompletionItem {
+    items.extend(
+        analysis
+            .imported_definitions
+            .iter()
+            .filter(|(_, imported)| {
+                matches!(
+                    imported.definition.category,
+                    SymbolCategory::Param | SymbolCategory::Node
+                )
+            })
+            .map(|(name, imported)| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::VARIABLE),
                 detail: imported.definition.type_description.clone(),
                 ..Default::default()
-            });
-        }
-    }
+            }),
+    );
 
     items
 }
 
 /// Complete type names (after `:`).
 fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items = Vec::new();
-
     // Built-in type keywords.
-    for kw in TYPE_KEYWORDS {
-        items.push(CompletionItem {
+    let mut items: Vec<CompletionItem> = TYPE_KEYWORDS
+        .iter()
+        .map(|kw| CompletionItem {
             label: (*kw).to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
-        });
-    }
+        })
+        .collect();
 
-    for def in analysis.symbol_table.definitions.values() {
-        // Skip builtins.
-        if def.name_span.is_empty() {
-            continue;
-        }
-        match def.category {
-            SymbolCategory::Dimension => {
-                items.push(CompletionItem {
+    items.extend(
+        analysis
+            .symbol_table
+            .definitions
+            .values()
+            .filter(|def| !def.name_span.is_empty())
+            .filter_map(|def| {
+                let kind = match def.category {
+                    SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
+                    SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
+                    SymbolCategory::Index => Some(CompletionItemKind::ENUM),
+                    _ => None,
+                }?;
+                Some(CompletionItem {
                     label: def.name.clone(),
-                    kind: Some(CompletionItemKind::CLASS),
+                    kind: Some(kind),
                     detail: def.type_description.clone(),
                     ..Default::default()
-                });
-            }
-            SymbolCategory::StructType => {
-                items.push(CompletionItem {
-                    label: def.name.clone(),
-                    kind: Some(CompletionItemKind::STRUCT),
-                    detail: def.type_description.clone(),
-                    ..Default::default()
-                });
-            }
-            SymbolCategory::Index => {
-                items.push(CompletionItem {
-                    label: def.name.clone(),
-                    kind: Some(CompletionItemKind::ENUM),
-                    detail: def.type_description.clone(),
-                    ..Default::default()
-                });
-            }
-            _ => {}
-        }
-    }
+                })
+            }),
+    );
 
     // Include imported type-like definitions.
-    for (name, imported) in &analysis.imported_definitions {
-        match imported.definition.category {
-            SymbolCategory::Dimension | SymbolCategory::StructType | SymbolCategory::Index => {
-                items.push(CompletionItem {
+    items.extend(
+        analysis
+            .imported_definitions
+            .iter()
+            .filter_map(|(name, imported)| {
+                let kind = match imported.definition.category {
+                    SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
+                    SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
+                    SymbolCategory::Index => Some(CompletionItemKind::ENUM),
+                    _ => None,
+                }?;
+                Some(CompletionItem {
                     label: name.clone(),
-                    kind: Some(match imported.definition.category {
-                        SymbolCategory::Dimension => CompletionItemKind::CLASS,
-                        SymbolCategory::StructType => CompletionItemKind::STRUCT,
-                        SymbolCategory::Index => CompletionItemKind::ENUM,
-                        _ => continue,
-                    }),
+                    kind: Some(kind),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()
-                });
-            }
-            _ => {}
-        }
-    }
+                })
+            }),
+    );
 
     items
 }
@@ -158,57 +146,59 @@ fn complete_top_level() -> Vec<CompletionItem> {
 
 /// Complete expression-level items: constants, functions, boolean keywords.
 fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items = Vec::new();
-
     // Boolean keywords.
-    for kw in &["true", "false"] {
-        items.push(CompletionItem {
+    let mut items: Vec<CompletionItem> = ["true", "false"]
+        .iter()
+        .map(|kw| CompletionItem {
             label: (*kw).to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
-        });
-    }
+        })
+        .collect();
 
-    for def in analysis.symbol_table.definitions.values() {
-        match def.category {
-            SymbolCategory::Const | SymbolCategory::BuiltinConst => {
-                items.push(CompletionItem {
+    items.extend(
+        analysis
+            .symbol_table
+            .definitions
+            .values()
+            .filter_map(|def| {
+                let kind = match def.category {
+                    SymbolCategory::Const | SymbolCategory::BuiltinConst => {
+                        Some(CompletionItemKind::CONSTANT)
+                    }
+                    SymbolCategory::Function | SymbolCategory::BuiltinFn => {
+                        Some(CompletionItemKind::FUNCTION)
+                    }
+                    _ => None,
+                }?;
+                Some(CompletionItem {
                     label: def.name.clone(),
-                    kind: Some(CompletionItemKind::CONSTANT),
+                    kind: Some(kind),
                     detail: def.type_description.clone(),
                     ..Default::default()
-                });
-            }
-            SymbolCategory::Function | SymbolCategory::BuiltinFn => {
-                items.push(CompletionItem {
-                    label: def.name.clone(),
-                    kind: Some(CompletionItemKind::FUNCTION),
-                    detail: def.type_description.clone(),
-                    ..Default::default()
-                });
-            }
-            _ => {}
-        }
-    }
+                })
+            }),
+    );
 
     // Include imported constants and functions.
-    for (name, imported) in &analysis.imported_definitions {
-        match imported.definition.category {
-            SymbolCategory::Const | SymbolCategory::Function => {
-                items.push(CompletionItem {
+    items.extend(
+        analysis
+            .imported_definitions
+            .iter()
+            .filter_map(|(name, imported)| {
+                let kind = match imported.definition.category {
+                    SymbolCategory::Const => Some(CompletionItemKind::CONSTANT),
+                    SymbolCategory::Function => Some(CompletionItemKind::FUNCTION),
+                    _ => None,
+                }?;
+                Some(CompletionItem {
                     label: name.clone(),
-                    kind: Some(match imported.definition.category {
-                        SymbolCategory::Const => CompletionItemKind::CONSTANT,
-                        SymbolCategory::Function => CompletionItemKind::FUNCTION,
-                        _ => continue,
-                    }),
+                    kind: Some(kind),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()
-                });
-            }
-            _ => {}
-        }
-    }
+                })
+            }),
+    );
 
     items
 }
