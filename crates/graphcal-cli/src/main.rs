@@ -167,41 +167,21 @@ fn main() {
 
             // Parse --input JSON file
             if let Some(input_path) = &input {
-                if let Some(file_path) = &file {
-                    let source = std::fs::read_to_string(file_path).unwrap_or_else(|e| {
-                        eprintln!("error: cannot read {}: {e}", file_path.display());
-                        process::exit(1);
-                    });
-                    let ast = graphcal_syntax::parser::Parser::with_name(
-                        &source,
-                        &file_path.to_string_lossy(),
-                    )
-                    .parse_file()
-                    .unwrap_or_else(|e| {
-                        eprintln!("error: failed to parse {}: {e}", file_path.display());
-                        process::exit(1);
-                    });
-
-                    let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
-                        eprintln!(
-                            "error: cannot read input file {}: {e}",
-                            input_path.display()
-                        );
-                        process::exit(1);
-                    });
-
-                    let json_overrides = json_input::json_to_overrides(&json_str, &ast)
-                        .unwrap_or_else(|e| {
-                            eprintln!("error: {e}");
-                            process::exit(1);
-                        });
-
-                    for (name, expr) in json_overrides {
-                        overrides.entry(name).or_insert(expr);
-                    }
-                } else {
-                    eprintln!("error: --input requires a file argument");
+                let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
+                    eprintln!(
+                        "error: cannot read input file {}: {e}",
+                        input_path.display()
+                    );
                     process::exit(1);
+                });
+
+                let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                });
+
+                for (name, expr) in json_overrides {
+                    overrides.entry(name).or_insert(expr);
                 }
             }
 
@@ -239,18 +219,6 @@ fn main() {
 
             // Parse --input JSON file
             if let Some(input_path) = &input {
-                let source = std::fs::read_to_string(&file).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read {}: {e}", file.display());
-                    process::exit(1);
-                });
-                let ast =
-                    graphcal_syntax::parser::Parser::with_name(&source, &file.to_string_lossy())
-                        .parse_file()
-                        .unwrap_or_else(|e| {
-                            eprintln!("error: failed to parse {}: {e}", file.display());
-                            process::exit(1);
-                        });
-
                 let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
                     eprintln!(
                         "error: cannot read input file {}: {e}",
@@ -259,11 +227,10 @@ fn main() {
                     process::exit(1);
                 });
 
-                let json_overrides =
-                    json_input::json_to_overrides(&json_str, &ast).unwrap_or_else(|e| {
-                        eprintln!("error: {e}");
-                        process::exit(1);
-                    });
+                let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                });
 
                 // Merge: --set takes precedence over --input
                 for (name, expr) in json_overrides {
