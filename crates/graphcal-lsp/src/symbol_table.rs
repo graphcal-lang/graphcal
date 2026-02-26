@@ -443,6 +443,23 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                     }
                 }
             }
+            DeclKind::Plot(p) => {
+                let name = p.name.value.to_string();
+                table.definitions.insert(
+                    name.clone(),
+                    DefinitionInfo {
+                        name: name.clone(),
+                        category: SymbolCategory::Assert, // reuse Assert category for plots
+                        name_span: p.name.span,
+                        decl_span: decl.span,
+                        type_description: Some(format!("plot ({})", p.chart_type)),
+                        detail: Some("plot".to_string()),
+                    },
+                );
+                for field in &p.fields {
+                    collect_expr_refs(&field.value, &mut table, &mut scopes);
+                }
+            }
             DeclKind::Import(u) => {
                 // Each imported name is a reference; target resolution for cross-file
                 // go-to-definition is handled separately.

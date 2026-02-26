@@ -51,6 +51,7 @@ graphcal eval [OPTIONS] <FILE>
 | `--input <INPUT>` | JSON input file for param values |
 | `--allow-defaults` | Allow params with defaults to keep their defaults when using `--set`/`--input` |
 | `--no-assert` | Skip assertion checking |
+| `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print Plotly JSON) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
@@ -188,6 +189,30 @@ dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 ...
 ```
+
+### Plot Output
+
+When a file contains `plot` declarations, use the `--plot` option to render
+them. Two output modes are available:
+
+**Browser mode** generates a self-contained HTML file and opens it in the
+default browser:
+
+```bash
+graphcal eval analysis.gcl --plot browser
+```
+
+**JSON mode** prints the Plotly JSON specification to stdout, useful for piping
+to other tools or embedding in web pages:
+
+```bash
+graphcal eval analysis.gcl --plot json
+```
+
+If no `plot` declarations are found, a warning is printed to stderr.
+
+See the [Plot Declarations](language/plots.md) reference for the language
+syntax.
 
 ---
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, Expr};
+use graphcal_syntax::ast::{AssertBody, Expr, PlotDecl};
 use graphcal_syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -32,6 +32,8 @@ pub struct ExecPlan {
     pub expressions: HashMap<String, Expr>,
     /// Assert bodies in source order: (name, body, span).
     pub assert_bodies: Vec<(String, AssertBody, Span)>,
+    /// Plot declarations in source order: (name, decl, span).
+    pub plot_bodies: Vec<(String, PlotDecl, Span)>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -60,6 +62,12 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .map(|(name, body, span)| (name.clone(), body.clone(), *span))
         .collect();
 
+    let plot_bodies: Vec<(String, PlotDecl, Span)> = tir
+        .plots
+        .iter()
+        .map(|(name, decl, span)| (name.clone(), decl.clone(), *span))
+        .collect();
+
     // Resolve domain constraints from type annotations.
     let domain_constraints = resolve_domain_constraints(tir, &const_values, src)?;
 
@@ -73,6 +81,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         topo_order,
         expressions,
         assert_bodies,
+        plot_bodies,
         assumes_map: tir.assumes_map.clone(),
         expected_fail: tir.expected_fail.clone(),
         domain_constraints,

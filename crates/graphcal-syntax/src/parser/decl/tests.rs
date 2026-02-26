@@ -284,6 +284,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Index(i) => i.name.value.as_str(),
             DeclKind::Import(_) => "<import>",
             DeclKind::Assert(a) => a.name.value.as_str(),
+            DeclKind::Plot(p) => p.name.value.as_str(),
         })
         .collect();
     assert_eq!(

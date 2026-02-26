@@ -283,6 +283,8 @@ pub struct EvalResult {
     pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
     /// Assertion results in source order: (name, result, span).
     pub assertions: Vec<(DeclName, AssertResult, Span)>,
+    /// Evaluated plot specifications in source order.
+    pub plots: Vec<PlotSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
@@ -302,6 +304,31 @@ impl EvalResult {
                 matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
             })
     }
+}
+
+/// A single evaluated plot specification.
+#[derive(Debug, Clone)]
+pub struct PlotSpec {
+    /// The plot declaration name.
+    pub name: DeclName,
+    /// The chart type (line, scatter, bar, heatmap).
+    pub chart_type: graphcal_syntax::ast::ChartType,
+    /// Evaluated plot fields as (`field_name`, values).
+    /// Field values are evaluated expressions — either scalar lists or strings.
+    pub fields: Vec<(String, PlotFieldValue)>,
+}
+
+/// A resolved value for a plot field.
+#[derive(Debug, Clone)]
+pub enum PlotFieldValue {
+    /// A list of f64 values (from evaluated numeric expressions/for-comprehensions).
+    Numbers(Vec<f64>),
+    /// A list of string labels (from evaluated label expressions/for-comprehensions).
+    Labels(Vec<String>),
+    /// A single string value (e.g., title).
+    String(String),
+    /// A single numeric value.
+    Number(f64),
 }
 
 /// Top-level compile error that wraps both parse and eval errors.

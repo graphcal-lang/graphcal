@@ -2270,3 +2270,53 @@ fn eval_no_overrides_defaults_freely() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// --- Plot tests ---
+
+#[test]
+fn eval_plot_json_output() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_basic.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // The output contains both the normal text output and the JSON plot spec.
+    // The JSON plot is on the last line.
+    assert!(
+        stdout.contains("\"type\":\"scatter\""),
+        "expected scatter trace in plot JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"type\":\"bar\""),
+        "expected bar trace in plot JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"mode\":\"lines\""),
+        "expected lines mode in plot JSON: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_no_plots_warns() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("rocket.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("no plot declarations found"),
+        "expected warning about no plots: {stderr}"
+    );
+}

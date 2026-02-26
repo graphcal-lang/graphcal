@@ -16,8 +16,8 @@ pub use project::{
     compile_to_tir_from_project, compile_to_tir_project,
 };
 pub use types::{
-    AssertResult, CompileError, DeclType, DisplayUnit, EvalResult, NodeError, Value, ValueError,
-    format_epoch_with_tz,
+    AssertResult, CompileError, DeclType, DisplayUnit, EvalResult, NodeError, PlotFieldValue,
+    PlotSpec, Value, ValueError, format_epoch_with_tz,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

@@ -1,4 +1,5 @@
 mod json_input;
+mod plot;
 mod shell;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -42,6 +43,9 @@ enum Commands {
         /// Allow params with default values to keep their defaults when using --set/--input
         #[arg(long)]
         allow_defaults: bool,
+        /// Plot output mode: browser (default), json, or a file path for HTML output
+        #[arg(long)]
+        plot: Option<PlotOutput>,
     },
     /// Format .gcl files
     Format {
@@ -83,9 +87,21 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(ValueEnum, Clone)]
+enum PlotOutput {
+    /// Open interactive plot in the default browser
+    Browser,
+    /// Print Plotly JSON spec to stdout
+    Json,
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "CLI binary, stdout output is expected for --plot json"
 )]
 #[expect(
     clippy::too_many_lines,
@@ -198,6 +214,7 @@ fn main() {
             no_assert,
             root,
             allow_defaults,
+            plot: plot_output,
         } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
@@ -264,6 +281,28 @@ fn main() {
                             }
                         }
                     }
+
+                    // Handle --plot output
+                    if let Some(ref plot_mode) = plot_output {
+                        if result.plots.is_empty() {
+                            eprintln!("warning: no plot declarations found");
+                        } else {
+                            let plotly_plot = plot::build_plot(&result.plots);
+                            match plot_mode {
+                                PlotOutput::Browser => {
+                                    plotly_plot.write_html("graphcal_plot.html");
+                                    if let Err(e) = open::that("graphcal_plot.html") {
+                                        eprintln!("error: could not open browser: {e}");
+                                        process::exit(2);
+                                    }
+                                }
+                                PlotOutput::Json => {
+                                    println!("{}", plotly_plot.to_json());
+                                }
+                            }
+                        }
+                    }
+
                     let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                         || result.nodes.iter().any(|(_, r)| r.is_err());
                     let has_assert_failures = !no_assert

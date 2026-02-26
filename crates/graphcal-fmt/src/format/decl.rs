@@ -1,8 +1,8 @@
 use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
     FieldDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl, IndexDecl,
-    IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, TypeDecl, TypeExpr, UnitDecl, UnitDef,
-    VariantDecl,
+    IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnitDecl,
+    UnitDef, VariantDecl,
 };
 use graphcal_syntax::span::Span;
 use pretty::RcDoc;
@@ -28,6 +28,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
+        DeclKind::Plot(d) => format_plot_decl(fmt, d),
     };
 
     // Collect attribute lines: real attributes + synthetic #[derive(...)] for type decls
@@ -449,6 +450,36 @@ fn format_import_param_bindings(
     RcDoc::text("(")
         .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
         .append(RcDoc::text(")"))
+}
+
+/// `plot name = chart_type { field: expr, ... };`
+fn format_plot_decl(fmt: &mut Formatter<'_>, d: &PlotDecl) -> RcDoc<'static> {
+    let header = RcDoc::text(format!("plot {} = {} ", d.name.value, d.chart_type));
+
+    if d.fields.is_empty() {
+        return header.append(RcDoc::text("{};"));
+    }
+
+    let field_docs: Vec<RcDoc<'static>> = d
+        .fields
+        .iter()
+        .map(|f| {
+            RcDoc::text(f.name.name.clone())
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &f.value))
+                .append(RcDoc::text(","))
+        })
+        .collect();
+
+    header
+        .append(RcDoc::text("{"))
+        .append(
+            RcDoc::hardline()
+                .append(RcDoc::intersperse(field_docs, RcDoc::hardline()))
+                .nest(INDENT),
+        )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("};"))
 }
 
 /// `assert name = expr;`

@@ -56,6 +56,9 @@ graphcal eval path/to/file.gcl --input params.json
 
 # Multi-file project (import declarations resolved automatically)
 graphcal eval project/main.gcl
+
+# Plot output (open interactive Plotly chart in browser)
+graphcal eval path/to/file.gcl --plot browser
 ```
 
 ## Features
@@ -279,6 +282,43 @@ Split calculations across files with `import` declarations. All declaration kind
 import "./constants.gcl" { G0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
+
+### Plotting with Plotly
+
+Declare interactive charts alongside your calculations using `plot` declarations.
+Graphcal renders them with [Plotly.js](https://plotly.com/javascript/) for
+publication-quality, interactive visualizations.
+
+```gcl
+index Step = { First, Second, Third, Fourth }
+
+node values: Dimensionless[Step] = {
+    Step::First: 1.0, Step::Second: 2.0,
+    Step::Third: 4.0, Step::Fourth: 8.0,
+};
+
+plot my_scatter = scatter {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] * @values[s] },
+    title: "Values Squared",
+};
+
+plot power_bars = bar {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] + 1.0 },
+    title: "Values Plus One",
+};
+```
+
+```sh
+# Open interactive chart in default browser
+$ graphcal eval analysis.gcl --plot browser
+
+# Print Plotly JSON spec to stdout
+$ graphcal eval analysis.gcl --plot json
+```
+
+Supported chart types: `line`, `scatter`, `bar`, `heatmap`.
 
 ### JSON input for parameter overrides
 
