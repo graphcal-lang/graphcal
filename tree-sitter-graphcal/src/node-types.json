@@ -801,6 +801,11 @@
     }
   },
   {
+    "type": "chart_type",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "const_declaration",
     "named": true,
     "fields": {
@@ -1426,6 +1431,188 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "figure_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "figure_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "figure_field",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "figure_named_field",
+          "named": true
+        },
+        {
+          "type": "figure_plots_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "figure_named_field",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_fn_call",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "table_expr",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "figure_plots_field",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3891,6 +4078,164 @@
     }
   },
   {
+    "type": "plot_declaration",
+    "named": true,
+    "fields": {
+      "chart_type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "chart_type",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "plot_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "plot_field",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "block_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_fn_call",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "table_expr",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "qualified_fn_call",
     "named": true,
     "fields": {
@@ -4398,6 +4743,10 @@
           "named": true
         },
         {
+          "type": "figure_declaration",
+          "named": true
+        },
+        {
           "type": "fn_declaration",
           "named": true
         },
@@ -4415,6 +4764,10 @@
         },
         {
           "type": "param_declaration",
+          "named": true
+        },
+        {
+          "type": "plot_declaration",
           "named": true
         },
         {
@@ -6363,6 +6716,10 @@
     "named": false
   },
   {
+    "type": "bar",
+    "named": false
+  },
+  {
     "type": "bool_type",
     "named": true
   },
@@ -6395,11 +6752,19 @@
     "named": false
   },
   {
+    "type": "figure",
+    "named": false
+  },
+  {
     "type": "fn",
     "named": false
   },
   {
     "type": "for",
+    "named": false
+  },
+  {
+    "type": "heatmap",
     "named": false
   },
   {
@@ -6427,6 +6792,10 @@
     "named": false
   },
   {
+    "type": "line",
+    "named": false
+  },
+  {
     "type": "line_comment",
     "named": true,
     "extra": true
@@ -6448,11 +6817,23 @@
     "named": false
   },
   {
+    "type": "plot",
+    "named": false
+  },
+  {
+    "type": "plots",
+    "named": false
+  },
+  {
     "type": "range",
     "named": false
   },
   {
     "type": "scan",
+    "named": false
+  },
+  {
+    "type": "scatter",
     "named": false
   },
   {

@@ -28,6 +28,8 @@
   "match"
   "for"
   "assert"
+  "plot"
+  "figure"
   "table"
 ] @keyword
 
@@ -278,6 +280,21 @@
 (tolerance_assert "~=" @operator)
 (tolerance_assert "+/-" @operator)
 (tolerance_assert "%" @operator)
+
+; ---------------------------------------------------------------
+; Plot declarations
+; ---------------------------------------------------------------
+
+(plot_declaration name: (identifier) @variable)
+(chart_type) @type
+(plot_field name: (identifier) @property)
+
+; ---------------------------------------------------------------
+; Figure declarations
+; ---------------------------------------------------------------
+
+(figure_declaration name: (identifier) @variable)
+(figure_named_field name: (identifier) @property)
 
 ; ---------------------------------------------------------------
 ; Range index

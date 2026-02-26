@@ -1,0 +1,31 @@
+// figure_basic.gcl -- Figure declaration grouping two plots
+//
+// Demonstrates a figure that combines two plots into subplots.
+// Both plots also appear as standalone figures.
+index Step = { First, Second, Third, Fourth }
+
+param x0: Dimensionless = 1.0;
+
+node values: Dimensionless[Step] = {
+    Step::First: 1.0,
+    Step::Second: 2.0,
+    Step::Third: 4.0,
+    Step::Fourth: 8.0,
+};
+
+plot curve_a = line {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] * @values[s] },
+    title: "Values Squared",
+};
+
+plot curve_b = bar {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] + 1.0 },
+    title: "Values Plus One",
+};
+
+figure comparison = {
+    plots: [curve_a, curve_b],
+    title: "Side-by-side Comparison",
+};

@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, Expr, FnDecl, MulDivOp, TypeExpr, TypeExprKind};
+use graphcal_syntax::ast::{
+    AssertBody, Expr, FigureDecl, FnDecl, MulDivOp, PlotDecl, TypeExpr, TypeExprKind,
+};
 use graphcal_syntax::dimension::{Dimension, Rational};
 use graphcal_syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
 use graphcal_syntax::span::Span;
@@ -236,6 +238,10 @@ pub struct TIR {
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
     pub asserts: Vec<(String, AssertBody, Span)>,
+    /// Plot declarations in source order: (name, decl, span, hidden).
+    pub plots: Vec<(String, PlotDecl, Span, bool)>,
+    /// Figure declarations in source order: (name, decl, span).
+    pub figures: Vec<(String, FigureDecl, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -381,6 +387,8 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         params: ir.params,
         nodes: ir.nodes,
         asserts: ir.asserts,
+        plots: ir.plots,
+        figures: ir.figures,
         runtime_deps: ir.runtime_deps,
         const_deps: ir.const_deps,
         source_order: ir.source_order,

@@ -5,8 +5,10 @@ use crate::token::Token;
 use super::{ParseError, Parser};
 
 mod dim_unit;
+mod figure;
 mod import;
 mod index;
+mod plot;
 #[cfg(test)]
 mod tests;
 mod type_decl;
@@ -20,7 +22,7 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, or `assert`";
+        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, `assert`, `plot`, or `figure`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -32,6 +34,8 @@ impl Parser<'_> {
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Import) => self.parse_import_decl(),
             Some(Token::Assert) => self.parse_assert(),
+            Some(Token::Plot) => self.parse_plot(),
+            Some(Token::Figure) => self.parse_figure(),
             Some(_) => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(expected, &tok.to_string(), span))

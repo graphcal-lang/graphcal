@@ -71,6 +71,8 @@ pub enum DeclKind {
     Index(IndexDecl),
     Import(ImportDecl),
     Assert(AssertDecl),
+    Plot(PlotDecl),
+    Figure(FigureDecl),
 }
 
 /// Assert declaration: `assert name = <expr>;`
@@ -99,6 +101,63 @@ pub enum AssertBody {
         /// Whether the tolerance is relative (`%`).
         is_relative: bool,
     },
+}
+
+/// The chart type in a plot declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartType {
+    Line,
+    Scatter,
+    Bar,
+    Heatmap,
+}
+
+impl std::fmt::Display for ChartType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Line => write!(f, "line"),
+            Self::Scatter => write!(f, "scatter"),
+            Self::Bar => write!(f, "bar"),
+            Self::Heatmap => write!(f, "heatmap"),
+        }
+    }
+}
+
+/// A named field in a plot declaration body.
+///
+/// Example: `x: for m: OpMode { @total_power[m] }`
+#[derive(Debug, Clone)]
+pub struct PlotField {
+    /// The field name (e.g., "x", "y", "title").
+    pub name: Ident,
+    /// The field value expression.
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// Plot declaration: `plot name = line { x: ..., y: ..., title: "..." };`
+///
+/// Plots are leaf declarations that depend on params/nodes via `@`-references.
+/// They produce a plot specification, not a runtime `Value`.
+#[derive(Debug, Clone)]
+pub struct PlotDecl {
+    pub name: Spanned<DeclName>,
+    pub chart_type: ChartType,
+    pub chart_type_span: Span,
+    pub fields: Vec<PlotField>,
+}
+
+/// Figure declaration: `figure name = { plots: [a, b], title: "..." };`
+///
+/// Figures group multiple plot declarations into a single combined chart
+/// with subplots. Like plots, they are leaf declarations.
+#[derive(Debug, Clone)]
+pub struct FigureDecl {
+    pub name: Spanned<DeclName>,
+    /// The plot names referenced by this figure (from the `plots: [...]` field).
+    pub plot_names: Vec<Spanned<DeclName>>,
+    /// Additional fields (e.g., `title`).
+    pub fields: Vec<PlotField>,
 }
 
 /// The kind of an `import` declaration.

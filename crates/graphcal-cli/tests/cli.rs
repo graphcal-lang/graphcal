@@ -2270,3 +2270,292 @@ fn eval_no_overrides_defaults_freely() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// --- Plot tests ---
+
+#[test]
+fn eval_plot_json_output() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_basic.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // The output contains both the normal text output and the JSON plot spec.
+    // The JSON plot is on the last line.
+    assert!(
+        stdout.contains("\"type\":\"scatter\""),
+        "expected scatter trace in plot JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"type\":\"bar\""),
+        "expected bar trace in plot JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"mode\":\"lines\""),
+        "expected lines mode in plot JSON: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_scatter_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_scatter.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\"type\":\"scatter\""),
+        "expected scatter trace: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"mode\":\"markers\""),
+        "expected markers mode for scatter: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_line_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_line.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\"type\":\"scatter\""),
+        "expected scatter trace for line chart: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"mode\":\"lines\""),
+        "expected lines mode: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_bar_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_bar.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\"type\":\"bar\""),
+        "expected bar trace: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_heatmap_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_heatmap.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\"type\":\"heatmap\""),
+        "expected heatmap trace: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_no_plots_warns() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("rocket.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("no plot declarations found"),
+        "expected warning about no plots: {stderr}"
+    );
+}
+
+// --- Figure tests ---
+
+#[test]
+fn eval_figure_basic_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("figure_basic.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Parse the JSON array from the --plot json output (after the text output).
+    // Find the JSON array start — it's on its own line starting with "[".
+    let json_start = stdout
+        .find("\n[")
+        .map(|i| i + 1)
+        .expect("expected JSON array in output");
+    let json_str = &stdout[json_start..];
+    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
+
+    let arr = json.as_array().expect("expected JSON array");
+    // 3 figures: curve_a (standalone), curve_b (standalone), comparison (figure)
+    assert_eq!(
+        arr.len(),
+        3,
+        "expected 3 figures (2 standalone + 1 combined): {json_str}"
+    );
+    assert_eq!(arr[0]["name"].as_str(), Some("curve_a"));
+    assert_eq!(arr[1]["name"].as_str(), Some("curve_b"));
+    assert_eq!(arr[2]["name"].as_str(), Some("comparison"));
+
+    // Standalone curve_a should have a scatter trace with lines
+    let curve_a_spec = &arr[0]["spec"];
+    assert!(
+        curve_a_spec.to_string().contains("\"mode\":\"lines\""),
+        "expected lines mode for curve_a: {curve_a_spec}"
+    );
+
+    // Standalone curve_b should have a bar trace
+    let bar_spec = &arr[1]["spec"];
+    assert!(
+        bar_spec.to_string().contains("\"type\":\"bar\""),
+        "expected bar type for curve_b: {bar_spec}"
+    );
+
+    // Comparison figure should have 2 traces (subplot)
+    let comparison_data = arr[2]["spec"]["data"]
+        .as_array()
+        .expect("expected data array in comparison");
+    assert_eq!(
+        comparison_data.len(),
+        2,
+        "expected 2 traces in comparison subplot"
+    );
+}
+
+#[test]
+fn eval_figure_hidden_json() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("figure_hidden.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Parse the JSON array from the --plot json output.
+    // Find the JSON array start — it's on its own line starting with "[".
+    let json_start = stdout
+        .find("\n[")
+        .map(|i| i + 1)
+        .expect("expected JSON array in output");
+    let json_str = &stdout[json_start..];
+    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
+
+    let arr = json.as_array().expect("expected JSON array");
+    // Only 1 figure: comparison (hidden plots suppress standalone output)
+    assert_eq!(
+        arr.len(),
+        1,
+        "expected 1 figure (hidden plots suppressed): {json_str}"
+    );
+    assert_eq!(arr[0]["name"].as_str(), Some("comparison"));
+
+    // The comparison figure should still contain both traces
+    let comparison_data = arr[0]["spec"]["data"]
+        .as_array()
+        .expect("expected data array in comparison");
+    assert_eq!(
+        comparison_data.len(),
+        2,
+        "expected 2 traces in comparison subplot even though plots are hidden"
+    );
+}
+
+#[test]
+fn eval_plot_basic_standalone_figures() {
+    // plot_basic.gcl has 2 plots, no figures — should produce 2 standalone figures
+    let output = graphcal_bin()
+        .args(["eval", &fixture("plot_basic.gcl"), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    let json_start = stdout
+        .find("\n[")
+        .map(|i| i + 1)
+        .expect("expected JSON array in output");
+    let json_str = &stdout[json_start..];
+    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
+
+    let arr = json.as_array().expect("expected JSON array");
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected 2 standalone figures from plot_basic.gcl: {json_str}"
+    );
+    assert_eq!(arr[0]["name"].as_str(), Some("my_line"));
+    assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
+}
+
+#[test]
+fn format_check_figure_fixtures() {
+    let output = graphcal_bin()
+        .args([
+            "format",
+            "--check",
+            &fixture("figure_basic.gcl"),
+            &fixture("figure_hidden.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected figure fixtures to be formatted, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

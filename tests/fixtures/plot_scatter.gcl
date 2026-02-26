@@ -1,0 +1,28 @@
+// plot_scatter.gcl -- Scatter plot with markers
+//
+// Demonstrates a scatter chart using computed x and y data from
+// the same index, useful for visualizing correlations.
+
+index Maneuver = { Departure, MidCourse, Insertion }
+
+dimension Velocity = Length / Time;
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver::Departure: 3.2 km/s,
+    Maneuver::MidCourse: 0.15 km/s,
+    Maneuver::Insertion: 1.8 km/s,
+};
+
+param spacecraft_mass: Mass[Maneuver] = {
+    Maneuver::Departure: 5000.0 kg,
+    Maneuver::MidCourse: 4200.0 kg,
+    Maneuver::Insertion: 3800.0 kg,
+};
+
+plot mass_vs_delta_v = scatter {
+    x: for m: Maneuver { @delta_v[m] },
+    y: for m: Maneuver { @spacecraft_mass[m] },
+    title: "Spacecraft Mass vs Delta-V",
+    x_label: "Delta-V",
+    y_label: "Mass",
+};

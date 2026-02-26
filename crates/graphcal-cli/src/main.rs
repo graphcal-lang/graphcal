@@ -1,4 +1,5 @@
 mod json_input;
+mod plot;
 mod shell;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -42,6 +43,9 @@ enum Commands {
         /// Allow params with default values to keep their defaults when using --set/--input
         #[arg(long)]
         allow_defaults: bool,
+        /// Plot output mode: browser (default), json, or a file path for HTML output
+        #[arg(long)]
+        plot: Option<PlotOutput>,
     },
     /// Format .gcl files
     Format {
@@ -83,9 +87,21 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(ValueEnum, Clone)]
+enum PlotOutput {
+    /// Open interactive plot in the default browser
+    Browser,
+    /// Print Plotly JSON spec to stdout
+    Json,
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "CLI binary, stdout output is expected for --plot json"
 )]
 #[expect(
     clippy::too_many_lines,
@@ -198,6 +214,7 @@ fn main() {
             no_assert,
             root,
             allow_defaults,
+            plot: plot_output,
         } => {
             // Parse --set overrides
             let mut overrides = std::collections::HashMap::new();
@@ -264,6 +281,34 @@ fn main() {
                             }
                         }
                     }
+
+                    // Handle --plot output
+                    if let Some(ref plot_mode) = plot_output {
+                        let rendered = plot::build_figures(&result.plots, &result.figures);
+                        if rendered.is_empty() {
+                            eprintln!("warning: no plot declarations found");
+                        } else {
+                            match plot_mode {
+                                PlotOutput::Browser => {
+                                    let html = plot::render_html(&rendered);
+                                    std::fs::write("graphcal_plot.html", html).unwrap_or_else(
+                                        |e| {
+                                            eprintln!("error: could not write HTML: {e}");
+                                            process::exit(2);
+                                        },
+                                    );
+                                    if let Err(e) = open::that("graphcal_plot.html") {
+                                        eprintln!("error: could not open browser: {e}");
+                                        process::exit(2);
+                                    }
+                                }
+                                PlotOutput::Json => {
+                                    println!("{}", plot::render_json(&rendered));
+                                }
+                            }
+                        }
+                    }
+
                     let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                         || result.nodes.iter().any(|(_, r)| r.is_err());
                     let has_assert_failures = !no_assert

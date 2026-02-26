@@ -97,6 +97,14 @@ The language has a layered type system:
 
     [:octicons-arrow-right-24: Assertions](assertions.md)
 
+- :material-chart-line:{ .lg .middle } **Plots**
+
+    ---
+
+    `plot` declarations, chart types, interactive visualization.
+
+    [:octicons-arrow-right-24: Plots](plots.md)
+
 - :material-package-variant:{ .lg .middle } **Built-in Reference**
 
     ---

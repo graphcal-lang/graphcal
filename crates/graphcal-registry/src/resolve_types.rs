@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use graphcal_syntax::ast::{AssertBody, Expr, FnDecl};
+use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, FnDecl, PlotDecl};
 use graphcal_syntax::names::{IndexName, VariantName};
 use graphcal_syntax::span::Span;
 
@@ -144,6 +144,8 @@ pub enum DeclCategory {
     Param,
     Node,
     Assert,
+    Plot,
+    Figure,
 }
 
 /// A single expected-fail key: a list of `(IndexName, VariantName)` pairs.
@@ -172,6 +174,10 @@ pub struct ResolvedFile {
     pub nodes: Vec<(String, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
     pub asserts: Vec<(String, AssertBody, Span)>,
+    /// Plot declarations in source order: (name, decl, span, hidden).
+    pub plots: Vec<(String, PlotDecl, Span, bool)>,
+    /// Figure declarations in source order: (name, decl, span).
+    pub figures: Vec<(String, FigureDecl, Span)>,
     /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of `CONST_REF` references (const deps).

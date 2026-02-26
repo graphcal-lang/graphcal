@@ -49,6 +49,8 @@ module.exports = grammar({
       $.index_declaration,
       $.import_declaration,
       $.assert_declaration,
+      $.plot_declaration,
+      $.figure_declaration,
     ),
 
     // #[name] or #[name(arg1, arg2)] or #[name(Index::Variant, (A::X, B::Y))]
@@ -337,6 +339,79 @@ module.exports = grammar({
       "=",
       field("body", $.assert_body),
       ";",
+    ),
+
+    // plot power_by_mode = bar {
+    //     x: labels(for m: OpMode { m }),
+    //     y: for m: OpMode { @total_power[m] },
+    //     title: "Total Power by Operating Mode",
+    // };
+    plot_declaration: $ => seq(
+      repeat($.attribute),
+      "plot",
+      field("name", $.identifier),
+      "=",
+      field("chart_type", $.chart_type),
+      "{",
+      optional(seq(
+        $.plot_field,
+        repeat(seq(",", $.plot_field)),
+        optional(","),
+      )),
+      "}",
+      ";",
+    ),
+
+    chart_type: $ => choice("line", "scatter", "bar", "heatmap"),
+
+    plot_field: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("value", $._expr),
+    ),
+
+    // figure comparison = {
+    //     plots: [curve_a, curve_b],
+    //     title: "Side-by-side Comparison",
+    // };
+    figure_declaration: $ => seq(
+      repeat($.attribute),
+      "figure",
+      field("name", $.identifier),
+      "=",
+      "{",
+      optional(seq(
+        $.figure_field,
+        repeat(seq(",", $.figure_field)),
+        optional(","),
+      )),
+      "}",
+      ";",
+    ),
+
+    figure_field: $ => choice(
+      $.figure_plots_field,
+      $.figure_named_field,
+    ),
+
+    // plots: [name1, name2]
+    figure_plots_field: $ => seq(
+      "plots",
+      ":",
+      "[",
+      optional(seq(
+        $.identifier,
+        repeat(seq(",", $.identifier)),
+        optional(","),
+      )),
+      "]",
+    ),
+
+    // title: "...", or other key: value fields
+    figure_named_field: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("value", $._expr),
     ),
 
     assert_body: $ => choice(

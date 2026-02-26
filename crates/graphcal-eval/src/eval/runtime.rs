@@ -21,7 +21,9 @@ use crate::resolve::{DeclCategory, ExpectedFail};
 
 use super::display::{attach_display_units, format_range_step};
 use super::project::resolve_field_declared_type;
-use super::types::{AssertResult, DeclType, EvalResult, NodeError, Value};
+use super::types::{
+    AssertResult, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
+};
 
 #[expect(
     clippy::too_many_lines,
@@ -455,12 +457,12 @@ pub(super) fn evaluate_plan(
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
-                DeclCategory::Assert => return None,
+                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
-                DeclCategory::Assert => return None,
+                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
             Some((DeclName::new(name), result, decl_type))
         })
@@ -486,6 +488,56 @@ pub(super) fn evaluate_plan(
         })
         .collect();
 
+    // Evaluate plot declarations
+    let plots: Vec<PlotSpec> = plan
+        .plot_bodies
+        .iter()
+        .filter_map(|(name, decl, _span, hidden)| {
+            evaluate_plot(
+                decl,
+                name,
+                *hidden,
+                &values,
+                &empty_locals,
+                &builtin_consts,
+                &builtin_fns,
+                &tir.registry,
+                src,
+            )
+        })
+        .collect();
+
+    // Evaluate figure declarations
+    let figures: Vec<super::types::FigureSpec> = plan
+        .figure_bodies
+        .iter()
+        .map(|(name, decl, _span)| {
+            let mut fields = Vec::new();
+            for field in &decl.fields {
+                if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                    fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+                    continue;
+                }
+                if let Ok(rv) = eval_expr(
+                    &field.value,
+                    &values,
+                    &empty_locals,
+                    &builtin_consts,
+                    &builtin_fns,
+                    &tir.registry,
+                    src,
+                ) {
+                    fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
+                }
+            }
+            super::types::FigureSpec {
+                name: DeclName::new(name),
+                plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
+                fields,
+            }
+        })
+        .collect();
+
     // Convert domain constraints to DeclName-keyed map for the result.
     let domain_constraints = plan
         .domain_constraints
@@ -499,6 +551,8 @@ pub(super) fn evaluate_plan(
         nodes,
         all,
         assertions,
+        plots,
+        figures,
         assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
@@ -999,4 +1053,102 @@ fn check_scalar_constraint(
         return Some(format!("above maximum ({max_display})"));
     }
     None
+}
+
+/// Evaluate a plot declaration, producing a `PlotSpec`.
+///
+/// Each field expression is evaluated. Indexed values (from `for` comprehensions)
+/// are flattened to lists of numbers or labels. String literals become `String` fields.
+/// Returns `None` if any field evaluation fails (plots are best-effort).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "evaluation context requires many parameters"
+)]
+fn evaluate_plot(
+    decl: &graphcal_syntax::ast::PlotDecl,
+    name: &str,
+    hidden: bool,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Option<PlotSpec> {
+    let mut fields = Vec::new();
+    for field in &decl.fields {
+        // String literals are not runtime values in Graphcal, so handle them
+        // directly here rather than going through eval_expr.
+        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+            fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+            continue;
+        }
+        let rv = eval_expr(
+            &field.value,
+            values,
+            local_values,
+            builtin_consts,
+            builtin_fns,
+            registry,
+            src,
+        )
+        .ok()?;
+        let field_value = runtime_to_plot_field_value(&rv);
+        fields.push((field.name.name.clone(), field_value));
+    }
+    Some(PlotSpec {
+        name: DeclName::new(name),
+        chart_type: decl.chart_type,
+        fields,
+        hidden,
+    })
+}
+
+/// Convert a `RuntimeValue` to a `PlotFieldValue`.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "plot data loss of precision from i64 to f64 is acceptable"
+)]
+fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
+    match rv {
+        RuntimeValue::Scalar(v) => PlotFieldValue::Number(*v),
+        RuntimeValue::Int(i) => PlotFieldValue::Number(*i as f64),
+        RuntimeValue::Bool(b) => PlotFieldValue::String(b.to_string()),
+        RuntimeValue::Label { variant, .. } => PlotFieldValue::String(variant.to_string()),
+        RuntimeValue::Indexed { entries, .. } => {
+            // Try to interpret as a list of numbers or labels
+            let mut numbers = Vec::new();
+            let mut labels = Vec::new();
+            let mut all_numeric = true;
+            for (_variant, entry_rv) in entries {
+                match entry_rv {
+                    RuntimeValue::Scalar(v) => numbers.push(*v),
+                    RuntimeValue::Int(i) => numbers.push(*i as f64),
+                    RuntimeValue::Label { variant, .. } => {
+                        labels.push(variant.to_string());
+                        all_numeric = false;
+                    }
+                    _ => {
+                        all_numeric = false;
+                    }
+                }
+            }
+            if all_numeric && !numbers.is_empty() {
+                PlotFieldValue::Numbers(numbers)
+            } else if !labels.is_empty() {
+                PlotFieldValue::Labels(labels)
+            } else {
+                // Fallback: extract variant names as labels
+                PlotFieldValue::Labels(
+                    entries
+                        .keys()
+                        .map(graphcal_syntax::names::VariantName::to_string)
+                        .collect(),
+                )
+            }
+        }
+        RuntimeValue::Struct { .. } => PlotFieldValue::String("<struct>".to_string()),
+        RuntimeValue::Datetime(epoch) => PlotFieldValue::String(format!("{epoch}")),
+        RuntimeValue::RangeLabel { value, .. } => PlotFieldValue::Number(*value),
+    }
 }

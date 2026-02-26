@@ -51,6 +51,7 @@ graphcal eval [OPTIONS] <FILE>
 | `--input <INPUT>` | JSON input file for param values |
 | `--allow-defaults` | Allow params with defaults to keep their defaults when using `--set`/`--input` |
 | `--no-assert` | Skip assertion checking |
+| `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print Plotly JSON) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
@@ -188,6 +189,45 @@ dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 ...
 ```
+
+### Plot Output
+
+When a file contains `plot` or `figure` declarations, use the `--plot` option
+to render them. Two output modes are available:
+
+**Browser mode** generates a self-contained HTML file with all figures and
+opens it in the default browser:
+
+```bash
+graphcal eval analysis.gcl --plot browser
+```
+
+**JSON mode** prints a JSON array of figure objects to stdout, useful for
+piping to other tools or embedding in web pages:
+
+```bash
+graphcal eval analysis.gcl --plot json
+```
+
+Each figure in the array has a `name` and a `spec` (Plotly JSON):
+
+```json
+[
+  { "name": "curve_a", "spec": { /* Plotly JSON */ } },
+  { "name": "comparison", "spec": { /* Plotly JSON with subplots */ } }
+]
+```
+
+Each non-hidden `plot` declaration produces a standalone figure. Each `figure`
+declaration produces a combined subplot chart. Hidden plots (marked with
+`#[hidden]`) are suppressed from standalone output but still appear in any
+`figure` that references them.
+
+If no `plot` or `figure` declarations are found, a warning is printed to
+stderr.
+
+See the [Plot Declarations](language/plots.md) reference for the language
+syntax.
 
 ---
 

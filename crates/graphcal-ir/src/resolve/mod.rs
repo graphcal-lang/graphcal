@@ -82,6 +82,8 @@ pub fn resolve_with_imports(
     let mut params = Vec::new();
     let mut nodes = Vec::new();
     let mut asserts = Vec::new();
+    let mut plots = Vec::new();
+    let mut figures = Vec::new();
     let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
@@ -117,6 +119,8 @@ pub fn resolve_with_imports(
             DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
             DeclKind::Const(c) => (c.name.value.to_string(), c.name.span, true),
             DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
+            DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
+            DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
             DeclKind::Fn(f) => {
                 let fn_name_str = f.name.value.to_string();
                 // Check fn name for duplicates (same namespace as param/node/const)
@@ -161,6 +165,8 @@ pub fn resolve_with_imports(
                 assert_names.insert(name.clone());
                 DeclCategory::Assert
             }
+            DeclKind::Plot(_) => DeclCategory::Plot,
+            DeclKind::Figure(_) => DeclCategory::Figure,
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
@@ -255,6 +261,41 @@ pub fn resolve_with_imports(
                 }
                 let aname = a.name.value.to_string();
                 asserts.push((aname, a.body.clone(), decl.span));
+            }
+            DeclKind::Plot(p) => {
+                // Validate references in plot field expressions (plots CAN use @)
+                for field in &p.fields {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &field.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                }
+                let pname = p.name.value.to_string();
+                let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
+                plots.push((pname, p.clone(), decl.span, hidden));
+            }
+            DeclKind::Figure(f) => {
+                // Validate references in figure field expressions (figures CAN use @)
+                for field in &f.fields {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &field.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                }
+                let fname = f.name.value.to_string();
+                figures.push((fname, f.clone(), decl.span));
             }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
@@ -410,18 +451,45 @@ pub fn resolve_with_imports(
             DeclKind::Node(n) => Some(n.name.value.to_string()),
             DeclKind::Const(c) => Some(c.name.value.to_string()),
             DeclKind::Assert(a) => Some(a.name.value.to_string()),
+            DeclKind::Plot(p) => Some(p.name.value.to_string()),
+            DeclKind::Figure(f) => Some(f.name.value.to_string()),
             DeclKind::Fn(f) => Some(f.name.value.to_string()),
             _ => None,
         };
         for attr in &decl.attributes {
             let attr_name = attr.name.name.as_str();
             match attr_name {
+                "hidden" => {
+                    // #[hidden] is only valid on plot declarations
+                    let kind = match &decl.kind {
+                        DeclKind::Plot(_) => continue,
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Assert(_) => "assert",
+                        DeclKind::Figure(_) => "figure",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                        DeclKind::Import(_) => "import",
+                    };
+                    return Err(GraphcalError::InvalidAttributeTarget {
+                        attr_name: "hidden".to_string(),
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
                 "assumes" => {
                     // #[assumes] is only valid on node and param
                     let kind = match &decl.kind {
                         DeclKind::Param(_) | DeclKind::Node(_) => None,
                         DeclKind::Const(_) => Some("const"),
                         DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Plot(_) => Some("plot"),
+                        DeclKind::Figure(_) => Some("figure"),
                         DeclKind::Fn(_) => Some("fn"),
                         DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
@@ -490,6 +558,8 @@ pub fn resolve_with_imports(
                         DeclKind::Param(_) => "param",
                         DeclKind::Node(_) => "node",
                         DeclKind::Const(_) => "const",
+                        DeclKind::Plot(_) => "plot",
+                        DeclKind::Figure(_) => "figure",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -514,6 +584,8 @@ pub fn resolve_with_imports(
                         DeclKind::Node(_) => "node",
                         DeclKind::Const(_) => "const",
                         DeclKind::Assert(_) => "assert",
+                        DeclKind::Plot(_) => "plot",
+                        DeclKind::Figure(_) => "figure",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -543,6 +615,8 @@ pub fn resolve_with_imports(
         params: all_params,
         nodes: all_nodes,
         asserts: all_asserts,
+        plots,
+        figures,
         runtime_deps,
         const_deps,
         source_order: all_source_order,
@@ -581,6 +655,8 @@ pub fn resolve_with_imported_values(
     let mut params = Vec::new();
     let mut nodes = Vec::new();
     let mut asserts = Vec::new();
+    let mut plots = Vec::new();
+    let mut figures = Vec::new();
     let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
@@ -616,6 +692,8 @@ pub fn resolve_with_imported_values(
             DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
             DeclKind::Const(c) => (c.name.value.to_string(), c.name.span, true),
             DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
+            DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
+            DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
             DeclKind::Fn(f) => {
                 let fn_name_str = f.name.value.to_string();
                 if let Some(first_span) = names.get(&fn_name_str) {
@@ -657,6 +735,8 @@ pub fn resolve_with_imported_values(
                 assert_names.insert(name.clone());
                 DeclCategory::Assert
             }
+            DeclKind::Plot(_) => DeclCategory::Plot,
+            DeclKind::Figure(_) => DeclCategory::Figure,
             _ => continue,
         };
         source_order.push((name.clone(), category));
@@ -739,6 +819,39 @@ pub fn resolve_with_imported_values(
                 let aname = a.name.value.to_string();
                 asserts.push((aname, a.body.clone(), decl.span));
             }
+            DeclKind::Plot(p) => {
+                for field in &p.fields {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &field.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                }
+                let pname = p.name.value.to_string();
+                let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
+                plots.push((pname, p.clone(), decl.span, hidden));
+            }
+            DeclKind::Figure(f) => {
+                for field in &f.fields {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &field.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        &builtin_consts,
+                        &builtin_fns,
+                        &user_fn_names,
+                        src,
+                    )?;
+                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                }
+                let fname = f.name.value.to_string();
+                figures.push((fname, f.clone(), decl.span));
+            }
             DeclKind::Fn(f) => {
                 check_no_graph_refs_in_fn(f, src)?;
                 functions.push((f.name.value.to_string(), f.clone(), decl.span));
@@ -810,17 +923,44 @@ pub fn resolve_with_imported_values(
             DeclKind::Node(n) => Some(n.name.value.to_string()),
             DeclKind::Const(c) => Some(c.name.value.to_string()),
             DeclKind::Assert(a) => Some(a.name.value.to_string()),
+            DeclKind::Plot(p) => Some(p.name.value.to_string()),
+            DeclKind::Figure(f) => Some(f.name.value.to_string()),
             DeclKind::Fn(f) => Some(f.name.value.to_string()),
             _ => None,
         };
         for attr in &decl.attributes {
             let attr_name = attr.name.name.as_str();
             match attr_name {
+                "hidden" => {
+                    // #[hidden] is only valid on plot declarations
+                    let kind = match &decl.kind {
+                        DeclKind::Plot(_) => continue,
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Assert(_) => "assert",
+                        DeclKind::Figure(_) => "figure",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Type(_) => "type",
+                        DeclKind::Index(_) => "index",
+                        DeclKind::Import(_) => "import",
+                    };
+                    return Err(GraphcalError::InvalidAttributeTarget {
+                        attr_name: "hidden".to_string(),
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
                 "assumes" => {
                     let kind = match &decl.kind {
                         DeclKind::Param(_) | DeclKind::Node(_) => None,
                         DeclKind::Const(_) => Some("const"),
                         DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Plot(_) => Some("plot"),
+                        DeclKind::Figure(_) => Some("figure"),
                         DeclKind::Fn(_) => Some("fn"),
                         DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
@@ -887,6 +1027,8 @@ pub fn resolve_with_imported_values(
                         DeclKind::Param(_) => "param",
                         DeclKind::Node(_) => "node",
                         DeclKind::Const(_) => "const",
+                        DeclKind::Plot(_) => "plot",
+                        DeclKind::Figure(_) => "figure",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -908,6 +1050,8 @@ pub fn resolve_with_imported_values(
                         DeclKind::Node(_) => "node",
                         DeclKind::Const(_) => "const",
                         DeclKind::Assert(_) => "assert",
+                        DeclKind::Plot(_) => "plot",
+                        DeclKind::Figure(_) => "figure",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -937,6 +1081,8 @@ pub fn resolve_with_imported_values(
         params,
         nodes,
         asserts,
+        plots,
+        figures,
         runtime_deps,
         const_deps,
         source_order,

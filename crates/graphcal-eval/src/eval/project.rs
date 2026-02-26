@@ -1254,7 +1254,7 @@ fn evaluate_project_perfile(
                             all_params.push((decl_name.clone(), Ok(value.clone())));
                             all_all.push((decl_name, Ok(value), super::types::DeclType::Node));
                         }
-                        DeclCategory::Assert => {}
+                        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => {}
                     }
                 }
             }
@@ -1270,6 +1270,8 @@ fn evaluate_project_perfile(
                 nodes: all_nodes,
                 all: all_all,
                 assertions: all_assertions,
+                plots: eval_result.plots,
+                figures: eval_result.figures,
                 assumes_map: eval_result.assumes_map,
                 base_dim_symbols: eval_result.base_dim_symbols,
                 domain_constraints: eval_result.domain_constraints,
@@ -1655,6 +1657,18 @@ pub(super) fn apply_overrides(
                         actual_kind: "assert".to_string(),
                     }));
                 }
+                DeclCategory::Plot => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "plot".to_string(),
+                    }));
+                }
+                DeclCategory::Figure => {
+                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+                        name: override_name.clone(),
+                        actual_kind: "figure".to_string(),
+                    }));
+                }
             }
         } else {
             return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
@@ -1790,6 +1804,8 @@ pub(super) fn file_has_declaration(file: &graphcal_syntax::ast::File, name: &str
         DeclKind::Unit(u) => u.name.value.as_str() == name,
         DeclKind::Index(idx) => idx.name.value.as_str() == name,
         DeclKind::Type(t) => t.name.value.as_str() == name,
+        DeclKind::Plot(p) => p.name.value.as_str() == name,
+        DeclKind::Figure(f) => f.name.value.as_str() == name,
         DeclKind::Import(_) => false,
     })
 }
