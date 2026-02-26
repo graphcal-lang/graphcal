@@ -469,11 +469,11 @@ fn format_bound_display(
 ) -> String {
     use graphcal_syntax::ast::ExprKind;
     match &expr.kind {
-        ExprKind::Number(n) => crate::eval::format_number(*n),
+        ExprKind::Number(n) => crate::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::UnitLiteral { value, unit } => {
-            let unit_str = crate::eval::format_unit_expr(unit);
-            let val_str = crate::eval::format_number(*value);
+            let unit_str = crate::format::format_unit_expr(unit);
+            let val_str = crate::format::format_number(*value);
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
@@ -500,7 +500,7 @@ fn format_bound_display(
             .map_or_else(
                 |_| "?".to_string(),
                 |rv| match rv {
-                    RuntimeValue::Scalar(v) => crate::eval::format_number(v),
+                    RuntimeValue::Scalar(v) => crate::format::format_number(v),
                     RuntimeValue::Int(i) => format!("{i}"),
                     _ => "?".to_string(),
                 },

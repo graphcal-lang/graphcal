@@ -6,9 +6,9 @@ use miette::NamedSource;
 use graphcal_syntax::ast::Expr;
 use graphcal_syntax::dimension::Dimension;
 
-use crate::builtins::{DimSignature, ParamDim, ResultDim};
-use crate::error::GraphcalError;
-use crate::registry::Registry;
+use graphcal_registry::builtins::{DimSignature, ParamDim, ResultDim};
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::registry::Registry;
 
 pub(super) fn infer_fn_dim(
     sig: &DimSignature,

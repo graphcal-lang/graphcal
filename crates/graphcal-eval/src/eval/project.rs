@@ -11,11 +11,11 @@ use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
 use graphcal_syntax::names::{DeclName, FnName, Spanned};
 use graphcal_syntax::span::Span;
 
-use crate::dim_check::DeclaredType;
+use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
-use crate::eval_expr::RuntimeValue;
 use crate::registry::{Registry, RegistryBuilder};
 use crate::resolve::{DeclCategory, ImportedValueNames, ScopedName};
+use crate::runtime_value::RuntimeValue;
 
 use super::runtime::evaluate_plan;
 use super::types::{AssertResult, CompileError, EvalResult};
@@ -882,7 +882,7 @@ fn compile_single_file_in_project(
 
     // Type-resolve, check dimensions.
     let tir = crate::tir::type_resolve(ir, file_src)?;
-    crate::fn_check::check_no_recursion_tir(&tir, file_src)?;
+    crate::fn_check::check_no_recursion(&tir.registry.functions, file_src)?;
     crate::dim_check::check_dimensions_tir(&tir, file_src)?;
 
     let declared_types = tir.build_declared_types(file_src)?;

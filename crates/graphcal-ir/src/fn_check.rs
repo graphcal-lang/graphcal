@@ -7,8 +7,8 @@ use petgraph::graph::DiGraph;
 
 use graphcal_syntax::ast::{Expr, ExprKind, FnBody};
 
-use crate::error::GraphcalError;
-use crate::registry::{FnDef, FunctionRegistry};
+use graphcal_registry::error::GraphcalError;
+use graphcal_registry::registry::{FnDef, FunctionRegistry};
 use graphcal_syntax::names::FnName;
 
 /// Check that user-defined functions do not form recursive call cycles.
@@ -65,16 +65,6 @@ pub fn check_no_recursion(
     })?;
 
     Ok(())
-}
-
-/// Check that user-defined functions do not form recursive call cycles, using TIR.
-///
-/// Delegates to [`check_no_recursion`] using the function registry from the TIR.
-pub fn check_no_recursion_tir(
-    tir: &crate::tir::TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    check_no_recursion(&tir.registry.functions, src)
 }
 
 /// Collect names of user-defined functions called from a function body.
@@ -195,8 +185,8 @@ mod tests {
         reason = "test code"
     )]
     use super::*;
-    use crate::prelude::load_prelude;
-    use crate::registry::RegistryBuilder;
+    use graphcal_registry::prelude::load_prelude;
+    use graphcal_registry::registry::RegistryBuilder;
     use graphcal_syntax::parser::Parser;
 
     fn check_recursion(source: &str) -> Result<(), GraphcalError> {
@@ -211,14 +201,14 @@ mod tests {
                 generic_params: fn_decl
                     .generic_params
                     .iter()
-                    .map(|g| crate::registry::FnGenericParam {
+                    .map(|g| graphcal_registry::registry::FnGenericParam {
                         name: g.name.value.clone(),
                         constraint: match g.constraint {
                             graphcal_syntax::ast::GenericConstraint::Dim => {
-                                crate::registry::FnGenericConstraint::Dim
+                                graphcal_registry::registry::FnGenericConstraint::Dim
                             }
                             graphcal_syntax::ast::GenericConstraint::Index => {
-                                crate::registry::FnGenericConstraint::Index
+                                graphcal_registry::registry::FnGenericConstraint::Index
                             }
                             graphcal_syntax::ast::GenericConstraint::Type => {
                                 unreachable!(
@@ -231,7 +221,7 @@ mod tests {
                 params: fn_decl
                     .params
                     .iter()
-                    .map(|p| crate::registry::FnParamDef {
+                    .map(|p| graphcal_registry::registry::FnParamDef {
                         name: p.name.name.clone(),
                         type_expr: p.type_ann.clone(),
                     })

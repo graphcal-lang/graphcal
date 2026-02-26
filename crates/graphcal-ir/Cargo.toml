@@ -1,5 +1,5 @@
 [package]
-name = "graphcal-eval"
+name = "graphcal-ir"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,21 +11,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-graphcal-ir = { workspace = true }
 graphcal-registry = { workspace = true }
-graphcal-tir = { workspace = true }
-indexmap.workspace = true
 graphcal-syntax = { workspace = true }
+indexmap.workspace = true
 miette.workspace = true
-petgraph = { workspace = true }
-thiserror.workspace = true
-hifitime.workspace = true
-jiff.workspace = true
+petgraph.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-proptest.workspace = true
-tempfile.workspace = true
 
 [lints]
 workspace = true

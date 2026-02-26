@@ -13,7 +13,7 @@ use graphcal_syntax::names::{DeclName, IndexName, VariantName};
 use graphcal_syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
-use crate::dim_check::DeclaredType;
+use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval_expr::{RuntimeValue, eval_expr};
 use crate::registry::Registry;
@@ -293,7 +293,7 @@ pub(super) fn eval_unfold(
 pub(super) fn evaluate_plan(
     tir: &crate::tir::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, crate::dim_check::DeclaredType>,
+    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> EvalResult {
     let builtin_consts = builtin_constants();
