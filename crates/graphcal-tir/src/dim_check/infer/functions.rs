@@ -10,227 +10,213 @@ use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{FnName, GenericParamName};
 
 use crate::tir::ResolvedFnSig;
-use graphcal_ir::resolve::is_aggregation_fn;
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::registry::Registry;
+use graphcal_registry::resolve_types::{SpecialFnKind, classify_special_fn};
 
 use super::super::builtins::infer_fn_dim;
 use super::super::helpers::{declared_to_inferred, expect_scalar, format_inferred_type};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
-/// Infer the type of a function call (FnCall or QualifiedFnCall).
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive handling of all function call kinds"
-)]
-pub(super) fn infer_fn_call(
-    name: &graphcal_syntax::names::Spanned<FnName>,
-    args: &[Expr],
-    declared_types: &HashMap<String, DeclaredType>,
-    local_types: &HashMap<String, InferredType>,
-    registry: &Registry,
-    builtin_fns: &HashMap<&str, graphcal_registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    // Aggregation functions over indexed values: sum, min, max, mean, count
-    if is_aggregation_fn(name.value.as_str()) && args.len() == 1 {
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
+/// Bundles the inference context that is threaded through every dispatch call.
+///
+/// This avoids repeating 8 arguments in every helper invocation inside `infer_fn_call`.
+struct InferCtx<'a> {
+    name: &'a graphcal_syntax::names::Spanned<FnName>,
+    args: &'a [Expr],
+    declared_types: &'a HashMap<String, DeclaredType>,
+    local_types: &'a HashMap<String, InferredType>,
+    registry: &'a Registry,
+    builtin_fns: &'a HashMap<&'a str, graphcal_registry::builtins::BuiltinFunction>,
+    resolved_fn_sigs: &'a HashMap<FnName, ResolvedFnSig>,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl InferCtx<'_> {
+    /// Infer the type of a single argument expression.
+    fn infer_arg(&self, arg: &Expr) -> Result<InferredType, GraphcalError> {
+        infer_type(
+            arg,
+            self.declared_types,
+            self.local_types,
+            self.registry,
+            self.builtin_fns,
+            self.resolved_fn_sigs,
+            self.src,
+        )
+    }
+
+    /// Aggregation dispatch: if the single argument is `Indexed`, aggregate;
+    /// otherwise fall through to builtins (e.g. 2-arg `min`/`max`).
+    fn infer_aggregation_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        let arg_type = self.infer_arg(&self.args[0])?;
         if let InferredType::Indexed { element, .. } = arg_type {
-            return Ok(if name.value.as_str() == "count" {
+            return Ok(if self.name.value.as_str() == "count" {
                 InferredType::Scalar(Dimension::dimensionless())
             } else {
                 *element
             });
         }
-        // If not indexed, fall through to builtins (min/max are 2-arg builtins too)
+        // Not indexed, fall through to builtin (min/max are 2-arg builtins)
+        self.infer_builtin_or_user_fn_call()
     }
 
-    // Conversion builtins: to_float(Int) -> Dimensionless, to_int(Dimensionless) -> Int
-    if name.value.as_str() == "to_float" {
-        if args.len() != 1 {
-            return Err(GraphcalError::WrongArity {
-                name: FnName::new("to_float"),
-                expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
-            });
+    /// Conversion dispatch: time-scale conversions (`to_utc`, ...) vs type
+    /// conversions (`to_float`, `to_int`).
+    ///
+    /// `SpecialFnKind::Conversion` covers both; we split them here.
+    fn infer_conversion_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        if let Some(target_scale) =
+            graphcal_registry::time_scale::time_scale_from_conversion_fn(self.name.value.as_str())
+        {
+            return self.infer_timescale_fn_call(target_scale);
         }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
-        if arg_type != InferredType::Int {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "Int".to_string(),
-                found: format_inferred_type(&arg_type, registry),
-                src: src.clone(),
-                span: args[0].span.into(),
-                help: "to_float() requires an Int argument".to_string(),
-            });
-        }
-        return Ok(InferredType::Scalar(Dimension::dimensionless()));
-    }
-    if name.value.as_str() == "to_int" {
-        if args.len() != 1 {
-            return Err(GraphcalError::WrongArity {
-                name: FnName::new("to_int"),
-                expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
-            });
-        }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
-        let arg_dim = expect_scalar(&arg_type, registry, src, args[0].span)?;
-        if !arg_dim.is_dimensionless() {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "Dimensionless".to_string(),
-                found: registry.dimensions.format_dimension(&arg_dim),
-                src: src.clone(),
-                span: args[0].span.into(),
-                help: "to_int() requires a Dimensionless argument".to_string(),
-            });
-        }
-        return Ok(InferredType::Int);
+        self.infer_type_conversion_fn_call()
     }
 
-    // datetime(string_literal) -> Datetime(UTC)
-    // datetime(string_literal, string_literal) -> Datetime(UTC)  (with timezone)
-    if name.value.as_str() == "datetime" {
-        if args.is_empty() || args.len() > 2 {
+    /// Infer type conversion: `to_float(Int) -> Dimensionless`, `to_int(Dimensionless) -> Int`.
+    fn infer_type_conversion_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        match self.name.value.as_str() {
+            "to_float" => {
+                if self.args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: FnName::new("to_float"),
+                        expected: 1,
+                        got: self.args.len(),
+                        src: self.src.clone(),
+                        span: self.name.span.into(),
+                    });
+                }
+                let arg_type = self.infer_arg(&self.args[0])?;
+                if arg_type != InferredType::Int {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Int".to_string(),
+                        found: format_inferred_type(&arg_type, self.registry),
+                        src: self.src.clone(),
+                        span: self.args[0].span.into(),
+                        help: "to_float() requires an Int argument".to_string(),
+                    });
+                }
+                Ok(InferredType::Scalar(Dimension::dimensionless()))
+            }
+            "to_int" => {
+                if self.args.len() != 1 {
+                    return Err(GraphcalError::WrongArity {
+                        name: FnName::new("to_int"),
+                        expected: 1,
+                        got: self.args.len(),
+                        src: self.src.clone(),
+                        span: self.name.span.into(),
+                    });
+                }
+                let arg_type = self.infer_arg(&self.args[0])?;
+                let arg_dim = expect_scalar(&arg_type, self.registry, self.src, self.args[0].span)?;
+                if !arg_dim.is_dimensionless() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Dimensionless".to_string(),
+                        found: self.registry.dimensions.format_dimension(&arg_dim),
+                        src: self.src.clone(),
+                        span: self.args[0].span.into(),
+                        help: "to_int() requires a Dimensionless argument".to_string(),
+                    });
+                }
+                Ok(InferredType::Int)
+            }
+            _ => {
+                // Should not reach here from classify_special_fn, but handle gracefully.
+                self.infer_builtin_or_user_fn_call()
+            }
+        }
+    }
+
+    /// Infer datetime constructors: `datetime(string)` and `epoch(string, TimeScale)`.
+    fn infer_datetime_constructor_call(&self) -> Result<InferredType, GraphcalError> {
+        match self.name.value.as_str() {
+            "datetime" => self.infer_datetime_call(),
+            "epoch" => self.infer_epoch_call(),
+            _ => {
+                // Should not reach here from classify_special_fn, but handle gracefully.
+                self.infer_builtin_or_user_fn_call()
+            }
+        }
+    }
+
+    /// `datetime(string_literal)` -> `Datetime(UTC)`
+    /// `datetime(string_literal, string_literal)` -> `Datetime(UTC)` (with timezone)
+    fn infer_datetime_call(&self) -> Result<InferredType, GraphcalError> {
+        if self.args.is_empty() || self.args.len() > 2 {
             return Err(GraphcalError::EvalError {
-                message: format!("datetime() expects 1 or 2 arguments, got {}", args.len()),
-                src: src.clone(),
-                span: name.span.into(),
+                message: format!(
+                    "datetime() expects 1 or 2 arguments, got {}",
+                    self.args.len()
+                ),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
-        match &args[0].kind {
+        match &self.args[0].kind {
             ExprKind::StringLiteral(_) => {}
             _ => {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "string literal".to_string(),
-                    found: format_inferred_type(
-                        &infer_type(
-                            &args[0],
-                            declared_types,
-                            local_types,
-                            registry,
-                            builtin_fns,
-                            resolved_fn_sigs,
-                            src,
-                        )?,
-                        registry,
-                    ),
-                    src: src.clone(),
-                    span: args[0].span.into(),
+                    found: format_inferred_type(&self.infer_arg(&self.args[0])?, self.registry),
+                    src: self.src.clone(),
+                    span: self.args[0].span.into(),
                     help: "datetime() requires a string literal argument".to_string(),
                 });
             }
         }
-        if args.len() == 2 {
-            match &args[1].kind {
+        if self.args.len() == 2 {
+            match &self.args[1].kind {
                 ExprKind::StringLiteral(_) => {}
                 _ => {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "string literal (IANA timezone)".to_string(),
                         found: format_inferred_type(
-                            &infer_type(
-                                &args[1],
-                                declared_types,
-                                local_types,
-                                registry,
-                                builtin_fns,
-                                resolved_fn_sigs,
-                                src,
-                            )?,
-                            registry,
+                            &self.infer_arg(&self.args[1])?,
+                            self.registry,
                         ),
-                        src: src.clone(),
-                        span: args[1].span.into(),
+                        src: self.src.clone(),
+                        span: self.args[1].span.into(),
                         help: "datetime() second argument must be a timezone string literal (e.g. \"Asia/Tokyo\")".to_string(),
                     });
                 }
             }
         }
-        return Ok(InferredType::Datetime(
+        Ok(InferredType::Datetime(
             graphcal_registry::time_scale::TimeScale::UTC,
-        ));
+        ))
     }
 
-    // epoch(string_literal, TimeScale) -> Datetime(scale)
-    if name.value.as_str() == "epoch" {
-        if args.len() != 2 {
+    /// `epoch(string_literal, TimeScale)` -> `Datetime(scale)`
+    fn infer_epoch_call(&self) -> Result<InferredType, GraphcalError> {
+        if self.args.len() != 2 {
             return Err(GraphcalError::WrongArity {
                 name: FnName::new("epoch"),
                 expected: 2,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
         // First arg must be a string literal
-        if !matches!(&args[0].kind, ExprKind::StringLiteral(_)) {
+        if !matches!(&self.args[0].kind, ExprKind::StringLiteral(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "string literal".to_string(),
-                found: format_inferred_type(
-                    &infer_type(
-                        &args[0],
-                        declared_types,
-                        local_types,
-                        registry,
-                        builtin_fns,
-                        resolved_fn_sigs,
-                        src,
-                    )?,
-                    registry,
-                ),
-                src: src.clone(),
-                span: args[0].span.into(),
+                found: format_inferred_type(&self.infer_arg(&self.args[0])?, self.registry),
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
                 help: "epoch() requires a string literal as its first argument".to_string(),
             });
         }
         // Second arg must be a time scale identifier
-        let ExprKind::ConstRef(scale_ident) = &args[1].kind else {
+        let ExprKind::ConstRef(scale_ident) = &self.args[1].kind else {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
-                found: format_inferred_type(
-                    &infer_type(
-                        &args[1],
-                        declared_types,
-                        local_types,
-                        registry,
-                        builtin_fns,
-                        resolved_fn_sigs,
-                        src,
-                    )?,
-                    registry,
-                ),
-                src: src.clone(),
-                span: args[1].span.into(),
+                found: format_inferred_type(&self.infer_arg(&self.args[1])?, self.registry),
+                src: self.src.clone(),
+                span: self.args[1].span.into(),
                 help: "epoch() requires a time scale identifier as its second argument".to_string(),
             });
         };
@@ -241,251 +227,259 @@ pub(super) fn infer_fn_call(
             .map_err(|_| GraphcalError::DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
                 found: scale_ident.value.to_string(),
-                src: src.clone(),
-                span: args[1].span.into(),
+                src: self.src.clone(),
+                span: self.args[1].span.into(),
                 help: format!(
                     "unknown time scale `{}`; expected one of: {}",
                     scale_ident.value.as_str(),
                     graphcal_registry::time_scale::TimeScale::ALL_NAMES.join(", ")
                 ),
             })?;
-        return Ok(InferredType::Datetime(scale));
+        Ok(InferredType::Datetime(scale))
     }
 
-    // Time scale conversion: to_utc, to_tai, to_tt, to_tdb, to_et, to_gpst, to_gst, to_bdt, to_qzsst
-    if let Some(target_scale) =
-        graphcal_registry::time_scale::time_scale_from_conversion_fn(name.value.as_str())
-    {
-        if args.len() != 1 {
+    /// Infer time scale conversion: `to_utc`, `to_tai`, etc.
+    /// Expects exactly 1 Datetime argument, returns `Datetime(target_scale)`.
+    fn infer_timescale_fn_call(
+        &self,
+        target_scale: graphcal_registry::time_scale::TimeScale,
+    ) -> Result<InferredType, GraphcalError> {
+        if self.args.len() != 1 {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: self.name.value.clone(),
                 expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
+        let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&arg_type, registry),
-                src: src.clone(),
-                span: args[0].span.into(),
-                help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                found: format_inferred_type(&arg_type, self.registry),
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+                help: format!(
+                    "{}() requires a Datetime argument",
+                    self.name.value.as_str()
+                ),
             });
         }
-        return Ok(InferredType::Datetime(target_scale));
+        Ok(InferredType::Datetime(target_scale))
     }
 
-    // Datetime extraction functions: year, month, day, etc. -> Int
-    if graphcal_ir::resolve::DATETIME_EXTRACT_FNS.contains(&name.value.as_str()) {
-        if args.len() != 1 {
+    /// Infer datetime extraction: `year`, `month`, `day`, etc. -> `Int`.
+    fn infer_datetime_extract_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        if self.args.len() != 1 {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: self.name.value.clone(),
                 expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
+        let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&arg_type, registry),
-                src: src.clone(),
-                span: args[0].span.into(),
-                help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                found: format_inferred_type(&arg_type, self.registry),
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+                help: format!(
+                    "{}() requires a Datetime argument",
+                    self.name.value.as_str()
+                ),
             });
         }
-        return Ok(InferredType::Int);
+        Ok(InferredType::Int)
     }
 
-    // Datetime from-numeric constructors: from_jd, from_mjd, from_unix -> Datetime(UTC)
-    if graphcal_ir::resolve::DATETIME_FROM_FNS.contains(&name.value.as_str()) {
-        if args.len() != 1 {
+    /// Infer datetime from-numeric constructors: `from_jd`, `from_mjd`, `from_unix` -> `Datetime(UTC)`.
+    fn infer_datetime_from_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        if self.args.len() != 1 {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: self.name.value.clone(),
                 expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
+        let arg_type = self.infer_arg(&self.args[0])?;
         match &arg_type {
             InferredType::Scalar(dim) if dim.is_dimensionless() => {}
             InferredType::Int => {}
             _ => {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless or Int".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    src: src.clone(),
-                    span: args[0].span.into(),
+                    found: format_inferred_type(&arg_type, self.registry),
+                    src: self.src.clone(),
+                    span: self.args[0].span.into(),
                     help: format!(
                         "{}() requires a dimensionless numeric argument",
-                        name.value.as_str()
+                        self.name.value.as_str()
                     ),
                 });
             }
         }
-        return Ok(InferredType::Datetime(
+        Ok(InferredType::Datetime(
             graphcal_registry::time_scale::TimeScale::UTC,
-        ));
+        ))
     }
 
-    // Datetime to-numeric functions: to_jd, to_mjd, to_unix -> Dimensionless
-    if graphcal_ir::resolve::DATETIME_TO_FNS.contains(&name.value.as_str()) {
-        if args.len() != 1 {
+    /// Infer datetime to-numeric functions: `to_jd`, `to_mjd`, `to_unix` -> `Dimensionless`.
+    fn infer_datetime_to_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        if self.args.len() != 1 {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: self.name.value.clone(),
                 expected: 1,
-                got: args.len(),
-                src: src.clone(),
-                span: name.span.into(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
             });
         }
-        let arg_type = infer_type(
-            &args[0],
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            resolved_fn_sigs,
-            src,
-        )?;
+        let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&arg_type, registry),
-                src: src.clone(),
-                span: args[0].span.into(),
-                help: format!("{}() requires a Datetime argument", name.value.as_str()),
+                found: format_inferred_type(&arg_type, self.registry),
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+                help: format!(
+                    "{}() requires a Datetime argument",
+                    self.name.value.as_str()
+                ),
             });
         }
-        return Ok(InferredType::Scalar(Dimension::dimensionless()));
+        Ok(InferredType::Scalar(Dimension::dimensionless()))
     }
 
-    // Try builtin first
-    if let Some(func) = builtin_fns.get(name.value.as_str()) {
-        let arg_dims: Vec<Dimension> = args
-            .iter()
-            .map(|a| {
-                let t = infer_type(
-                    a,
-                    declared_types,
-                    local_types,
-                    registry,
-                    builtin_fns,
-                    resolved_fn_sigs,
-                    src,
-                )?;
-                expect_scalar(&t, registry, src, a.span)
-            })
-            .collect::<Result<_, _>>()?;
-        return infer_fn_dim(&func.dim_sig, &arg_dims, args, registry, src)
-            .map(InferredType::Scalar);
+    /// Infer builtin math functions or user-defined functions.
+    fn infer_builtin_or_user_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        // Try builtin first
+        if let Some(func) = self.builtin_fns.get(self.name.value.as_str()) {
+            let arg_dims: Vec<Dimension> = self
+                .args
+                .iter()
+                .map(|a| {
+                    let t = self.infer_arg(a)?;
+                    expect_scalar(&t, self.registry, self.src, a.span)
+                })
+                .collect::<Result<_, _>>()?;
+            return infer_fn_dim(&func.dim_sig, &arg_dims, self.args, self.registry, self.src)
+                .map(InferredType::Scalar);
+        }
+
+        // Try user-defined function via resolved signatures
+        self.infer_user_fn_call()
     }
 
-    // Try user-defined function via resolved signatures
-    let fn_name_key = FnName::new(name.value.as_str());
-    let sig = resolved_fn_sigs
-        .get(&fn_name_key)
-        .ok_or_else(|| GraphcalError::UnknownFunction {
-            name: name.value.clone(),
-            src: src.clone(),
-            span: name.span.into(),
+    /// Infer a user-defined function call with generic parameter inference.
+    fn infer_user_fn_call(&self) -> Result<InferredType, GraphcalError> {
+        let fn_name_key = FnName::new(self.name.value.as_str());
+        let sig = self.resolved_fn_sigs.get(&fn_name_key).ok_or_else(|| {
+            GraphcalError::UnknownFunction {
+                name: self.name.value.clone(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            }
         })?;
 
-    // Arity check
-    if args.len() != sig.params.len() {
-        return Err(GraphcalError::WrongArity {
-            name: name.value.clone(),
-            expected: sig.params.len(),
-            got: args.len(),
-            src: src.clone(),
-            span: name.span.into(),
-        });
-    }
+        // Arity check
+        if self.args.len() != sig.params.len() {
+            return Err(GraphcalError::WrongArity {
+                name: self.name.value.clone(),
+                expected: sig.params.len(),
+                got: self.args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
+        }
 
-    // Infer arg types
-    let arg_types: Vec<InferredType> = args
-        .iter()
-        .map(|a| {
-            infer_type(
-                a,
-                declared_types,
-                local_types,
-                registry,
-                builtin_fns,
-                resolved_fn_sigs,
-                src,
-            )
-        })
-        .collect::<Result<_, _>>()?;
+        // Infer arg types
+        let arg_types: Vec<InferredType> = self
+            .args
+            .iter()
+            .map(|a| self.infer_arg(a))
+            .collect::<Result<_, _>>()?;
 
-    if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
-        // Non-generic: check each param type using resolved signature
-        for (i, param) in sig.params.iter().enumerate() {
-            let expected = crate::tir::resolved_to_declared_type(&param.resolved_type, src)?;
-            let expected_inferred = declared_to_inferred(&expected);
-            if arg_types[i] != expected_inferred {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(&expected_inferred, registry),
-                    found: format_inferred_type(&arg_types[i], registry),
-                    src: src.clone(),
-                    span: args[i].span.into(),
-                    help: format!("parameter `{}` expects {expected_inferred:?}", param.name),
-                });
+        if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
+            // Non-generic: check each param type using resolved signature
+            for (i, param) in sig.params.iter().enumerate() {
+                let expected =
+                    crate::tir::resolved_to_declared_type(&param.resolved_type, self.src)?;
+                let expected_inferred = declared_to_inferred(&expected);
+                if arg_types[i] != expected_inferred {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: format_inferred_type(&expected_inferred, self.registry),
+                        found: format_inferred_type(&arg_types[i], self.registry),
+                        src: self.src.clone(),
+                        span: self.args[i].span.into(),
+                        help: format!("parameter `{}` expects {expected_inferred:?}", param.name),
+                    });
+                }
             }
-        }
-        // Resolve return type
-        let ret = crate::tir::resolved_to_declared_type(&sig.return_type, src)?;
-        Ok(declared_to_inferred(&ret))
-    } else {
-        // Generic: unify generic params from arg types
-        let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
-        let mut index_sub: HashMap<GenericParamName, graphcal_syntax::names::IndexName> =
-            HashMap::new();
-        for (i, param) in sig.params.iter().enumerate() {
-            crate::tir::unify_resolved_type(
-                &param.resolved_type,
-                &arg_types[i],
-                &mut dim_sub,
-                &mut index_sub,
-                registry,
-                src,
-                args[i].span,
+            // Resolve return type
+            let ret = crate::tir::resolved_to_declared_type(&sig.return_type, self.src)?;
+            Ok(declared_to_inferred(&ret))
+        } else {
+            // Generic: unify generic params from arg types
+            let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
+            let mut index_sub: HashMap<GenericParamName, graphcal_syntax::names::IndexName> =
+                HashMap::new();
+            for (i, param) in sig.params.iter().enumerate() {
+                crate::tir::unify_resolved_type(
+                    &param.resolved_type,
+                    &arg_types[i],
+                    &mut dim_sub,
+                    &mut index_sub,
+                    self.registry,
+                    self.src,
+                    self.args[i].span,
+                )?;
+            }
+            // Resolve return type with substitution
+            let ret_type = crate::tir::substitute_resolved_type(
+                &sig.return_type,
+                &dim_sub,
+                &index_sub,
+                self.src,
             )?;
+            Ok(ret_type)
         }
-        // Resolve return type with substitution
-        let ret_type =
-            crate::tir::substitute_resolved_type(&sig.return_type, &dim_sub, &index_sub, src)?;
-        Ok(ret_type)
+    }
+}
+
+/// Infer the type of a function call (FnCall or QualifiedFnCall).
+pub(super) fn infer_fn_call(
+    name: &graphcal_syntax::names::Spanned<FnName>,
+    args: &[Expr],
+    declared_types: &HashMap<String, DeclaredType>,
+    local_types: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, graphcal_registry::builtins::BuiltinFunction>,
+    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    let ctx = InferCtx {
+        name,
+        args,
+        declared_types,
+        local_types,
+        registry,
+        builtin_fns,
+        resolved_fn_sigs,
+        src,
+    };
+    match classify_special_fn(name.value.as_str()) {
+        Some(SpecialFnKind::Aggregation) if args.len() == 1 => ctx.infer_aggregation_fn_call(),
+        Some(SpecialFnKind::Conversion) => ctx.infer_conversion_fn_call(),
+        Some(SpecialFnKind::Constructor) => ctx.infer_datetime_constructor_call(),
+        Some(SpecialFnKind::DatetimeExtract) => ctx.infer_datetime_extract_fn_call(),
+        Some(SpecialFnKind::DatetimeFrom) => ctx.infer_datetime_from_fn_call(),
+        Some(SpecialFnKind::DatetimeTo) => ctx.infer_datetime_to_fn_call(),
+        _ => ctx.infer_builtin_or_user_fn_call(),
     }
 }
