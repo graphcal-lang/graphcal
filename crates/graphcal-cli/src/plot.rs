@@ -390,15 +390,7 @@ fn get_number_field(spec: &PlotSpec, field_name: &str) -> Option<Vec<f64>> {
 
 /// Get a string field from a plot spec.
 fn get_string_field_from_plot(spec: &PlotSpec, field_name: &str) -> Option<String> {
-    for (name, value) in &spec.fields {
-        if name == field_name {
-            return match value {
-                PlotFieldValue::String(s) => Some(s.clone()),
-                _ => None,
-            };
-        }
-    }
-    None
+    get_string_field_from_fields(&spec.fields, field_name)
 }
 
 /// Get a string field from a list of (name, value) pairs.

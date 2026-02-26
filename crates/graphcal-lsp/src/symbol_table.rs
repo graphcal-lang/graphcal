@@ -12,7 +12,7 @@ use graphcal_eval::builtins::{builtin_constants, builtin_functions};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::format::format_unit_expr_with_config;
 use graphcal_eval::registry::{IndexKind, Registry};
-use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
+use graphcal_eval::tir::{ResolvedFnSig, ResolvedIndex, ResolvedTypeExpr, TIR};
 
 /// The category of a symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1010,6 +1010,34 @@ fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
     &[]
 }
 
+/// Format a function signature as `fn name<generics>(params) -> ret`.
+pub fn format_fn_signature(fn_name: &str, sig: &ResolvedFnSig, registry: &Registry) -> String {
+    let params_str: Vec<String> = sig
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
+        .collect();
+
+    let generics = if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
+        String::new()
+    } else {
+        let all: Vec<String> = sig
+            .generic_dim_params
+            .iter()
+            .map(|p| format!("{p}: Dim"))
+            .chain(
+                sig.generic_index_params
+                    .iter()
+                    .map(|p| format!("{p}: Index")),
+            )
+            .collect();
+        format!("<{}>", all.join(", "))
+    };
+
+    let ret = sig.return_type.format(registry);
+    format!("fn {fn_name}{generics}({}) -> {ret}", params_str.join(", "))
+}
+
 /// Enrich a symbol table with type information from a TIR.
 #[expect(
     clippy::too_many_lines,
@@ -1053,41 +1081,19 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     // Enrich function definitions with signatures.
     for (fn_name, sig) in &tir.resolved_fn_sigs {
         if let Some(def) = table.definitions.get_mut(fn_name.as_str()) {
-            let params_str: Vec<String> = sig
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
-                .collect();
-
-            let generics =
-                if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
-                    String::new()
-                } else {
-                    let all: Vec<String> = sig
-                        .generic_dim_params
-                        .iter()
-                        .map(|p| format!("{p}: Dim"))
-                        .chain(
-                            sig.generic_index_params
-                                .iter()
-                                .map(|p| format!("{p}: Index")),
-                        )
-                        .collect();
-                    format!("<{}>", all.join(", "))
-                };
-
-            let ret = sig.return_type.format(registry);
-            def.type_description = Some(format!(
-                "fn {}{generics}({}) -> {ret}",
-                fn_name,
-                params_str.join(", ")
-            ));
+            def.type_description = Some(format_fn_signature(fn_name.as_str(), sig, registry));
         }
     }
 
-    // Enrich dimension definitions.
-    for (name, def) in &table.definitions.clone() {
-        match def.category {
+    // Enrich dimension/unit/index/struct definitions from registry.
+    // Collect keys and categories first to avoid cloning the entire HashMap.
+    let definition_keys: Vec<(String, SymbolCategory)> = table
+        .definitions
+        .iter()
+        .map(|(k, d)| (k.clone(), d.category))
+        .collect();
+    for (name, category) in &definition_keys {
+        match category {
             SymbolCategory::Dimension => {
                 if let Some(dim) = registry.dimensions.get_dimension(name)
                     && let Some(def_mut) = table.definitions.get_mut(name)

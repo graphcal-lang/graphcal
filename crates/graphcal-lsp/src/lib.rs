@@ -12,6 +12,7 @@ mod hover;
 mod inlay_hints;
 mod references;
 mod rename;
+mod resolve;
 pub mod server;
 mod signature_help;
 mod symbol_table;
