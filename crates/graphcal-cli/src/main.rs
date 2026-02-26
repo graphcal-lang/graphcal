@@ -284,20 +284,26 @@ fn main() {
 
                     // Handle --plot output
                     if let Some(ref plot_mode) = plot_output {
-                        if result.plots.is_empty() {
+                        let rendered = plot::build_figures(&result.plots, &result.figures);
+                        if rendered.is_empty() {
                             eprintln!("warning: no plot declarations found");
                         } else {
-                            let plotly_plot = plot::build_plot(&result.plots);
                             match plot_mode {
                                 PlotOutput::Browser => {
-                                    plotly_plot.write_html("graphcal_plot.html");
+                                    let html = plot::render_html(&rendered);
+                                    std::fs::write("graphcal_plot.html", html).unwrap_or_else(
+                                        |e| {
+                                            eprintln!("error: could not write HTML: {e}");
+                                            process::exit(2);
+                                        },
+                                    );
                                     if let Err(e) = open::that("graphcal_plot.html") {
                                         eprintln!("error: could not open browser: {e}");
                                         process::exit(2);
                                     }
                                 }
                                 PlotOutput::Json => {
-                                    println!("{}", plotly_plot.to_json());
+                                    println!("{}", plot::render_json(&rendered));
                                 }
                             }
                         }

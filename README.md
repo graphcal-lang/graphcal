@@ -320,6 +320,23 @@ $ graphcal eval analysis.gcl --plot json
 
 Supported chart types: `line`, `scatter`, `bar`, `heatmap`.
 
+Group plots into combined subplot figures with `figure` declarations. Use
+`#[hidden]` to suppress standalone output for plots that only belong in a
+combined view:
+
+```gcl
+#[hidden]
+plot my_scatter = scatter { ... };
+
+#[hidden]
+plot power_bars = bar { ... };
+
+figure combined = {
+    plots: [my_scatter, power_bars],
+    title: "Analysis Overview",
+};
+```
+
 ### JSON input for parameter overrides
 
 Override params from a JSON file with `--input`. Supports scalars with units (as strings), booleans, integers, floats, structs, tagged unions, and indexed params.

@@ -50,6 +50,7 @@ module.exports = grammar({
       $.import_declaration,
       $.assert_declaration,
       $.plot_declaration,
+      $.figure_declaration,
     ),
 
     // #[name] or #[name(arg1, arg2)] or #[name(Index::Variant, (A::X, B::Y))]
@@ -364,6 +365,50 @@ module.exports = grammar({
     chart_type: $ => choice("line", "scatter", "bar", "heatmap"),
 
     plot_field: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("value", $._expr),
+    ),
+
+    // figure comparison = {
+    //     plots: [curve_a, curve_b],
+    //     title: "Side-by-side Comparison",
+    // };
+    figure_declaration: $ => seq(
+      repeat($.attribute),
+      "figure",
+      field("name", $.identifier),
+      "=",
+      "{",
+      optional(seq(
+        $.figure_field,
+        repeat(seq(",", $.figure_field)),
+        optional(","),
+      )),
+      "}",
+      ";",
+    ),
+
+    figure_field: $ => choice(
+      $.figure_plots_field,
+      $.figure_named_field,
+    ),
+
+    // plots: [name1, name2]
+    figure_plots_field: $ => seq(
+      "plots",
+      ":",
+      "[",
+      optional(seq(
+        $.identifier,
+        repeat(seq(",", $.identifier)),
+        optional(","),
+      )),
+      "]",
+    ),
+
+    // title: "...", or other key: value fields
+    figure_named_field: $ => seq(
       field("name", $.identifier),
       ":",
       field("value", $._expr),

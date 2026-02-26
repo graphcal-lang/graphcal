@@ -72,6 +72,7 @@ pub enum DeclKind {
     Import(ImportDecl),
     Assert(AssertDecl),
     Plot(PlotDecl),
+    Figure(FigureDecl),
 }
 
 /// Assert declaration: `assert name = <expr>;`
@@ -143,6 +144,19 @@ pub struct PlotDecl {
     pub name: Spanned<DeclName>,
     pub chart_type: ChartType,
     pub chart_type_span: Span,
+    pub fields: Vec<PlotField>,
+}
+
+/// Figure declaration: `figure name = { plots: [a, b], title: "..." };`
+///
+/// Figures group multiple plot declarations into a single combined chart
+/// with subplots. Like plots, they are leaf declarations.
+#[derive(Debug, Clone)]
+pub struct FigureDecl {
+    pub name: Spanned<DeclName>,
+    /// The plot names referenced by this figure (from the `plots: [...]` field).
+    pub plot_names: Vec<Spanned<DeclName>>,
+    /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField>,
 }
 

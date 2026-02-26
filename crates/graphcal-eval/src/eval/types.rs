@@ -285,6 +285,8 @@ pub struct EvalResult {
     pub assertions: Vec<(DeclName, AssertResult, Span)>,
     /// Evaluated plot specifications in source order.
     pub plots: Vec<PlotSpec>,
+    /// Evaluated figure specifications in source order.
+    pub figures: Vec<FigureSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
@@ -315,6 +317,19 @@ pub struct PlotSpec {
     pub chart_type: graphcal_syntax::ast::ChartType,
     /// Evaluated plot fields as (`field_name`, values).
     /// Field values are evaluated expressions — either scalar lists or strings.
+    pub fields: Vec<(String, PlotFieldValue)>,
+    /// Whether this plot is hidden from standalone output (`#[hidden]`).
+    pub hidden: bool,
+}
+
+/// A single evaluated figure specification.
+#[derive(Debug, Clone)]
+pub struct FigureSpec {
+    /// The figure declaration name.
+    pub name: DeclName,
+    /// The plot names referenced by this figure.
+    pub plot_names: Vec<DeclName>,
+    /// Additional evaluated fields (e.g., `title`).
     pub fields: Vec<(String, PlotFieldValue)>,
 }
 

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::{
-    AssertBody, DeclKind, Expr, ExprKind, File, FnDecl, PlotDecl, TypeExpr,
+    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, PlotDecl, TypeExpr,
 };
 use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DeclName, DimName, FnName};
@@ -48,8 +48,10 @@ pub struct IR {
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
     /// Assert declarations in source order: (name, body, span).
     pub asserts: Vec<(String, AssertBody, Span)>,
-    /// Plot declarations in source order: (name, decl, span).
-    pub plots: Vec<(String, PlotDecl, Span)>,
+    /// Plot declarations in source order: (name, decl, span, hidden).
+    pub plots: Vec<(String, PlotDecl, Span, bool)>,
+    /// Figure declarations in source order: (name, decl, span).
+    pub figures: Vec<(String, FigureDecl, Span)>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of const-references (const deps).
@@ -204,6 +206,7 @@ pub fn lower_to_builder(
         nodes,
         asserts: resolved.asserts,
         plots: resolved.plots,
+        figures: resolved.figures,
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
@@ -315,6 +318,7 @@ pub fn lower_to_builder_with_imported_values(
         nodes,
         asserts: resolved.asserts,
         plots: resolved.plots,
+        figures: resolved.figures,
         runtime_deps: resolved.runtime_deps,
         const_deps: resolved.const_deps,
         source_order: resolved.source_order,
@@ -334,7 +338,8 @@ pub struct UnfrozenIR {
     params: Vec<(String, TypeExpr, Option<Expr>, Span)>,
     nodes: Vec<(String, TypeExpr, Expr, Span)>,
     asserts: Vec<(String, graphcal_syntax::ast::AssertBody, Span)>,
-    plots: Vec<(String, PlotDecl, Span)>,
+    plots: Vec<(String, PlotDecl, Span, bool)>,
+    figures: Vec<(String, FigureDecl, Span)>,
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
@@ -358,6 +363,7 @@ impl UnfrozenIR {
             nodes: self.nodes,
             asserts: self.asserts,
             plots: self.plots,
+            figures: self.figures,
             runtime_deps: self.runtime_deps,
             const_deps: self.const_deps,
             source_order: self.source_order,
@@ -534,13 +540,32 @@ impl UnfrozenIR {
         }
 
         // Merge plots
-        for (name, mut plot_decl, span) in dep.plots {
+        for (name, mut plot_decl, span, hidden) in dep.plots {
             for field in &mut plot_decl.fields {
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             let prefixed = format!("{prefix}::{name}");
-            self.plots.push((prefixed.clone(), plot_decl, span));
+            self.plots.push((prefixed.clone(), plot_decl, span, hidden));
             self.source_order.push((prefixed, DeclCategory::Plot));
+        }
+
+        // Merge figures
+        for (name, mut figure_decl, span) in dep.figures {
+            for field in &mut figure_decl.fields {
+                prefix_expr_refs(&mut field.value, prefix, dep_names);
+            }
+            // Prefix plot names referenced by the figure
+            for plot_name in &mut figure_decl.plot_names {
+                if dep_names.contains(plot_name.value.as_str()) {
+                    plot_name.value = graphcal_syntax::names::DeclName::new(format!(
+                        "{prefix}::{}",
+                        plot_name.value
+                    ));
+                }
+            }
+            let prefixed = format!("{prefix}::{name}");
+            self.figures.push((prefixed.clone(), figure_decl, span));
+            self.source_order.push((prefixed, DeclCategory::Figure));
         }
 
         // Merge functions

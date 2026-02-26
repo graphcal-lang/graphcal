@@ -457,12 +457,12 @@ pub(super) fn evaluate_plan(
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
-                DeclCategory::Assert | DeclCategory::Plot => return None,
+                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
-                DeclCategory::Assert | DeclCategory::Plot => return None,
+                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
             Some((DeclName::new(name), result, decl_type))
         })
@@ -492,10 +492,11 @@ pub(super) fn evaluate_plan(
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
         .iter()
-        .filter_map(|(name, decl, _span)| {
+        .filter_map(|(name, decl, _span, hidden)| {
             evaluate_plot(
                 decl,
                 name,
+                *hidden,
                 &values,
                 &empty_locals,
                 &builtin_consts,
@@ -503,6 +504,37 @@ pub(super) fn evaluate_plan(
                 &tir.registry,
                 src,
             )
+        })
+        .collect();
+
+    // Evaluate figure declarations
+    let figures: Vec<super::types::FigureSpec> = plan
+        .figure_bodies
+        .iter()
+        .map(|(name, decl, _span)| {
+            let mut fields = Vec::new();
+            for field in &decl.fields {
+                if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                    fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+                    continue;
+                }
+                if let Ok(rv) = eval_expr(
+                    &field.value,
+                    &values,
+                    &empty_locals,
+                    &builtin_consts,
+                    &builtin_fns,
+                    &tir.registry,
+                    src,
+                ) {
+                    fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
+                }
+            }
+            super::types::FigureSpec {
+                name: DeclName::new(name),
+                plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
+                fields,
+            }
         })
         .collect();
 
@@ -520,6 +552,7 @@ pub(super) fn evaluate_plan(
         all,
         assertions,
         plots,
+        figures,
         assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
@@ -1034,6 +1067,7 @@ fn check_scalar_constraint(
 fn evaluate_plot(
     decl: &graphcal_syntax::ast::PlotDecl,
     name: &str,
+    hidden: bool,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     builtin_consts: &HashMap<&str, f64>,
@@ -1066,6 +1100,7 @@ fn evaluate_plot(
         name: DeclName::new(name),
         chart_type: decl.chart_type,
         fields,
+        hidden,
     })
 }
 

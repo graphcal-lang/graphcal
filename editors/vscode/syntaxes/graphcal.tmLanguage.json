@@ -16,6 +16,7 @@
     { "include": "#const-declaration" },
     { "include": "#assert-declaration" },
     { "include": "#plot-declaration" },
+    { "include": "#figure-declaration" },
     { "include": "#import-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
@@ -162,6 +163,14 @@
         "1": { "name": "keyword.declaration.plot.graphcal" },
         "2": { "name": "variable.other.graphcal" },
         "3": { "name": "support.type.chart.graphcal" }
+      }
+    },
+
+    "figure-declaration": {
+      "match": "\\b(figure)\\s+([a-z][a-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.figure.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
       }
     },
 

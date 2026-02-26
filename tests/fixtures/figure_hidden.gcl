@@ -1,0 +1,33 @@
+// figure_hidden.gcl -- Hidden plots with figure
+//
+// Demonstrates #[hidden] attribute on plots to suppress standalone output.
+// Only the figure's combined chart should appear in the output.
+index Step = { First, Second, Third, Fourth }
+
+param x0: Dimensionless = 1.0;
+
+node values: Dimensionless[Step] = {
+    Step::First: 1.0,
+    Step::Second: 2.0,
+    Step::Third: 4.0,
+    Step::Fourth: 8.0,
+};
+
+#[hidden]
+plot curve_a = line {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] * @values[s] },
+    title: "Values Squared",
+};
+
+#[hidden]
+plot curve_b = bar {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] + 1.0 },
+    title: "Values Plus One",
+};
+
+figure comparison = {
+    plots: [curve_a, curve_b],
+    title: "Combined View",
+};

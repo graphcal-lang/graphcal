@@ -94,13 +94,110 @@ plot mass_vs_dv = scatter {
 };
 ```
 
+## The `#[hidden]` Attribute
+
+By default, every `plot` declaration produces its own standalone figure in the
+output. To suppress a plot's standalone figure (for example, when it only makes
+sense as part of a combined figure), use the `#[hidden]` attribute:
+
+```gcl
+#[hidden]
+plot curve_a = line {
+    x: for t: Time { t },
+    y: for t: Time { @altitude[t] },
+    title: "Altitude",
+};
+```
+
+A hidden plot still participates in the computation graph and can be referenced
+by `figure` declarations — it simply does not appear as a standalone chart
+in the output.
+
+The `#[hidden]` attribute is only valid on `plot` declarations.
+
+## Figure Declarations
+
+A `figure` declaration groups multiple plots into a single combined chart with
+subplots. Each referenced plot is rendered as a separate subplot in a
+tiled grid layout.
+
+```
+figure <name> = {
+    plots: [<plot_name>, ...],
+    <field>: <expr>,
+    ...
+};
+```
+
+A `figure` declaration has:
+
+- A **name** following `lower_snake_case` conventions.
+- A **`plots` field** listing the plot names to combine: `plots: [a, b]`.
+- Optional **fields** like `title` (a string literal).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plots` | List of plot names | Plots to include as subplots (required) |
+| `title` | String literal | Figure title |
+
+### Example
+
+```gcl
+plot curve_a = line {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] * @values[s] },
+    title: "Values Squared",
+};
+
+plot curve_b = bar {
+    x: for s: Step { @values[s] },
+    y: for s: Step { @values[s] + 1.0 },
+    title: "Values Plus One",
+};
+
+figure comparison = {
+    plots: [curve_a, curve_b],
+    title: "Side-by-side Comparison",
+};
+```
+
+This produces **three** figures in the output: `curve_a` (standalone),
+`curve_b` (standalone), and `comparison` (combined subplot chart).
+
+### Hiding Standalone Plots
+
+To output only the combined figure, mark the individual plots as `#[hidden]`:
+
+```gcl
+#[hidden]
+plot curve_a = line { ... };
+
+#[hidden]
+plot curve_b = bar { ... };
+
+figure comparison = {
+    plots: [curve_a, curve_b],
+    title: "Combined View",
+};
+```
+
+This produces **one** figure: `comparison`. The hidden plots are still evaluated
+and included in the combined figure, but do not appear as standalone charts.
+
+### Subplot Layout
+
+Subplots are arranged in an auto-computed grid: `ceil(sqrt(n))` columns,
+with rows to accommodate all plots. Each subplot gets its own x-axis and y-axis.
+
 ## Key Properties
 
-- Plot names follow `lower_snake_case`, like `param` and `node`.
+- Plot and figure names follow `lower_snake_case`, like `param` and `node`.
 - Plot bodies can reference any `@param` or `@node`, plus constants.
-- Plots are **leaf nodes** -- no declaration can reference a plot with `@`.
+- Plots and figures are **leaf nodes** — no declaration can reference them with
+  `@`.
 - Plots participate in the dependency graph (they depend on the nodes they
   reference) but do not produce runtime values.
+- Figures reference plots by name and are validated at resolution time.
 
 ## CLI Output
 
@@ -112,6 +209,15 @@ graphcal eval file.gcl --plot browser
 
 # Print Plotly JSON spec to stdout
 graphcal eval file.gcl --plot json
+```
+
+The JSON output is an array of figure objects, each with a `name` and `spec`:
+
+```json
+[
+  { "name": "curve_a", "spec": { /* Plotly JSON */ } },
+  { "name": "comparison", "spec": { /* Plotly JSON with subplots */ } }
+]
 ```
 
 See [CLI Reference](../cli-reference.md#plot-output) for details.

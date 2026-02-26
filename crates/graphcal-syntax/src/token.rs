@@ -45,6 +45,8 @@ pub enum Token {
     Table,
     #[token("plot")]
     Plot,
+    #[token("figure")]
+    Figure,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -160,6 +162,7 @@ impl std::fmt::Display for Token {
             Self::Assert => write!(f, "assert"),
             Self::Table => write!(f, "table"),
             Self::Plot => write!(f, "plot"),
+            Self::Figure => write!(f, "figure"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
