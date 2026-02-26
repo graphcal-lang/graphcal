@@ -43,8 +43,15 @@ pub fn parse_manifest(path: &Path) -> Result<Manifest, ManifestError> {
     parse_manifest_str(&content)
 }
 
-/// Parse manifest from a TOML string (for testability).
-fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
+/// Parse manifest from a TOML string.
+///
+/// This is the I/O-free entry point — the caller is responsible for reading the
+/// file contents. [`parse_manifest`] is a convenience wrapper that reads from disk.
+///
+/// # Errors
+///
+/// Returns a [`ManifestError`] if the content is invalid TOML or missing required fields.
+pub fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
     let arena = toml_spanner::Arena::new();
     let root = toml_spanner::parse(content, &arena).map_err(|e| ManifestError::TomlParseError {
         message: e.to_string(),

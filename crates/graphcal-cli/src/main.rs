@@ -10,6 +10,7 @@ use std::process;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
+use graphcal_io::RealFileSystem;
 use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
@@ -270,7 +271,13 @@ fn main() {
                 }
             }
 
-            match compile_and_eval_project(&file, &overrides, root.as_deref(), allow_defaults) {
+            match compile_and_eval_project(
+                &file,
+                &overrides,
+                root.as_deref(),
+                allow_defaults,
+                &RealFileSystem,
+            ) {
                 Ok(result) => {
                     match format {
                         OutputFormat::Text => print_text(&result, no_assert),
@@ -359,7 +366,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 
     let mut error_count = 0;
     for file in &targets {
-        match compile_to_tir_project(file, project_root) {
+        match compile_to_tir_project(file, project_root, &RealFileSystem) {
             Ok(_) => {
                 println!("ok: {}", file.display());
             }

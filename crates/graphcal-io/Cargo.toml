@@ -1,0 +1,17 @@
+[package]
+name = "graphcal-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Filesystem implementations for the Graphcal compiler"
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+graphcal-eval = { workspace = true }
+
+[lints]
+workspace = true

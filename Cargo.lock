@@ -693,6 +693,7 @@ dependencies = [
  "graphcal-dag",
  "graphcal-eval",
  "graphcal-fmt",
+ "graphcal-io",
  "graphcal-lsp",
  "graphcal-syntax",
  "indexmap 2.13.0",
@@ -744,6 +745,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-io"
+version = "0.1.0"
+dependencies = [
+ "graphcal-eval",
+]
+
+[[package]]
 name = "graphcal-ir"
 version = "0.1.0"
 dependencies = [
@@ -761,6 +769,7 @@ version = "0.1.0"
 dependencies = [
  "graphcal-eval",
  "graphcal-fmt",
+ "graphcal-io",
  "graphcal-syntax",
  "indexmap 2.13.0",
  "miette",

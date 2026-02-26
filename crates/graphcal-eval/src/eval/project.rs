@@ -24,12 +24,13 @@ use super::types::{AssertResult, CompileError, EvalResult};
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
 // ---------------------------------------------------------------------------
 
-/// Helper function to resolve an import path to a canonical file path.
+/// Resolve an import path to a canonical file path within an already-loaded project.
 ///
-/// For `FilePath`, joins with the parent directory and canonicalizes.
-/// For `ModulePath`, searches the already-loaded project files to find the match.
-/// This function is only called after the project is fully loaded, so module paths
-/// have already been resolved by the loader.
+/// This function is **I/O-free**: it resolves paths by looking up canonical keys
+/// in `project.files` rather than calling the filesystem.
+///
+/// - `FilePath`: joins with `parent_dir` and matches against project file keys.
+/// - `ModulePath`: matches against project file keys by suffix.
 fn resolve_import_to_canonical(
     import_path: &ImportPath,
     parent_dir: &Path,
@@ -39,21 +40,24 @@ fn resolve_import_to_canonical(
     match import_path {
         ImportPath::FilePath { path, span } => {
             let file_path = parent_dir.join(path);
-            file_path.canonicalize().map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: path.clone(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            })
+            // Look up the resolved path among already-loaded project files.
+            // The loader stored all files under canonical keys, so we match
+            // by checking which canonical key ends with our joined path's
+            // file components. This avoids filesystem I/O.
+            for canonical_path in project.files.keys() {
+                if paths_match(canonical_path, &file_path) {
+                    return Ok(canonical_path.clone());
+                }
+            }
+            Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+                path: path.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            }))
         }
         ImportPath::ModulePath { segments, span } => {
             // Module paths are resolved by the loader. Since the project is already loaded,
             // we need to find the canonical path from project.files.
-            // The loader constructs paths as: <project_root>/<source_dir>/segments.../last.gcl
-            //
-            // Simple approach: iterate through project.files to find a matching file.
-            // The segments should match the relative path from the source directory.
             let search_suffix = segments
                 .iter()
                 .map(|s| s.name.as_str())
@@ -67,7 +71,6 @@ fn resolve_import_to_canonical(
                 }
             }
 
-            // Not found - this shouldn't happen if the loader did its job
             Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
                 path: import_path.display_path(),
                 src: src.clone(),
@@ -75,6 +78,62 @@ fn resolve_import_to_canonical(
             }))
         }
     }
+}
+
+/// Check whether a canonical path matches a (possibly relative) file path.
+///
+/// Returns `true` if `canonical` ends with the same sequence of path components
+/// as the **normalized** `target`. Normalization resolves `.` and `..` components
+/// logically (without filesystem access) so that paths like
+/// `/foo/child/../lib.gcl` correctly match `/foo/lib.gcl`.
+///
+/// This also handles the macOS `/tmp` → `/private/tmp` symlink case where
+/// `target` and `canonical` share a common suffix but differ in prefix.
+fn paths_match(canonical: &Path, target: &Path) -> bool {
+    let normalized = normalize_path(target);
+    // Fast path: exact match.
+    if canonical == normalized {
+        return true;
+    }
+    // Compare trailing components. The target path (from parent_dir.join(import))
+    // may differ from the canonical path only in prefix (symlink resolution).
+    // Match by comparing components from the end.
+    let c_components: Vec<_> = canonical.components().collect();
+    let n_components: Vec<_> = normalized.components().collect();
+    if n_components.len() > c_components.len() {
+        return false;
+    }
+    c_components
+        .iter()
+        .rev()
+        .zip(n_components.iter().rev())
+        .all(|(a, b)| a == b)
+}
+
+/// Normalize a path by resolving `.` and `..` components logically,
+/// without touching the filesystem.
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                // Pop the last normal component if possible.
+                if matches!(components.last(), Some(Component::Normal(_))) {
+                    components.pop();
+                } else {
+                    components.push(component);
+                }
+            }
+            Component::CurDir => {
+                // Skip `.` components.
+            }
+            _ => {
+                components.push(component);
+            }
+        }
+    }
+    components.iter().collect()
 }
 
 /// Helper function to derive a module name from an `ImportPath`.
@@ -1698,7 +1757,7 @@ pub(super) fn apply_overrides(
 /// Resolves imports from `use` declarations in the root file, lowers to IR,
 /// type-resolves, and runs all checks (recursion, dimensions). The project may
 /// have been loaded from disk, constructed from in-memory source, or a mix of
-/// both (via [`LoadedProject::load_with_overlay`](crate::loader::LoadedProject::load_with_overlay)).
+/// both (via [`crate::io::OverlayFileSystem`](crate::io) + [`crate::loader::load_project`]).
 ///
 /// # Errors
 ///
@@ -1739,6 +1798,8 @@ pub fn compile_and_eval_from_project(
 /// Loads all files referenced by `use` declarations starting from `root_path`,
 /// collects imported declarations, and evaluates the root file with imports merged.
 ///
+/// All filesystem access goes through the provided [`crate::io::FileSystemReader`].
+///
 /// # Errors
 ///
 /// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
@@ -1746,13 +1807,14 @@ pub fn compile_and_eval_from_project(
     clippy::implicit_hasher,
     reason = "public API accepts HashMap without requiring specific hasher"
 )]
-pub fn compile_and_eval_project(
+pub fn compile_and_eval_project<F: crate::io::FileSystemReader>(
     root_path: &Path,
     overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
     project_root: Option<&Path>,
     allow_defaults: bool,
+    fs: &F,
 ) -> Result<EvalResult, CompileError> {
-    let project = crate::loader::load_project(root_path, project_root)?;
+    let project = crate::loader::load_project(root_path, project_root, fs)?;
     compile_and_eval_from_project(&project, overrides, allow_defaults)
 }
 
@@ -1775,14 +1837,17 @@ pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, Compi
 /// Loads all files referenced by `use` declarations starting from `root_path`,
 /// resolves imports, and runs the pipeline up through dimension checking.
 ///
+/// All filesystem access goes through the provided [`crate::io::FileSystemReader`].
+///
 /// # Errors
 ///
 /// Returns a [`CompileError`] if loading, parsing, resolution, or checking fails.
-pub fn compile_to_tir_project(
+pub fn compile_to_tir_project<F: crate::io::FileSystemReader>(
     root_path: &Path,
     project_root: Option<&Path>,
+    fs: &F,
 ) -> Result<(crate::tir::TIR, crate::loader::LoadedProject), CompileError> {
-    let project = crate::loader::load_project(root_path, project_root)?;
+    let project = crate::loader::load_project(root_path, project_root, fs)?;
     let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))
 }

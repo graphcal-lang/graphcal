@@ -20,6 +20,7 @@ use graphcal_eval::eval::{
     AssertResult, CompileError, EvalResult, NodeError, Value, compile_and_eval_from_project,
     compile_to_tir_from_project,
 };
+use graphcal_eval::io::FileSystemReader as _;
 use graphcal_eval::loader::LoadedProject;
 use graphcal_eval::tir::TIR;
 use graphcal_syntax::ast::DeclKind;
@@ -33,7 +34,7 @@ use format::{format_value_changed, format_value_line};
 struct ShellState {
     /// User-entered declarations: (name → source text) in entry order.
     user_decls: IndexMap<String, String>,
-    /// Base file path (for `load_with_overlay`). `None` in standalone mode.
+    /// Base file path (for overlay filesystem). `None` in standalone mode.
     base_path: Option<PathBuf>,
     /// Base file source (original content before user additions).
     base_source: Option<String>,
@@ -75,8 +76,14 @@ impl ShellState {
     fn recompile(&self) -> Result<(EvalResult, TIR), CompileError> {
         let full_source = self.build_full_source();
         if let Some(base_path) = &self.base_path {
-            let project =
-                LoadedProject::load_with_overlay(base_path, (base_path, &full_source), None)?;
+            let base_fs = graphcal_io::RealFileSystem;
+            let canonical = base_fs.canonicalize(base_path).map_err(|_| {
+                CompileError::Eval(graphcal_eval::error::GraphcalError::FileNotFound {
+                    path: base_path.display().to_string(),
+                })
+            })?;
+            let fs = graphcal_io::OverlayFileSystem::new(base_fs, canonical, full_source);
+            let project = graphcal_eval::loader::load_project(base_path, None, &fs)?;
             let tir = compile_to_tir_from_project(&project)?;
             let result = compile_and_eval_from_project(&project, &self.overrides, true)?;
             Ok((result, tir))
