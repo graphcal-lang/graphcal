@@ -5,8 +5,7 @@ use miette::NamedSource;
 
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::resolve_types::{
-    is_aggregation_fn, is_constructor_fn, is_conversion_fn, is_datetime_extract_fn,
-    is_datetime_from_fn, is_datetime_to_fn, is_time_scale_name,
+    classify_special_fn, is_aggregation_fn, is_time_scale_name,
 };
 use graphcal_syntax::ast::{Expr, ExprKind};
 use graphcal_syntax::visitor::ExprVisitor;
@@ -85,12 +84,7 @@ fn collect_const_refs(
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
-                && !is_aggregation_fn(name_str)
-                && !is_conversion_fn(name_str)
-                && !is_constructor_fn(name_str)
-                && !is_datetime_extract_fn(name_str)
-                && !is_datetime_from_fn(name_str)
-                && !is_datetime_to_fn(name_str)
+                && classify_special_fn(name_str).is_none()
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
@@ -433,12 +427,7 @@ fn collect_all_refs(
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
-                && !is_aggregation_fn(name_str)
-                && !is_conversion_fn(name_str)
-                && !is_constructor_fn(name_str)
-                && !is_datetime_extract_fn(name_str)
-                && !is_datetime_from_fn(name_str)
-                && !is_datetime_to_fn(name_str)
+                && classify_special_fn(name_str).is_none()
             {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
