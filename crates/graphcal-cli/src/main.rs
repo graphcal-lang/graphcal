@@ -146,18 +146,6 @@ fn parse_overrides(
     overrides
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI binary, stdout output is expected for --plot json"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "CLI main with subcommand dispatch and override parsing"
-)]
 fn main() {
     // Install miette's fancy graphical error handler
     miette::set_hook(Box::new(|_| {
@@ -209,71 +197,90 @@ fn main() {
             plot: plot_output,
         } => {
             let overrides = parse_overrides(&set, input.as_deref());
-
-            match compile_and_eval_project(
+            handle_eval(
                 &file,
+                &format,
                 &overrides,
+                no_assert,
                 root.as_deref(),
                 allow_defaults,
-                &RealFileSystem,
-            ) {
-                Ok(result) => {
-                    match format {
-                        OutputFormat::Text => print_text(&result, no_assert),
-                        OutputFormat::Json => {
-                            if let Err(e) = print_json(&result, no_assert) {
-                                eprintln!("JSON serialization error: {e}");
+                plot_output.as_ref(),
+            );
+        }
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "CLI binary, stdout output is expected for --plot json"
+)]
+fn handle_eval(
+    file: &Path,
+    format: &OutputFormat,
+    overrides: &std::collections::HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    no_assert: bool,
+    root: Option<&Path>,
+    allow_defaults: bool,
+    plot_output: Option<&PlotOutput>,
+) {
+    match compile_and_eval_project(file, overrides, root, allow_defaults, &RealFileSystem) {
+        Ok(result) => {
+            match format {
+                OutputFormat::Text => print_text(&result, no_assert),
+                OutputFormat::Json => {
+                    if let Err(e) = print_json(&result, no_assert) {
+                        eprintln!("JSON serialization error: {e}");
+                        process::exit(2);
+                    }
+                }
+            }
+
+            // Handle --plot output
+            if let Some(plot_mode) = plot_output {
+                let rendered = plot::build_figures(&result.plots, &result.figures);
+                if rendered.is_empty() {
+                    eprintln!("warning: no plot declarations found");
+                } else {
+                    match plot_mode {
+                        PlotOutput::Browser => {
+                            let html = plot::render_html(&rendered);
+                            std::fs::write("graphcal_plot.html", html).unwrap_or_else(|e| {
+                                eprintln!("error: could not write HTML: {e}");
+                                process::exit(2);
+                            });
+                            if let Err(e) = open::that("graphcal_plot.html") {
+                                eprintln!("error: could not open browser: {e}");
                                 process::exit(2);
                             }
                         }
-                    }
-
-                    // Handle --plot output
-                    if let Some(ref plot_mode) = plot_output {
-                        let rendered = plot::build_figures(&result.plots, &result.figures);
-                        if rendered.is_empty() {
-                            eprintln!("warning: no plot declarations found");
-                        } else {
-                            match plot_mode {
-                                PlotOutput::Browser => {
-                                    let html = plot::render_html(&rendered);
-                                    std::fs::write("graphcal_plot.html", html).unwrap_or_else(
-                                        |e| {
-                                            eprintln!("error: could not write HTML: {e}");
-                                            process::exit(2);
-                                        },
-                                    );
-                                    if let Err(e) = open::that("graphcal_plot.html") {
-                                        eprintln!("error: could not open browser: {e}");
-                                        process::exit(2);
-                                    }
-                                }
-                                PlotOutput::Json => {
-                                    println!("{}", plot::render_json(&rendered));
-                                }
-                            }
+                        PlotOutput::Json => {
+                            println!("{}", plot::render_json(&rendered));
                         }
                     }
-
-                    let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
-                        || result.nodes.iter().any(|(_, r)| r.is_err());
-                    let has_assert_failures = !no_assert
-                        && result.assertions.iter().any(|(_, r, _)| {
-                            matches!(
-                                r,
-                                graphcal_eval::eval::AssertResult::Fail { .. }
-                                    | graphcal_eval::eval::AssertResult::Error { .. }
-                            )
-                        });
-                    if has_eval_errors || has_assert_failures {
-                        process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{:?}", miette::Report::new(e));
-                    process::exit(2);
                 }
             }
+
+            let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
+                || result.nodes.iter().any(|(_, r)| r.is_err());
+            let has_assert_failures = !no_assert
+                && result.assertions.iter().any(|(_, r, _)| {
+                    matches!(
+                        r,
+                        graphcal_eval::eval::AssertResult::Fail { .. }
+                            | graphcal_eval::eval::AssertResult::Error { .. }
+                    )
+                });
+            if has_eval_errors || has_assert_failures {
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("{:?}", miette::Report::new(e));
+            process::exit(2);
         }
     }
 }
@@ -381,8 +388,15 @@ fn run_format(paths: &[PathBuf], check: bool) {
     }
 }
 
-/// Recursively collect all `.gcl` files under a directory.
+/// Recursively collect all `.gcl` files under a directory, sorted for deterministic output.
 fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
+    let mut files = collect_gcl_files_unsorted(dir);
+    files.sort();
+    files
+}
+
+/// Recursively collect all `.gcl` files under a directory (unsorted).
+fn collect_gcl_files_unsorted(dir: &PathBuf) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return files;
@@ -390,14 +404,13 @@ fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            files.extend(collect_gcl_files(&path));
+            files.extend(collect_gcl_files_unsorted(&path));
         } else if path.extension().is_some_and(|ext| ext == "gcl") {
             files.push(path);
         } else {
             // Skip non-.gcl files
         }
     }
-    files.sort();
     files
 }
 
@@ -715,8 +728,6 @@ fn print_text(result: &EvalResult, no_assert: bool) {
 
     // Print assertion results (unless --no-assert)
     if !no_assert && !result.assertions.is_empty() {
-        use graphcal_eval::eval::AssertResult;
-
         println!();
         println!("Assertions:");
         let max_assert_len = result
@@ -726,26 +737,58 @@ fn print_text(result: &EvalResult, no_assert: bool) {
             .max()
             .unwrap_or(0);
         for (name, assert_result, _) in &result.assertions {
-            let n = name.as_str();
-            let w = max_assert_len;
-            match assert_result {
-                AssertResult::Pass => {
-                    println!("  {n:w$}  PASS");
-                }
-                AssertResult::Fail { message } => {
-                    eprintln!("  {n:w$}  FAIL  ({message})");
-                    if let Some(affected) = result.assumes_map.get(n) {
-                        eprintln!(
-                            "  {blank:w$}        affected: {nodes}",
-                            blank = "",
-                            nodes = affected.join(", ")
-                        );
-                    }
-                }
-                AssertResult::Error { message } => {
-                    eprintln!("  {n:w$}  ERROR ({message})");
-                }
+            let line = format_assertion_line(
+                name.as_str(),
+                assert_result,
+                max_assert_len,
+                result.assumes_map.get(name.as_str()),
+            );
+            if matches!(
+                assert_result,
+                graphcal_eval::eval::AssertResult::Fail { .. }
+                    | graphcal_eval::eval::AssertResult::Error { .. }
+            ) {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
             }
+        }
+    }
+}
+
+/// Format a single assertion result line for text output.
+///
+/// Returns the formatted string including the assertion name, status, and (for failures)
+/// the failure message and affected nodes.
+fn format_assertion_line(
+    name: &str,
+    result: &graphcal_eval::eval::AssertResult,
+    name_width: usize,
+    affected: Option<&Vec<String>>,
+) -> String {
+    use std::fmt::Write as _;
+
+    use graphcal_eval::eval::AssertResult;
+
+    let w = name_width;
+    match result {
+        AssertResult::Pass => {
+            format!("  {name:w$}  PASS")
+        }
+        AssertResult::Fail { message } => {
+            let mut line = format!("  {name:w$}  FAIL  ({message})");
+            if let Some(affected) = affected {
+                let _ = write!(
+                    line,
+                    "\n  {:w$}        affected: {}",
+                    "",
+                    affected.join(", ")
+                );
+            }
+            line
+        }
+        AssertResult::Error { message } => {
+            format!("  {name:w$}  ERROR ({message})")
         }
     }
 }
