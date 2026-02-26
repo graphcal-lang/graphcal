@@ -17,7 +17,7 @@ use graphcal_registry::registry::Registry;
 use helpers::{
     expect_scalar, format_declared_type, format_inferred_type, is_bool_type, types_match,
 };
-use infer::infer_type;
+use infer::{infer_type, infer_type_with_owner};
 
 mod builtins;
 mod helpers;
@@ -88,8 +88,9 @@ pub fn check_dimensions_tir(
     // Check consts and nodes (always have expressions)
     for (name, type_ann, value_expr, _span) in tir.consts.iter().chain(tir.nodes.iter()) {
         let declared = &declared_types[name.as_str()];
-        let inferred = infer_type(
+        let inferred = infer_type_with_owner(
             value_expr,
+            Some(name.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
@@ -114,8 +115,9 @@ pub fn check_dimensions_tir(
             continue;
         };
         let declared = &declared_types[name.as_str()];
-        let inferred = infer_type(
+        let inferred = infer_type_with_owner(
             value_expr,
+            Some(name.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
