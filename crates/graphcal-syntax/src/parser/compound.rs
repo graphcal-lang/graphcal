@@ -69,17 +69,7 @@ impl Parser<'_> {
             self.expect(Token::RParen)?;
             self.expect(Token::LBrace)?;
             let scrutinee = Box::new(first);
-            let mut arms = Vec::new();
-            loop {
-                if self.lexer.peek() == Some(&Token::RBrace) {
-                    break;
-                }
-                arms.push(self.parse_match_arm()?);
-                // Optional comma between arms
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                }
-            }
+            let arms = self.parse_match_arm_list()?;
             let (_, end_span) = self.expect(Token::RBrace)?;
             let span = start_span.merge(end_span);
             return Ok(Expr {
@@ -90,17 +80,7 @@ impl Parser<'_> {
         let scrutinee = Box::new(self.parse_expr()?);
         self.expect(Token::LBrace)?;
 
-        let mut arms = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-            arms.push(self.parse_match_arm()?);
-            // Optional comma between arms
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            }
-        }
+        let arms = self.parse_match_arm_list()?;
 
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
@@ -209,6 +189,22 @@ impl Parser<'_> {
             kind: else_expr.kind,
             span: start_span.merge(else_expr.span),
         })
+    }
+
+    /// Parse a list of match arms until `}`.
+    fn parse_match_arm_list(&mut self) -> Result<Vec<MatchArm>, ParseError> {
+        let mut arms = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::RBrace) {
+                break;
+            }
+            arms.push(self.parse_match_arm()?);
+            // Optional comma between arms
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            }
+        }
+        Ok(arms)
     }
 
     /// Parse a single match arm: `VariantName { field1, field2: _ } => expr`
@@ -526,49 +522,9 @@ impl Parser<'_> {
 
     /// Continue parsing an expression from an already-parsed left-hand side.
     /// Handles postfix operations and binary operators.
-    pub(super) fn continue_parsing_expr(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
+    pub(super) fn continue_parsing_expr(&mut self, expr: Expr) -> Result<Expr, ParseError> {
         // Handle postfix (field access, index access)
-        loop {
-            match self.lexer.peek() {
-                Some(Token::Dot) => {
-                    self.lexer.next_token();
-                    let field_ident = self.parse_any_ident()?;
-                    let span = expr.span.merge(field_ident.span);
-                    expr = Expr {
-                        kind: ExprKind::FieldAccess {
-                            expr: Box::new(expr),
-                            field: field_ident.into_spanned::<FieldName>(),
-                        },
-                        span,
-                    };
-                }
-                Some(Token::LBracket) => {
-                    self.lexer.next_token();
-                    let mut args = Vec::new();
-                    loop {
-                        if self.lexer.peek() == Some(&Token::RBracket) {
-                            break;
-                        }
-                        args.push(self.parse_index_arg()?);
-                        if self.lexer.peek() == Some(&Token::Comma) {
-                            self.lexer.next_token();
-                        } else {
-                            break;
-                        }
-                    }
-                    let (_, end_span) = self.expect(Token::RBracket)?;
-                    let span = expr.span.merge(end_span);
-                    expr = Expr {
-                        kind: ExprKind::IndexAccess {
-                            expr: Box::new(expr),
-                            args,
-                        },
-                        span,
-                    };
-                }
-                _ => break,
-            }
-        }
+        let mut expr = self.apply_postfix(expr)?;
         // Handle binary operators (comparison, arithmetic, logical).
         // Check for comparison operators (==, !=, <, >, <=, >=).
         let op = self.lexer.peek().and_then(token_to_comparison_op);
