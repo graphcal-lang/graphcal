@@ -15,9 +15,12 @@ node y: Dimensionless[TimeStep] = unfold(@initial_value, |prev_t, t| {
     @y[prev_t] * (1.0 - @decay_rate * dt)
 });
 
-plot decay_curve = line {
-    x: for t: TimeStep { t },
-    y: for t: TimeStep { @y[t] },
+plot decay_curve = {
+    mark: line,
+    encode: {
+        x: for t: TimeStep { t },
+        y: for t: TimeStep { @y[t] },
+    },
     title: "Exponential Decay",
     x_label: "Time",
     y_label: "Value",

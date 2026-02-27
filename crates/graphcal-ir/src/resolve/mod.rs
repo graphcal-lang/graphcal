@@ -278,10 +278,10 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Plot(p) => {
-                // Validate references in plot field expressions (plots CAN use @)
-                for field in &p.fields {
+                // Validate references in plot encoding and property expressions (plots CAN use @)
+                for encoding in &p.encodings {
                     let (_graph_refs, _const_refs) = extract_all_refs(
-                        &field.value,
+                        &encoding.value,
                         &all_runtime_names,
                         &all_const_names,
                         builtin_consts,
@@ -290,7 +290,33 @@ fn collect_local_declarations(
                         src,
                         None,
                     )?;
-                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                    check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
+                }
+                for prop in &p.mark.properties {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &prop.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        builtin_consts,
+                        builtin_fns,
+                        &all_user_fn_names,
+                        src,
+                        None,
+                    )?;
+                    check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
+                }
+                for prop in &p.properties {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &prop.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        builtin_consts,
+                        builtin_fns,
+                        &all_user_fn_names,
+                        src,
+                        None,
+                    )?;
+                    check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
                 }
                 let pname = p.name.value.to_string();
                 let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");

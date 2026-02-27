@@ -790,8 +790,14 @@ impl UnfrozenIR {
 
         // Merge plots
         for mut entry in dep.plots {
-            for field in &mut entry.decl.fields {
-                prefix_expr_refs(&mut field.value, prefix, dep_names);
+            for encoding in &mut entry.decl.encodings {
+                prefix_expr_refs(&mut encoding.value, prefix, dep_names);
+            }
+            for prop in &mut entry.decl.mark.properties {
+                prefix_expr_refs(&mut prop.value, prefix, dep_names);
+            }
+            for prop in &mut entry.decl.properties {
+                prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             let prefixed = entry.name.with_prefix(prefix);
             self.plots.push(PlotEntry {

@@ -882,9 +882,10 @@ fn check_scalar_constraint(
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
 ///
-/// Each field expression is evaluated. Indexed values (from `for` comprehensions)
-/// are flattened to lists of numbers or labels. String literals become `String` fields.
-/// Returns `None` if any field evaluation fails (plots are best-effort).
+/// Encoding channel expressions and property expressions are evaluated and
+/// flattened into a single `fields` list. String literals are handled directly
+/// (they are not runtime values in Graphcal).
+/// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
     decl: &graphcal_syntax::ast::PlotDecl,
     name: &str,
@@ -894,20 +895,44 @@ fn evaluate_plot(
     ctx: &EvalContext<'_>,
 ) -> Option<PlotSpec> {
     let mut fields = Vec::new();
-    for field in &decl.fields {
-        // String literals are not runtime values in Graphcal, so handle them
-        // directly here rather than going through eval_expr.
-        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
-            fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+
+    // Evaluate encoding channels
+    for encoding in &decl.encodings {
+        let channel_name = encoding.channel.to_string();
+        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &encoding.value.kind {
+            fields.push((channel_name, PlotFieldValue::String(s.clone())));
             continue;
         }
-        let rv = eval_expr(&field.value, values, local_values, ctx).ok()?;
+        let rv = eval_expr(&encoding.value, values, local_values, ctx).ok()?;
         let field_value = runtime_to_plot_field_value(&rv);
-        fields.push((field.name.name.clone(), field_value));
+        fields.push((channel_name, field_value));
     }
+
+    // Evaluate mark properties (e.g., stroke_width, opacity)
+    for prop in &decl.mark.properties {
+        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
+            fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
+            continue;
+        }
+        let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
+        let field_value = runtime_to_plot_field_value(&rv);
+        fields.push((prop.name.name.clone(), field_value));
+    }
+
+    // Evaluate top-level properties (e.g., title, width, height)
+    for prop in &decl.properties {
+        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
+            fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
+            continue;
+        }
+        let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
+        let field_value = runtime_to_plot_field_value(&rv);
+        fields.push((prop.name.name.clone(), field_value));
+    }
+
     Some(PlotSpec {
         name: DeclName::new(name),
-        chart_type: decl.chart_type,
+        mark_type: decl.mark.mark_type,
         fields,
         hidden,
     })

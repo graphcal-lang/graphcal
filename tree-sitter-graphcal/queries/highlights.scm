@@ -286,7 +286,10 @@
 ; ---------------------------------------------------------------
 
 (plot_declaration name: (identifier) @variable)
-(chart_type) @type
+(mark_type) @type
+(mark_field "mark" @keyword)
+(encode_field "encode" @keyword)
+(encode_channel channel: (identifier) @property)
 (plot_field name: (identifier) @property)
 
 ; ---------------------------------------------------------------

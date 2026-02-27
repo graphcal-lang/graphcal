@@ -341,28 +341,71 @@ module.exports = grammar({
       ";",
     ),
 
-    // plot power_by_mode = bar {
-    //     x: labels(for m: OpMode { m }),
-    //     y: for m: OpMode { @total_power[m] },
-    //     title: "Total Power by Operating Mode",
+    // plot mass_vs_dv = {
+    //     mark: point,
+    //     encode: {
+    //         x: for m: Maneuver { @delta_v[m] },
+    //         y: for m: Maneuver { @spacecraft_mass[m] },
+    //     },
+    //     title: "Spacecraft Mass vs Delta-V",
     // };
     plot_declaration: $ => seq(
       repeat($.attribute),
       "plot",
       field("name", $.identifier),
       "=",
-      field("chart_type", $.chart_type),
       "{",
       optional(seq(
-        $.plot_field,
-        repeat(seq(",", $.plot_field)),
+        $._plot_body_field,
+        repeat(seq(",", $._plot_body_field)),
         optional(","),
       )),
       "}",
       ";",
     ),
 
-    chart_type: $ => choice("line", "scatter", "bar", "heatmap"),
+    _plot_body_field: $ => choice(
+      $.mark_field,
+      $.encode_field,
+      $.plot_field,
+    ),
+
+    // mark: point, or mark: line { stroke_width: 2.0, },
+    mark_field: $ => seq(
+      "mark",
+      ":",
+      field("mark_type", $.mark_type),
+      optional(seq(
+        "{",
+        optional(seq(
+          $.plot_field,
+          repeat(seq(",", $.plot_field)),
+          optional(","),
+        )),
+        "}",
+      )),
+    ),
+
+    mark_type: $ => choice("point", "line", "bar", "area", "rect", "tick"),
+
+    // encode: { x: expr, y: expr, color: expr, ... },
+    encode_field: $ => seq(
+      "encode",
+      ":",
+      "{",
+      optional(seq(
+        $.encode_channel,
+        repeat(seq(",", $.encode_channel)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    encode_channel: $ => seq(
+      field("channel", $.identifier),
+      ":",
+      field("value", $._expr),
+    ),
 
     plot_field: $ => seq(
       field("name", $.identifier),

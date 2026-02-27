@@ -607,12 +607,18 @@ fn collect_plot_decl(
             category: SymbolCategory::Plot,
             name_span: p.name.span,
             decl_span,
-            type_description: Some(format!("plot ({})", p.chart_type)),
+            type_description: Some(format!("plot (mark: {})", p.mark.mark_type)),
             detail: Some("plot".to_string()),
         },
     );
-    for field in &p.fields {
-        collect_expr_refs(&field.value, table, scopes);
+    for encoding in &p.encodings {
+        collect_expr_refs(&encoding.value, table, scopes);
+    }
+    for prop in &p.mark.properties {
+        collect_expr_refs(&prop.value, table, scopes);
+    }
+    for prop in &p.properties {
+        collect_expr_refs(&prop.value, table, scopes);
     }
 }
 

@@ -10,14 +10,20 @@ node values: Dimensionless[Step] = {
     Step::Fourth: 8.0,
 };
 
-plot my_line = line {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] * @values[s] },
+plot my_line = {
+    mark: line,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] * @values[s] },
+    },
     title: "Values Squared",
 };
 
-plot my_bar = bar {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] + 1.0 },
+plot my_bar = {
+    mark: bar,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] + 1.0 },
+    },
     title: "Values Plus One",
 };

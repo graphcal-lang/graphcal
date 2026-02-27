@@ -347,10 +347,10 @@ impl EvalResult {
 pub struct PlotSpec {
     /// The plot declaration name.
     pub name: DeclName,
-    /// The chart type (line, scatter, bar, heatmap).
-    pub chart_type: graphcal_syntax::ast::ChartType,
+    /// The mark type (point, line, bar, area, rect, tick).
+    pub mark_type: graphcal_syntax::ast::MarkType,
     /// Evaluated plot fields as (`field_name`, values).
-    /// Field values are evaluated expressions — either scalar lists or strings.
+    /// Encoding channels and properties are flattened into this list.
     pub fields: Vec<(String, PlotFieldValue)>,
     /// Whether this plot is hidden from standalone output (`#[hidden]`).
     pub hidden: bool,

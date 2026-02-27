@@ -103,48 +103,102 @@ pub enum AssertBody {
     },
 }
 
-/// The chart type in a plot declaration.
+/// The mark type in a plot declaration (Vega-Lite grammar).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChartType {
+pub enum MarkType {
+    Point,
     Line,
-    Scatter,
     Bar,
-    Heatmap,
+    Area,
+    Rect,
+    Tick,
 }
 
-impl std::fmt::Display for ChartType {
+impl std::fmt::Display for MarkType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Point => write!(f, "point"),
             Self::Line => write!(f, "line"),
-            Self::Scatter => write!(f, "scatter"),
             Self::Bar => write!(f, "bar"),
-            Self::Heatmap => write!(f, "heatmap"),
+            Self::Area => write!(f, "area"),
+            Self::Rect => write!(f, "rect"),
+            Self::Tick => write!(f, "tick"),
         }
     }
 }
 
-/// A named field in a plot declaration body.
+/// An encoding channel in a plot declaration (Vega-Lite grammar).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodingChannel {
+    X,
+    Y,
+    Color,
+    Size,
+    Shape,
+    Opacity,
+    Detail,
+    Text,
+    Tooltip,
+}
+
+impl std::fmt::Display for EncodingChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::X => write!(f, "x"),
+            Self::Y => write!(f, "y"),
+            Self::Color => write!(f, "color"),
+            Self::Size => write!(f, "size"),
+            Self::Shape => write!(f, "shape"),
+            Self::Opacity => write!(f, "opacity"),
+            Self::Detail => write!(f, "detail"),
+            Self::Text => write!(f, "text"),
+            Self::Tooltip => write!(f, "tooltip"),
+        }
+    }
+}
+
+/// The mark specification in a plot declaration: `mark: point` or `mark: line { stroke_width: 2.0 }`.
+#[derive(Debug, Clone)]
+pub struct MarkSpec {
+    pub mark_type: MarkType,
+    pub mark_type_span: Span,
+    pub properties: Vec<PlotField>,
+    pub span: Span,
+}
+
+/// An encoding channel mapping in a plot declaration.
 ///
 /// Example: `x: for m: OpMode { @total_power[m] }`
 #[derive(Debug, Clone)]
+pub struct Encoding {
+    pub channel: EncodingChannel,
+    pub channel_span: Span,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// A named field in a plot or figure declaration body.
+///
+/// Example: `title: "My Chart"`
+#[derive(Debug, Clone)]
 pub struct PlotField {
-    /// The field name (e.g., "x", "y", "title").
+    /// The field name (e.g., "title", "width", "height").
     pub name: Ident,
     /// The field value expression.
     pub value: Expr,
     pub span: Span,
 }
 
-/// Plot declaration: `plot name = line { x: ..., y: ..., title: "..." };`
+/// Plot declaration: `plot name = { mark: point, encode: { x: ..., y: ... }, title: "..." };`
 ///
 /// Plots are leaf declarations that depend on params/nodes via `@`-references.
 /// They produce a plot specification, not a runtime `Value`.
 #[derive(Debug, Clone)]
 pub struct PlotDecl {
     pub name: Spanned<DeclName>,
-    pub chart_type: ChartType,
-    pub chart_type_span: Span,
-    pub fields: Vec<PlotField>,
+    pub mark: MarkSpec,
+    pub encodings: Vec<Encoding>,
+    pub properties: Vec<PlotField>,
 }
 
 /// Figure declaration: `figure name = { plots: [a, b], title: "..." };`
@@ -917,8 +971,14 @@ pub fn desugar_tuple_matches(file: &mut File) {
                 }
             },
             DeclKind::Plot(p) => {
-                for field in &mut p.fields {
-                    desugar_expr(&mut field.value);
+                for encoding in &mut p.encodings {
+                    desugar_expr(&mut encoding.value);
+                }
+                for prop in &mut p.mark.properties {
+                    desugar_expr(&mut prop.value);
+                }
+                for prop in &mut p.properties {
+                    desugar_expr(&mut prop.value);
                 }
             }
             DeclKind::Figure(f) => {

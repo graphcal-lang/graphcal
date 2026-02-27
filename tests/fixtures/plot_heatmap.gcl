@@ -1,6 +1,6 @@
 // plot_heatmap.gcl -- Heatmap with 2D indexed data
 //
-// Demonstrates a heatmap chart visualizing power draw across
+// Demonstrates a rect mark chart visualizing power draw across
 // subsystems and operating modes as a 2D grid.
 
 index Subsystem = { Comms, Thermal, Payload }
@@ -13,10 +13,13 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
     Payload:  0.0 W,   0.0 W,  35.0 W;
 };
 
-plot power_heatmap = heatmap {
-    x: for m: OpMode { @power_draw[Subsystem::Comms, m] },
-    y: for s: Subsystem { @power_draw[s, OpMode::Safe] },
-    z: for s: Subsystem { sum(for m: OpMode { @power_draw[s, m] }) },
+plot power_heatmap = {
+    mark: rect,
+    encode: {
+        x: for m: OpMode { @power_draw[Subsystem::Comms, m] },
+        y: for s: Subsystem { @power_draw[s, OpMode::Safe] },
+        color: for s: Subsystem { sum(for m: OpMode { @power_draw[s, m] }) },
+    },
     title: "Power Draw Heatmap",
     x_label: "Operating Mode",
     y_label: "Subsystem",
