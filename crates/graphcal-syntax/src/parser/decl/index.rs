@@ -17,31 +17,15 @@ impl Parser<'_> {
         self.expect(Token::Eq)?;
 
         // Check whether this is a range index or a named index
-        let is_range = if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
-            self.lexer.slice_at(span) == "range"
-        } else {
-            false
-        };
-        if is_range {
+        if self.lexer.peek() == Some(&Token::Range) {
             // range(start, end, step: step)
-            self.lexer.next_token(); // consume "range"
+            self.expect(Token::Range)?;
             self.expect(Token::LParen)?;
             let start = self.parse_expr()?;
             self.expect(Token::Comma)?;
             let end = self.parse_expr()?;
             self.expect(Token::Comma)?;
-            // Expect `step:` keyword argument
-            let is_step = if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
-                self.lexer.slice_at(span) == "step"
-            } else {
-                false
-            };
-            if is_step {
-                self.lexer.next_token(); // consume "step"
-            } else {
-                let (tok, span) = self.advance()?;
-                return Err(self.unexpected_token("`step`", &tok.to_string(), span));
-            }
+            self.expect(Token::Step)?;
             self.expect(Token::Colon)?;
             let step = self.parse_expr()?;
             let (_, end_span) = self.expect(Token::RParen)?;

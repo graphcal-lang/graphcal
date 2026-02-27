@@ -1,2 +1,2 @@
 // domain_invalid_key.gcl -- unknown constraint key
-param mass: Mass(step: 10.0 kg) = 500.0 kg;
+param mass: Mass(limit: 10.0 kg) = 500.0 kg;
