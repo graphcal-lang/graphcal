@@ -922,6 +922,19 @@ fn collect_expr_refs(
                 scopes.pop();
             }
         }
+        ExprKind::TupleMatch { scrutinees, arms } => {
+            for s in scrutinees {
+                collect_expr_refs(s, table, scopes);
+            }
+            for arm in arms {
+                if let Some(patterns) = &arm.patterns {
+                    for p in patterns {
+                        collect_expr_refs(p, table, scopes);
+                    }
+                }
+                collect_expr_refs(&arm.body, table, scopes);
+            }
+        }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)

@@ -338,6 +338,11 @@ fn collect_const_refs(
             }
             Ok(())
         }
+        // TupleMatch is desugared before resolution.
+        #[expect(clippy::unreachable, reason = "invariant: desugared before resolution")]
+        ExprKind::TupleMatch { .. } => {
+            unreachable!("TupleMatch should be desugared before resolution")
+        }
     }
 }
 
@@ -737,6 +742,11 @@ fn collect_all_refs(
                 )?;
             }
             Ok(())
+        }
+        // TupleMatch is desugared before resolution.
+        #[expect(clippy::unreachable, reason = "invariant: desugared before resolution")]
+        ExprKind::TupleMatch { .. } => {
+            unreachable!("TupleMatch should be desugared before resolution")
         }
     }
 }

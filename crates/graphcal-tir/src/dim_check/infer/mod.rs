@@ -384,5 +384,14 @@ pub(super) fn infer_type_with_owner(
             resolved_fn_sigs,
             src,
         ),
+
+        // TupleMatch is desugared before dim-checking.
+        #[expect(
+            clippy::unreachable,
+            reason = "invariant: desugared before dim-checking"
+        )]
+        ExprKind::TupleMatch { .. } => {
+            unreachable!("TupleMatch should be desugared before dim-checking")
+        }
     }
 }
