@@ -169,6 +169,40 @@ impl Value {
         }
     }
 
+    /// Format this value as a flat display string (no name prefix, no recursion).
+    ///
+    /// If `symbols` is provided, scalar values include their unit label in brackets
+    /// (e.g., `"42.5 [km/hour]"`). Without `symbols`, only the numeric value is shown.
+    ///
+    /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
+    /// a placeholder string, not recursively expanded.
+    #[must_use]
+    pub fn format_display(
+        &self,
+        symbols: Option<&std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>>,
+    ) -> String {
+        match self {
+            Self::Bool(b) => b.to_string(),
+            Self::Int(i) => i.to_string(),
+            Self::Label {
+                index_name,
+                variant,
+            } => format!("{index_name}::{variant}"),
+            Self::Struct { variant, .. } => variant.as_str().to_string(),
+            Self::Datetime { .. } => self.format_datetime().unwrap_or_default(),
+            Self::Scalar { .. } => {
+                let formatted = graphcal_registry::format::format_number(
+                    self.display_value().unwrap_or_default(),
+                );
+                match symbols.and_then(|s| self.display_label(s)) {
+                    Some(label) => format!("{formatted} [{label}]"),
+                    None => formatted,
+                }
+            }
+            Self::Indexed { .. } => "[...]".to_string(),
+        }
+    }
+
     /// Format a `Datetime` value for display.
     ///
     /// If `display_tz` is set, formats the instant in that IANA timezone
