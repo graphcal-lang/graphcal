@@ -297,15 +297,26 @@ struct DeferredInstantiatedImport {
     import_span: Span,
 }
 
+/// Mutable state accumulated while processing import declarations.
+///
+/// Bundles the various collections that [`compile_single_file_in_project`] builds
+/// during its import-processing loop, avoiding excessive parameter counts in the
+/// extracted helper functions.
+struct ImportContext<'a> {
+    imported_names: ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    imported_type_system_names: HashMap<PathBuf, HashSet<String>>,
+    module_map: HashMap<String, (PathBuf, Span)>,
+    extra_registry_builders: Vec<&'a Registry>,
+    deferred_instantiated: Vec<DeferredInstantiatedImport>,
+}
+
 /// Compile a single file within a project, using pre-evaluated values from dependencies.
 ///
 /// Builds import bindings, lowers to IR, applies overrides, and type-resolves to TIR.
 /// Both [`evaluate_project_perfile`] and [`compile_to_tir_project_perfile`] call this
 /// for each file in the project.
-#[expect(
-    clippy::too_many_lines,
-    reason = "per-file compilation is a single logical pipeline"
-)]
 fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_path: &Path,
@@ -317,388 +328,458 @@ fn compile_single_file_in_project(
     let file_src = &loaded_file.named_source;
     let file_dir = file_path.parent().unwrap_or_else(|| Path::new("."));
 
-    // Build ImportedValueNames and imported_values from this file's import declarations.
-    let mut imported_names = ImportedValueNames::default();
-    let mut imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
-    // Track imported value categories for output (source order).
-    let mut imported_source_order: Vec<(ScopedName, DeclCategory)> = Vec::new();
-    // Track type-system declarations to import from dependency registries.
-    let mut imported_type_system_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
-    // Module imports: module_name → (canonical_path, span).
-    let mut module_map: HashMap<String, (PathBuf, Span)> = HashMap::new();
-    // Track extra RegistryBuilder entries to merge from dependencies.
-    let mut extra_registry_builders: Vec<&Registry> = Vec::new();
-    // Deferred instantiated imports (processed after lowering).
-    let mut deferred_instantiated: Vec<DeferredInstantiatedImport> = Vec::new();
+    let mut ctx = ImportContext {
+        imported_names: ImportedValueNames::default(),
+        imported_values: HashMap::new(),
+        imported_source_order: Vec::new(),
+        imported_type_system_names: HashMap::new(),
+        module_map: HashMap::new(),
+        extra_registry_builders: Vec::new(),
+        deferred_instantiated: Vec::new(),
+    };
 
+    // Process all import declarations.
     for decl in &loaded_file.ast.declarations {
         if let DeclKind::Import(import_decl) = &decl.kind {
             let import_canonical =
                 resolve_import_to_canonical(&import_decl.path, file_dir, project, file_src)?;
 
-            // Instantiated import: defer to post-lowering IR merging.
-            if !import_decl.param_bindings.is_empty() {
-                let dep_loaded = &project.files[&import_canonical];
-
-                // Determine the prefix (namespace) for the merged declarations.
-                let prefix = match &import_decl.kind {
-                    graphcal_syntax::ast::ImportKind::Module { alias } => {
-                        if let Some(alias_ident) = alias {
-                            alias_ident.name.clone()
-                        } else {
-                            derive_module_name_from_import_path(&import_decl.path, file_src)?
-                        }
-                    }
-                    graphcal_syntax::ast::ImportKind::Selective(_) => {
-                        // For selective instantiated imports, we still need a prefix
-                        // for the merged declarations. Derive from filename.
-                        derive_module_name_from_import_path(&import_decl.path, file_src)?
-                    }
-                };
-
-                // Check for duplicate module names (instantiated imports occupy the same namespace).
-                if let Some((_, first_span)) = module_map.get(&prefix) {
-                    return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                        name: prefix,
-                        src: file_src.clone(),
-                        span: import_decl.path.span().into(),
-                        first: (*first_span).into(),
-                    }));
-                }
-                module_map.insert(
-                    prefix.clone(),
-                    (import_canonical.clone(), import_decl.path.span()),
-                );
-
-                // Validate param bindings against the dependency's AST.
-                let mut bindings = HashMap::new();
-                for binding in &import_decl.param_bindings {
-                    let binding_name = &binding.name.name;
-                    // Check that the binding name is a param in the dependency.
-                    let is_param = dep_loaded.ast.declarations.iter().any(|d| {
-                        matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name)
-                    });
-                    if !is_param {
-                        // Check if it's some other kind of declaration.
-                        let actual_kind = dep_loaded.ast.declarations.iter().find_map(|d| match &d
-                            .kind
-                        {
-                            DeclKind::Node(n) if n.name.value.as_str() == binding_name => {
-                                Some("node")
-                            }
-                            DeclKind::Const(c) if c.name.value.as_str() == binding_name => {
-                                Some("const")
-                            }
-                            DeclKind::Assert(a) if a.name.value.as_str() == binding_name => {
-                                Some("assert")
-                            }
-                            DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
-                            _ => None,
-                        });
-                        if let Some(kind) = actual_kind {
-                            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                                name: binding_name.clone(),
-                                actual_kind: kind.to_string(),
-                                src: file_src.clone(),
-                                span: binding.name.span.into(),
-                            }));
-                        }
-                        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-                            name: binding_name.clone(),
-                            file_path: import_decl.path.display_path(),
-                            src: file_src.clone(),
-                            span: binding.name.span.into(),
-                        }));
-                    }
-                    bindings.insert(binding_name.clone(), binding.value.clone());
-                }
-
-                // Register the dependency's declaration names in the importer's scope
-                // so that the resolver recognizes references to them.
-                let selective_names = match &import_decl.kind {
-                    graphcal_syntax::ast::ImportKind::Selective(names) => {
-                        let mut selective = Vec::new();
-                        for import_item in names {
-                            let orig_name = &import_item.name.name;
-                            let local_name = import_item.local_name().to_string();
-
-                            // Verify the name exists in the dependency.
-                            if !file_has_declaration(&dep_loaded.ast, orig_name) {
-                                return Err(CompileError::Eval(
-                                    GraphcalError::ImportNameNotFound {
-                                        name: orig_name.clone(),
-                                        file_path: import_decl.path.display_path(),
-                                        src: file_src.clone(),
-                                        span: import_item.name.span.into(),
-                                    },
-                                ));
-                            }
-
-                            // Register the local name in scope for the resolver.
-                            // Determine the category from the dep's AST.
-                            let is_const = dep_loaded.ast.declarations.iter().any(|d| {
-                                matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name)
-                            });
-                            let is_runtime = dep_loaded.ast.declarations.iter().any(|d| {
-                                matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
-                                    || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
-                            });
-                            let scoped = ScopedName::Local(local_name.clone());
-                            let span = import_item.name.span;
-                            if is_const {
-                                imported_names.const_names.push((scoped, span));
-                            } else if is_runtime {
-                                imported_names.param_names.push((scoped, span));
-                            } else {
-                                // Type-system declarations (dim/unit/index/type) are not
-                                // registered in imported_names; handled via registry merge.
-                            }
-                            // Type-system declarations from instantiated imports also need registration.
-                            let is_type_system =
-                                dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
-                                    DeclKind::Dimension(dim) => {
-                                        dim.name.value.as_str() == orig_name
-                                    }
-                                    DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
-                                    DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
-                                    DeclKind::Type(t) => t.name.value.as_str() == orig_name,
-                                    _ => false,
-                                });
-                            if is_type_system {
-                                imported_type_system_names
-                                    .entry(import_canonical.clone())
-                                    .or_default()
-                                    .insert(orig_name.clone());
-                            }
-
-                            selective.push((orig_name.clone(), local_name));
-                        }
-                        Some(selective)
-                    }
-                    graphcal_syntax::ast::ImportKind::Module { .. } => {
-                        // Register all dep names under the prefix for scope checking.
-                        let import_span = import_decl.path.span();
-                        for dep_decl in &dep_loaded.ast.declarations {
-                            let (dep_name, is_const) = match &dep_decl.kind {
-                                DeclKind::Const(c) => (Some(c.name.value.to_string()), true),
-                                DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
-                                DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
-                                _ => (None, false),
-                            };
-                            if let Some(name) = dep_name {
-                                let scoped = ScopedName::Qualified {
-                                    module: prefix.clone(),
-                                    member: name,
-                                };
-                                if is_const {
-                                    imported_names.const_names.push((scoped, import_span));
-                                } else {
-                                    imported_names.param_names.push((scoped, import_span));
-                                }
-                            }
-                        }
-                        // Import type-system declarations.
-                        if let Some(dep_eval) = evaluated_files.get(&import_canonical) {
-                            extra_registry_builders.push(&dep_eval.registry);
-                        }
-                        None
-                    }
-                };
-
-                // Strict check: when any binding is provided, ALL params of the
-                // imported file must be explicitly bound unless #[allow_defaults].
-                let allow_defaults = decl
-                    .attributes
-                    .iter()
-                    .any(|a| a.name.name == "allow_defaults");
-                if !allow_defaults {
-                    for dep_decl in &dep_loaded.ast.declarations {
-                        if let DeclKind::Param(p) = &dep_decl.kind
-                            && p.value.is_some()
-                            && !bindings.contains_key(p.name.value.as_str())
-                        {
-                            return Err(CompileError::Eval(
-                                GraphcalError::DefaultParamNotProvided {
-                                    name: p.name.value.to_string(),
-                                    src: file_src.clone(),
-                                    span: import_decl.path.span().into(),
-                                    help: format!(
-                                        "provide `{name} = <value>` in the import binding or add `#[allow_defaults]` to the import",
-                                        name = p.name.value,
-                                    ),
-                                },
-                            ));
-                        }
-                    }
-                }
-
-                deferred_instantiated.push(DeferredInstantiatedImport {
-                    dep_path: import_canonical,
-                    prefix,
-                    bindings,
-                    selective_names,
-                    import_span: decl.span,
-                });
-                continue;
-            }
-
-            let dep = evaluated_files.get(&import_canonical).ok_or_else(|| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: format!(
-                        "internal: dependency {} not yet evaluated",
-                        import_canonical.display()
-                    ),
-                    src: file_src.clone(),
-                    span: import_decl.path.span().into(),
-                })
-            })?;
-
-            match &import_decl.kind {
-                graphcal_syntax::ast::ImportKind::Selective(names) => {
-                    for import_item in names {
-                        let orig_name = &import_item.name.name;
-                        let local_name = import_item.local_name().to_string();
-
-                        match import_selective_item(
-                            dep,
-                            orig_name,
-                            &local_name,
-                            import_item.name.span,
-                            &mut imported_names,
-                            &mut imported_values,
-                            Some(&mut imported_source_order),
-                        ) {
-                            SelectiveImportResult::Const
-                            | SelectiveImportResult::Runtime
-                            | SelectiveImportResult::Function => {}
-                            SelectiveImportResult::Assert => {
-                                // Assert is already evaluated in the dep file.
-                                // We just need to make the name visible for #[assumes].
-                                imported_names
-                                    .assert_names
-                                    .push((local_name, import_item.name.span));
-                            }
-                            SelectiveImportResult::NotFound => {
-                                // Check if it's a type-system declaration in the dep's file.
-                                let dep_loaded = &project.files[&import_canonical];
-                                if file_has_declaration(&dep_loaded.ast, orig_name) {
-                                    // Type-system declaration (dim/unit/index/type).
-                                    imported_type_system_names
-                                        .entry(import_canonical.clone())
-                                        .or_default()
-                                        .insert(orig_name.clone());
-                                } else {
-                                    return Err(CompileError::Eval(
-                                        GraphcalError::ImportNameNotFound {
-                                            name: orig_name.clone(),
-                                            file_path: import_decl.path.display_path(),
-                                            src: file_src.clone(),
-                                            span: import_item.name.span.into(),
-                                        },
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                graphcal_syntax::ast::ImportKind::Module { alias } => {
-                    let module_name = if let Some(alias_ident) = alias {
-                        alias_ident.name.clone()
-                    } else {
-                        derive_module_name_from_import_path(&import_decl.path, file_src)?
-                    };
-                    if let Some((_, first_span)) = module_map.get(&module_name) {
-                        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                            name: module_name,
-                            src: file_src.clone(),
-                            span: import_decl.path.span().into(),
-                            first: (*first_span).into(),
-                        }));
-                    }
-                    module_map.insert(
-                        module_name.clone(),
-                        (import_canonical.clone(), import_decl.path.span()),
-                    );
-
-                    // Import all values under module::name prefix.
-                    let import_span = import_decl.path.span();
-                    import_module_values(
-                        dep,
-                        &module_name,
-                        import_span,
-                        &mut imported_names,
-                        &mut imported_values,
-                        Some(&mut imported_source_order),
-                    );
-                    // Import all type-system declarations from dep's registry.
-                    extra_registry_builders.push(&dep.registry);
-                }
+            if import_decl.param_bindings.is_empty() {
+                process_non_instantiated_import(
+                    project,
+                    &import_canonical,
+                    import_decl,
+                    file_src,
+                    evaluated_files,
+                    &mut ctx,
+                )?;
+            } else {
+                process_instantiated_import(
+                    project,
+                    &import_canonical,
+                    import_decl,
+                    decl,
+                    file_src,
+                    evaluated_files,
+                    &mut ctx,
+                )?;
             }
         }
     }
 
     // For module imports, resolve qualified references in expressions.
-    let file_ast = if module_map.is_empty() {
-        std::borrow::Cow::Borrowed(&loaded_file.ast)
-    } else {
-        let mut ast = loaded_file.ast.clone();
-        for decl in &mut ast.declarations {
-            match &mut decl.kind {
-                DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
-                DeclKind::Param(p) => {
-                    if let Some(ref mut value) = p.value {
-                        rewrite_qualified_refs(value);
-                    }
-                }
-                DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
-                DeclKind::Assert(a) => match &mut a.body {
-                    graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
-                    graphcal_syntax::ast::AssertBody::Tolerance {
-                        actual,
-                        expected,
-                        tolerance,
-                        ..
-                    } => {
-                        rewrite_qualified_refs(actual);
-                        rewrite_qualified_refs(expected);
-                        rewrite_qualified_refs(tolerance);
-                    }
-                },
-                DeclKind::Fn(f) => match &mut f.body {
-                    graphcal_syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
-                    graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
-                        for stmt in stmts {
-                            rewrite_qualified_refs(&mut stmt.value);
-                        }
-                        rewrite_qualified_refs(expr);
-                    }
-                },
-                _ => {}
+    let file_ast = rewrite_qualified_refs_in_ast(&loaded_file.ast, &ctx.module_map);
+
+    // Lower to IR and finalize compilation.
+    lower_and_finalize(
+        project,
+        file_path,
+        file_src,
+        &file_ast,
+        ctx,
+        evaluated_files,
+        overrides,
+        override_targets,
+    )
+}
+
+/// Process an instantiated import (one with param bindings), deferring it for
+/// post-lowering IR merging.
+#[expect(
+    clippy::too_many_lines,
+    reason = "binding validation, scope registration, and allow_defaults check form a single cohesive pipeline"
+)]
+fn process_instantiated_import<'a>(
+    project: &'a crate::loader::LoadedProject,
+    import_canonical: &PathBuf,
+    import_decl: &graphcal_syntax::ast::ImportDecl,
+    decl: &graphcal_syntax::ast::Declaration,
+    file_src: &NamedSource<Arc<String>>,
+    evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
+    ctx: &mut ImportContext<'a>,
+) -> Result<(), CompileError> {
+    let dep_loaded = &project.files[import_canonical];
+
+    // Determine the prefix (namespace) for the merged declarations.
+    let prefix = match &import_decl.kind {
+        graphcal_syntax::ast::ImportKind::Module { alias } => {
+            if let Some(alias_ident) = alias {
+                alias_ident.name.clone()
+            } else {
+                derive_module_name_from_import_path(&import_decl.path, file_src)?
             }
         }
-        // Also rewrite qualified refs in param binding expressions.
-        for decl in &mut ast.declarations {
-            if let DeclKind::Import(import_decl) = &mut decl.kind {
-                for binding in &mut import_decl.param_bindings {
-                    rewrite_qualified_refs(&mut binding.value);
-                }
-            }
+        graphcal_syntax::ast::ImportKind::Selective(_) => {
+            // For selective instantiated imports, we still need a prefix
+            // for the merged declarations. Derive from filename.
+            derive_module_name_from_import_path(&import_decl.path, file_src)?
         }
-        std::borrow::Cow::Owned(ast)
     };
 
-    // Lower to IR using per-file evaluation path.
-    let saved_imported_values = imported_values.clone();
+    // Check for duplicate module names (instantiated imports occupy the same namespace).
+    if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
+        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+            name: prefix,
+            src: file_src.clone(),
+            span: import_decl.path.span().into(),
+            first: (*first_span).into(),
+        }));
+    }
+    ctx.module_map.insert(
+        prefix.clone(),
+        (import_canonical.clone(), import_decl.path.span()),
+    );
+
+    // Validate param bindings against the dependency's AST.
+    let mut bindings = HashMap::new();
+    for binding in &import_decl.param_bindings {
+        let binding_name = &binding.name.name;
+        // Check that the binding name is a param in the dependency.
+        let is_param = dep_loaded.ast.declarations.iter().any(
+            |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name),
+        );
+        if !is_param {
+            // Check if it's some other kind of declaration.
+            let actual_kind = dep_loaded
+                .ast
+                .declarations
+                .iter()
+                .find_map(|d| match &d.kind {
+                    DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
+                    DeclKind::Const(c) if c.name.value.as_str() == binding_name => Some("const"),
+                    DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
+                    DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
+                    _ => None,
+                });
+            if let Some(kind) = actual_kind {
+                return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
+                    name: binding_name.clone(),
+                    actual_kind: kind.to_string(),
+                    src: file_src.clone(),
+                    span: binding.name.span.into(),
+                }));
+            }
+            return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+                name: binding_name.clone(),
+                file_path: import_decl.path.display_path(),
+                src: file_src.clone(),
+                span: binding.name.span.into(),
+            }));
+        }
+        bindings.insert(binding_name.clone(), binding.value.clone());
+    }
+
+    // Register the dependency's declaration names in the importer's scope
+    // so that the resolver recognizes references to them.
+    let selective_names = match &import_decl.kind {
+        graphcal_syntax::ast::ImportKind::Selective(names) => {
+            let mut selective = Vec::new();
+            for import_item in names {
+                let orig_name = &import_item.name.name;
+                let local_name = import_item.local_name().to_string();
+
+                // Verify the name exists in the dependency.
+                if !file_has_declaration(&dep_loaded.ast, orig_name) {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                        name: orig_name.clone(),
+                        file_path: import_decl.path.display_path(),
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
+                }
+
+                // Register the local name in scope for the resolver.
+                // Determine the category from the dep's AST.
+                let is_const = dep_loaded.ast.declarations.iter().any(
+                    |d| matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name),
+                );
+                let is_runtime = dep_loaded.ast.declarations.iter().any(|d| {
+                    matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
+                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
+                });
+                let scoped = ScopedName::Local(local_name.clone());
+                let span = import_item.name.span;
+                if is_const {
+                    ctx.imported_names.const_names.push((scoped, span));
+                } else if is_runtime {
+                    ctx.imported_names.param_names.push((scoped, span));
+                } else {
+                    // Type-system declarations (dim/unit/index/type) are not
+                    // registered in imported_names; handled via registry merge.
+                }
+                // Type-system declarations from instantiated imports also need registration.
+                let is_type_system = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
+                    DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
+                    DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
+                    DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
+                    DeclKind::Type(t) => t.name.value.as_str() == orig_name,
+                    _ => false,
+                });
+                if is_type_system {
+                    ctx.imported_type_system_names
+                        .entry(import_canonical.clone())
+                        .or_default()
+                        .insert(orig_name.clone());
+                }
+
+                selective.push((orig_name.clone(), local_name));
+            }
+            Some(selective)
+        }
+        graphcal_syntax::ast::ImportKind::Module { .. } => {
+            // Register all dep names under the prefix for scope checking.
+            let import_span = import_decl.path.span();
+            for dep_decl in &dep_loaded.ast.declarations {
+                let (dep_name, is_const) = match &dep_decl.kind {
+                    DeclKind::Const(c) => (Some(c.name.value.to_string()), true),
+                    DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
+                    DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
+                    _ => (None, false),
+                };
+                if let Some(name) = dep_name {
+                    let scoped = ScopedName::Qualified {
+                        module: prefix.clone(),
+                        member: name,
+                    };
+                    if is_const {
+                        ctx.imported_names.const_names.push((scoped, import_span));
+                    } else {
+                        ctx.imported_names.param_names.push((scoped, import_span));
+                    }
+                }
+            }
+            // Import type-system declarations.
+            if let Some(dep_eval) = evaluated_files.get(import_canonical) {
+                ctx.extra_registry_builders.push(&dep_eval.registry);
+            }
+            None
+        }
+    };
+
+    // Strict check: when any binding is provided, ALL params of the
+    // imported file must be explicitly bound unless #[allow_defaults].
+    let allow_defaults = decl
+        .attributes
+        .iter()
+        .any(|a| a.name.name == "allow_defaults");
+    if !allow_defaults {
+        for dep_decl in &dep_loaded.ast.declarations {
+            if let DeclKind::Param(p) = &dep_decl.kind
+                && p.value.is_some()
+                && !bindings.contains_key(p.name.value.as_str())
+            {
+                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
+                    name: p.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: import_decl.path.span().into(),
+                    help: format!(
+                        "provide `{name} = <value>` in the import binding or add `#[allow_defaults]` to the import",
+                        name = p.name.value,
+                    ),
+                }));
+            }
+        }
+    }
+
+    ctx.deferred_instantiated.push(DeferredInstantiatedImport {
+        dep_path: import_canonical.clone(),
+        prefix,
+        bindings,
+        selective_names,
+        import_span: decl.span,
+    });
+    Ok(())
+}
+
+/// Process a non-instantiated import (no param bindings), importing values and
+/// type-system declarations from the already-evaluated dependency.
+fn process_non_instantiated_import<'a>(
+    project: &crate::loader::LoadedProject,
+    import_canonical: &PathBuf,
+    import_decl: &graphcal_syntax::ast::ImportDecl,
+    file_src: &NamedSource<Arc<String>>,
+    evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
+    ctx: &mut ImportContext<'a>,
+) -> Result<(), CompileError> {
+    let dep = evaluated_files.get(import_canonical).ok_or_else(|| {
+        CompileError::Eval(GraphcalError::EvalError {
+            message: format!(
+                "internal: dependency {} not yet evaluated",
+                import_canonical.display()
+            ),
+            src: file_src.clone(),
+            span: import_decl.path.span().into(),
+        })
+    })?;
+
+    match &import_decl.kind {
+        graphcal_syntax::ast::ImportKind::Selective(names) => {
+            for import_item in names {
+                let orig_name = &import_item.name.name;
+                let local_name = import_item.local_name().to_string();
+
+                match import_selective_item(
+                    dep,
+                    orig_name,
+                    &local_name,
+                    import_item.name.span,
+                    &mut ctx.imported_names,
+                    &mut ctx.imported_values,
+                    Some(&mut ctx.imported_source_order),
+                ) {
+                    SelectiveImportResult::Const
+                    | SelectiveImportResult::Runtime
+                    | SelectiveImportResult::Function => {}
+                    SelectiveImportResult::Assert => {
+                        // Assert is already evaluated in the dep file.
+                        // We just need to make the name visible for #[assumes].
+                        ctx.imported_names
+                            .assert_names
+                            .push((local_name, import_item.name.span));
+                    }
+                    SelectiveImportResult::NotFound => {
+                        // Check if it's a type-system declaration in the dep's file.
+                        let dep_loaded = &project.files[import_canonical];
+                        if file_has_declaration(&dep_loaded.ast, orig_name) {
+                            // Type-system declaration (dim/unit/index/type).
+                            ctx.imported_type_system_names
+                                .entry(import_canonical.clone())
+                                .or_default()
+                                .insert(orig_name.clone());
+                        } else {
+                            return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                                name: orig_name.clone(),
+                                file_path: import_decl.path.display_path(),
+                                src: file_src.clone(),
+                                span: import_item.name.span.into(),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        graphcal_syntax::ast::ImportKind::Module { alias } => {
+            let module_name = if let Some(alias_ident) = alias {
+                alias_ident.name.clone()
+            } else {
+                derive_module_name_from_import_path(&import_decl.path, file_src)?
+            };
+            if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
+                return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+                    name: module_name,
+                    src: file_src.clone(),
+                    span: import_decl.path.span().into(),
+                    first: (*first_span).into(),
+                }));
+            }
+            ctx.module_map.insert(
+                module_name.clone(),
+                (import_canonical.clone(), import_decl.path.span()),
+            );
+
+            // Import all values under module::name prefix.
+            let import_span = import_decl.path.span();
+            import_module_values(
+                dep,
+                &module_name,
+                import_span,
+                &mut ctx.imported_names,
+                &mut ctx.imported_values,
+                Some(&mut ctx.imported_source_order),
+            );
+            // Import all type-system declarations from dep's registry.
+            ctx.extra_registry_builders.push(&dep.registry);
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite qualified references in the AST when module imports are present.
+///
+/// If there are no module imports, returns a borrowed reference to the original AST.
+/// Otherwise, clones the AST and rewrites `QualifiedGraphRef`, `QualifiedConstRef`,
+/// and `QualifiedFnCall` to their flat counterparts.
+fn rewrite_qualified_refs_in_ast<'a>(
+    ast: &'a graphcal_syntax::ast::File,
+    module_map: &HashMap<String, (PathBuf, Span)>,
+) -> std::borrow::Cow<'a, graphcal_syntax::ast::File> {
+    if module_map.is_empty() {
+        return std::borrow::Cow::Borrowed(ast);
+    }
+
+    let mut ast = ast.clone();
+    for decl in &mut ast.declarations {
+        match &mut decl.kind {
+            DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
+            DeclKind::Param(p) => {
+                if let Some(ref mut value) = p.value {
+                    rewrite_qualified_refs(value);
+                }
+            }
+            DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
+            DeclKind::Assert(a) => match &mut a.body {
+                graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
+                graphcal_syntax::ast::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    ..
+                } => {
+                    rewrite_qualified_refs(actual);
+                    rewrite_qualified_refs(expected);
+                    rewrite_qualified_refs(tolerance);
+                }
+            },
+            DeclKind::Fn(f) => match &mut f.body {
+                graphcal_syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
+                graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                    for stmt in stmts {
+                        rewrite_qualified_refs(&mut stmt.value);
+                    }
+                    rewrite_qualified_refs(expr);
+                }
+            },
+            _ => {}
+        }
+    }
+    // Also rewrite qualified refs in param binding expressions.
+    for decl in &mut ast.declarations {
+        if let DeclKind::Import(import_decl) = &mut decl.kind {
+            for binding in &mut import_decl.param_bindings {
+                rewrite_qualified_refs(&mut binding.value);
+            }
+        }
+    }
+    std::borrow::Cow::Owned(ast)
+}
+
+/// Lower the AST to IR, process deferred instantiated imports, apply overrides,
+/// and type-resolve to produce the final `CompiledFile`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pipeline function threading project context through IR lowering stages"
+)]
+fn lower_and_finalize(
+    project: &crate::loader::LoadedProject,
+    file_path: &Path,
+    file_src: &NamedSource<Arc<String>>,
+    file_ast: &graphcal_syntax::ast::File,
+    ctx: ImportContext<'_>,
+    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    override_targets: &HashMap<DeclName, (PathBuf, DeclName)>,
+) -> Result<CompiledFile, CompileError> {
+    let saved_imported_values = ctx.imported_values.clone();
 
     let (mut builder, mut unfrozen) = crate::ir::lower_to_builder_with_imported_values(
-        &file_ast,
+        file_ast,
         file_src,
-        &imported_names,
-        imported_values,
+        &ctx.imported_names,
+        ctx.imported_values,
     )?;
 
     // Register type-system declarations from selectively imported files.
-    for (dep_path, names) in &imported_type_system_names {
+    for (dep_path, names) in &ctx.imported_type_system_names {
         let dep_loaded = &project.files[dep_path];
         crate::ir::register_selected_declarations(
             &dep_loaded.ast,
@@ -709,119 +790,18 @@ fn compile_single_file_in_project(
     }
 
     // Merge type-system declarations from module-imported registries.
-    for dep_registry in &extra_registry_builders {
+    for dep_registry in &ctx.extra_registry_builders {
         merge_registry_into_builder(&mut builder, dep_registry);
     }
 
     // Process deferred instantiated imports: compile dep to IR and merge.
-    for deferred in &deferred_instantiated {
-        let dep_loaded = &project.files[&deferred.dep_path];
-        let dep_src = &dep_loaded.named_source;
-
-        // Build imported values for the dependency from its own transitive imports.
-        let dep_imported = build_dep_imported_values(project, &deferred.dep_path, evaluated_files)?;
-
-        // Compile the dependency to IR.
-        let (dep_builder, dep_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
-            &dep_loaded.ast,
-            dep_src,
-            &dep_imported.0,
-            dep_imported.1,
-        )?;
-
-        // Merge the dependency's type-system declarations into the importer's registry.
-        let dep_registry = dep_builder.build();
-        merge_registry_into_builder(&mut builder, &dep_registry);
-
-        // Collect all declaration names in the dependency (for prefix_expr_refs).
-        let mut dep_names: HashSet<String> = HashSet::new();
-        for (name, _) in &dep_unfrozen.source_order {
-            dep_names.insert(name.clone());
-        }
-        // Also include function names.
-        for fn_entry in &dep_unfrozen.functions {
-            dep_names.insert(fn_entry.name.clone());
-        }
-
-        // Merge the dependency's IR into the importer's IR.
-        unfrozen.merge_dependency(
-            dep_unfrozen,
-            &deferred.prefix,
-            &deferred.bindings,
-            &dep_names,
-        );
-
-        // For selective instantiated imports, add alias nodes that reference
-        // the prefixed declarations. E.g., `delta_v` → `@prefix::delta_v`.
-        if let Some(selective) = &deferred.selective_names {
-            for (orig_name, local_name) in selective {
-                let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
-
-                // Find the type annotation from the dependency's AST.
-                let type_ann = dep_loaded
-                    .ast
-                    .declarations
-                    .iter()
-                    .find_map(|d| match &d.kind {
-                        DeclKind::Const(c) if c.name.value.as_str() == orig_name => {
-                            Some(c.type_ann.clone())
-                        }
-                        DeclKind::Param(p) if p.name.value.as_str() == orig_name => {
-                            Some(p.type_ann.clone())
-                        }
-                        DeclKind::Node(n) if n.name.value.as_str() == orig_name => {
-                            Some(n.type_ann.clone())
-                        }
-                        _ => None,
-                    });
-
-                if let Some(type_ann) = type_ann {
-                    // Determine if this is a const or runtime declaration.
-                    let is_const = dep_loaded.ast.declarations.iter().any(|d| {
-                        matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name)
-                    });
-
-                    // Create an alias expression: `@prefix::orig_name` (or `PREFIX::CONST`)
-                    let alias_expr = if is_const {
-                        Expr {
-                            kind: ExprKind::ConstRef(Spanned::new(
-                                DeclName::new(&prefixed_name),
-                                deferred.import_span,
-                            )),
-                            span: deferred.import_span,
-                        }
-                    } else {
-                        Expr {
-                            kind: ExprKind::GraphRef(Spanned::new(
-                                DeclName::new(&prefixed_name),
-                                deferred.import_span,
-                            )),
-                            span: deferred.import_span,
-                        }
-                    };
-
-                    // Add the alias as a declaration in the importer's IR.
-                    if is_const {
-                        unfrozen.add_const_alias(
-                            local_name.clone(),
-                            type_ann,
-                            alias_expr,
-                            deferred.import_span,
-                            prefixed_name,
-                        );
-                    } else {
-                        unfrozen.add_node_alias(
-                            local_name.clone(),
-                            type_ann,
-                            alias_expr,
-                            deferred.import_span,
-                            prefixed_name,
-                        );
-                    }
-                }
-            }
-        }
-    }
+    process_deferred_instantiated_imports(
+        project,
+        &ctx.deferred_instantiated,
+        evaluated_files,
+        &mut builder,
+        &mut unfrozen,
+    )?;
 
     let ir = unfrozen.freeze(builder.build());
 
@@ -858,8 +838,142 @@ fn compile_single_file_in_project(
         tir,
         declared_types,
         imported_values: saved_imported_values,
-        imported_source_order,
+        imported_source_order: ctx.imported_source_order,
     })
+}
+
+/// Process deferred instantiated imports by compiling each dependency to IR
+/// and merging it into the importer's IR.
+fn process_deferred_instantiated_imports(
+    project: &crate::loader::LoadedProject,
+    deferred_imports: &[DeferredInstantiatedImport],
+    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    builder: &mut RegistryBuilder,
+    unfrozen: &mut graphcal_ir::ir::UnfrozenIR,
+) -> Result<(), CompileError> {
+    for deferred in deferred_imports {
+        let dep_loaded = &project.files[&deferred.dep_path];
+        let dep_src = &dep_loaded.named_source;
+
+        // Build imported values for the dependency from its own transitive imports.
+        let dep_imported = build_dep_imported_values(project, &deferred.dep_path, evaluated_files)?;
+
+        // Compile the dependency to IR.
+        let (dep_builder, dep_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
+            &dep_loaded.ast,
+            dep_src,
+            &dep_imported.0,
+            dep_imported.1,
+        )?;
+
+        // Merge the dependency's type-system declarations into the importer's registry.
+        let dep_registry = dep_builder.build();
+        merge_registry_into_builder(builder, &dep_registry);
+
+        // Collect all declaration names in the dependency (for prefix_expr_refs).
+        let mut dep_names: HashSet<String> = HashSet::new();
+        for (name, _) in &dep_unfrozen.source_order {
+            dep_names.insert(name.clone());
+        }
+        // Also include function names.
+        for fn_entry in &dep_unfrozen.functions {
+            dep_names.insert(fn_entry.name.clone());
+        }
+
+        // Merge the dependency's IR into the importer's IR.
+        unfrozen.merge_dependency(
+            dep_unfrozen,
+            &deferred.prefix,
+            &deferred.bindings,
+            &dep_names,
+        );
+
+        // For selective instantiated imports, add alias nodes that reference
+        // the prefixed declarations. E.g., `delta_v` → `@prefix::delta_v`.
+        if let Some(selective) = &deferred.selective_names {
+            add_selective_aliases(dep_loaded, selective, deferred, unfrozen);
+        }
+    }
+    Ok(())
+}
+
+/// Add alias declarations for selective instantiated imports.
+///
+/// For each selected name, creates either a const or node alias in the importer's IR
+/// that references the prefixed declaration from the merged dependency.
+fn add_selective_aliases(
+    dep_loaded: &crate::loader::LoadedFile,
+    selective: &[(String, String)],
+    deferred: &DeferredInstantiatedImport,
+    unfrozen: &mut graphcal_ir::ir::UnfrozenIR,
+) {
+    for (orig_name, local_name) in selective {
+        let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
+
+        // Find the type annotation from the dependency's AST.
+        let type_ann = dep_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Const(c) if c.name.value.as_str() == orig_name => {
+                    Some(c.type_ann.clone())
+                }
+                DeclKind::Param(p) if p.name.value.as_str() == orig_name => {
+                    Some(p.type_ann.clone())
+                }
+                DeclKind::Node(n) if n.name.value.as_str() == orig_name => Some(n.type_ann.clone()),
+                _ => None,
+            });
+
+        let Some(type_ann) = type_ann else {
+            continue;
+        };
+
+        // Determine if this is a const or runtime declaration.
+        let is_const =
+            dep_loaded.ast.declarations.iter().any(
+                |d| matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name),
+            );
+
+        // Create an alias expression: `@prefix::orig_name` (or `PREFIX::CONST`)
+        let alias_expr = if is_const {
+            Expr {
+                kind: ExprKind::ConstRef(Spanned::new(
+                    DeclName::new(&prefixed_name),
+                    deferred.import_span,
+                )),
+                span: deferred.import_span,
+            }
+        } else {
+            Expr {
+                kind: ExprKind::GraphRef(Spanned::new(
+                    DeclName::new(&prefixed_name),
+                    deferred.import_span,
+                )),
+                span: deferred.import_span,
+            }
+        };
+
+        // Add the alias as a declaration in the importer's IR.
+        if is_const {
+            unfrozen.add_const_alias(
+                local_name.clone(),
+                type_ann,
+                alias_expr,
+                deferred.import_span,
+                prefixed_name,
+            );
+        } else {
+            unfrozen.add_node_alias(
+                local_name.clone(),
+                type_ann,
+                alias_expr,
+                deferred.import_span,
+                prefixed_name,
+            );
+        }
+    }
 }
 
 /// Result of looking up a single selective import item in an `EvaluatedFile`.
