@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use graphcal_syntax::ast::{
-    DeclKind, DimExpr, DomainBound, ExprKind, FnBody, IndexDeclKind, PatternBinding, TypeExpr,
-    TypeExprKind, UnitExpr,
+    AssertDecl, ConstDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody,
+    FnDecl, ImportDecl, IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, PatternBinding, PlotDecl,
+    TypeDecl, TypeExpr, TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_syntax::span::Span;
 
@@ -141,15 +142,37 @@ impl ScopeStack {
 }
 
 /// Build a symbol table from a parsed AST file.
-#[expect(
-    clippy::too_many_lines,
-    reason = "declaration walker needs to handle every DeclKind variant"
-)]
 pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
     let mut table = SymbolTable::default();
     let mut scopes = ScopeStack::new();
 
-    // Add builtin constants as definitions.
+    register_builtins(&mut table);
+
+    for decl in &ast.declarations {
+        collect_attribute_refs(&decl.attributes, &mut table);
+
+        match &decl.kind {
+            DeclKind::Param(p) => collect_param_decl(p, decl.span, &mut table, &mut scopes),
+            DeclKind::Node(n) => collect_node_decl(n, decl.span, &mut table, &mut scopes),
+            DeclKind::Const(c) => collect_const_decl(c, decl.span, &mut table, &mut scopes),
+            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, &mut table),
+            DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
+            DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
+            DeclKind::Fn(f) => collect_fn_decl(f, decl.span, &mut table, &mut scopes),
+            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, &mut table),
+            DeclKind::Assert(a) => collect_assert_decl(a, decl.span, &mut table, &mut scopes),
+            DeclKind::Plot(p) => collect_plot_decl(p, decl.span, &mut table, &mut scopes),
+            DeclKind::Figure(f) => collect_figure_decl(f, decl.span, &mut table, &mut scopes),
+            DeclKind::Import(u) => collect_import_decl(u, &mut table),
+        }
+    }
+
+    // Sort references by offset for binary search.
+    table.references.sort_by_key(|r| r.span.offset());
+    table
+}
+
+fn register_builtins(table: &mut SymbolTable) {
     for name in builtin_constants().keys() {
         table.definitions.insert(
             (*name).to_string(),
@@ -164,7 +187,6 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
         );
     }
 
-    // Add builtin functions as definitions.
     for (name, f) in builtin_functions() {
         table.definitions.insert(
             (*name).to_string(),
@@ -178,334 +200,373 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
             },
         );
     }
+}
 
-    for decl in &ast.declarations {
-        // Collect references from #[assumes(...)] attribute arguments.
-        for attr in &decl.attributes {
-            if attr.name.name == "assumes" {
-                for arg in &attr.args {
-                    if let Some(ident) = arg.as_single_ident() {
-                        table.references.push(ReferenceInfo {
-                            span: ident.span,
-                            target: ident.name.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        match &decl.kind {
-            DeclKind::Param(p) => {
-                let name = p.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Param,
-                        name_span: p.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                collect_type_expr_refs(&p.type_ann, &mut table);
-                if let Some(ref value) = p.value {
-                    collect_expr_refs(value, &mut table, &mut scopes);
-                }
-            }
-            DeclKind::Node(n) => {
-                let name = n.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Node,
-                        name_span: n.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                collect_type_expr_refs(&n.type_ann, &mut table);
-                collect_expr_refs(&n.value, &mut table, &mut scopes);
-            }
-            DeclKind::Const(c) => {
-                let name = c.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Const,
-                        name_span: c.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                collect_type_expr_refs(&c.type_ann, &mut table);
-                collect_expr_refs(&c.value, &mut table, &mut scopes);
-            }
-            DeclKind::Dimension(d) => {
-                let name = d.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Dimension,
-                        name_span: d.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                if let Some(dim_expr) = &d.definition {
-                    collect_dim_expr_refs(dim_expr, &mut table);
-                }
-            }
-            DeclKind::Unit(u) => {
-                let name = u.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Unit,
-                        name_span: u.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                collect_dim_expr_refs(&u.dim_type, &mut table);
-                if let Some(unit_def) = &u.definition {
-                    collect_expr_refs(&unit_def.scale_expr, &mut table, &mut scopes);
-                    collect_unit_expr_refs(&unit_def.unit_expr, &mut table);
-                }
-            }
-            DeclKind::Type(t) => {
-                let name = t.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::StructType,
-                        name_span: t.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                // Add variants (only if more than one, i.e., tagged union, not struct sugar).
-                if t.variants.len() > 1 {
-                    for variant in &t.variants {
-                        let vname = variant.name.value.to_string();
-                        let key = format!("{name}::{vname}");
-                        table.definitions.insert(
-                            key,
-                            DefinitionInfo {
-                                name: vname,
-                                category: SymbolCategory::IndexVariant,
-                                name_span: variant.name.span,
-                                decl_span: variant.span,
-                                type_description: None,
-                                detail: Some(format!("variant of {name}")),
-                            },
-                        );
-                    }
-                }
-                // Walk field type annotations.
-                for variant in &t.variants {
-                    for field in &variant.fields {
-                        collect_type_expr_refs(&field.type_ann, &mut table);
-                    }
-                }
-            }
-            DeclKind::Fn(f) => {
-                let fname = f.name.value.to_string();
-                table.definitions.insert(
-                    fname.clone(),
-                    DefinitionInfo {
-                        name: fname.clone(),
-                        category: SymbolCategory::Function,
-                        name_span: f.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-
-                // Push scope for function params.
-                scopes.push();
-                for param in &f.params {
-                    let pname = param.name.name.clone();
-                    let key = format!("{fname}::{pname}");
-                    table.definitions.insert(
-                        key.clone(),
-                        DefinitionInfo {
-                            name: pname.clone(),
-                            category: SymbolCategory::LocalVar,
-                            name_span: param.name.span,
-                            decl_span: param.name.span,
-                            type_description: None,
-                            detail: Some(format!("parameter of fn {fname}")),
-                        },
-                    );
-                    scopes.insert(pname, key);
-                    collect_type_expr_refs(&param.type_ann, &mut table);
-                }
-
-                collect_type_expr_refs(&f.return_type, &mut table);
-
-                match &f.body {
-                    FnBody::Short(expr) => {
-                        collect_expr_refs(expr, &mut table, &mut scopes);
-                    }
-                    FnBody::Block { stmts, expr } => {
-                        scopes.push();
-                        for stmt in stmts {
-                            collect_expr_refs(&stmt.value, &mut table, &mut scopes);
-                            let lname = stmt.name.name.clone();
-                            let key = format!("{fname}::{lname}");
-                            table.definitions.insert(
-                                key.clone(),
-                                DefinitionInfo {
-                                    name: lname.clone(),
-                                    category: SymbolCategory::LocalVar,
-                                    name_span: stmt.name.span,
-                                    decl_span: stmt.span,
-                                    type_description: None,
-                                    detail: None,
-                                },
-                            );
-                            scopes.insert(lname, key);
-                            if let Some(type_ann) = &stmt.type_ann {
-                                collect_type_expr_refs(type_ann, &mut table);
-                            }
-                        }
-                        collect_expr_refs(expr, &mut table, &mut scopes);
-                        scopes.pop();
-                    }
-                }
-                scopes.pop();
-            }
-            DeclKind::Index(idx) => {
-                let name = idx.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Index,
-                        name_span: idx.name.span,
-                        decl_span: decl.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                if let IndexDeclKind::Named { variants } = &idx.kind {
-                    for variant in variants {
-                        let vname = variant.value.to_string();
-                        let key = format!("{name}::{vname}");
-                        table.definitions.insert(
-                            key,
-                            DefinitionInfo {
-                                name: vname,
-                                category: SymbolCategory::IndexVariant,
-                                name_span: variant.span,
-                                decl_span: variant.span,
-                                type_description: None,
-                                detail: Some(format!("label/value variant of index {name}")),
-                            },
-                        );
-                    }
-                }
-            }
-            DeclKind::Assert(a) => {
-                let name = a.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Assert,
-                        name_span: a.name.span,
-                        decl_span: decl.span,
-                        type_description: Some("Bool".to_string()),
-                        detail: Some("assert".to_string()),
-                    },
-                );
-                // Walk assert body expressions
-                match &a.body {
-                    graphcal_syntax::ast::AssertBody::Expr(expr) => {
-                        collect_expr_refs(expr, &mut table, &mut scopes);
-                    }
-                    graphcal_syntax::ast::AssertBody::Tolerance {
-                        actual,
-                        expected,
-                        tolerance,
-                        ..
-                    } => {
-                        collect_expr_refs(actual, &mut table, &mut scopes);
-                        collect_expr_refs(expected, &mut table, &mut scopes);
-                        collect_expr_refs(tolerance, &mut table, &mut scopes);
-                    }
-                }
-            }
-            DeclKind::Plot(p) => {
-                let name = p.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Plot,
-                        name_span: p.name.span,
-                        decl_span: decl.span,
-                        type_description: Some(format!("plot ({})", p.chart_type)),
-                        detail: Some("plot".to_string()),
-                    },
-                );
-                for field in &p.fields {
-                    collect_expr_refs(&field.value, &mut table, &mut scopes);
-                }
-            }
-            DeclKind::Figure(f) => {
-                let name = f.name.value.to_string();
-                table.definitions.insert(
-                    name.clone(),
-                    DefinitionInfo {
-                        name: name.clone(),
-                        category: SymbolCategory::Figure,
-                        name_span: f.name.span,
-                        decl_span: decl.span,
-                        type_description: Some("figure".to_string()),
-                        detail: Some("figure".to_string()),
-                    },
-                );
-                for field in &f.fields {
-                    collect_expr_refs(&field.value, &mut table, &mut scopes);
-                }
-            }
-            DeclKind::Import(u) => {
-                // Each imported name is a reference; target resolution for cross-file
-                // go-to-definition is handled separately.
-                if let graphcal_syntax::ast::ImportKind::Selective(names) = &u.kind {
-                    for import_item in names {
-                        table.references.push(ReferenceInfo {
-                            span: import_item.name.span,
-                            target: import_item.name.name.clone(),
-                        });
-                        // If aliased, the alias also resolves to the same target.
-                        if let Some(alias) = &import_item.alias {
-                            table.references.push(ReferenceInfo {
-                                span: alias.span,
-                                target: import_item.name.name.clone(),
-                            });
-                        }
-                    }
+fn collect_attribute_refs(attributes: &[graphcal_syntax::ast::Attribute], table: &mut SymbolTable) {
+    for attr in attributes {
+        if attr.name.name == "assumes" {
+            for arg in &attr.args {
+                if let Some(ident) = arg.as_single_ident() {
+                    table.references.push(ReferenceInfo {
+                        span: ident.span,
+                        target: ident.name.clone(),
+                    });
                 }
             }
         }
     }
+}
 
-    // Sort references by offset for binary search.
-    table.references.sort_by_key(|r| r.span.offset());
-    table
+fn collect_param_decl(
+    p: &ParamDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = p.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Param,
+            name_span: p.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    collect_type_expr_refs(&p.type_ann, table);
+    if let Some(ref value) = p.value {
+        collect_expr_refs(value, table, scopes);
+    }
+}
+
+fn collect_node_decl(
+    n: &NodeDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = n.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Node,
+            name_span: n.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    collect_type_expr_refs(&n.type_ann, table);
+    collect_expr_refs(&n.value, table, scopes);
+}
+
+fn collect_const_decl(
+    c: &ConstDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = c.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Const,
+            name_span: c.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    collect_type_expr_refs(&c.type_ann, table);
+    collect_expr_refs(&c.value, table, scopes);
+}
+
+fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
+    let name = d.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Dimension,
+            name_span: d.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    if let Some(dim_expr) = &d.definition {
+        collect_dim_expr_refs(dim_expr, table);
+    }
+}
+
+fn collect_unit_decl(
+    u: &UnitDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = u.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Unit,
+            name_span: u.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    collect_dim_expr_refs(&u.dim_type, table);
+    if let Some(unit_def) = &u.definition {
+        collect_expr_refs(&unit_def.scale_expr, table, scopes);
+        collect_unit_expr_refs(&unit_def.unit_expr, table);
+    }
+}
+
+fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
+    let name = t.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name: name.clone(),
+            category: SymbolCategory::StructType,
+            name_span: t.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    // Add variants (only if more than one, i.e., tagged union, not struct sugar).
+    if t.variants.len() > 1 {
+        for variant in &t.variants {
+            let vname = variant.name.value.to_string();
+            let key = format!("{name}::{vname}");
+            table.definitions.insert(
+                key,
+                DefinitionInfo {
+                    name: vname,
+                    category: SymbolCategory::IndexVariant,
+                    name_span: variant.name.span,
+                    decl_span: variant.span,
+                    type_description: None,
+                    detail: Some(format!("variant of {name}")),
+                },
+            );
+        }
+    }
+    // Walk field type annotations.
+    for variant in &t.variants {
+        for field in &variant.fields {
+            collect_type_expr_refs(&field.type_ann, table);
+        }
+    }
+}
+
+fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes: &mut ScopeStack) {
+    let fname = f.name.value.to_string();
+    table.definitions.insert(
+        fname.clone(),
+        DefinitionInfo {
+            name: fname.clone(),
+            category: SymbolCategory::Function,
+            name_span: f.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+
+    // Push scope for function params.
+    scopes.push();
+    for param in &f.params {
+        let pname = param.name.name.clone();
+        let key = format!("{fname}::{pname}");
+        table.definitions.insert(
+            key.clone(),
+            DefinitionInfo {
+                name: pname.clone(),
+                category: SymbolCategory::LocalVar,
+                name_span: param.name.span,
+                decl_span: param.name.span,
+                type_description: None,
+                detail: Some(format!("parameter of fn {fname}")),
+            },
+        );
+        scopes.insert(pname, key);
+        collect_type_expr_refs(&param.type_ann, table);
+    }
+
+    collect_type_expr_refs(&f.return_type, table);
+
+    match &f.body {
+        FnBody::Short(expr) => {
+            collect_expr_refs(expr, table, scopes);
+        }
+        FnBody::Block { stmts, expr } => {
+            scopes.push();
+            for stmt in stmts {
+                collect_expr_refs(&stmt.value, table, scopes);
+                let lname = stmt.name.name.clone();
+                let key = format!("{fname}::{lname}");
+                table.definitions.insert(
+                    key.clone(),
+                    DefinitionInfo {
+                        name: lname.clone(),
+                        category: SymbolCategory::LocalVar,
+                        name_span: stmt.name.span,
+                        decl_span: stmt.span,
+                        type_description: None,
+                        detail: None,
+                    },
+                );
+                scopes.insert(lname, key);
+                if let Some(type_ann) = &stmt.type_ann {
+                    collect_type_expr_refs(type_ann, table);
+                }
+            }
+            collect_expr_refs(expr, table, scopes);
+            scopes.pop();
+        }
+    }
+    scopes.pop();
+}
+
+fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable) {
+    let name = idx.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name: name.clone(),
+            category: SymbolCategory::Index,
+            name_span: idx.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    if let IndexDeclKind::Named { variants } = &idx.kind {
+        for variant in variants {
+            let vname = variant.value.to_string();
+            let key = format!("{name}::{vname}");
+            table.definitions.insert(
+                key,
+                DefinitionInfo {
+                    name: vname,
+                    category: SymbolCategory::IndexVariant,
+                    name_span: variant.span,
+                    decl_span: variant.span,
+                    type_description: None,
+                    detail: Some(format!("label/value variant of index {name}")),
+                },
+            );
+        }
+    }
+}
+
+fn collect_assert_decl(
+    a: &AssertDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = a.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Assert,
+            name_span: a.name.span,
+            decl_span,
+            type_description: Some("Bool".to_string()),
+            detail: Some("assert".to_string()),
+        },
+    );
+    match &a.body {
+        graphcal_syntax::ast::AssertBody::Expr(expr) => {
+            collect_expr_refs(expr, table, scopes);
+        }
+        graphcal_syntax::ast::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            ..
+        } => {
+            collect_expr_refs(actual, table, scopes);
+            collect_expr_refs(expected, table, scopes);
+            collect_expr_refs(tolerance, table, scopes);
+        }
+    }
+}
+
+fn collect_plot_decl(
+    p: &PlotDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = p.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Plot,
+            name_span: p.name.span,
+            decl_span,
+            type_description: Some(format!("plot ({})", p.chart_type)),
+            detail: Some("plot".to_string()),
+        },
+    );
+    for field in &p.fields {
+        collect_expr_refs(&field.value, table, scopes);
+    }
+}
+
+fn collect_figure_decl(
+    f: &FigureDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = f.name.value.to_string();
+    table.definitions.insert(
+        name.clone(),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Figure,
+            name_span: f.name.span,
+            decl_span,
+            type_description: Some("figure".to_string()),
+            detail: Some("figure".to_string()),
+        },
+    );
+    for field in &f.fields {
+        collect_expr_refs(&field.value, table, scopes);
+    }
+}
+
+fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
+    // Each imported name is a reference; target resolution for cross-file
+    // go-to-definition is handled separately.
+    if let graphcal_syntax::ast::ImportKind::Selective(names) = &u.kind {
+        for import_item in names {
+            table.references.push(ReferenceInfo {
+                span: import_item.name.span,
+                target: import_item.name.name.clone(),
+            });
+            // If aliased, the alias also resolves to the same target.
+            if let Some(alias) = &import_item.alias {
+                table.references.push(ReferenceInfo {
+                    span: alias.span,
+                    target: import_item.name.name.clone(),
+                });
+            }
+        }
+    }
 }
 
 /// Collect references from an expression, tracking local scopes.
