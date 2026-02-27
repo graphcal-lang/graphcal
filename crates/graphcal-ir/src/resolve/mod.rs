@@ -75,6 +75,18 @@ impl AttributeName {
     }
 }
 
+/// Classification of a name in the resolver's scope.
+///
+/// Used to partition names into const vs runtime sets without relying on casing heuristics.
+/// Functions are tracked separately because they don't participate in const/runtime dependency
+/// extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameCategory {
+    Const,
+    Runtime,
+    Fn,
+}
+
 /// Result of collecting local declarations from the AST.
 struct CollectedDeclarations {
     consts: Vec<ResolvedConstEntry>,
@@ -104,7 +116,7 @@ struct CollectedDeclarations {
 fn collect_local_declarations(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    names: &mut HashMap<String, Span>,
+    names: &mut HashMap<String, (Span, NameCategory)>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, graphcal_registry::builtins::BuiltinFunction>,
     imported_user_fns: &HashSet<String>,
@@ -138,7 +150,7 @@ fn collect_local_declarations(
             DeclKind::Fn(f) => {
                 let fn_name_str = f.name.value.to_string();
                 // Check fn name for duplicates (same namespace as param/node/const)
-                if let Some(first_span) = names.get(&fn_name_str) {
+                if let Some((first_span, _)) = names.get(&fn_name_str) {
                     return Err(GraphcalError::DuplicateName {
                         name: fn_name_str,
                         src: src.clone(),
@@ -146,7 +158,7 @@ fn collect_local_declarations(
                         first: (*first_span).into(),
                     });
                 }
-                names.insert(fn_name_str.clone(), f.name.span);
+                names.insert(fn_name_str.clone(), (f.name.span, NameCategory::Fn));
                 local_user_fn_names.insert(fn_name_str.clone());
                 all_user_fn_names.insert(fn_name_str);
                 continue;
@@ -161,7 +173,7 @@ fn collect_local_declarations(
         };
 
         // Check for duplicates
-        if let Some(first_span) = names.get(&name) {
+        if let Some((first_span, _)) = names.get(&name) {
             return Err(GraphcalError::DuplicateName {
                 name,
                 src: src.clone(),
@@ -169,7 +181,12 @@ fn collect_local_declarations(
                 first: (*first_span).into(),
             });
         }
-        names.insert(name.clone(), name_span);
+        let name_cat = if is_const {
+            NameCategory::Const
+        } else {
+            NameCategory::Runtime
+        };
+        names.insert(name.clone(), (name_span, name_cat));
 
         // Track source order and assert names
         let category = match &decl.kind {
@@ -217,30 +234,7 @@ fn collect_local_declarations(
     }
 
     // Build the set of all known names for reference checking.
-    // Module-qualified names (e.g. "constants::G0", "params::dry_mass") are classified
-    // by the casing of the part after "::" so they land in the right set.
-    let all_const_names: HashSet<&str> = names
-        .keys()
-        .filter(|n| {
-            if let Some((_module, member)) = n.split_once("::") {
-                is_upper_snake_case(member)
-            } else {
-                is_upper_snake_case(n)
-            }
-        })
-        .map(String::as_str)
-        .collect();
-    let all_runtime_names: HashSet<&str> = names
-        .keys()
-        .filter(|n| {
-            if let Some((_module, member)) = n.split_once("::") {
-                is_lower_snake_case(member)
-            } else {
-                is_lower_snake_case(n)
-            }
-        })
-        .map(String::as_str)
-        .collect();
+    let (all_const_names, all_runtime_names) = build_name_sets(names);
 
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
@@ -419,31 +413,19 @@ fn collect_local_declarations(
     })
 }
 
-/// Build const and runtime name sets from the names map.
-///
-/// Module-qualified names are classified by the casing of the part after "::".
-fn build_name_sets(names: &HashMap<String, Span>) -> (HashSet<&str>, HashSet<&str>) {
+/// Build const and runtime name sets from the names map using stored categories.
+fn build_name_sets(
+    names: &HashMap<String, (Span, NameCategory)>,
+) -> (HashSet<&str>, HashSet<&str>) {
     let all_const_names: HashSet<&str> = names
-        .keys()
-        .filter(|n| {
-            if let Some((_module, member)) = n.split_once("::") {
-                is_upper_snake_case(member)
-            } else {
-                is_upper_snake_case(n)
-            }
-        })
-        .map(String::as_str)
+        .iter()
+        .filter(|(_, (_, cat))| *cat == NameCategory::Const)
+        .map(|(name, _)| name.as_str())
         .collect();
     let all_runtime_names: HashSet<&str> = names
-        .keys()
-        .filter(|n| {
-            if let Some((_module, member)) = n.split_once("::") {
-                is_lower_snake_case(member)
-            } else {
-                is_lower_snake_case(n)
-            }
-        })
-        .map(String::as_str)
+        .iter()
+        .filter(|(_, (_, cat))| *cat == NameCategory::Runtime)
+        .map(|(name, _)| name.as_str())
         .collect();
     (all_const_names, all_runtime_names)
 }
@@ -730,26 +712,26 @@ pub fn resolve_with_imports(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    let mut names: HashMap<String, Span> = HashMap::new();
+    let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
     let mut imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
     for (name, _, _, span) in &imported.consts {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Const));
     }
     for (name, _, _, span) in &imported.params {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
     for (name, _, _, span) in &imported.nodes {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
     for (name, _, span) in &imported.functions {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Fn));
         imported_fn_names.insert(name.clone());
     }
     for (name, _, span) in &imported.asserts {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
 
     // Collect local declarations
@@ -924,27 +906,27 @@ pub fn resolve_with_imported_values(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    let mut names: HashMap<String, Span> = HashMap::new();
+    let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
     let mut imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (for scope checking only).
     // ScopedName -> String conversion: the resolver's internal scope uses flat strings
     // because it mixes imported names with local declarations.
     for (name, span) in &imported.const_names {
-        names.insert(name.to_string(), *span);
+        names.insert(name.to_string(), (*span, NameCategory::Const));
     }
     for (name, span) in &imported.param_names {
-        names.insert(name.to_string(), *span);
+        names.insert(name.to_string(), (*span, NameCategory::Runtime));
     }
     for (name, span) in &imported.node_names {
-        names.insert(name.to_string(), *span);
+        names.insert(name.to_string(), (*span, NameCategory::Runtime));
     }
     for entry in &imported.functions {
-        names.insert(entry.name.clone(), entry.span);
+        names.insert(entry.name.clone(), (entry.span, NameCategory::Fn));
         imported_fn_names.insert(entry.name.clone());
     }
     for (name, span) in &imported.assert_names {
-        names.insert(name.clone(), *span);
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
 
     // Collect local declarations
