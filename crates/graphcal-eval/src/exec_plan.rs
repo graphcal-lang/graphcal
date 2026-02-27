@@ -369,8 +369,8 @@ fn resolve_domain_constraints(
                 }
             }
 
-            // Extract display text from the source.
-            let display_text = format_bound_display(&bound.value, &tir.registry);
+            // Format display text from the expression and pre-evaluated value.
+            let display_text = format_bound_display(&bound.value, si_value);
 
             constraint_span = constraint_span.merge(bound.span);
 
@@ -511,10 +511,11 @@ fn infer_bound_dimension(
 }
 
 /// Format a bound expression for display (e.g., `"100 kg"`, `"0.01 N"`).
-fn format_bound_display(
-    expr: &graphcal_syntax::ast::Expr,
-    registry: &crate::registry::Registry,
-) -> String {
+///
+/// For simple expressions (numbers, unit literals, unary negation), the
+/// original syntactic form is preserved. For complex expressions, the
+/// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
+fn format_bound_display(expr: &graphcal_syntax::ast::Expr, si_value: f64) -> String {
     use graphcal_syntax::ast::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => crate::format::format_number(*n),
@@ -528,30 +529,10 @@ fn format_bound_display(
             op: graphcal_syntax::ast::UnaryOp::Neg,
             operand,
         } => {
-            format!("-{}", format_bound_display(operand, registry))
+            format!("-{}", format_bound_display(operand, -si_value))
         }
-        _ => {
-            // Fallback: try to evaluate and display raw SI value
-            let builtin_consts = builtin_constants();
-            let builtin_fns = builtin_functions();
-            let empty: HashMap<String, RuntimeValue> = HashMap::new();
-            let src = NamedSource::new("", Arc::new(String::new()));
-            let ctx = EvalContext {
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src: &src,
-                unfold_context: None,
-            };
-            eval_expr(expr, &empty, &empty, &ctx).map_or_else(
-                |_| "?".to_string(),
-                |rv| match rv {
-                    RuntimeValue::Scalar(v) => crate::format::format_number(v),
-                    RuntimeValue::Int(i) => format!("{i}"),
-                    _ => "?".to_string(),
-                },
-            )
-        }
+        // Fallback: display the already-evaluated SI value.
+        _ => crate::format::format_number(si_value),
     }
 }
 
