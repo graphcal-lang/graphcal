@@ -268,6 +268,7 @@ fn collect_local_declarations(
                         builtin_fns,
                         &all_user_fn_names,
                         src,
+                        None,
                     )?;
                     // Check that assert body doesn't reference other assert names via @
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
@@ -290,6 +291,7 @@ fn collect_local_declarations(
                         builtin_fns,
                         &all_user_fn_names,
                         src,
+                        None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
                 }
@@ -313,6 +315,7 @@ fn collect_local_declarations(
                         builtin_fns,
                         &all_user_fn_names,
                         src,
+                        None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
                 }
@@ -362,6 +365,7 @@ fn collect_local_declarations(
                         builtin_fns,
                         &all_user_fn_names,
                         src,
+                        None,
                     )?;
                     runtime_deps.insert(pname.clone(), graph_refs);
                 } else {
@@ -375,7 +379,8 @@ fn collect_local_declarations(
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
-                let (mut graph_refs, _const_refs) = extract_all_refs(
+                let nname = n.name.value.to_string();
+                let (graph_refs, _const_refs) = extract_all_refs(
                     &n.value,
                     &all_runtime_names,
                     &all_const_names,
@@ -383,14 +388,8 @@ fn collect_local_declarations(
                     builtin_fns,
                     &all_user_fn_names,
                     src,
+                    Some(&nname),
                 )?;
-                let nname = n.name.value.to_string();
-                // Unfold self-references (@self[prev_i]) are not true
-                // cyclic dependencies — they access the previous step.
-                // Remove the self-edge so the DAG stays acyclic.
-                if matches!(n.value.kind, ExprKind::Unfold { .. }) {
-                    graph_refs.remove(&nname);
-                }
                 runtime_deps.insert(nname.clone(), graph_refs);
                 nodes.push(ResolvedNodeEntry {
                     name: nname,
@@ -746,11 +745,12 @@ pub fn resolve_with_imports(
             builtin_fns,
             &local.user_fn_names,
             src,
+            None,
         )?;
         runtime_deps.insert(name.clone(), graph_refs);
     }
     for (name, _, expr, _) in &imported.nodes {
-        let (mut graph_refs, _const_refs) = extract_all_refs(
+        let (graph_refs, _const_refs) = extract_all_refs(
             expr,
             &all_runtime_names,
             &all_const_names,
@@ -758,10 +758,8 @@ pub fn resolve_with_imports(
             builtin_fns,
             &local.user_fn_names,
             src,
+            Some(name.as_str()),
         )?;
-        if matches!(expr.kind, ExprKind::Unfold { .. }) {
-            graph_refs.remove(name);
-        }
         runtime_deps.insert(name.clone(), graph_refs);
     }
 

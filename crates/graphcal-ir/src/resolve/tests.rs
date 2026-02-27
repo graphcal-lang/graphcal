@@ -436,3 +436,19 @@ fn resolve_duplicate_fn_name() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(matches!(err, GraphcalError::DuplicateName { .. }));
 }
+
+#[test]
+fn resolve_unfold_self_edge_excluded() {
+    // The unfold body references @x[prev_t], which creates a self-reference.
+    // extract_all_refs should exclude this self-edge from runtime_deps.
+    let source = r"
+        index TimeStep = { First, Second, Third }
+        node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });
+    ";
+    let resolved = parse_and_resolve(source).unwrap();
+    let x_deps = &resolved.runtime_deps["x"];
+    assert!(
+        !x_deps.contains("x"),
+        "unfold self-reference should be excluded from runtime_deps"
+    );
+}
