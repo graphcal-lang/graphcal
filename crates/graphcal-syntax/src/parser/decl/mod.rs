@@ -1,5 +1,4 @@
-use crate::ast::{Attribute, AttributeArg, DeclKind, Declaration, DeriveOp};
-use crate::names::Spanned;
+use crate::ast::{Attribute, AttributeArg, Declaration};
 use crate::token::Token;
 
 use super::{ParseError, Parser};
@@ -48,50 +47,7 @@ impl Parser<'_> {
             decl.span = first_attr.span.merge(decl.span);
         }
 
-        // Extract #[derive(...)] attribute for type declarations
-        if let DeclKind::Type(ref mut type_decl) = decl.kind {
-            let mut remaining_attrs = Vec::new();
-            for attr in attributes {
-                if attr.name.name == "derive" {
-                    for arg in &attr.args {
-                        let ident = arg.as_single_ident().ok_or_else(|| {
-                            self.unexpected_token(
-                                "`Add`, `Sub`, or `Neg`",
-                                "<complex argument>",
-                                arg.span(),
-                            )
-                        })?;
-                        let op = match ident.name.as_str() {
-                            "Add" => DeriveOp::Add,
-                            "Sub" => DeriveOp::Sub,
-                            "Neg" => DeriveOp::Neg,
-                            _ => {
-                                return Err(self.unexpected_token(
-                                    "`Add`, `Sub`, or `Neg`",
-                                    &ident.name,
-                                    ident.span,
-                                ));
-                            }
-                        };
-                        type_decl.derives.push(Spanned::new(op, ident.span));
-                    }
-                } else {
-                    remaining_attrs.push(attr);
-                }
-            }
-            decl.attributes = remaining_attrs;
-        } else {
-            // For non-type declarations, check that no #[derive] attribute was used
-            let derive_attr = attributes.iter().find(|a| a.name.name == "derive");
-            if let Some(attr) = derive_attr {
-                return Err(self.unexpected_token(
-                    "a valid attribute for this declaration",
-                    "derive",
-                    attr.span,
-                ));
-            }
-            decl.attributes = attributes;
-        }
+        decl.attributes = attributes;
 
         Ok(decl)
     }

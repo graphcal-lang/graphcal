@@ -317,7 +317,6 @@ pub struct UnitDef {
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam>,
-    pub derives: Vec<Spanned<DeriveOp>>,
     pub variants: Vec<VariantDecl>,
 }
 
