@@ -1,8 +1,8 @@
 use graphcal_syntax::ast::{
-    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, FieldDecl,
-    FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl, IndexDecl,
-    IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnitDecl,
-    UnitDef, VariantDecl,
+    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
+    FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
+    IndexDecl, IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr,
+    UnitDecl, UnitDef, VariantDecl,
 };
 use pretty::RcDoc;
 
@@ -425,24 +425,33 @@ fn format_import_param_bindings(
         .append(RcDoc::text(")"))
 }
 
-/// `plot name = chart_type { field: expr, ... };`
+/// `plot name = { mark: type, encode: { x: ..., y: ... }, title: "..." };`
 fn format_plot_decl(fmt: &mut Formatter<'_>, d: &PlotDecl) -> RcDoc<'static> {
-    let header = RcDoc::text(format!("plot {} = {} ", d.name.value, d.chart_type));
+    let header = RcDoc::text(format!("plot {} = ", d.name.value));
 
-    if d.fields.is_empty() {
-        return header.append(RcDoc::text("{};"));
+    let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
+
+    // Emit mark field
+    field_docs.push(format_mark_spec(fmt, &d.mark));
+
+    // Emit encode block
+    if !d.encodings.is_empty() {
+        field_docs.push(format_encode_block(fmt, &d.encodings));
     }
 
-    let field_docs: Vec<RcDoc<'static>> = d
-        .fields
-        .iter()
-        .map(|f| {
+    // Emit other properties
+    for f in &d.properties {
+        field_docs.push(
             RcDoc::text(f.name.name.clone())
                 .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &f.value))
-                .append(RcDoc::text(","))
-        })
-        .collect();
+                .append(RcDoc::text(",")),
+        );
+    }
+
+    if field_docs.is_empty() {
+        return header.append(RcDoc::text("{};"));
+    }
 
     header
         .append(RcDoc::text("{"))
@@ -453,6 +462,59 @@ fn format_plot_decl(fmt: &mut Formatter<'_>, d: &PlotDecl) -> RcDoc<'static> {
         )
         .append(RcDoc::hardline())
         .append(RcDoc::text("};"))
+}
+
+/// Format a mark specification: `mark: point,` or `mark: line { stroke_width: 2.0, },`
+fn format_mark_spec(
+    fmt: &mut Formatter<'_>,
+    mark: &graphcal_syntax::ast::MarkSpec,
+) -> RcDoc<'static> {
+    if mark.properties.is_empty() {
+        RcDoc::text(format!("mark: {},", mark.mark_type))
+    } else {
+        let prop_docs: Vec<RcDoc<'static>> = mark
+            .properties
+            .iter()
+            .map(|f| {
+                RcDoc::text(f.name.name.clone())
+                    .append(RcDoc::text(": "))
+                    .append(format_expr(fmt, &f.value))
+                    .append(RcDoc::text(","))
+            })
+            .collect();
+
+        RcDoc::text(format!("mark: {} ", mark.mark_type))
+            .append(RcDoc::text("{"))
+            .append(
+                RcDoc::hardline()
+                    .append(RcDoc::intersperse(prop_docs, RcDoc::hardline()))
+                    .nest(INDENT),
+            )
+            .append(RcDoc::hardline())
+            .append(RcDoc::text("},"))
+    }
+}
+
+/// Format an encode block: `encode: { x: ..., y: ..., },`
+fn format_encode_block(fmt: &mut Formatter<'_>, encodings: &[Encoding]) -> RcDoc<'static> {
+    let channel_docs: Vec<RcDoc<'static>> = encodings
+        .iter()
+        .map(|e| {
+            RcDoc::text(e.channel.to_string())
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &e.value))
+                .append(RcDoc::text(","))
+        })
+        .collect();
+
+    RcDoc::text("encode: {")
+        .append(
+            RcDoc::hardline()
+                .append(RcDoc::intersperse(channel_docs, RcDoc::hardline()))
+                .nest(INDENT),
+        )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("},"))
 }
 
 /// `figure name = { plots: [a, b], title: "...", };`

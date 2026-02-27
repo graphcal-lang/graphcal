@@ -16,6 +16,8 @@
     { "include": "#const-declaration" },
     { "include": "#assert-declaration" },
     { "include": "#plot-declaration" },
+    { "include": "#mark-keyword" },
+    { "include": "#encode-keyword" },
     { "include": "#figure-declaration" },
     { "include": "#import-declaration" },
     { "include": "#let-binding" },
@@ -157,11 +159,25 @@
     },
 
     "plot-declaration": {
-      "match": "\\b(plot)\\s+([a-z][a-z0-9_]*)\\s*=\\s*(line|scatter|bar|heatmap)\\b",
+      "match": "\\b(plot)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.declaration.plot.graphcal" },
-        "2": { "name": "variable.other.graphcal" },
-        "3": { "name": "support.type.chart.graphcal" }
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "mark-keyword": {
+      "match": "\\b(mark)\\s*:\\s*(point|line|bar|area|rect|tick)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.mark.graphcal" },
+        "2": { "name": "support.type.mark.graphcal" }
+      }
+    },
+
+    "encode-keyword": {
+      "match": "\\b(encode)\\s*:",
+      "captures": {
+        "1": { "name": "keyword.other.encode.graphcal" }
       }
     },
 

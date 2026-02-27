@@ -1,5 +1,5 @@
 use graphcal_eval::eval::{FigureSpec, PlotFieldValue, PlotSpec};
-use graphcal_syntax::ast::ChartType;
+use graphcal_syntax::ast::MarkType;
 use plotly::common::{Font, Mode};
 use plotly::layout::{Axis, LayoutTemplate, Template};
 use plotly::{Bar, HeatMap, Layout, Plot, Scatter, Trace};
@@ -51,11 +51,13 @@ fn build_single_plot(spec: &PlotSpec) -> Plot {
     let series_name =
         get_string_field_from_plot(spec, "name").unwrap_or_else(|| spec.name.as_str().to_string());
 
-    let trace: Box<dyn Trace> = match spec.chart_type {
-        ChartType::Line => build_scatter_trace(spec, Mode::Lines, &series_name),
-        ChartType::Scatter => build_scatter_trace(spec, Mode::Markers, &series_name),
-        ChartType::Bar => build_bar_trace(spec, &series_name),
-        ChartType::Heatmap => build_heatmap_trace(spec, &series_name),
+    let trace: Box<dyn Trace> = match spec.mark_type {
+        MarkType::Point => build_scatter_trace(spec, Mode::Markers, &series_name),
+        MarkType::Bar => build_bar_trace(spec, &series_name),
+        MarkType::Rect => build_heatmap_trace(spec, &series_name),
+        MarkType::Line | MarkType::Area | MarkType::Tick => {
+            build_scatter_trace(spec, Mode::Lines, &series_name)
+        }
     };
     plot.add_trace(trace);
 
@@ -90,7 +92,7 @@ fn build_single_plot(spec: &PlotSpec) -> Plot {
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "subplot grid positions use small non-negative integers"
+    reason = "grid dimension calculation uses small non-negative integers"
 )]
 fn build_subplot_figure(fig: &FigureSpec, all_plots: &[PlotSpec]) -> Plot {
     let mut plot = Plot::new();
@@ -122,102 +124,105 @@ fn build_subplot_figure(fig: &FigureSpec, all_plots: &[PlotSpec]) -> Plot {
     let gap = 0.08; // gap between subplots
 
     for (i, spec) in referenced.iter().enumerate() {
-        let row = i / cols;
-        let col = i % cols;
-
-        // Compute domain for this subplot
-        let cell_width = (1.0 - gap * (cols as f64 - 1.0)) / cols as f64;
-        let cell_height = (1.0 - gap * (rows as f64 - 1.0)) / rows as f64;
-
-        let x_start = col as f64 * (cell_width + gap);
-        let x_end = x_start + cell_width;
-        // Y is inverted: row 0 at top
-        let y_start = (row as f64 + 1.0).mul_add(-(cell_height + gap), 1.0) + gap;
-        let y_end = y_start + cell_height;
-
-        let series_name = get_string_field_from_plot(spec, "name")
-            .unwrap_or_else(|| spec.name.as_str().to_string());
-        let subplot_title = get_string_field_from_plot(spec, "title");
-        let x_label = get_string_field_from_plot(spec, "x_label");
-        let y_label = get_string_field_from_plot(spec, "y_label");
-
-        // Build axis pair
-        let mut x_axis = Axis::new()
-            .domain(&[x_start, x_end])
-            .show_grid(true)
-            .grid_color("#E5E5E5")
-            .zero_line(false);
-        if let Some(xl) = x_label {
-            x_axis = x_axis.title(xl.as_str());
-        }
-
-        let x_anchor = if i == 0 {
-            "y".to_string()
-        } else {
-            format!("y{}", i + 1)
-        };
-        let y_anchor = if i == 0 {
-            "x".to_string()
-        } else {
-            format!("x{}", i + 1)
-        };
-        x_axis = x_axis.anchor(x_anchor.as_str());
-
-        let mut y_axis = Axis::new()
-            .domain(&[y_start, y_end])
-            .show_grid(true)
-            .grid_color("#E5E5E5")
-            .zero_line(false);
-        if let Some(yl) = y_label {
-            y_axis = y_axis.title(yl.as_str());
-        }
-        if let Some(t) = subplot_title {
-            // Use the subplot title as the y-axis title prefix or annotation
-            y_axis = y_axis.title(t.as_str());
-        }
-        y_axis = y_axis.anchor(y_anchor.as_str());
-
-        // Set the axis on the layout using the numbered methods
+        let (trace, x_axis, y_axis) = build_subplot_trace(spec, i, cols, rows, gap);
         layout = set_x_axis(layout, i, x_axis);
         layout = set_y_axis(layout, i, y_axis);
-
-        // Build trace bound to the correct axis pair
-        let x_axis_ref = if i == 0 {
-            "x".to_string()
-        } else {
-            format!("x{}", i + 1)
-        };
-        let y_axis_ref = if i == 0 {
-            "y".to_string()
-        } else {
-            format!("y{}", i + 1)
-        };
-
-        let trace: Box<dyn Trace> = match spec.chart_type {
-            ChartType::Line => build_scatter_trace_with_axis(
-                spec,
-                Mode::Lines,
-                &series_name,
-                &x_axis_ref,
-                &y_axis_ref,
-            ),
-            ChartType::Scatter => build_scatter_trace_with_axis(
-                spec,
-                Mode::Markers,
-                &series_name,
-                &x_axis_ref,
-                &y_axis_ref,
-            ),
-            ChartType::Bar => {
-                build_bar_trace_with_axis(spec, &series_name, &x_axis_ref, &y_axis_ref)
-            }
-            ChartType::Heatmap => build_heatmap_trace(spec, &series_name),
-        };
         plot.add_trace(trace);
     }
 
     plot.set_layout(layout);
     plot
+}
+
+/// Build a single subplot trace with its axis pair for a given grid position.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "subplot grid positions use small non-negative integers"
+)]
+fn build_subplot_trace(
+    spec: &PlotSpec,
+    i: usize,
+    cols: usize,
+    rows: usize,
+    gap: f64,
+) -> (Box<dyn Trace>, Axis, Axis) {
+    let row = i / cols;
+    let col = i % cols;
+
+    let cell_width = gap.mul_add(-(cols as f64 - 1.0), 1.0) / cols as f64;
+    let cell_height = gap.mul_add(-(rows as f64 - 1.0), 1.0) / rows as f64;
+
+    let x_start = col as f64 * (cell_width + gap);
+    let x_end = x_start + cell_width;
+    let y_start = (row as f64 + 1.0).mul_add(-(cell_height + gap), 1.0) + gap;
+    let y_end = y_start + cell_height;
+
+    let series_name =
+        get_string_field_from_plot(spec, "name").unwrap_or_else(|| spec.name.as_str().to_string());
+    let subplot_title = get_string_field_from_plot(spec, "title");
+    let x_label = get_string_field_from_plot(spec, "x_label");
+    let y_label = get_string_field_from_plot(spec, "y_label");
+
+    let mut x_axis = Axis::new()
+        .domain(&[x_start, x_end])
+        .show_grid(true)
+        .grid_color("#E5E5E5")
+        .zero_line(false);
+    if let Some(xl) = x_label {
+        x_axis = x_axis.title(xl.as_str());
+    }
+    let x_anchor = if i == 0 {
+        "y".to_string()
+    } else {
+        format!("y{}", i + 1)
+    };
+    let y_anchor = if i == 0 {
+        "x".to_string()
+    } else {
+        format!("x{}", i + 1)
+    };
+    x_axis = x_axis.anchor(x_anchor.as_str());
+
+    let mut y_axis = Axis::new()
+        .domain(&[y_start, y_end])
+        .show_grid(true)
+        .grid_color("#E5E5E5")
+        .zero_line(false);
+    if let Some(yl) = y_label {
+        y_axis = y_axis.title(yl.as_str());
+    }
+    if let Some(t) = subplot_title {
+        y_axis = y_axis.title(t.as_str());
+    }
+    y_axis = y_axis.anchor(y_anchor.as_str());
+
+    let x_axis_ref = if i == 0 {
+        "x".to_string()
+    } else {
+        format!("x{}", i + 1)
+    };
+    let y_axis_ref = if i == 0 {
+        "y".to_string()
+    } else {
+        format!("y{}", i + 1)
+    };
+
+    let trace: Box<dyn Trace> = match spec.mark_type {
+        MarkType::Point => build_scatter_trace_with_axis(
+            spec,
+            Mode::Markers,
+            &series_name,
+            &x_axis_ref,
+            &y_axis_ref,
+        ),
+        MarkType::Bar => build_bar_trace_with_axis(spec, &series_name, &x_axis_ref, &y_axis_ref),
+        MarkType::Rect => build_heatmap_trace(spec, &series_name),
+        MarkType::Line | MarkType::Area | MarkType::Tick => {
+            build_scatter_trace_with_axis(spec, Mode::Lines, &series_name, &x_axis_ref, &y_axis_ref)
+        }
+    };
+
+    (trace, x_axis, y_axis)
 }
 
 /// Render all figures as a single HTML page.
@@ -361,10 +366,14 @@ fn build_bar_trace_with_axis(
 }
 
 /// Build a `HeatMap` trace.
+///
+/// Uses "color" encoding channel (Vega-Lite style) with fallback to "z" for compatibility.
 fn build_heatmap_trace(spec: &PlotSpec, name: &str) -> Box<dyn Trace> {
     let x = get_axis_data(spec, "x");
     let y = get_axis_data(spec, "y");
-    let z = get_number_field(spec, "z").unwrap_or_default();
+    let z = get_number_field(spec, "color")
+        .or_else(|| get_number_field(spec, "z"))
+        .unwrap_or_default();
 
     match (x, y) {
         (AxisData::Numbers(xn), AxisData::Numbers(yn)) => HeatMap::new(xn, yn, z).name(name),

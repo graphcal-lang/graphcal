@@ -13,15 +13,21 @@ node values: Dimensionless[Step] = {
     Step::Fourth: 8.0,
 };
 
-plot curve_a = line {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] * @values[s] },
+plot curve_a = {
+    mark: line,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] * @values[s] },
+    },
     title: "Values Squared",
 };
 
-plot curve_b = bar {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] + 1.0 },
+plot curve_b = {
+    mark: bar,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] + 1.0 },
+    },
     title: "Values Plus One",
 };
 

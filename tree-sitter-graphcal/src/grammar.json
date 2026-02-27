@@ -1513,14 +1513,6 @@
           "value": "="
         },
         {
-          "type": "FIELD",
-          "name": "chart_type",
-          "content": {
-            "type": "SYMBOL",
-            "name": "chart_type"
-          }
-        },
-        {
           "type": "STRING",
           "value": "{"
         },
@@ -1532,7 +1524,7 @@
               "members": [
                 {
                   "type": "SYMBOL",
-                  "name": "plot_field"
+                  "name": "_plot_body_field"
                 },
                 {
                   "type": "REPEAT",
@@ -1545,7 +1537,7 @@
                       },
                       {
                         "type": "SYMBOL",
-                        "name": "plot_field"
+                        "name": "_plot_body_field"
                       }
                     ]
                   }
@@ -1579,16 +1571,120 @@
         }
       ]
     },
-    "chart_type": {
+    "_plot_body_field": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "mark_field"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "encode_field"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "plot_field"
+        }
+      ]
+    },
+    "mark_field": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "mark"
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "mark_type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "mark_type"
+          }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "{"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "plot_field"
+                        },
+                        {
+                          "type": "REPEAT",
+                          "content": {
+                            "type": "SEQ",
+                            "members": [
+                              {
+                                "type": "STRING",
+                                "value": ","
+                              },
+                              {
+                                "type": "SYMBOL",
+                                "name": "plot_field"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "CHOICE",
+                          "members": [
+                            {
+                              "type": "STRING",
+                              "value": ","
+                            },
+                            {
+                              "type": "BLANK"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
+                  "type": "STRING",
+                  "value": "}"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "mark_type": {
       "type": "CHOICE",
       "members": [
         {
           "type": "STRING",
-          "value": "line"
+          "value": "point"
         },
         {
           "type": "STRING",
-          "value": "scatter"
+          "value": "line"
         },
         {
           "type": "STRING",
@@ -1596,7 +1692,106 @@
         },
         {
           "type": "STRING",
-          "value": "heatmap"
+          "value": "area"
+        },
+        {
+          "type": "STRING",
+          "value": "rect"
+        },
+        {
+          "type": "STRING",
+          "value": "tick"
+        }
+      ]
+    },
+    "encode_field": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "encode"
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "encode_channel"
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "STRING",
+                        "value": ","
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "encode_channel"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": ","
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "encode_channel": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "channel",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expr"
+          }
         }
       ]
     },

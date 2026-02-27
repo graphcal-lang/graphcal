@@ -18,9 +18,12 @@ node total_power: Power[OpMode] = for m: OpMode {
     sum(for s: Subsystem { @power_draw[s, m] })
 };
 
-plot power_by_mode = bar {
-    x: for m: OpMode { @total_power[m] },
-    y: for m: OpMode { @total_power[m] },
+plot power_by_mode = {
+    mark: bar,
+    encode: {
+        x: for m: OpMode { @total_power[m] },
+        y: for m: OpMode { @total_power[m] },
+    },
     title: "Total Power by Operating Mode",
     y_label: "Power",
 };

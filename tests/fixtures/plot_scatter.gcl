@@ -19,9 +19,12 @@ param spacecraft_mass: Mass[Maneuver] = {
     Maneuver::Insertion: 3800.0 kg,
 };
 
-plot mass_vs_delta_v = scatter {
-    x: for m: Maneuver { @delta_v[m] },
-    y: for m: Maneuver { @spacecraft_mass[m] },
+plot mass_vs_delta_v = {
+    mark: point,
+    encode: {
+        x: for m: Maneuver { @delta_v[m] },
+        y: for m: Maneuver { @spacecraft_mass[m] },
+    },
     title: "Spacecraft Mass vs Delta-V",
     x_label: "Delta-V",
     y_label: "Mass",
