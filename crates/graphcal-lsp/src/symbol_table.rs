@@ -276,6 +276,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
                 );
                 collect_dim_expr_refs(&u.dim_type, &mut table);
                 if let Some(unit_def) = &u.definition {
+                    collect_expr_refs(&unit_def.scale_expr, &mut table, &mut scopes);
                     collect_unit_expr_refs(&unit_def.unit_expr, &mut table);
                 }
             }

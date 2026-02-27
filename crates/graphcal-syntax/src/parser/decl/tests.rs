@@ -173,7 +173,9 @@ fn parse_derived_unit() {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "km");
             let def = u.definition.as_ref().unwrap();
-            assert!((def.scale - 1000.0).abs() < f64::EPSILON);
+            assert!(
+                matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1000.0).abs() < f64::EPSILON)
+            );
             assert_eq!(def.unit_expr.terms.len(), 1);
             assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "m");
         }
@@ -190,7 +192,9 @@ fn parse_compound_unit_decl() {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "N");
             let def = u.definition.as_ref().unwrap();
-            assert!((def.scale - 1.0).abs() < f64::EPSILON);
+            assert!(
+                matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1.0).abs() < f64::EPSILON)
+            );
             assert_eq!(def.unit_expr.terms.len(), 3);
             assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "kg");
             assert_eq!(def.unit_expr.terms[1].op, MulDivOp::Mul);
@@ -212,11 +216,15 @@ fn parse_unit_decl_with_paren_expr() {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "deg");
             let def = u.definition.as_ref().unwrap();
-            assert!(
-                (def.scale - std::f64::consts::PI / 180.0).abs() < 1e-10,
-                "scale = {}",
-                def.scale
-            );
+            // The parser now stores the expression tree instead of evaluating it.
+            match &def.scale_expr.kind {
+                ExprKind::BinOp { op, lhs, rhs } => {
+                    assert!(matches!(op, crate::ast::BinOp::Div));
+                    assert!(matches!(&lhs.kind, ExprKind::ConstRef(c) if c.value.as_str() == "PI"));
+                    assert!(matches!(&rhs.kind, ExprKind::Integer(180)));
+                }
+                other => panic!("expected BinOp, got {other:?}"),
+            }
             assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "rad");
         }
         _ => panic!("expected unit"),

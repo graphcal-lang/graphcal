@@ -300,7 +300,7 @@ pub struct UnitDecl {
 /// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.
 #[derive(Debug, Clone)]
 pub struct UnitDef {
-    pub scale: f64,
+    pub scale_expr: Expr,
     pub unit_expr: UnitExpr,
     pub span: Span,
 }

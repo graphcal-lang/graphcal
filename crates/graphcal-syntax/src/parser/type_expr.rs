@@ -1,6 +1,6 @@
 use crate::ast::{
-    DimExpr, DimExprItem, DimTerm, MulDivOp, TypeExpr, TypeExprKind, UnitDef, UnitExpr,
-    UnitExprItem,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, MulDivOp, TypeExpr, TypeExprKind, UnitDef,
+    UnitExpr, UnitExprItem,
 };
 use crate::names::UnitName;
 use crate::span::Span;
@@ -447,11 +447,11 @@ impl Parser<'_> {
     /// E.g., `1000 m`, `1 kg * m / s^2`, `(PI / 180) rad`
     pub(super) fn parse_unit_def(&mut self) -> Result<UnitDef, ParseError> {
         // Parse the scale expression: either a plain number or `(expr)`
-        let (scale, scale_span) = self.parse_unit_scale()?;
+        let scale_expr = self.parse_unit_scale()?;
         let unit_expr = self.parse_unit_expr()?;
-        let span = scale_span.merge(unit_expr.span);
+        let span = scale_expr.span.merge(unit_expr.span);
         Ok(UnitDef {
-            scale,
+            scale_expr,
             unit_expr,
             span,
         })
@@ -459,7 +459,7 @@ impl Parser<'_> {
 
     /// Parse the scale part of a unit definition.
     /// Supports: `1000`, `0.001`, `(PI / 180)`, `(expr)`
-    fn parse_unit_scale(&mut self) -> Result<(f64, crate::span::Span), ParseError> {
+    fn parse_unit_scale(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
@@ -471,15 +471,16 @@ impl Parser<'_> {
                         span: span.into(),
                     }
                 })?;
-                Ok((value, span))
+                Ok(Expr {
+                    kind: ExprKind::Number(value),
+                    span,
+                })
             }
             Some(Token::LParen) => {
-                let (_, lp_span) = self.advance()?;
+                let (_, _lp_span) = self.advance()?;
                 let expr = self.parse_expr()?;
-                let (_, rp_span) = self.expect(Token::RParen)?;
-                let span = lp_span.merge(rp_span);
-                let scale = self.eval_const_expr(&expr)?;
-                Ok((scale, span))
+                self.expect(Token::RParen)?;
+                Ok(expr)
             }
             Some(_) => {
                 let (tok, span) = self.advance()?;
