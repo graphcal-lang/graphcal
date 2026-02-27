@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{Location, Url};
 
 use crate::convert::span_to_range;
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
+use crate::symbol_table::{SymbolCategory, SymbolKey};
 
 /// Find all references to the symbol at the given byte offset.
 pub fn references(
@@ -13,8 +13,8 @@ pub fn references(
     offset: usize,
     include_declaration: bool,
 ) -> Option<Vec<Location>> {
-    // Determine the target name: either from a reference or a definition at cursor.
-    let target_name = match (
+    // Determine the target key: either from a reference or a definition at cursor.
+    let target_key = match (
         analysis.symbol_table.find_reference_at(offset),
         analysis.symbol_table.find_definition_at(offset),
     ) {
@@ -27,13 +27,22 @@ pub fn references(
         {
             return None;
         }
-        (None, Some(definition)) => definition.name.clone(),
+        // Use pointer-based reverse lookup to get the correct scoped key.
+        (None, Some(definition)) => analysis
+            .symbol_table
+            .definitions
+            .iter()
+            .find(|(_, d)| std::ptr::eq(*d, definition))
+            .map_or_else(
+                || SymbolKey::TopLevel(definition.name.clone()),
+                |(k, _)| k.clone(),
+            ),
         (None, None) => return None,
     };
 
     let mut locations: Vec<Location> = analysis
         .symbol_table
-        .find_all_references(&target_name)
+        .find_all_references(&target_key)
         .into_iter()
         .map(|r| Location {
             uri: uri.clone(),
@@ -46,7 +55,7 @@ pub fn references(
         let declaration_location = analysis
             .symbol_table
             .definitions
-            .get(&target_name)
+            .get(&target_key)
             .filter(|def| {
                 !matches!(
                     def.category,
@@ -60,7 +69,7 @@ pub fn references(
             .or_else(|| {
                 analysis
                     .imported_definitions
-                    .get(&target_name)
+                    .get(&target_key)
                     .filter(|imported| !imported.definition.name_span.is_empty())
                     .map(|imported| Location {
                         uri: imported.uri.clone(),

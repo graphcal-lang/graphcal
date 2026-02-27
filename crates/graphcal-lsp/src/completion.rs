@@ -63,8 +63,8 @@ fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                     SymbolCategory::Param | SymbolCategory::Node
                 )
             })
-            .map(|(name, imported)| CompletionItem {
-                label: name.clone(),
+            .map(|(_, imported)| CompletionItem {
+                label: imported.definition.name.clone(),
                 kind: Some(CompletionItemKind::VARIABLE),
                 detail: imported.definition.type_description.clone(),
                 ..Default::default()
@@ -113,7 +113,7 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
         analysis
             .imported_definitions
             .iter()
-            .filter_map(|(name, imported)| {
+            .filter_map(|(_, imported)| {
                 let kind = match imported.definition.category {
                     SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
                     SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
@@ -121,7 +121,7 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                     _ => None,
                 }?;
                 Some(CompletionItem {
-                    label: name.clone(),
+                    label: imported.definition.name.clone(),
                     kind: Some(kind),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()
@@ -185,14 +185,14 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
         analysis
             .imported_definitions
             .iter()
-            .filter_map(|(name, imported)| {
+            .filter_map(|(_, imported)| {
                 let kind = match imported.definition.category {
                     SymbolCategory::Const => Some(CompletionItemKind::CONSTANT),
                     SymbolCategory::Function => Some(CompletionItemKind::FUNCTION),
                     _ => None,
                 }?;
                 Some(CompletionItem {
-                    label: name.clone(),
+                    label: imported.definition.name.clone(),
                     kind: Some(kind),
                     detail: imported.definition.type_description.clone(),
                     ..Default::default()

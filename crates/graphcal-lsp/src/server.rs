@@ -32,7 +32,7 @@ use indexmap::IndexMap;
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolTable};
+use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub struct ImportedDefinition {
@@ -64,8 +64,8 @@ pub struct AnalysisResult {
     pub source: String,
     /// The symbol table (built from AST, enriched from TIR if available).
     pub symbol_table: SymbolTable,
-    /// Definitions from imported files, keyed by symbol name.
-    pub imported_definitions: HashMap<String, ImportedDefinition>,
+    /// Definitions from imported files, keyed by symbol key.
+    pub imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
     /// Diagnostics to publish.
     pub diagnostics: Vec<Diagnostic>,
     /// Computed values from evaluation, keyed by declaration name.
@@ -569,7 +569,7 @@ fn collect_imported_definitions(
     root_ast: &graphcal_syntax::ast::File,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_eval::tir::TIR>,
-) -> HashMap<String, ImportedDefinition> {
+) -> HashMap<SymbolKey, ImportedDefinition> {
     let mut result = HashMap::new();
 
     let Ok(root_path) = root_uri.to_file_path() else {
@@ -622,10 +622,10 @@ fn collect_imported_definitions(
             match &import_decl.kind {
                 graphcal_syntax::ast::ImportKind::Selective(names) => {
                     for import_item in names {
-                        if let Some(def) = imported_table.definitions.remove(&import_item.name.name)
-                        {
+                        let key = SymbolKey::TopLevel(import_item.name.name.clone());
+                        if let Some(def) = imported_table.definitions.remove(&key) {
                             result.insert(
-                                import_item.name.name.clone(),
+                                key,
                                 ImportedDefinition {
                                     uri: imported_uri.clone(),
                                     source: source.clone(),
@@ -636,9 +636,9 @@ fn collect_imported_definitions(
                     }
                 }
                 graphcal_syntax::ast::ImportKind::Module { .. } => {
-                    for (name, def) in imported_table.definitions {
+                    for (key, def) in imported_table.definitions {
                         result.insert(
-                            name,
+                            key,
                             ImportedDefinition {
                                 uri: imported_uri.clone(),
                                 source: source.clone(),

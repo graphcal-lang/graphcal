@@ -71,11 +71,10 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     reason = "DocumentSymbol::deprecated field is deprecated but required by the type"
 )]
 fn collect_children(analysis: &AnalysisResult, parent_name: &str) -> Vec<DocumentSymbol> {
-    let prefix = format!("{parent_name}::");
     let mut children = Vec::new();
 
     for (key, def) in &analysis.symbol_table.definitions {
-        if def.category == SymbolCategory::IndexVariant && key.starts_with(&prefix) {
+        if def.category == SymbolCategory::IndexVariant && key.is_variant_of(parent_name) {
             let range = span_to_range(&analysis.source, def.decl_span);
             let selection_range = span_to_range(&analysis.source, def.name_span);
             children.push(DocumentSymbol {

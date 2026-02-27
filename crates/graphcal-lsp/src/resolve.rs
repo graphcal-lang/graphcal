@@ -3,7 +3,7 @@
 use graphcal_syntax::span::Span;
 
 use crate::server::{AnalysisResult, ImportedDefinition};
-use crate::symbol_table::DefinitionInfo;
+use crate::symbol_table::{DefinitionInfo, SymbolKey};
 
 /// Where a resolved symbol lives.
 pub enum SymbolLocation<'a> {
@@ -20,7 +20,7 @@ pub enum SymbolLocation<'a> {
 )]
 pub struct ResolvedSymbol<'a> {
     /// The symbol table key for this symbol.
-    pub key: String,
+    pub key: SymbolKey,
     /// Where the definition lives.
     pub location: SymbolLocation<'a>,
     /// Whether the cursor was on a reference (true) or a definition (false).
@@ -65,7 +65,10 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
             .definitions
             .iter()
             .find(|(_, d)| std::ptr::eq(*d, definition))
-            .map_or_else(|| definition.name.clone(), |(k, _)| k.clone());
+            .map_or_else(
+                || SymbolKey::TopLevel(definition.name.clone()),
+                |(k, _)| k.clone(),
+            );
         return Some(ResolvedSymbol {
             key,
             location: SymbolLocation::Local(definition),
