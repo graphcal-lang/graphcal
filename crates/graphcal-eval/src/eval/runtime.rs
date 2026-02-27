@@ -173,6 +173,13 @@ pub(super) fn run_eval_loop(
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
     let mut errors: HashMap<String, NodeError> = HashMap::new();
 
+    // Build string-keyed runtime_deps for lookups (TIR uses ScopedName keys).
+    let runtime_deps: HashMap<String, Vec<String>> = tir
+        .runtime_deps
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.iter().map(ToString::to_string).collect()))
+        .collect();
+
     // Insert imported values into the lookup table (pre-evaluated by dependency files).
     // ScopedName → String: the runtime values map uses flat strings because it
     // merges imported, const, and locally computed values into a single namespace.
@@ -192,12 +199,11 @@ pub(super) fn run_eval_loop(
         }
 
         // Check if any dependency has failed
-        let failed_deps: Vec<DeclName> = tir
-            .runtime_deps
+        let failed_deps: Vec<DeclName> = runtime_deps
             .get(name)
             .map(|deps| {
                 deps.iter()
-                    .filter(|dep| errors.contains_key(*dep))
+                    .filter(|dep| errors.contains_key(dep.as_str()))
                     .map(DeclName::new)
                     .collect()
             })
@@ -278,16 +284,16 @@ pub(super) fn evaluate_plan(
     let EvalLoopResult { values, errors } = run_eval_loop(plan, tir, declared_types, src);
 
     // Build a map from name -> expression for display unit extraction
-    let expr_map: HashMap<&str, &graphcal_syntax::ast::Expr> = tir
+    let expr_map: HashMap<String, &graphcal_syntax::ast::Expr> = tir
         .consts
         .iter()
-        .map(|e| (e.name.as_str(), &e.expr))
+        .map(|e| (e.name.to_string(), &e.expr))
         .chain(
             tir.params
                 .iter()
-                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.as_str(), ex))),
+                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.to_string(), ex))),
         )
-        .chain(tir.nodes.iter().map(|e| (e.name.as_str(), &e.expr)))
+        .chain(tir.nodes.iter().map(|e| (e.name.to_string(), &e.expr)))
         .collect();
 
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
@@ -309,25 +315,33 @@ pub(super) fn evaluate_plan(
         .consts
         .iter()
         .map(|e| {
-            let val = make_value(&e.name, &plan.const_values[&e.name]);
-            (DeclName::new(&e.name), val)
+            let name_str = e.name.to_string();
+            let val = make_value(&name_str, &plan.const_values[&name_str]);
+            (DeclName::new(&name_str), val)
         })
         .collect();
     let params = tir
         .params
         .iter()
-        .map(|e| (DeclName::new(&e.name), make_result(&e.name)))
+        .map(|e| {
+            let name_str = e.name.to_string();
+            (DeclName::new(&name_str), make_result(&name_str))
+        })
         .collect();
     let nodes = tir
         .nodes
         .iter()
-        .map(|e| (DeclName::new(&e.name), make_result(&e.name)))
+        .map(|e| {
+            let name_str = e.name.to_string();
+            (DeclName::new(&name_str), make_result(&name_str))
+        })
         .collect();
 
     let all = tir
         .source_order
         .iter()
         .filter_map(|(name, cat)| {
+            let name_str = name.to_string();
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
@@ -335,11 +349,11 @@ pub(super) fn evaluate_plan(
                 DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
             let result = match cat {
-                DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
-                DeclCategory::Param | DeclCategory::Node => make_result(name),
+                DeclCategory::Const => Ok(make_value(&name_str, &plan.const_values[&name_str])),
+                DeclCategory::Param | DeclCategory::Node => make_result(&name_str),
                 DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
             };
-            Some((DeclName::new(name), result, decl_type))
+            Some((DeclName::new(&name_str), result, decl_type))
         })
         .collect();
 

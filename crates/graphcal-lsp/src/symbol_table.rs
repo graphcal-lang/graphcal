@@ -1122,30 +1122,31 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     let registry = &tir.registry;
 
     // Build a map from declaration name to its AST TypeExpr constraints.
-    let mut decl_constraints: HashMap<&str, &[DomainBound]> = HashMap::new();
+    let mut decl_constraints: HashMap<String, &[DomainBound]> = HashMap::new();
     for e in &tir.params {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(&e.name, constraints);
+            decl_constraints.insert(e.name.to_string(), constraints);
         }
     }
     for e in &tir.nodes {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(&e.name, constraints);
+            decl_constraints.insert(e.name.to_string(), constraints);
         }
     }
     for e in &tir.consts {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
-            decl_constraints.insert(&e.name, constraints);
+            decl_constraints.insert(e.name.to_string(), constraints);
         }
     }
 
     // Enrich param/node/const declarations with resolved types + constraints.
     for (name, resolved_type) in &tir.resolved_decl_types {
-        if let Some(def) = table.definitions.get_mut(name) {
-            let type_desc = decl_constraints.get(name.as_str()).map_or_else(
+        let name_str = name.to_string();
+        if let Some(def) = table.definitions.get_mut(&name_str) {
+            let type_desc = decl_constraints.get(&name_str).map_or_else(
                 || resolved_type.format(registry),
                 |constraints| format_type_with_constraints(resolved_type, constraints, registry),
             );

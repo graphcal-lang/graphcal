@@ -18,6 +18,7 @@ use graphcal_ir::ir::IR;
 use graphcal_ir::resolve::{DeclCategory, ExpectedFail};
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::registry::Registry;
+use graphcal_registry::resolve_types::ScopedName;
 use graphcal_registry::time_scale::TimeScale;
 
 // ---------------------------------------------------------------------------
@@ -241,29 +242,29 @@ pub struct TIR {
     /// Figure declarations in source order.
     pub figures: Vec<graphcal_ir::ir::FigureEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
-    pub runtime_deps: HashMap<String, std::collections::HashSet<String>>,
+    pub runtime_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
-    pub const_deps: HashMap<String, std::collections::HashSet<String>>,
+    pub const_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
-    pub source_order: Vec<(String, DeclCategory)>,
+    pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// User-defined function declarations.
     pub functions: Vec<graphcal_ir::ir::FunctionEntry>,
     /// Set of all assert names.
-    pub assert_names: std::collections::HashSet<String>,
+    pub assert_names: std::collections::HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: HashMap<String, Vec<String>>,
+    pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<String, ExpectedFail>,
+    pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
-    pub resolved_decl_types: HashMap<String, ResolvedTypeExpr>,
+    pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     /// Resolved function signatures (with generic placeholders).
     pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
     /// Resolved domain constraints for declarations that have them.
-    pub domain_constraints: HashMap<String, ResolvedDomainConstraint>,
+    pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
     pub imported_values: HashMap<
-        graphcal_ir::resolve::ScopedName,
+        ScopedName,
         (
             graphcal_registry::runtime_value::RuntimeValue,
             graphcal_registry::declared_type::DeclaredType,
@@ -295,7 +296,7 @@ impl TIR {
         }
         for (name, resolved) in &self.resolved_decl_types {
             let dt = resolved_to_declared_type(resolved, src)?;
-            declared_types.insert(name.clone(), dt);
+            declared_types.insert(name.to_string(), dt);
         }
         // Include imported values' declared types so dim_check can resolve references.
         // ScopedName → String: dim_check uses flat string keys.
@@ -1471,9 +1472,18 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/rocket.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // All declarations should have resolved types
-        assert!(tir.resolved_decl_types.contains_key("dry_mass"));
-        assert!(tir.resolved_decl_types.contains_key("delta_v"));
-        assert!(tir.resolved_decl_types.contains_key("G0"));
+        assert!(
+            tir.resolved_decl_types
+                .contains_key(&ScopedName::local("dry_mass"))
+        );
+        assert!(
+            tir.resolved_decl_types
+                .contains_key(&ScopedName::local("delta_v"))
+        );
+        assert!(
+            tir.resolved_decl_types
+                .contains_key(&ScopedName::local("G0"))
+        );
     }
 
     #[test]
@@ -1508,7 +1518,7 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/indexed.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // delta_v should be Velocity[Maneuver]
-        let dv_type = &tir.resolved_decl_types["delta_v"];
+        let dv_type = &tir.resolved_decl_types[&ScopedName::local("delta_v")];
         assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
         // total generic fn should have resolved sig
         let total_sig = &tir.resolved_fn_sigs[&FnName::new("total")];
@@ -1521,7 +1531,7 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/hohmann.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // transfer should be a struct type
-        let transfer_type = &tir.resolved_decl_types["transfer"];
+        let transfer_type = &tir.resolved_decl_types[&ScopedName::local("transfer")];
         assert!(
             matches!(transfer_type, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
         );
@@ -1532,7 +1542,7 @@ mod tests {
         let source = include_str!("../../../tests/fixtures/generics.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // pos_eci should be a GenericStruct with type args
-        let pos_type = &tir.resolved_decl_types["pos_eci"];
+        let pos_type = &tir.resolved_decl_types[&ScopedName::local("pos_eci")];
         match pos_type {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..
@@ -1553,7 +1563,7 @@ mod tests {
         }
         // x_pos should be scalar Length
         assert_eq!(
-            tir.resolved_decl_types["x_pos"],
+            tir.resolved_decl_types[&ScopedName::local("x_pos")],
             ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
         );
     }
@@ -1564,7 +1574,7 @@ mod tests {
         let tir = parse_and_type_resolve(source).unwrap();
 
         // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
-        let pos3_eci = &tir.resolved_decl_types["pos3_eci"];
+        let pos3_eci = &tir.resolved_decl_types[&ScopedName::local("pos3_eci")];
         match pos3_eci {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..
@@ -1585,7 +1595,7 @@ mod tests {
         }
 
         // pos3_default: Pos3<Length> — default fills in Unframed
-        let pos3_default = &tir.resolved_decl_types["pos3_default"];
+        let pos3_default = &tir.resolved_decl_types[&ScopedName::local("pos3_default")];
         match pos3_default {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..

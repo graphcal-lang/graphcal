@@ -871,13 +871,14 @@ fn process_deferred_instantiated_imports(
         merge_registry_into_builder(builder, &dep_registry);
 
         // Collect all declaration names in the dependency (for prefix_expr_refs).
+        // These are un-prefixed member names used for containment checks.
         let mut dep_names: HashSet<String> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
-            dep_names.insert(name.clone());
+            dep_names.insert(name.member().to_string());
         }
         // Also include function names.
         for fn_entry in &dep_unfrozen.functions {
-            dep_names.insert(fn_entry.name.clone());
+            dep_names.insert(fn_entry.name.member().to_string());
         }
 
         // Merge the dependency's IR into the importer's IR.
@@ -958,19 +959,19 @@ fn add_selective_aliases(
         // Add the alias as a declaration in the importer's IR.
         if is_const {
             unfrozen.add_const_alias(
-                local_name.clone(),
+                ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_expr,
                 deferred.import_span,
-                prefixed_name,
+                ScopedName::local(prefixed_name),
             );
         } else {
             unfrozen.add_node_alias(
-                local_name.clone(),
+                ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_expr,
                 deferred.import_span,
-                prefixed_name,
+                ScopedName::local(prefixed_name),
             );
         }
     }
@@ -1033,7 +1034,11 @@ fn import_selective_item(
         }
         imported_values.insert(scoped, (rv.clone(), dt));
         SelectiveImportResult::Runtime
-    } else if let Some(fn_entry) = dep.functions.iter().find(|entry| entry.name == orig_name) {
+    } else if let Some(fn_entry) = dep
+        .functions
+        .iter()
+        .find(|entry| entry.name.member() == orig_name)
+    {
         imported_names
             .functions
             .push(graphcal_registry::resolve_types::ResolvedFunctionEntry {
@@ -1663,11 +1668,11 @@ fn extract_runtime_values(
     let result = super::runtime::run_eval_loop(plan, tir, declared_types, src);
 
     // Return only locally-defined param/node values (not imported, not consts).
-    let local_runtime_names: HashSet<&str> = tir
+    let local_runtime_names: HashSet<String> = tir
         .params
         .iter()
-        .map(|e| e.name.as_str())
-        .chain(tir.nodes.iter().map(|e| e.name.as_str()))
+        .map(|e| e.name.to_string())
+        .chain(tir.nodes.iter().map(|e| e.name.to_string()))
         .collect();
 
     result
@@ -1725,7 +1730,7 @@ pub(super) fn apply_overrides(
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
-        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n == name_str) {
+        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n.member() == name_str) {
             match cat {
                 DeclCategory::Param => {}
                 non_param_cat => {
@@ -1741,19 +1746,22 @@ pub(super) fn apply_overrides(
             }));
         }
 
-        if let Some(entry) = ir.params.iter_mut().find(|e| e.name == name_str) {
+        if let Some(entry) = ir.params.iter_mut().find(|e| e.name.member() == name_str) {
             entry.default_expr = Some(override_expr.clone());
         }
 
         let all_runtime: std::collections::HashSet<&str> = ir
             .params
             .iter()
-            .map(|e| e.name.as_str())
-            .chain(ir.nodes.iter().map(|e| e.name.as_str()))
+            .map(|e| e.name.member())
+            .chain(ir.nodes.iter().map(|e| e.name.member()))
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
         crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
-        ir.runtime_deps.insert(name_str.to_string(), graph_refs);
+        ir.runtime_deps.insert(
+            ScopedName::local(name_str),
+            graph_refs.into_iter().map(ScopedName::local).collect(),
+        );
     }
     Ok(())
 }

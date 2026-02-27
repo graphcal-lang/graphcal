@@ -27,6 +27,7 @@ use graphcal_registry::error::GraphcalError;
 use graphcal_registry::format::format_unit_expr;
 use graphcal_registry::prelude::load_prelude;
 use graphcal_registry::registry::{self, Registry, RegistryBuilder};
+use graphcal_registry::resolve_types::ScopedName;
 use graphcal_registry::runtime_value::RuntimeValue;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ use graphcal_registry::runtime_value::RuntimeValue;
 /// A const declaration with type annotation.
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
@@ -45,7 +46,7 @@ pub struct ConstEntry {
 /// A param declaration with type annotation.
 #[derive(Debug, Clone)]
 pub struct ParamEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub default_expr: Option<Expr>,
     pub span: Span,
@@ -54,7 +55,7 @@ pub struct ParamEntry {
 /// A node declaration with type annotation.
 #[derive(Debug, Clone)]
 pub struct NodeEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
@@ -63,7 +64,7 @@ pub struct NodeEntry {
 /// An assert declaration.
 #[derive(Debug, Clone)]
 pub struct AssertEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub body: AssertBody,
     pub span: Span,
 }
@@ -71,7 +72,7 @@ pub struct AssertEntry {
 /// A plot declaration.
 #[derive(Debug, Clone)]
 pub struct PlotEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub decl: PlotDecl,
     pub span: Span,
     pub hidden: bool,
@@ -80,7 +81,7 @@ pub struct PlotEntry {
 /// A figure declaration.
 #[derive(Debug, Clone)]
 pub struct FigureEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub decl: FigureDecl,
     pub span: Span,
 }
@@ -88,7 +89,7 @@ pub struct FigureEntry {
 /// A function declaration.
 #[derive(Debug, Clone)]
 pub struct FunctionEntry {
-    pub name: String,
+    pub name: ScopedName,
     pub decl: FnDecl,
     pub span: Span,
 }
@@ -118,23 +119,35 @@ pub struct IR {
     /// Figure declarations in source order.
     pub figures: Vec<FigureEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
-    pub runtime_deps: HashMap<String, HashSet<String>>,
+    pub runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
-    pub const_deps: HashMap<String, HashSet<String>>,
+    pub const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
-    pub source_order: Vec<(String, DeclCategory)>,
+    pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// User-defined function declarations.
     pub functions: Vec<FunctionEntry>,
     /// Set of all assert names.
-    pub assert_names: HashSet<String>,
+    pub assert_names: HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: HashMap<String, Vec<String>>,
+    pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<String, ExpectedFail>,
+    pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    pub imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
+    pub imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+}
+
+/// Convert a `String`-keyed dep map from the resolver to a `ScopedName`-keyed map.
+fn wrap_dep_map(map: HashMap<String, HashSet<String>>) -> HashMap<ScopedName, HashSet<ScopedName>> {
+    map.into_iter()
+        .map(|(k, v)| {
+            (
+                ScopedName::local(k),
+                v.into_iter().map(ScopedName::local).collect(),
+            )
+        })
+        .collect()
 }
 
 /// Lower an AST into an [`IR`].
@@ -239,7 +252,7 @@ pub fn lower_to_builder(
                         span: entry.span.into(),
                     })?;
             Ok(ConstEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -259,7 +272,7 @@ pub fn lower_to_builder(
                         span: entry.span.into(),
                     })?;
             Ok(ParamEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 default_expr: entry.default_expr,
                 span: entry.span,
@@ -279,7 +292,7 @@ pub fn lower_to_builder(
                         span: entry.span.into(),
                     })?;
             Ok(NodeEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -295,7 +308,7 @@ pub fn lower_to_builder(
             .asserts
             .into_iter()
             .map(|entry| AssertEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 body: entry.body,
                 span: entry.span,
             })
@@ -304,7 +317,7 @@ pub fn lower_to_builder(
             .plots
             .into_iter()
             .map(|entry| PlotEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
                 hidden: entry.hidden,
@@ -314,26 +327,47 @@ pub fn lower_to_builder(
             .figures
             .into_iter()
             .map(|entry| FigureEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
             })
             .collect(),
-        runtime_deps: resolved.runtime_deps,
-        const_deps: resolved.const_deps,
-        source_order: resolved.source_order,
+        runtime_deps: wrap_dep_map(resolved.runtime_deps),
+        const_deps: wrap_dep_map(resolved.const_deps),
+        source_order: resolved
+            .source_order
+            .into_iter()
+            .map(|(name, cat)| (ScopedName::local(name), cat))
+            .collect(),
         functions: resolved
             .functions
             .into_iter()
             .map(|entry| FunctionEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
             })
             .collect(),
-        assert_names: resolved.assert_names,
-        assumes_map: resolved.assumes_map,
-        expected_fail: resolved.expected_fail,
+        assert_names: resolved
+            .assert_names
+            .into_iter()
+            .map(ScopedName::local)
+            .collect(),
+        assumes_map: resolved
+            .assumes_map
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    ScopedName::local(k),
+                    v.into_iter().map(ScopedName::local).collect(),
+                )
+            })
+            .collect(),
+        expected_fail: resolved
+            .expected_fail
+            .into_iter()
+            .map(|(k, v)| (ScopedName::local(k), v))
+            .collect(),
         imported_values: HashMap::new(),
     };
 
@@ -363,7 +397,7 @@ pub fn lower_to_builder_with_imported_values(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
@@ -406,7 +440,7 @@ pub fn lower_to_builder_with_imported_values(
                         span: entry.span.into(),
                     })?;
             Ok(ConstEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -426,7 +460,7 @@ pub fn lower_to_builder_with_imported_values(
                         span: entry.span.into(),
                     })?;
             Ok(ParamEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 default_expr: entry.default_expr,
                 span: entry.span,
@@ -446,7 +480,7 @@ pub fn lower_to_builder_with_imported_values(
                         span: entry.span.into(),
                     })?;
             Ok(NodeEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -462,7 +496,7 @@ pub fn lower_to_builder_with_imported_values(
             .asserts
             .into_iter()
             .map(|entry| AssertEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 body: entry.body,
                 span: entry.span,
             })
@@ -471,7 +505,7 @@ pub fn lower_to_builder_with_imported_values(
             .plots
             .into_iter()
             .map(|entry| PlotEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
                 hidden: entry.hidden,
@@ -481,26 +515,47 @@ pub fn lower_to_builder_with_imported_values(
             .figures
             .into_iter()
             .map(|entry| FigureEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
             })
             .collect(),
-        runtime_deps: resolved.runtime_deps,
-        const_deps: resolved.const_deps,
-        source_order: resolved.source_order,
+        runtime_deps: wrap_dep_map(resolved.runtime_deps),
+        const_deps: wrap_dep_map(resolved.const_deps),
+        source_order: resolved
+            .source_order
+            .into_iter()
+            .map(|(name, cat)| (ScopedName::local(name), cat))
+            .collect(),
         functions: resolved
             .functions
             .into_iter()
             .map(|entry| FunctionEntry {
-                name: entry.name,
+                name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
             })
             .collect(),
-        assert_names: resolved.assert_names,
-        assumes_map: resolved.assumes_map,
-        expected_fail: resolved.expected_fail,
+        assert_names: resolved
+            .assert_names
+            .into_iter()
+            .map(ScopedName::local)
+            .collect(),
+        assumes_map: resolved
+            .assumes_map
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    ScopedName::local(k),
+                    v.into_iter().map(ScopedName::local).collect(),
+                )
+            })
+            .collect(),
+        expected_fail: resolved
+            .expected_fail
+            .into_iter()
+            .map(|(k, v)| (ScopedName::local(k), v))
+            .collect(),
         imported_values,
     };
 
@@ -515,16 +570,16 @@ pub struct UnfrozenIR {
     asserts: Vec<AssertEntry>,
     plots: Vec<PlotEntry>,
     figures: Vec<FigureEntry>,
-    runtime_deps: HashMap<String, HashSet<String>>,
-    const_deps: HashMap<String, HashSet<String>>,
+    runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
+    const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
-    pub source_order: Vec<(String, DeclCategory)>,
+    pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// User-defined function declarations.
     pub functions: Vec<FunctionEntry>,
-    assert_names: HashSet<String>,
-    assumes_map: HashMap<String, Vec<String>>,
-    expected_fail: HashMap<String, ExpectedFail>,
-    imported_values: HashMap<crate::resolve::ScopedName, (RuntimeValue, DeclaredType)>,
+    assert_names: HashSet<ScopedName>,
+    assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+    expected_fail: HashMap<ScopedName, ExpectedFail>,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 impl UnfrozenIR {
@@ -555,11 +610,11 @@ impl UnfrozenIR {
     /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
     pub fn add_const_alias(
         &mut self,
-        name: String,
+        name: ScopedName,
         type_ann: TypeExpr,
         expr: Expr,
         span: Span,
-        target: String,
+        target: ScopedName,
     ) {
         let mut deps = HashSet::new();
         deps.insert(target);
@@ -578,11 +633,11 @@ impl UnfrozenIR {
     /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
     pub fn add_node_alias(
         &mut self,
-        name: String,
+        name: ScopedName,
         type_ann: TypeExpr,
         expr: Expr,
         span: Span,
-        target: String,
+        target: ScopedName,
     ) {
         let mut deps = HashSet::new();
         deps.insert(target);
@@ -616,21 +671,24 @@ impl UnfrozenIR {
         bindings: &HashMap<String, Expr>,
         dep_names: &HashSet<String>,
     ) {
+        /// Prefix a `ScopedName` dep if its member is in `dep_names`.
+        fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<String>) -> ScopedName {
+            if dep_names.contains(d.member()) {
+                d.with_prefix(prefix)
+            } else {
+                d.clone()
+            }
+        }
+
         // Merge consts
         for mut entry in dep.consts {
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             // Prefix const deps
             if let Some(deps) = dep.const_deps.get(&entry.name) {
                 let prefixed_deps = deps
                     .iter()
-                    .map(|d| {
-                        if dep_names.contains(d) {
-                            format!("{prefix}::{d}")
-                        } else {
-                            d.clone()
-                        }
-                    })
+                    .map(|d| prefix_dep(d, prefix, dep_names))
                     .collect();
                 self.const_deps.insert(prefixed.clone(), prefixed_deps);
             }
@@ -645,8 +703,8 @@ impl UnfrozenIR {
 
         // Merge params — replace defaults with bindings where provided
         for mut entry in dep.params {
-            let prefixed = format!("{prefix}::{}", entry.name);
-            if let Some(binding_expr) = bindings.get(&entry.name) {
+            let prefixed = entry.name.with_prefix(prefix);
+            if let Some(binding_expr) = bindings.get(entry.name.member()) {
                 // Use the binding expression (from the importer's scope, no prefixing needed
                 // for refs that belong to the importer — only dep-internal refs get prefixed)
                 entry.default_expr = Some(binding_expr.clone());
@@ -659,21 +717,17 @@ impl UnfrozenIR {
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = HashSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
-                if bindings.contains_key(&entry.name) {
+                if bindings.contains_key(entry.name.member()) {
                     // Binding expression — deps are already in the importer's namespace.
                     // We'll recompute deps from the binding expression below.
                 } else {
                     // Default expression — prefix dep-internal deps
                     for d in orig_deps {
-                        if dep_names.contains(d) {
-                            graph_refs.insert(format!("{prefix}::{d}"));
-                        } else {
-                            graph_refs.insert(d.clone());
-                        }
+                        graph_refs.insert(prefix_dep(d, prefix, dep_names));
                     }
                 }
             }
-            if let Some(binding_expr) = bindings.get(&entry.name) {
+            if let Some(binding_expr) = bindings.get(entry.name.member()) {
                 // Collect graph refs from the binding expression
                 collect_graph_refs_from_expr(binding_expr, &mut graph_refs);
             }
@@ -690,17 +744,11 @@ impl UnfrozenIR {
         // Merge nodes
         for mut entry in dep.nodes {
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             if let Some(deps) = dep.runtime_deps.get(&entry.name) {
                 let prefixed_deps = deps
                     .iter()
-                    .map(|d| {
-                        if dep_names.contains(d) {
-                            format!("{prefix}::{d}")
-                        } else {
-                            d.clone()
-                        }
-                    })
+                    .map(|d| prefix_dep(d, prefix, dep_names))
                     .collect();
                 self.runtime_deps.insert(prefixed.clone(), prefixed_deps);
             }
@@ -730,7 +778,7 @@ impl UnfrozenIR {
                     prefix_expr_refs(tolerance, prefix, dep_names);
                 }
             }
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             self.asserts.push(AssertEntry {
                 name: prefixed.clone(),
                 body: entry.body,
@@ -745,7 +793,7 @@ impl UnfrozenIR {
             for field in &mut entry.decl.fields {
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             self.plots.push(PlotEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
@@ -769,7 +817,7 @@ impl UnfrozenIR {
                     ));
                 }
             }
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             self.figures.push(FigureEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
@@ -791,7 +839,7 @@ impl UnfrozenIR {
                     prefix_expr_refs(expr, prefix, dep_names);
                 }
             }
-            let prefixed = format!("{prefix}::{}", entry.name);
+            let prefixed = entry.name.with_prefix(prefix);
             self.functions.push(FunctionEntry {
                 name: prefixed,
                 decl: entry.decl,
@@ -801,16 +849,16 @@ impl UnfrozenIR {
 
         // Merge assumes_map and expected_fail
         for (assert_name, assumers) in dep.assumes_map {
-            let prefixed_assert = format!("{prefix}::{assert_name}");
-            let prefixed_assumers: Vec<String> =
-                assumers.iter().map(|a| format!("{prefix}::{a}")).collect();
+            let prefixed_assert = assert_name.with_prefix(prefix);
+            let prefixed_assumers: Vec<ScopedName> =
+                assumers.iter().map(|a| a.with_prefix(prefix)).collect();
             self.assumes_map
                 .entry(prefixed_assert)
                 .or_default()
                 .extend(prefixed_assumers);
         }
         for (assert_name, ef) in dep.expected_fail {
-            let prefixed = format!("{prefix}::{assert_name}");
+            let prefixed = assert_name.with_prefix(prefix);
             self.expected_fail.insert(prefixed, ef);
         }
     }
@@ -876,7 +924,7 @@ pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<Strin
 
 /// Visitor that collects graph references from expressions.
 struct GraphRefCollector<'a> {
-    refs: &'a mut HashSet<String>,
+    refs: &'a mut HashSet<ScopedName>,
 }
 
 impl ExprVisitor for GraphRefCollector<'_> {
@@ -884,14 +932,15 @@ impl ExprVisitor for GraphRefCollector<'_> {
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::GraphRef(ident) = &expr.kind {
-            self.refs.insert(ident.value.to_string());
+            self.refs.insert(ScopedName::local(ident.value.as_str()));
         }
         Ok(())
     }
 
     fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::QualifiedGraphRef { module, name } = &expr.kind {
-            self.refs.insert(format!("{}::{}", module.name, name.value));
+            self.refs
+                .insert(ScopedName::qualified(&module.name, name.value.as_str()));
         }
         Ok(())
     }
@@ -902,7 +951,7 @@ impl ExprVisitor for GraphRefCollector<'_> {
 /// This is a simpler version of `resolve::collect_graph_refs` that operates on
 /// arbitrary expressions without requiring a known-names set. Used for building
 /// runtime deps from binding expressions.
-fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<String>) {
+fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<ScopedName>) {
     let mut collector = GraphRefCollector { refs };
     let _ = collector.visit_expr(expr);
 }
@@ -1436,7 +1485,7 @@ mod tests {
             "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;",
         )
         .unwrap();
-        let names: Vec<&str> = ir.source_order.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<String> = ir.source_order.iter().map(|(n, _)| n.to_string()).collect();
         assert_eq!(names, vec!["b", "a", "z"]);
     }
 
@@ -1446,9 +1495,9 @@ mod tests {
             "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;",
         )
         .unwrap();
-        let c_deps = &ir.runtime_deps["c"];
-        assert!(c_deps.contains("a"));
-        assert!(c_deps.contains("b"));
+        let c_deps = &ir.runtime_deps[&ScopedName::local("c")];
+        assert!(c_deps.contains(&ScopedName::local("a")));
+        assert!(c_deps.contains(&ScopedName::local("b")));
         assert_eq!(c_deps.len(), 2);
     }
 }

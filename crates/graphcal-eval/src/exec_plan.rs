@@ -85,7 +85,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .asserts
         .iter()
         .map(|entry| AssertBodyEntry {
-            name: entry.name.clone(),
+            name: entry.name.to_string(),
             body: entry.body.clone(),
             span: entry.span,
         })
@@ -95,7 +95,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .plots
         .iter()
         .map(|entry| PlotBodyEntry {
-            name: entry.name.clone(),
+            name: entry.name.to_string(),
             decl: entry.decl.clone(),
             hidden: entry.hidden,
         })
@@ -105,7 +105,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .figures
         .iter()
         .map(|entry| FigureBodyEntry {
-            name: entry.name.clone(),
+            name: entry.name.to_string(),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -125,8 +125,16 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         assert_bodies,
         plot_bodies,
         figure_bodies,
-        assumes_map: tir.assumes_map.clone(),
-        expected_fail: tir.expected_fail.clone(),
+        assumes_map: tir
+            .assumes_map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.iter().map(ToString::to_string).collect()))
+            .collect(),
+        expected_fail: tir
+            .expected_fail
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
         domain_constraints,
     })
 }
@@ -147,15 +155,17 @@ fn eval_consts_from_tir(
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
 
     for entry in &tir.consts {
-        let idx = graph.add_node(entry.name.clone());
-        index_map.insert(entry.name.clone(), idx);
+        let name_str = entry.name.to_string();
+        let idx = graph.add_node(name_str.clone());
+        index_map.insert(name_str, idx);
     }
 
     for entry in &tir.consts {
         if let Some(deps) = tir.const_deps.get(&entry.name) {
-            let from = index_map[&entry.name];
+            let from = index_map[&entry.name.to_string()];
             for dep in deps {
-                let to = index_map[dep];
+                let dep_str = dep.to_string();
+                let to = index_map[&dep_str];
                 graph.add_edge(to, from, ());
             }
         }
@@ -166,7 +176,7 @@ fn eval_consts_from_tir(
         let span = tir
             .consts
             .iter()
-            .find(|e| e.name == *cycle_node)
+            .find(|e| e.name.to_string() == *cycle_node)
             .map_or_else(|| Span::new(0, 0), |e| e.span);
         GraphcalError::CyclicDependency {
             name: cycle_node.clone().into(),
@@ -175,10 +185,10 @@ fn eval_consts_from_tir(
         }
     })?;
 
-    let const_exprs: HashMap<&str, &Expr> = tir
+    let const_exprs: HashMap<String, &Expr> = tir
         .consts
         .iter()
-        .map(|entry| (entry.name.as_str(), &entry.expr))
+        .map(|entry| (entry.name.to_string(), &entry.expr))
         .collect();
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -194,7 +204,7 @@ fn eval_consts_from_tir(
 
     for idx in sorted {
         let name = &graph[idx];
-        let expr = const_exprs[name.as_str()];
+        let expr = const_exprs[name];
         let val = eval_expr(expr, &values, &empty_locals, &ctx)?;
         values.insert(name.clone(), val);
     }
@@ -212,15 +222,16 @@ fn build_runtime_dag(
     let mut expressions: HashMap<String, Expr> = HashMap::new();
 
     for entry in &tir.params {
-        let idx = graph.add_node(entry.name.clone());
-        index_map.insert(entry.name.clone(), idx);
+        let name_str = entry.name.to_string();
+        let idx = graph.add_node(name_str.clone());
+        index_map.insert(name_str.clone(), idx);
         match &entry.default_expr {
             Some(expr) => {
-                expressions.insert(entry.name.clone(), expr.clone());
+                expressions.insert(name_str, expr.clone());
             }
             None => {
                 return Err(GraphcalError::RequiredParamNotProvided {
-                    name: entry.name.clone(),
+                    name: name_str,
                     src: src.clone(),
                     span: entry.span.into(),
                 });
@@ -228,15 +239,18 @@ fn build_runtime_dag(
         }
     }
     for entry in &tir.nodes {
-        let idx = graph.add_node(entry.name.clone());
-        index_map.insert(entry.name.clone(), idx);
-        expressions.insert(entry.name.clone(), entry.expr.clone());
+        let name_str = entry.name.to_string();
+        let idx = graph.add_node(name_str.clone());
+        index_map.insert(name_str.clone(), idx);
+        expressions.insert(name_str, entry.expr.clone());
     }
 
     for (name, deps) in &tir.runtime_deps {
-        if let Some(&to_idx) = index_map.get(name) {
+        let name_str = name.to_string();
+        if let Some(&to_idx) = index_map.get(&name_str) {
             for dep in deps {
-                if let Some(&from_idx) = index_map.get(dep) {
+                let dep_str = dep.to_string();
+                if let Some(&from_idx) = index_map.get(&dep_str) {
                     graph.add_edge(from_idx, to_idx, ());
                 }
             }
@@ -248,9 +262,9 @@ fn build_runtime_dag(
         let span = tir
             .nodes
             .iter()
-            .map(|e| (&e.name, e.span))
-            .chain(tir.params.iter().map(|e| (&e.name, e.span)))
-            .find(|(n, _)| *n == cycle_node)
+            .map(|e| (e.name.to_string(), e.span))
+            .chain(tir.params.iter().map(|e| (e.name.to_string(), e.span)))
+            .find(|(n, _)| n == cycle_node)
             .map_or_else(|| Span::new(0, 0), |(_, s)| s);
         GraphcalError::CyclicDependency {
             name: cycle_node.clone().into(),
@@ -274,6 +288,10 @@ fn build_runtime_dag(
 #[expect(
     clippy::too_many_lines,
     reason = "linear iteration over domain bounds with validation"
+)]
+#[expect(
+    clippy::redundant_clone,
+    reason = "name_str is cloned in early-return error paths but consumed later"
 )]
 fn resolve_domain_constraints(
     tir: &TIR,
@@ -308,10 +326,12 @@ fn resolve_domain_constraints(
             continue;
         }
 
+        let name_str = name.to_string();
+
         // Validate that the base type supports constraints.
         let resolved = tir.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
-        validate_constraint_target(name, base_resolved, decl_span, src)?;
+        validate_constraint_target(&name_str, base_resolved, decl_span, src)?;
 
         // Get the expected dimension for bound validation.
         let expected_dim = base_resolved.and_then(|r| match r {
@@ -359,7 +379,7 @@ fn resolve_domain_constraints(
                     && bd != expected
                 {
                     return Err(GraphcalError::DomainDimensionMismatch {
-                        name: name.clone(),
+                        name: name_str.clone(),
                         type_dim: tir.registry.dimensions.format_dimension(expected),
                         bound_name: bound.kind.to_string(),
                         bound_dim: tir.registry.dimensions.format_dimension(bd),
@@ -391,7 +411,7 @@ fn resolve_domain_constraints(
             && min > max
         {
             return Err(GraphcalError::DomainMinExceedsMax {
-                name: name.clone(),
+                name: name_str.clone(),
                 min: min_display.unwrap_or_else(|| format!("{min}")),
                 max: max_display.unwrap_or_else(|| format!("{max}")),
                 src: src.clone(),
@@ -400,7 +420,7 @@ fn resolve_domain_constraints(
         }
 
         constraints.insert(
-            name.clone(),
+            name_str,
             ResolvedDomainConstraint {
                 min: min_val,
                 max: max_val,
