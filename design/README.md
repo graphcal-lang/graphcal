@@ -64,6 +64,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [17](./17-error-messages.md) | Error Messages & Diagnostics | Design settled | Error codes, format, miette-based diagnostic system |
 | [18](./18-non-si-dimensions.md) | Non-SI Base Dimensions | Proposal | User-defined base dimensions (Information, Currency, etc.) |
 | [19](./19-assertions-and-testing.md) | Assertions & Testing | Design in progress | `assert` declarations, `#[...]` attributes, `#[assumes]`, tolerance syntax |
+| [22](./22-vega-lite-plotting.md) | Vega-Lite Plotting | Proposal | Replace Plotly with Vega-Lite grammar via Altair-inspired API |
 
 ## How to Use These Files
 
