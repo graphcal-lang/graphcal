@@ -77,6 +77,10 @@ pub trait ExprVisitor {
             ExprKind::Unfold { init, body, .. } => self.visit_unfold(expr, init, body),
 
             ExprKind::Match { scrutinee, arms } => self.visit_match(expr, scrutinee, arms),
+
+            ExprKind::TupleMatch { scrutinees, arms } => {
+                self.visit_tuple_match(expr, scrutinees, arms)
+            }
         }
     }
 
@@ -210,6 +214,26 @@ pub trait ExprVisitor {
         }
         Ok(())
     }
+
+    fn visit_tuple_match(
+        &mut self,
+        _expr: &Expr,
+        scrutinees: &[Expr],
+        arms: &[crate::ast::TupleMatchArm],
+    ) -> Result<(), Self::Error> {
+        for s in scrutinees {
+            self.visit_expr(s)?;
+        }
+        for arm in arms {
+            if let Some(patterns) = &arm.patterns {
+                for p in patterns {
+                    self.visit_expr(p)?;
+                }
+            }
+            self.visit_expr(&arm.body)?;
+        }
+        Ok(())
+    }
 }
 
 /// Mutable visitor for in-place rewriting of [`Expr`] trees.
@@ -294,6 +318,20 @@ pub trait ExprVisitorMut {
             ExprKind::Match { scrutinee, arms } => {
                 self.visit_expr_mut(scrutinee)?;
                 for arm in arms {
+                    self.visit_expr_mut(&mut arm.body)?;
+                }
+                Ok(())
+            }
+            ExprKind::TupleMatch { scrutinees, arms } => {
+                for s in scrutinees {
+                    self.visit_expr_mut(s)?;
+                }
+                for arm in arms {
+                    if let Some(patterns) = &mut arm.patterns {
+                        for p in patterns {
+                            self.visit_expr_mut(p)?;
+                        }
+                    }
                     self.visit_expr_mut(&mut arm.body)?;
                 }
                 Ok(())

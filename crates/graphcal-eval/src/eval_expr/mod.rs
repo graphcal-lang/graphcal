@@ -269,5 +269,9 @@ pub fn eval_expr(
             curr_name,
             body,
         } => collections::eval_unfold(expr, init, prev_name, curr_name, body, values, ctx),
+
+        // TupleMatch is desugared to If/BinOp(Eq) chains before evaluation.
+        #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
+        ExprKind::TupleMatch { .. } => unreachable!("TupleMatch should be desugared before eval"),
     }
 }

@@ -1,7 +1,7 @@
 use crate::ast::TypeExpr;
 use crate::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, LetBinding, MatchArm, MatchPattern,
-    PatternBinding,
+    Expr, ExprKind, FieldInit, ForBinding, LetBinding, MatchArm, MatchPattern, PatternBinding,
+    TupleMatchArm,
 };
 use crate::names::{DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName};
 use crate::span::Span;
@@ -46,23 +46,23 @@ impl Parser<'_> {
     pub(super) fn parse_match_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Match)?;
         // Support tuple scrutinee syntax: `match (a, b) { ... }`
-        // by desugaring to nested `if` expressions.
+        // Produces an ExprKind::TupleMatch node (desugared later).
         if self.lexer.peek() == Some(&Token::LParen) {
             self.lexer.next_token(); // consume '('
             let first = self.parse_expr()?;
             if self.lexer.peek() == Some(&Token::Comma) {
-                let mut tuple_scrutinee = vec![first];
+                let mut scrutinees = vec![first];
                 while self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
-                    tuple_scrutinee.push(self.parse_expr()?);
+                    scrutinees.push(self.parse_expr()?);
                 }
                 self.expect(Token::RParen)?;
                 self.expect(Token::LBrace)?;
-                let tuple_match = self.parse_tuple_match_arms(&tuple_scrutinee, start_span)?;
+                let arms = self.parse_tuple_match_arms(scrutinees.len(), start_span)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
                 return Ok(Expr {
-                    kind: tuple_match.kind,
+                    kind: ExprKind::TupleMatch { scrutinees, arms },
                     span,
                 });
             }
@@ -90,18 +90,16 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse tuple-match arms and lower them to nested `if` expressions.
+    /// Parse tuple-match arms into a `TupleMatch` AST node.
     ///
     /// Supported form:
     /// `match (a, b) { (X, Y) => expr, _ => fallback }`
     fn parse_tuple_match_arms(
         &mut self,
-        tuple_scrutinee: &[Expr],
+        arity: usize,
         start_span: Span,
-    ) -> Result<Expr, ParseError> {
-        let arity = tuple_scrutinee.len();
-        let mut cases: Vec<(Vec<Expr>, Expr)> = Vec::new();
-        let mut fallback: Option<Expr> = None;
+    ) -> Result<Vec<TupleMatchArm>, ParseError> {
+        let mut arms = Vec::new();
 
         loop {
             if self.lexer.peek() == Some(&Token::RBrace) {
@@ -109,11 +107,17 @@ impl Parser<'_> {
             }
 
             if self.lexer.peek() == Some(&Token::Underscore) {
-                self.lexer.next_token(); // consume '_'
+                let (_, underscore_span) = self.advance()?;
                 self.expect(Token::FatArrow)?;
-                fallback = Some(self.parse_expr()?);
+                let body = self.parse_expr()?;
+                let span = underscore_span.merge(body.span);
+                arms.push(TupleMatchArm {
+                    patterns: None,
+                    body,
+                    span,
+                });
             } else {
-                self.expect(Token::LParen)?;
+                let (_, lparen_span) = self.expect(Token::LParen)?;
                 let mut pattern_elems = Vec::new();
                 loop {
                     pattern_elems.push(self.parse_expr()?);
@@ -133,7 +137,12 @@ impl Parser<'_> {
                 }
                 self.expect(Token::FatArrow)?;
                 let body = self.parse_expr()?;
-                cases.push((pattern_elems, body));
+                let span = lparen_span.merge(body.span);
+                arms.push(TupleMatchArm {
+                    patterns: Some(pattern_elems),
+                    body,
+                    span,
+                });
             }
 
             if self.lexer.peek() == Some(&Token::Comma) {
@@ -141,54 +150,11 @@ impl Parser<'_> {
             }
         }
 
-        // Build nested if-chain in reverse order.
-        let mut else_expr = if let Some(fallback_expr) = fallback {
-            fallback_expr
-        } else if let Some((_, last_body)) = cases.pop() {
-            last_body
-        } else {
+        if arms.is_empty() {
             return Err(self.unexpected_eof("at least one tuple match arm"));
-        };
-
-        for (pattern, body) in cases.into_iter().rev() {
-            let mut cond: Option<Expr> = None;
-            for (scrutinee_elem, pat_elem) in tuple_scrutinee.iter().zip(pattern.iter()) {
-                let eq = Expr {
-                    kind: ExprKind::BinOp {
-                        op: BinOp::Eq,
-                        lhs: Box::new(scrutinee_elem.clone()),
-                        rhs: Box::new(pat_elem.clone()),
-                    },
-                    span: scrutinee_elem.span.merge(pat_elem.span),
-                };
-                cond = Some(if let Some(prev) = cond {
-                    Expr {
-                        kind: ExprKind::BinOp {
-                            op: BinOp::And,
-                            lhs: Box::new(prev.clone()),
-                            rhs: Box::new(eq.clone()),
-                        },
-                        span: prev.span.merge(eq.span),
-                    }
-                } else {
-                    eq
-                });
-            }
-            let condition = cond.ok_or_else(|| self.unexpected_eof("condition"))?;
-            else_expr = Expr {
-                kind: ExprKind::If {
-                    condition: Box::new(condition.clone()),
-                    then_branch: Box::new(body.clone()),
-                    else_branch: Box::new(else_expr.clone()),
-                },
-                span: condition.span.merge(else_expr.span),
-            };
         }
 
-        Ok(Expr {
-            kind: else_expr.kind,
-            span: start_span.merge(else_expr.span),
-        })
+        Ok(arms)
     }
 
     /// Parse a list of match arms until `}`.

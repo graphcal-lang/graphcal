@@ -717,6 +717,14 @@ pub enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    /// Tuple match expression: `match (a, b) { (X, Y) => expr, _ => fallback }`
+    ///
+    /// Preserved in the AST for formatting and tooling. Desugared to nested
+    /// `If` / `BinOp(Eq)` chains before evaluation.
+    TupleMatch {
+        scrutinees: Vec<Expr>,
+        arms: Vec<TupleMatchArm>,
+    },
     /// Standalone index variant reference: `Maneuver::Departure`
     /// Used in comparisons with loop variables: `m == Maneuver::Departure`
     VariantLiteral {
@@ -803,6 +811,15 @@ pub struct MatchArm {
     pub span: Span,
 }
 
+/// One arm of a tuple `match` expression: `(X, Y) => expr` or `_ => fallback`
+#[derive(Debug, Clone)]
+pub struct TupleMatchArm {
+    /// `None` for the wildcard `_` arm.
+    pub patterns: Option<Vec<Expr>>,
+    pub body: Expr,
+    pub span: Span,
+}
+
 /// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Maneuver::Departure`
 #[derive(Debug, Clone)]
 pub struct MatchPattern {
@@ -851,6 +868,247 @@ pub enum BinOp {
 pub enum UnaryOp {
     Neg,
     Not,
+}
+
+// ---------------------------------------------------------------------------
+// Desugaring: TupleMatch → nested If / BinOp(Eq)
+// ---------------------------------------------------------------------------
+
+/// Desugar all `TupleMatch` nodes in a file to nested `If`/`BinOp(Eq)` chains.
+///
+/// This must be called before evaluation, dim-checking, and dependency analysis,
+/// which only understand the desugared form. The formatter and LSP symbol table
+/// operate on the original AST (before desugaring) so they see `TupleMatch`.
+pub fn desugar_tuple_matches(file: &mut File) {
+    for decl in &mut file.declarations {
+        match &mut decl.kind {
+            DeclKind::Param(p) => {
+                if let Some(v) = &mut p.value {
+                    desugar_expr(v);
+                }
+            }
+            DeclKind::Node(n) => desugar_expr(&mut n.value),
+            DeclKind::Const(c) => desugar_expr(&mut c.value),
+            DeclKind::Unit(u) => {
+                if let Some(def) = &mut u.definition {
+                    desugar_expr(&mut def.scale_expr);
+                }
+            }
+            DeclKind::Fn(f) => match &mut f.body {
+                FnBody::Short(e) => desugar_expr(e),
+                FnBody::Block { stmts, expr } => {
+                    for s in stmts {
+                        desugar_expr(&mut s.value);
+                    }
+                    desugar_expr(expr);
+                }
+            },
+            DeclKind::Assert(a) => match &mut a.body {
+                AssertBody::Expr(e) => desugar_expr(e),
+                AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    ..
+                } => {
+                    desugar_expr(actual);
+                    desugar_expr(expected);
+                    desugar_expr(tolerance);
+                }
+            },
+            DeclKind::Plot(p) => {
+                for field in &mut p.fields {
+                    desugar_expr(&mut field.value);
+                }
+            }
+            DeclKind::Figure(f) => {
+                for field in &mut f.fields {
+                    desugar_expr(&mut field.value);
+                }
+            }
+            DeclKind::Dimension(_)
+            | DeclKind::Index(_)
+            | DeclKind::Type(_)
+            | DeclKind::Import(_) => {}
+        }
+    }
+}
+
+/// Recursively desugar `TupleMatch` inside a single expression.
+fn desugar_expr(expr: &mut Expr) {
+    // First, recurse into children.
+    match &mut expr.kind {
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::VariantLiteral { .. }
+        | ExprKind::QualifiedGraphRef { .. }
+        | ExprKind::QualifiedConstRef { .. }
+        // TupleMatch is handled below after recursing into children.
+        | ExprKind::TupleMatch { .. } => {}
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            desugar_expr(lhs);
+            desugar_expr(rhs);
+        }
+        ExprKind::UnaryOp { operand, .. } => desugar_expr(operand),
+        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
+            for a in args {
+                desugar_expr(a);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            desugar_expr(condition);
+            desugar_expr(then_branch);
+            desugar_expr(else_branch);
+        }
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::AsCast { expr: inner, .. }
+        | ExprKind::FieldAccess { expr: inner, .. }
+        | ExprKind::IndexAccess { expr: inner, .. } => desugar_expr(inner),
+        ExprKind::Block { stmts, expr: body } => {
+            for s in stmts {
+                desugar_expr(&mut s.value);
+            }
+            desugar_expr(body);
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for f in fields {
+                if let Some(v) = &mut f.value {
+                    desugar_expr(v);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            for e in entries {
+                desugar_expr(&mut e.value);
+            }
+        }
+        ExprKind::ForComp { body, .. } => desugar_expr(body),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            desugar_expr(source);
+            desugar_expr(init);
+            desugar_expr(body);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            desugar_expr(init);
+            desugar_expr(body);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            desugar_expr(scrutinee);
+            for arm in arms {
+                desugar_expr(&mut arm.body);
+            }
+        }
+    }
+
+    // Now desugar TupleMatch at this node.
+    if let ExprKind::TupleMatch { scrutinees, arms } = &mut expr.kind {
+        // Recurse into children first.
+        for s in scrutinees.iter_mut() {
+            desugar_expr(s);
+        }
+        for arm in arms.iter_mut() {
+            if let Some(patterns) = &mut arm.patterns {
+                for p in patterns {
+                    desugar_expr(p);
+                }
+            }
+            desugar_expr(&mut arm.body);
+        }
+
+        // Take ownership of arms (scrutinees are borrowed).
+        let arms = std::mem::take(arms);
+        let span = expr.span;
+
+        expr.kind = desugar_tuple_match(scrutinees, arms, span);
+    }
+}
+
+/// Build a nested `if` / `BinOp(Eq)` chain from tuple match scrutinees and arms.
+///
+/// For `match (a, b) { (X, Y) => e1, (P, Q) => e2, _ => e3 }`:
+/// ```text
+/// if a == X && b == Y { e1 }
+/// else if a == P && b == Q { e2 }
+/// else { e3 }
+/// ```
+fn desugar_tuple_match(scrutinees: &[Expr], arms: Vec<TupleMatchArm>, span: Span) -> ExprKind {
+    let false_expr = Expr {
+        kind: ExprKind::Bool(false),
+        span,
+    };
+
+    // Build the chain from last arm to first.
+    let mut result: Option<Expr> = None;
+
+    for arm in arms.into_iter().rev() {
+        match arm.patterns {
+            None => {
+                // Wildcard arm becomes the else branch.
+                result = Some(arm.body);
+            }
+            Some(patterns) => {
+                // Build `scrutinee[0] == pattern[0] && scrutinee[1] == pattern[1] && ...`
+                let condition = build_conjunction(scrutinees, &patterns, arm.span);
+                let else_branch = result.unwrap_or_else(|| false_expr.clone());
+                result = Some(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(condition),
+                        then_branch: Box::new(arm.body),
+                        else_branch: Box::new(else_branch),
+                    },
+                    span: arm.span,
+                });
+            }
+        }
+    }
+
+    result.unwrap_or(false_expr).kind
+}
+
+/// Build `a == X && b == Y && ...` from parallel scrutinee/pattern slices.
+///
+/// # Panics
+///
+/// Panics if `scrutinees` is empty (parser guarantees at least one).
+#[expect(
+    clippy::unreachable,
+    reason = "invariant: parser guarantees arity >= 1"
+)]
+fn build_conjunction(scrutinees: &[Expr], patterns: &[Expr], span: Span) -> Expr {
+    scrutinees
+        .iter()
+        .zip(patterns.iter())
+        .map(|(s, p)| Expr {
+            kind: ExprKind::BinOp {
+                op: BinOp::Eq,
+                lhs: Box::new(s.clone()),
+                rhs: Box::new(p.clone()),
+            },
+            span,
+        })
+        .reduce(|acc, eq| Expr {
+            kind: ExprKind::BinOp {
+                op: BinOp::And,
+                lhs: Box::new(acc),
+                rhs: Box::new(eq),
+            },
+            span,
+        })
+        // The parser guarantees at least one scrutinee.
+        .unwrap_or_else(|| unreachable!("tuple match must have at least one scrutinee"))
 }
 
 #[cfg(test)]

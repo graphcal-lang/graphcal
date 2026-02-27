@@ -1,6 +1,6 @@
 use graphcal_syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, LetBinding, MapEntry, MatchArm,
-    MatchPattern, PatternBinding, TypeExpr, UnaryOp,
+    MatchPattern, PatternBinding, TupleMatchArm, TypeExpr, UnaryOp,
 };
 use graphcal_syntax::names::{IndexName, Spanned};
 use pretty::RcDoc;
@@ -128,6 +128,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_unfold(fmt, init, prev_name, curr_name, body),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
+        ExprKind::TupleMatch { scrutinees, arms } => format_tuple_match(fmt, scrutinees, arms),
         ExprKind::VariantLiteral { index, variant } => {
             RcDoc::text(format!("{}::{}", index.value, variant.value))
         }
@@ -800,4 +801,49 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     name.append(RcDoc::text(" { "))
         .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
         .append(RcDoc::text(" }"))
+}
+
+pub fn format_tuple_match(
+    fmt: &mut Formatter<'_>,
+    scrutinees: &[Expr],
+    arms: &[TupleMatchArm],
+) -> RcDoc<'static> {
+    // Format scrutinees: `match (a, b)`
+    let scrutinee_docs: Vec<RcDoc<'static>> =
+        scrutinees.iter().map(|s| format_expr(fmt, s)).collect();
+    let scrutinee_list = RcDoc::intersperse(scrutinee_docs, RcDoc::text(", "));
+
+    let mut arm_docs: Vec<RcDoc<'static>> = Vec::new();
+    for arm in arms {
+        let leading = fmt.drain_comments_before(arm.span.offset());
+        let pattern_doc = arm.patterns.as_ref().map_or_else(
+            || RcDoc::text("_"),
+            |patterns| {
+                let pat_docs: Vec<RcDoc<'static>> =
+                    patterns.iter().map(|p| format_expr(fmt, p)).collect();
+                RcDoc::text("(")
+                    .append(RcDoc::intersperse(pat_docs, RcDoc::text(", ")))
+                    .append(RcDoc::text(")"))
+            },
+        );
+        let body = format_expr(fmt, &arm.body);
+        let arm_doc = pattern_doc
+            .append(RcDoc::text(" => "))
+            .append(body)
+            .append(RcDoc::text(","));
+        let arm_end = arm.span.offset() + arm.span.len();
+        let trailing = fmt.drain_trailing_comment(arm_end);
+        arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
+    }
+
+    RcDoc::text("match (")
+        .append(scrutinee_list)
+        .append(RcDoc::text(") {"))
+        .append(
+            RcDoc::hardline()
+                .append(RcDoc::intersperse(arm_docs, RcDoc::hardline()))
+                .nest(INDENT),
+        )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
 }
