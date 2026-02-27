@@ -1,8 +1,8 @@
 use graphcal_syntax::ast::{
-    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DeriveOp, DimDecl,
-    FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
-    IndexDecl, IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr,
-    UnitDecl, UnitDef, VariantDecl,
+    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, FieldDecl,
+    FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl, IndexDecl,
+    IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnitDecl,
+    UnitDef, VariantDecl,
 };
 use graphcal_syntax::span::Span;
 use pretty::RcDoc;
@@ -32,38 +32,10 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
     };
 
-    // Collect attribute lines: real attributes + synthetic #[derive(...)] for type decls
-    let has_attrs = !decl.attributes.is_empty();
-    let has_derives = matches!(&decl.kind, DeclKind::Type(t) if !t.derives.is_empty());
-
-    if !has_attrs && !has_derives {
+    if decl.attributes.is_empty() {
         body
     } else {
         let mut parts: Vec<RcDoc<'static>> = Vec::new();
-
-        // Emit #[derive(...)] first if present
-        if let DeclKind::Type(t) = &decl.kind
-            && !t.derives.is_empty()
-        {
-            let derives: Vec<RcDoc<'static>> = t
-                .derives
-                .iter()
-                .map(|d| {
-                    RcDoc::text(match d.value {
-                        DeriveOp::Add => "Add",
-                        DeriveOp::Sub => "Sub",
-                        DeriveOp::Neg => "Neg",
-                    })
-                })
-                .collect();
-            parts.push(
-                RcDoc::text("#[derive(")
-                    .append(RcDoc::intersperse(derives, RcDoc::text(", ")))
-                    .append(RcDoc::text(")]")),
-            );
-            parts.push(RcDoc::hardline());
-        }
-
         for attr in &decl.attributes {
             parts.push(format_attribute(attr));
             parts.push(RcDoc::hardline());

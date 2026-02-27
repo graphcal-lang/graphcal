@@ -970,7 +970,7 @@ fn register_declarations_impl(
                 register_index_decl(idx, registry, src, decl.span)?;
             }
             DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
-                register_type_decl(t, registry);
+                register_type_decl(t, &decl.attributes, registry);
             }
             _ => {}
         }
@@ -1081,7 +1081,11 @@ fn register_index_decl(
     Ok(())
 }
 
-fn register_type_decl(t: &graphcal_syntax::ast::TypeDecl, registry: &mut RegistryBuilder) {
+fn register_type_decl(
+    t: &graphcal_syntax::ast::TypeDecl,
+    attributes: &[graphcal_syntax::ast::Attribute],
+    registry: &mut RegistryBuilder,
+) {
     let generic_params: Vec<registry::TypeGenericParam> = t
         .generic_params
         .iter()
@@ -1105,10 +1109,27 @@ fn register_type_decl(t: &graphcal_syntax::ast::TypeDecl, registry: &mut Registr
             fields,
         });
     }
+
+    // Extract derives from attributes (validated by resolver)
+    let derives: Vec<graphcal_syntax::ast::DeriveOp> = attributes
+        .iter()
+        .filter(|a| a.name.name == "derive")
+        .flat_map(|a| a.args.iter())
+        .filter_map(|arg| {
+            arg.as_single_ident()
+                .and_then(|ident| match ident.name.as_str() {
+                    "Add" => Some(graphcal_syntax::ast::DeriveOp::Add),
+                    "Sub" => Some(graphcal_syntax::ast::DeriveOp::Sub),
+                    "Neg" => Some(graphcal_syntax::ast::DeriveOp::Neg),
+                    _ => None,
+                })
+        })
+        .collect();
+
     registry.register_type(registry::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        derives: t.derives.iter().map(|d| d.value).collect(),
+        derives,
         variants,
     });
 }

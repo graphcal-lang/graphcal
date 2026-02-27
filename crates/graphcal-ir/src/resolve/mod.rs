@@ -45,6 +45,7 @@ enum AttributeName {
     ExpectedFail,
     Lazy,
     AllowDefaults,
+    Derive,
 }
 
 impl AttributeName {
@@ -56,6 +57,7 @@ impl AttributeName {
             "expected_fail" => Some(Self::ExpectedFail),
             "lazy" => Some(Self::Lazy),
             "allow_defaults" => Some(Self::AllowDefaults),
+            "derive" => Some(Self::Derive),
             _ => None,
         }
     }
@@ -68,6 +70,7 @@ impl AttributeName {
             Self::ExpectedFail => "expected_fail",
             Self::Lazy => "lazy",
             Self::AllowDefaults => "allow_defaults",
+            Self::Derive => "derive",
         }
     }
 }
@@ -618,6 +621,56 @@ fn validate_attributes(
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),
+                        kind: kind.to_string(),
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
+                }
+                AttributeName::Derive => {
+                    // #[derive(...)] is only valid on type declarations
+                    let kind = match &decl.kind {
+                        DeclKind::Type(_) => {
+                            // Validate derive arguments
+                            for arg in &attr.args {
+                                let ident = arg.as_single_ident().ok_or_else(|| {
+                                    GraphcalError::EvalError {
+                                        message:
+                                            "`#[derive(...)]` arguments must be `Add`, `Sub`, or `Neg`"
+                                                .to_string(),
+                                        src: src.clone(),
+                                        span: arg.span().into(),
+                                    }
+                                })?;
+                                match ident.name.as_str() {
+                                    "Add" | "Sub" | "Neg" => {}
+                                    _ => {
+                                        return Err(GraphcalError::EvalError {
+                                            message: format!(
+                                                "unknown derive op `{}`; expected `Add`, `Sub`, or `Neg`",
+                                                ident.name
+                                            ),
+                                            src: src.clone(),
+                                            span: ident.span.into(),
+                                        });
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        DeclKind::Param(_) => "param",
+                        DeclKind::Node(_) => "node",
+                        DeclKind::Const(_) => "const",
+                        DeclKind::Assert(_) => "assert",
+                        DeclKind::Plot(_) => "plot",
+                        DeclKind::Figure(_) => "figure",
+                        DeclKind::Fn(_) => "fn",
+                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::Unit(_) => "unit",
+                        DeclKind::Index(_) => "index",
+                        DeclKind::Import(_) => "import",
+                    };
+                    return Err(GraphcalError::InvalidAttributeTarget {
+                        attr_name: AttributeName::Derive.as_str().to_string(),
                         kind: kind.to_string(),
                         src: src.clone(),
                         span: attr.span.into(),

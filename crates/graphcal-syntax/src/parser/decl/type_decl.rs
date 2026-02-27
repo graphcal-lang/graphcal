@@ -50,7 +50,6 @@ impl Parser<'_> {
             kind: DeclKind::Type(TypeDecl {
                 name,
                 generic_params,
-                derives: vec![],
                 variants,
             }),
             span,

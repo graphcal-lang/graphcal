@@ -517,16 +517,18 @@ fn parse_type_decl_derive_attribute() {
     let source = "#[derive(Add, Sub, Neg)]\ntype Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
-    // #[derive(...)] should be extracted, not left in attributes
-    assert!(file.declarations[0].attributes.is_empty());
+    // #[derive(...)] stays in attributes (validated by resolver, extracted at IR lowering)
+    let attrs = &file.declarations[0].attributes;
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs[0].name.name, "derive");
+    assert_eq!(attrs[0].args.len(), 3);
+    assert_eq!(attrs[0].args[0].as_single_ident().unwrap().name, "Add");
+    assert_eq!(attrs[0].args[1].as_single_ident().unwrap().name, "Sub");
+    assert_eq!(attrs[0].args[2].as_single_ident().unwrap().name, "Neg");
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Vec3");
             assert_eq!(t.generic_params.len(), 2);
-            assert_eq!(t.derives.len(), 3);
-            assert_eq!(t.derives[0].value, crate::ast::DeriveOp::Add);
-            assert_eq!(t.derives[1].value, crate::ast::DeriveOp::Sub);
-            assert_eq!(t.derives[2].value, crate::ast::DeriveOp::Neg);
             assert_eq!(t.variants.len(), 1);
         }
         _ => panic!("expected type declaration"),
@@ -534,10 +536,12 @@ fn parse_type_decl_derive_attribute() {
 }
 
 #[test]
-fn parse_derive_attribute_on_non_type_is_error() {
+fn parse_derive_attribute_on_non_type_passes_parser() {
+    // Parser no longer rejects #[derive] on non-type decls; validation is done by the resolver
     let source = "#[derive(Add)]\nparam x: Dimensionless = 1.0;";
-    let result = Parser::new(source).parse_file();
-    assert!(result.is_err());
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations[0].attributes.len(), 1);
+    assert_eq!(file.declarations[0].attributes[0].name.name, "derive");
 }
 
 #[test]
@@ -546,7 +550,7 @@ fn parse_type_decl_no_derive() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert!(t.derives.is_empty());
+            assert!(t.variants.is_empty());
         }
         _ => panic!("expected type declaration"),
     }
