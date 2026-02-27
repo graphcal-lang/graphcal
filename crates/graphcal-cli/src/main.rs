@@ -439,23 +439,6 @@ fn extract_unit_label(
     }
 }
 
-/// Format a leaf value as a cell string without unit suffix.
-fn format_leaf_cell(value: &graphcal_eval::eval::Value) -> String {
-    use graphcal_eval::eval::Value;
-    match value {
-        Value::Bool(b) => b.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Label {
-            index_name,
-            variant,
-        } => format!("{index_name}::{variant}"),
-        Value::Scalar { .. } => format_number(value.display_value().unwrap_or_default()),
-        Value::Struct { variant, .. } => variant.as_str().to_string(),
-        Value::Indexed { .. } => "...".to_string(),
-        Value::Datetime { .. } => value.format_datetime().unwrap_or_default(),
-    }
-}
-
 /// Render a 2D `Indexed` value as a formatted table grid (without name/unit header).
 fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
     use graphcal_eval::eval::Value;
@@ -501,7 +484,7 @@ fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
                 let cell_val = cells
                     .iter()
                     .find(|(k, _)| k.as_str() == *col_name)
-                    .map(|(_, v)| format_leaf_cell(v))
+                    .map(|(_, v)| v.format_display(None))
                     .unwrap_or_default();
                 row.push(cell_val);
             }
