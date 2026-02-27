@@ -341,7 +341,16 @@ fn collect_const_refs(
     }
 }
 
-/// Extract graph refs and const refs from a runtime expression (param/node value).
+/// Extract all graph and const references from an expression.
+///
+/// When `self_name` is `Some` and the expression is an `Unfold`, the self-reference
+/// is excluded from the returned `graph_refs`. Unfold self-references (e.g.
+/// `@my_node[prev]`) are temporal — they access the previous iteration, not a
+/// true cyclic dependency.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes through resolution context; self_name adds one beyond the existing set"
+)]
 pub(super) fn extract_all_refs(
     expr: &Expr,
     all_runtime_names: &HashSet<&str>,
@@ -350,6 +359,7 @@ pub(super) fn extract_all_refs(
     builtin_fns: &HashMap<&str, graphcal_registry::builtins::BuiltinFunction>,
     user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
+    self_name: Option<&str>,
 ) -> Result<(HashSet<String>, HashSet<String>), GraphcalError> {
     let mut graph_refs = HashSet::new();
     let mut const_refs = HashSet::new();
@@ -364,6 +374,13 @@ pub(super) fn extract_all_refs(
         &mut graph_refs,
         &mut const_refs,
     )?;
+    // Unfold self-references (@self[prev_i]) are not true cyclic dependencies —
+    // they access the previous step. Remove the self-edge so the DAG stays acyclic.
+    if let Some(name) = self_name
+        && matches!(expr.kind, ExprKind::Unfold { .. })
+    {
+        graph_refs.remove(name);
+    }
     Ok((graph_refs, const_refs))
 }
 
