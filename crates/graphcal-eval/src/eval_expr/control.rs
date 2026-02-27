@@ -1,15 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_syntax::ast::{Expr, LetBinding, MatchArm};
 
-use crate::builtins::BuiltinFunction;
 use crate::error::GraphcalError;
-use crate::registry::Registry;
 use crate::runtime_value::RuntimeValue;
 
+use super::EvalContext;
 use super::eval_expr;
 
 /// Evaluate an `if` expression.
@@ -20,46 +16,19 @@ pub(super) fn eval_if(
     else_branch: &Expr,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let cond = eval_expr(
-        condition,
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?
-    .expect_bool("if condition")
-    .map_err(|msg| GraphcalError::EvalError {
-        message: msg,
-        src: src.clone(),
-        span: expr.span.into(),
-    })?;
+    let cond = eval_expr(condition, values, local_values, ctx)?
+        .expect_bool("if condition")
+        .map_err(|msg| GraphcalError::EvalError {
+            message: msg,
+            src: ctx.src.clone(),
+            span: expr.span.into(),
+        })?;
     if cond {
-        eval_expr(
-            then_branch,
-            values,
-            local_values,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        )
+        eval_expr(then_branch, values, local_values, ctx)
     } else {
-        eval_expr(
-            else_branch,
-            values,
-            local_values,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        )
+        eval_expr(else_branch, values, local_values, ctx)
     }
 }
 
@@ -69,33 +38,14 @@ pub(super) fn eval_block(
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let mut block_locals = local_values.clone();
     for binding in stmts {
-        let val = eval_expr(
-            &binding.value,
-            values,
-            &block_locals,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        )?;
+        let val = eval_expr(&binding.value, values, &block_locals, ctx)?;
         block_locals.insert(binding.name.name.clone(), val);
     }
-    eval_expr(
-        body,
-        values,
-        &block_locals,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )
+    eval_expr(body, values, &block_locals, ctx)
 }
 
 /// Evaluate a `match` expression.
@@ -105,20 +55,9 @@ pub(super) fn eval_match(
     arms: &[MatchArm],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let scrutinee_val = eval_expr(
-        scrutinee,
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
+    let scrutinee_val = eval_expr(scrutinee, values, local_values, ctx)?;
 
     match &scrutinee_val {
         RuntimeValue::Label { variant, .. } => {
@@ -128,20 +67,12 @@ pub(super) fn eval_match(
                 .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!("no match arm for label `{variant}`"),
-                    src: src.clone(),
+                    src: ctx.src.clone(),
                     span: expr.span.into(),
                 })?;
 
             // Labels have no fields -- no bindings to process
-            eval_expr(
-                &matched_arm.body,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )
+            eval_expr(&matched_arm.body, values, local_values, ctx)
         }
         RuntimeValue::Struct {
             variant,
@@ -154,7 +85,7 @@ pub(super) fn eval_match(
                 .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!("no match arm for variant `{variant}`"),
-                    src: src.clone(),
+                    src: ctx.src.clone(),
                     span: expr.span.into(),
                 })?;
 
@@ -170,7 +101,7 @@ pub(super) fn eval_match(
                                         "no field `{}` on variant `{variant}`",
                                         field.value
                                     ),
-                                    src: src.clone(),
+                                    src: ctx.src.clone(),
                                     span: field.span.into(),
                                 }
                             })?;
@@ -180,19 +111,11 @@ pub(super) fn eval_match(
                 }
             }
 
-            eval_expr(
-                &matched_arm.body,
-                values,
-                &arm_locals,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )
+            eval_expr(&matched_arm.body, values, &arm_locals, ctx)
         }
         _ => Err(GraphcalError::EvalError {
             message: "match scrutinee must be a label or tagged union".to_string(),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: scrutinee.span.into(),
         }),
     }

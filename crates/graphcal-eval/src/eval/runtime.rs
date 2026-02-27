@@ -1,5 +1,5 @@
 //! Runtime evaluation: converting TIR execution results to Values,
-//! evaluating unfold expressions, running execution plans, and checking asserts.
+//! running execution plans, and checking asserts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,7 +7,6 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::ast::ExprKind;
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{DeclName, IndexName, VariantName};
 use graphcal_syntax::span::Span;
@@ -15,7 +14,7 @@ use graphcal_syntax::span::Span;
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
-use crate::eval_expr::{RuntimeValue, eval_expr};
+use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
 use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ExpectedFail};
 
@@ -148,142 +147,6 @@ pub(super) fn runtime_to_value(
     }
 }
 
-/// Evaluate an `Unfold` expression: `unfold(init, |prev_i, i| body)`.
-///
-/// Builds results incrementally over a range index. Each iteration creates a
-/// scoped overlay of `values` containing the partial result so that
-/// `@self_name[prev_i]` resolves correctly, without mutating the shared map.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
-#[expect(
-    clippy::needless_range_loop,
-    reason = "loop index i is used for step_value(i), step_index fields, and variant indexing"
-)]
-pub(super) fn eval_unfold(
-    self_name: &str,
-    init: &graphcal_syntax::ast::Expr,
-    prev_name: &graphcal_syntax::ast::Ident,
-    curr_name: &graphcal_syntax::ast::Ident,
-    body: &graphcal_syntax::ast::Expr,
-    values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
-    registry: &Registry,
-    declared_types: &HashMap<String, DeclaredType>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<RuntimeValue, GraphcalError> {
-    // Find the range index from the node's declared type
-    let declared = declared_types
-        .get(self_name)
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!("no declared type for node `{self_name}`"),
-            src: src.clone(),
-            span: (0, 0).into(),
-        })?;
-    let index_name = match declared {
-        DeclaredType::Indexed { index, .. } => index.clone(),
-        _ => {
-            return Err(GraphcalError::EvalError {
-                message: format!("node `{self_name}` must have an indexed type for time scan"),
-                src: src.clone(),
-                span: (0, 0).into(),
-            });
-        }
-    };
-    let idx_def = registry
-        .indexes
-        .get_index(index_name.as_str())
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!("unknown index `{index_name}`"),
-            src: src.clone(),
-            span: (0, 0).into(),
-        })?;
-
-    let step_count = idx_def.step_count();
-    let variants = idx_def.variants();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-
-    // Evaluate init expression
-    let init_val = eval_expr(
-        init,
-        values,
-        &empty_locals,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
-
-    // Build results incrementally
-    let mut result_entries: IndexMap<VariantName, RuntimeValue> = IndexMap::new();
-
-    // Step 0: init value
-    result_entries.insert(variants[0].clone(), init_val);
-
-    // Steps 1..N: evaluate body with prev_t and t bindings
-    // Pre-allocate scan_locals with the two loop-variable keys (reused across iterations).
-    let mut scan_locals = HashMap::with_capacity(2);
-    for i in 1..step_count {
-        // Build a scoped overlay: values + partial result for @self[prev_t]
-        let mut overlay_values = values.clone();
-        overlay_values.insert(
-            self_name.to_string(),
-            RuntimeValue::Indexed {
-                index_name: index_name.clone(),
-                entries: result_entries.clone(),
-            },
-        );
-
-        let prev_value = idx_def
-            .step_value(i - 1)
-            .map_err(|e| GraphcalError::EvalError {
-                message: format!("internal: range index step {} out of bounds: {e}", i - 1),
-                src: src.clone(),
-                span: (0, 0).into(),
-            })?;
-        let curr_value = idx_def
-            .step_value(i)
-            .map_err(|e| GraphcalError::EvalError {
-                message: format!("internal: range index step {i} out of bounds: {e}"),
-                src: src.clone(),
-                span: (0, 0).into(),
-            })?;
-
-        scan_locals.insert(
-            prev_name.name.clone(),
-            RuntimeValue::RangeLabel {
-                step_index: i - 1,
-                value: prev_value,
-            },
-        );
-        scan_locals.insert(
-            curr_name.name.clone(),
-            RuntimeValue::RangeLabel {
-                step_index: i,
-                value: curr_value,
-            },
-        );
-
-        let body_val = eval_expr(
-            body,
-            &overlay_values,
-            &scan_locals,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        )?;
-        result_entries.insert(variants[i].clone(), body_val);
-    }
-
-    Ok(RuntimeValue::Indexed {
-        index_name,
-        entries: result_entries,
-    })
-}
-
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
     pub values: HashMap<String, RuntimeValue>,
@@ -293,7 +156,7 @@ pub(super) struct EvalLoopResult {
 /// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
 ///
 /// Inserts imported and const values, then iterates in topological order.
-/// Unfold expressions receive special handling (incremental partial results).
+/// Unfold expressions are handled inline by `eval_expr` via `EvalContext`.
 /// Domain constraints are checked after successful evaluation.
 ///
 /// Returns all computed values and any per-node errors.
@@ -347,40 +210,20 @@ pub(super) fn run_eval_loop(
 
         let expr = &plan.expressions[name];
 
-        // Unfold requires special handling: it needs to build up results
-        // incrementally and insert partial results into `values` so that
-        // @self[prev_i] can resolve during body evaluation.
-        let result = if let ExprKind::Unfold {
-            init,
-            prev_name,
-            curr_name,
-            body,
-        } = &expr.kind
-        {
-            eval_unfold(
-                name,
-                init,
-                prev_name,
-                curr_name,
-                body,
-                &values,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                declared_types,
-                src,
-            )
-        } else {
-            eval_expr(
-                expr,
-                &values,
-                &empty_locals,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                src,
-            )
+        // Build eval context with unfold support for this node.
+        let unfold_ctx = UnfoldContext {
+            self_name: name,
+            declared_types,
         };
+        let ctx = EvalContext {
+            builtin_consts,
+            builtin_fns,
+            registry: &tir.registry,
+            src,
+            unfold_context: Some(unfold_ctx),
+        };
+
+        let result = eval_expr(expr, &values, &empty_locals, &ctx);
 
         match result {
             Ok(val) => {
@@ -423,6 +266,14 @@ pub(super) fn evaluate_plan(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    let ctx = EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+    };
 
     let EvalLoopResult { values, errors } = run_eval_loop(plan, tir, declared_types, src);
 
@@ -498,16 +349,8 @@ pub(super) fn evaluate_plan(
         .iter()
         .map(|entry| {
             let ef = plan.expected_fail.get(&entry.name);
-            let assert_result = evaluate_assert_with_expected_fail(
-                &entry.body,
-                ef,
-                &values,
-                &empty_locals,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                src,
-            );
+            let assert_result =
+                evaluate_assert_with_expected_fail(&entry.body, ef, &values, &empty_locals, &ctx);
             (DeclName::new(&entry.name), assert_result, entry.span)
         })
         .collect();
@@ -523,10 +366,7 @@ pub(super) fn evaluate_plan(
                 entry.hidden,
                 &values,
                 &empty_locals,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                src,
+                &ctx,
             )
         })
         .collect();
@@ -543,15 +383,7 @@ pub(super) fn evaluate_plan(
                     fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
                     continue;
                 }
-                if let Ok(rv) = eval_expr(
-                    &field.value,
-                    &values,
-                    &empty_locals,
-                    builtin_consts,
-                    builtin_fns,
-                    &tir.registry,
-                    src,
-                ) {
+                if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
                     fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
                 }
             }
@@ -591,40 +423,17 @@ pub(super) fn evaluate_plan(
 /// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn evaluate_assert_with_expected_fail(
     body: &graphcal_syntax::ast::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match ef {
-        None => evaluate_assert_body(
-            body,
-            values,
-            local_values,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        ),
+        None => evaluate_assert_body(body, values, local_values, ctx),
         Some(ExpectedFail::All) => {
-            let result = evaluate_assert_body(
-                body,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            );
+            let result = evaluate_assert_body(body, values, local_values, ctx);
             match result {
                 AssertResult::Pass => AssertResult::Fail {
                     message: "assertion passed but was marked #[expected_fail]".to_string(),
@@ -643,15 +452,7 @@ fn evaluate_assert_with_expected_fail(
                     message: "per-variant #[expected_fail] on a tolerance assertion".to_string(),
                 };
             };
-            match eval_expr(
-                body_expr,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            ) {
+            match eval_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Indexed {
                     index_name,
                     entries,
@@ -915,30 +716,15 @@ fn collect_failing_paths(
 }
 
 /// Evaluate a single assert body and return an `AssertResult`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "tolerance evaluation has multiple eval_expr calls and error handling"
-)]
 pub(super) fn evaluate_assert_body(
     body: &graphcal_syntax::ast::AssertBody,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match body {
         graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
-            match eval_expr(
-                body_expr,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            ) {
+            match eval_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
                 Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
                     message: "assertion evaluated to false".to_string(),
@@ -961,15 +747,7 @@ pub(super) fn evaluate_assert_body(
             tolerance,
             is_relative,
         } => {
-            let actual_val = match eval_expr(
-                actual,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            ) {
+            let actual_val = match eval_expr(actual, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 Ok(other) => {
                     return AssertResult::Error {
@@ -982,15 +760,7 @@ pub(super) fn evaluate_assert_body(
                     };
                 }
             };
-            let expected_val = match eval_expr(
-                expected,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            ) {
+            let expected_val = match eval_expr(expected, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 Ok(other) => {
                     return AssertResult::Error {
@@ -1003,15 +773,7 @@ pub(super) fn evaluate_assert_body(
                     };
                 }
             };
-            let tolerance_val = match eval_expr(
-                tolerance,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            ) {
+            let tolerance_val = match eval_expr(tolerance, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 #[expect(
                     clippy::cast_precision_loss,
@@ -1109,20 +871,13 @@ fn check_scalar_constraint(
 /// Each field expression is evaluated. Indexed values (from `for` comprehensions)
 /// are flattened to lists of numbers or labels. String literals become `String` fields.
 /// Returns `None` if any field evaluation fails (plots are best-effort).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn evaluate_plot(
     decl: &graphcal_syntax::ast::PlotDecl,
     name: &str,
     hidden: bool,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Option<PlotSpec> {
     let mut fields = Vec::new();
     for field in &decl.fields {
@@ -1132,16 +887,7 @@ fn evaluate_plot(
             fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
             continue;
         }
-        let rv = eval_expr(
-            &field.value,
-            values,
-            local_values,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        )
-        .ok()?;
+        let rv = eval_expr(&field.value, values, local_values, ctx).ok()?;
         let field_value = runtime_to_plot_field_value(&rv);
         fields.push((field.name.name.clone(), field_value));
     }

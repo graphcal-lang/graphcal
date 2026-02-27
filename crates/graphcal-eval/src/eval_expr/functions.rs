@@ -7,12 +7,11 @@ use miette::NamedSource;
 use graphcal_syntax::ast::{Expr, ExprKind, FnBody};
 use graphcal_syntax::names::VariantName;
 
-use crate::builtins::BuiltinFunction;
 use crate::error::GraphcalError;
-use crate::registry::Registry;
 use crate::resolve_types::{SpecialFnKind, classify_special_fn};
 use crate::runtime_value::RuntimeValue;
 
+use super::EvalContext;
 use super::arithmetic::check_finite;
 use super::eval_expr;
 
@@ -23,30 +22,24 @@ pub(super) fn eval_fn_call(
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let ctx = EvalCtx {
+    let fn_ctx = FnDispatch {
         expr,
         name,
         args,
         values,
         local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
+        ctx,
     };
     match classify_special_fn(name.value.as_str()) {
-        Some(SpecialFnKind::Aggregation) if args.len() == 1 => ctx.dispatch_aggregation(),
-        Some(SpecialFnKind::Conversion) => ctx.dispatch_conversion(),
-        Some(SpecialFnKind::Constructor) => eval_datetime_constructor(expr, name, args, src),
-        Some(SpecialFnKind::DatetimeExtract) => ctx.dispatch_with_eval(eval_datetime_extract_fn),
-        Some(SpecialFnKind::DatetimeFrom) => ctx.dispatch_with_eval(eval_datetime_from_fn),
-        Some(SpecialFnKind::DatetimeTo) => ctx.dispatch_with_eval(eval_datetime_to_fn),
-        _ => ctx.dispatch_timescale_or_builtin(),
+        Some(SpecialFnKind::Aggregation) if args.len() == 1 => fn_ctx.dispatch_aggregation(),
+        Some(SpecialFnKind::Conversion) => fn_ctx.dispatch_conversion(),
+        Some(SpecialFnKind::Constructor) => eval_datetime_constructor(expr, name, args, ctx.src),
+        Some(SpecialFnKind::DatetimeExtract) => fn_ctx.dispatch_with_eval(eval_datetime_extract_fn),
+        Some(SpecialFnKind::DatetimeFrom) => fn_ctx.dispatch_with_eval(eval_datetime_from_fn),
+        Some(SpecialFnKind::DatetimeTo) => fn_ctx.dispatch_with_eval(eval_datetime_to_fn),
+        _ => fn_ctx.dispatch_timescale_or_builtin(),
     }
 }
 
@@ -57,42 +50,28 @@ type EvalHelperFn = fn(
     &[Expr],
     &HashMap<String, RuntimeValue>,
     &HashMap<String, RuntimeValue>,
-    &HashMap<&str, f64>,
-    &HashMap<&str, BuiltinFunction>,
-    &Registry,
-    &NamedSource<Arc<String>>,
+    &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError>;
 
-/// Bundles the evaluation context that is threaded through every dispatch call.
+/// Bundles the function dispatch context.
 ///
-/// This avoids repeating 9+ arguments in every helper invocation inside `eval_fn_call`.
-struct EvalCtx<'a> {
+/// This avoids repeating arguments in every helper invocation inside `eval_fn_call`.
+struct FnDispatch<'a, 'ctx> {
     expr: &'a Expr,
     name: &'a graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &'a [Expr],
     values: &'a HashMap<String, RuntimeValue>,
     local_values: &'a HashMap<String, RuntimeValue>,
-    builtin_consts: &'a HashMap<&'a str, f64>,
-    builtin_fns: &'a HashMap<&'a str, BuiltinFunction>,
-    registry: &'a Registry,
-    src: &'a NamedSource<Arc<String>>,
+    ctx: &'a EvalContext<'ctx>,
 }
 
-impl EvalCtx<'_> {
+impl FnDispatch<'_, '_> {
     /// Aggregation dispatch: if the single argument is `Indexed`, aggregate; otherwise fall
     /// through to builtins (e.g. 2-arg `min`/`max`).
     fn dispatch_aggregation(&self) -> Result<RuntimeValue, GraphcalError> {
-        let arg_val = eval_expr(
-            &self.args[0],
-            self.values,
-            self.local_values,
-            self.builtin_consts,
-            self.builtin_fns,
-            self.registry,
-            self.src,
-        )?;
+        let arg_val = eval_expr(&self.args[0], self.values, self.local_values, self.ctx)?;
         if let RuntimeValue::Indexed { entries, .. } = arg_val {
-            return eval_aggregation_fn(self.name, &entries, self.expr, self.src);
+            return eval_aggregation_fn(self.name, &entries, self.expr, self.ctx.src);
         }
         // Not indexed, fall through to builtin (min/max are 2-arg builtins)
         self.dispatch_builtin_or_user()
@@ -109,10 +88,7 @@ impl EvalCtx<'_> {
                     self.args,
                     self.values,
                     self.local_values,
-                    self.builtin_consts,
-                    self.builtin_fns,
-                    self.registry,
-                    self.src,
+                    self.ctx,
                 )
             },
             |scale| self.dispatch_timescale(scale),
@@ -138,10 +114,7 @@ impl EvalCtx<'_> {
             target_scale,
             self.values,
             self.local_values,
-            self.builtin_consts,
-            self.builtin_fns,
-            self.registry,
-            self.src,
+            self.ctx,
         )
     }
 
@@ -152,10 +125,7 @@ impl EvalCtx<'_> {
             self.args,
             self.values,
             self.local_values,
-            self.builtin_consts,
-            self.builtin_fns,
-            self.registry,
-            self.src,
+            self.ctx,
         )
     }
 
@@ -167,10 +137,7 @@ impl EvalCtx<'_> {
             self.args,
             self.values,
             self.local_values,
-            self.builtin_consts,
-            self.builtin_fns,
-            self.registry,
-            self.src,
+            self.ctx,
         )
     }
 }
@@ -236,36 +203,21 @@ fn eval_aggregation_fn(
 }
 
 /// Evaluate a type conversion function (`to_float`, `to_int`).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_conversion_fn(
     expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match name.value.as_str() {
         "to_float" => {
-            let arg = eval_expr(
-                &args[0],
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )?;
+            let arg = eval_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(GraphcalError::InternalError {
                     message: "to_float() received non-Int argument".to_string(),
-                    src: src.clone(),
+                    src: ctx.src.clone(),
                     span: args[0].span.into(),
                 });
             };
@@ -276,26 +228,18 @@ fn eval_conversion_fn(
             Ok(RuntimeValue::Scalar(i as f64))
         }
         "to_int" => {
-            let arg = eval_expr(
-                &args[0],
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )?;
+            let arg = eval_expr(&args[0], values, local_values, ctx)?;
             let f =
                 arg.expect_scalar("to_int argument")
                     .map_err(|msg| GraphcalError::EvalError {
                         message: msg,
-                        src: src.clone(),
+                        src: ctx.src.clone(),
                         span: expr.span.into(),
                     })?;
             if !f.is_finite() {
                 return Err(GraphcalError::EvalError {
                     message: format!("to_int() requires a finite value, got {f}"),
-                    src: src.clone(),
+                    src: ctx.src.clone(),
                     span: expr.span.into(),
                 });
             }
@@ -315,7 +259,7 @@ fn eval_conversion_fn(
                         i64::MIN,
                         i64::MAX,
                     ),
-                    src: src.clone(),
+                    src: ctx.src.clone(),
                     span: expr.span.into(),
                 });
             }
@@ -327,7 +271,7 @@ fn eval_conversion_fn(
         }
         _ => Err(GraphcalError::InternalError {
             message: format!("unexpected conversion function `{}`", name.value),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: expr.span.into(),
         }),
     }
@@ -408,10 +352,6 @@ fn eval_datetime_constructor(
 }
 
 /// Evaluate a time scale conversion function (`to_utc`, `to_tai`, `to_tt`, etc.).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_timescale_fn(
     _expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
@@ -419,24 +359,13 @@ fn eval_timescale_fn(
     target_scale: crate::time_scale::TimeScale,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let arg = eval_expr(
-        &args[0],
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
+    let arg = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg else {
         return Err(GraphcalError::InternalError {
             message: format!("{}() received non-Datetime argument", name.value),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: args[0].span.into(),
         });
     };
@@ -445,34 +374,19 @@ fn eval_timescale_fn(
 }
 
 /// Evaluate a datetime extraction function (`year`, `month`, `day`, etc.).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_datetime_extract_fn(
     _expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let arg_val = eval_expr(
-        &args[0],
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
+    let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
         return Err(GraphcalError::InternalError {
             message: format!("{}() received non-Datetime argument", name.value),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: args[0].span.into(),
         });
     };
@@ -496,7 +410,7 @@ fn eval_datetime_extract_fn(
         _ => {
             return Err(GraphcalError::EvalError {
                 message: format!("unknown extraction function `{}`", name.value),
-                src: src.clone(),
+                src: ctx.src.clone(),
                 span: name.span.into(),
             });
         }
@@ -505,30 +419,15 @@ fn eval_datetime_extract_fn(
 }
 
 /// Evaluate a datetime-from-numeric constructor (`from_jd`, `from_mjd`, `from_unix`).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_datetime_from_fn(
     _expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let arg_val = eval_expr(
-        &args[0],
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
+    let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let num = match arg_val {
         RuntimeValue::Scalar(v) => v,
         #[expect(
@@ -539,7 +438,7 @@ fn eval_datetime_from_fn(
         _ => {
             return Err(GraphcalError::InternalError {
                 message: format!("{}() received non-numeric argument", name.value),
-                src: src.clone(),
+                src: ctx.src.clone(),
                 span: args[0].span.into(),
             });
         }
@@ -551,7 +450,7 @@ fn eval_datetime_from_fn(
         _ => {
             return Err(GraphcalError::EvalError {
                 message: format!("unknown from-datetime function `{}`", name.value),
-                src: src.clone(),
+                src: ctx.src.clone(),
                 span: name.span.into(),
             });
         }
@@ -560,34 +459,19 @@ fn eval_datetime_from_fn(
 }
 
 /// Evaluate a datetime-to-numeric function (`to_jd`, `to_mjd`, `to_unix`).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_datetime_to_fn(
     _expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let arg_val = eval_expr(
-        &args[0],
-        values,
-        local_values,
-        builtin_consts,
-        builtin_fns,
-        registry,
-        src,
-    )?;
+    let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
         return Err(GraphcalError::InternalError {
             message: format!("{}() received non-Datetime argument", name.value),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: args[0].span.into(),
         });
     };
@@ -598,7 +482,7 @@ fn eval_datetime_to_fn(
         _ => {
             return Err(GraphcalError::EvalError {
                 message: format!("unknown to-datetime function `{}`", name.value),
-                src: src.clone(),
+                src: ctx.src.clone(),
                 span: name.span.into(),
             });
         }
@@ -607,39 +491,24 @@ fn eval_datetime_to_fn(
 }
 
 /// Evaluate a builtin numeric function or a user-defined function.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "evaluation context requires many parameters"
-)]
 fn eval_builtin_or_user_fn(
     expr: &Expr,
     name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     // Try builtin first
-    if let Some(builtin) = builtin_fns.get(name.value.as_str()) {
+    if let Some(builtin) = ctx.builtin_fns.get(name.value.as_str()) {
         let arg_values: Vec<f64> = args
             .iter()
             .map(|a| {
-                let rv = eval_expr(
-                    a,
-                    values,
-                    local_values,
-                    builtin_consts,
-                    builtin_fns,
-                    registry,
-                    src,
-                )?;
+                let rv = eval_expr(a, values, local_values, ctx)?;
                 rv.expect_scalar("function argument")
                     .map_err(|msg| GraphcalError::EvalError {
                         message: msg,
-                        src: src.clone(),
+                        src: ctx.src.clone(),
                         span: a.span.into(),
                     })
             })
@@ -648,35 +517,26 @@ fn eval_builtin_or_user_fn(
         return Ok(RuntimeValue::Scalar(check_finite(
             result,
             name.value.as_str(),
-            src,
+            ctx.src,
             expr.span,
         )?));
     }
 
     // Try user-defined function
-    let fn_def = registry
+    let fn_def = ctx
+        .registry
         .functions
         .get_function(name.value.as_str())
         .ok_or_else(|| GraphcalError::EvalError {
             message: format!("unknown function `{}`", name.value),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: name.span.into(),
         })?;
 
     // Evaluate arguments
     let arg_values: Vec<RuntimeValue> = args
         .iter()
-        .map(|a| {
-            eval_expr(
-                a,
-                values,
-                local_values,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )
-        })
+        .map(|a| eval_expr(a, values, local_values, ctx))
         .collect::<Result<_, _>>()?;
 
     // Build fn_locals from param names + arg values
@@ -690,38 +550,14 @@ fn eval_builtin_or_user_fn(
     // exist in function bodies, so passing values is safe.
     let body = fn_def.body.clone();
     match &body {
-        FnBody::Short(expr) => eval_expr(
-            expr,
-            values,
-            &fn_locals,
-            builtin_consts,
-            builtin_fns,
-            registry,
-            src,
-        ),
+        FnBody::Short(expr) => eval_expr(expr, values, &fn_locals, ctx),
         FnBody::Block { stmts, expr } => {
             let mut block_locals = fn_locals;
             for binding in stmts {
-                let val = eval_expr(
-                    &binding.value,
-                    values,
-                    &block_locals,
-                    builtin_consts,
-                    builtin_fns,
-                    registry,
-                    src,
-                )?;
+                let val = eval_expr(&binding.value, values, &block_locals, ctx)?;
                 block_locals.insert(binding.name.name.clone(), val);
             }
-            eval_expr(
-                expr,
-                values,
-                &block_locals,
-                builtin_consts,
-                builtin_fns,
-                registry,
-                src,
-            )
+            eval_expr(expr, values, &block_locals, ctx)
         }
     }
 }

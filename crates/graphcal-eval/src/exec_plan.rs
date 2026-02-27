@@ -15,7 +15,7 @@ use petgraph::graph::DiGraph;
 
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
-use crate::eval_expr::{RuntimeValue, eval_expr};
+use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
 use crate::tir::{ResolvedDomainConstraint, TIR};
 
 /// An assert body entry for execution.
@@ -184,18 +184,18 @@ fn eval_consts_from_tir(
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
 
+    let ctx = EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+    };
+
     for idx in sorted {
         let name = &graph[idx];
         let expr = const_exprs[name.as_str()];
-        let val = eval_expr(
-            expr,
-            &values,
-            &empty_locals,
-            builtin_consts,
-            builtin_fns,
-            &tir.registry,
-            src,
-        )?;
+        let val = eval_expr(expr, &values, &empty_locals, &ctx)?;
         values.insert(name.clone(), val);
     }
 
@@ -284,6 +284,14 @@ fn resolve_domain_constraints(
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
+    let ctx = EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+    };
+
     let mut constraints = HashMap::new();
 
     // Iterate over params and nodes that have non-empty constraints in their type annotations.
@@ -322,15 +330,7 @@ fn resolve_domain_constraints(
 
         for bound in domain_bounds {
             // Evaluate the bound expression.
-            let rv = eval_expr(
-                &bound.value,
-                const_values,
-                &empty_locals,
-                builtin_consts,
-                builtin_fns,
-                &tir.registry,
-                src,
-            )?;
+            let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
 
             let si_value = match &rv {
                 RuntimeValue::Scalar(v) => *v,
@@ -536,16 +536,14 @@ fn format_bound_display(
             let builtin_fns = builtin_functions();
             let empty: HashMap<String, RuntimeValue> = HashMap::new();
             let src = NamedSource::new("", Arc::new(String::new()));
-            eval_expr(
-                expr,
-                &empty,
-                &empty,
+            let ctx = EvalContext {
                 builtin_consts,
                 builtin_fns,
                 registry,
-                &src,
-            )
-            .map_or_else(
+                src: &src,
+                unfold_context: None,
+            };
+            eval_expr(expr, &empty, &empty, &ctx).map_or_else(
                 |_| "?".to_string(),
                 |rv| match rv {
                     RuntimeValue::Scalar(v) => crate::format::format_number(v),
