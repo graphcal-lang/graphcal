@@ -2271,7 +2271,7 @@ fn eval_no_overrides_defaults_freely() {
     );
 }
 
-// --- Plot tests ---
+// --- Plot tests (Vega-Lite JSON) ---
 
 #[test]
 fn eval_plot_json_output() {
@@ -2286,19 +2286,18 @@ fn eval_plot_json_output() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // The output contains both the normal text output and the JSON plot spec.
-    // The JSON plot is on the last line.
+    // Vega-Lite specs: "mark": "line" and "mark": "bar"
     assert!(
-        stdout.contains("\"type\":\"scatter\""),
-        "expected scatter trace in plot JSON: {stdout}"
+        stdout.contains("\"mark\": \"line\""),
+        "expected line mark in Vega-Lite JSON: {stdout}"
     );
     assert!(
-        stdout.contains("\"type\":\"bar\""),
-        "expected bar trace in plot JSON: {stdout}"
+        stdout.contains("\"mark\": \"bar\""),
+        "expected bar mark in Vega-Lite JSON: {stdout}"
     );
     assert!(
-        stdout.contains("\"mode\":\"lines\""),
-        "expected lines mode in plot JSON: {stdout}"
+        stdout.contains("vega-lite"),
+        "expected Vega-Lite $schema: {stdout}"
     );
 }
 
@@ -2316,12 +2315,8 @@ fn eval_plot_scatter_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("\"type\":\"scatter\""),
-        "expected scatter trace: {stdout}"
-    );
-    assert!(
-        stdout.contains("\"mode\":\"markers\""),
-        "expected markers mode for scatter: {stdout}"
+        stdout.contains("\"mark\": \"point\""),
+        "expected point mark for scatter: {stdout}"
     );
 }
 
@@ -2339,12 +2334,8 @@ fn eval_plot_line_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("\"type\":\"scatter\""),
-        "expected scatter trace for line chart: {stdout}"
-    );
-    assert!(
-        stdout.contains("\"mode\":\"lines\""),
-        "expected lines mode: {stdout}"
+        stdout.contains("\"mark\": \"line\""),
+        "expected line mark: {stdout}"
     );
 }
 
@@ -2362,8 +2353,8 @@ fn eval_plot_bar_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("\"type\":\"bar\""),
-        "expected bar trace: {stdout}"
+        stdout.contains("\"mark\": \"bar\""),
+        "expected bar mark: {stdout}"
     );
 }
 
@@ -2381,8 +2372,8 @@ fn eval_plot_heatmap_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("\"type\":\"heatmap\""),
-        "expected heatmap trace: {stdout}"
+        stdout.contains("\"mark\": \"rect\""),
+        "expected rect mark for heatmap: {stdout}"
     );
 }
 
@@ -2441,28 +2432,30 @@ fn eval_figure_basic_json() {
     assert_eq!(arr[1]["name"].as_str(), Some("curve_b"));
     assert_eq!(arr[2]["name"].as_str(), Some("comparison"));
 
-    // Standalone curve_a should have a scatter trace with lines
+    // Standalone curve_a should have a line mark
     let curve_a_spec = &arr[0]["spec"];
-    assert!(
-        curve_a_spec.to_string().contains("\"mode\":\"lines\""),
-        "expected lines mode for curve_a: {curve_a_spec}"
-    );
-
-    // Standalone curve_b should have a bar trace
-    let bar_spec = &arr[1]["spec"];
-    assert!(
-        bar_spec.to_string().contains("\"type\":\"bar\""),
-        "expected bar type for curve_b: {bar_spec}"
-    );
-
-    // Comparison figure should have 2 traces (subplot)
-    let comparison_data = arr[2]["spec"]["data"]
-        .as_array()
-        .expect("expected data array in comparison");
     assert_eq!(
-        comparison_data.len(),
+        curve_a_spec["mark"].as_str(),
+        Some("line"),
+        "expected line mark for curve_a: {curve_a_spec}"
+    );
+
+    // Standalone curve_b should have a bar mark
+    let bar_spec = &arr[1]["spec"];
+    assert_eq!(
+        bar_spec["mark"].as_str(),
+        Some("bar"),
+        "expected bar mark for curve_b: {bar_spec}"
+    );
+
+    // Comparison figure should use hconcat with 2 sub-specs
+    let comparison_hconcat = arr[2]["spec"]["hconcat"]
+        .as_array()
+        .expect("expected hconcat array in comparison");
+    assert_eq!(
+        comparison_hconcat.len(),
         2,
-        "expected 2 traces in comparison subplot"
+        "expected 2 sub-specs in comparison hconcat"
     );
 }
 
@@ -2498,14 +2491,14 @@ fn eval_figure_hidden_json() {
     );
     assert_eq!(arr[0]["name"].as_str(), Some("comparison"));
 
-    // The comparison figure should still contain both traces
-    let comparison_data = arr[0]["spec"]["data"]
+    // The comparison figure should still contain both sub-specs via hconcat
+    let comparison_hconcat = arr[0]["spec"]["hconcat"]
         .as_array()
-        .expect("expected data array in comparison");
+        .expect("expected hconcat array in comparison");
     assert_eq!(
-        comparison_data.len(),
+        comparison_hconcat.len(),
         2,
-        "expected 2 traces in comparison subplot even though plots are hidden"
+        "expected 2 sub-specs in comparison hconcat even though plots are hidden"
     );
 }
 
