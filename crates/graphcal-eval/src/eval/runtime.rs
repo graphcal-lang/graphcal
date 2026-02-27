@@ -150,8 +150,9 @@ pub(super) fn runtime_to_value(
 
 /// Evaluate an `Unfold` expression: `unfold(init, |prev_i, i| body)`.
 ///
-/// This builds up results incrementally over a range index, inserting partial
-/// results into `values` so that `@self_name[prev_i]` resolves correctly.
+/// Builds results incrementally over a range index. Each iteration creates a
+/// scoped overlay of `values` containing the partial result so that
+/// `@self_name[prev_i]` resolves correctly, without mutating the shared map.
 #[expect(
     clippy::too_many_arguments,
     reason = "evaluation context requires many parameters"
@@ -166,7 +167,7 @@ pub(super) fn eval_unfold(
     prev_name: &graphcal_syntax::ast::Ident,
     curr_name: &graphcal_syntax::ast::Ident,
     body: &graphcal_syntax::ast::Expr,
-    values: &mut HashMap<String, RuntimeValue>,
+    values: &HashMap<String, RuntimeValue>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::builtins::BuiltinFunction>,
     registry: &Registry,
@@ -222,9 +223,12 @@ pub(super) fn eval_unfold(
     result_entries.insert(variants[0].clone(), init_val);
 
     // Steps 1..N: evaluate body with prev_t and t bindings
+    // Pre-allocate scan_locals with the two loop-variable keys (reused across iterations).
+    let mut scan_locals = HashMap::with_capacity(2);
     for i in 1..step_count {
-        // Insert partial result so @self[prev_t] can resolve
-        values.insert(
+        // Build a scoped overlay: values + partial result for @self[prev_t]
+        let mut overlay_values = values.clone();
+        overlay_values.insert(
             self_name.to_string(),
             RuntimeValue::Indexed {
                 index_name: index_name.clone(),
@@ -247,7 +251,6 @@ pub(super) fn eval_unfold(
                 span: (0, 0).into(),
             })?;
 
-        let mut scan_locals = HashMap::new();
         scan_locals.insert(
             prev_name.name.clone(),
             RuntimeValue::RangeLabel {
@@ -265,7 +268,7 @@ pub(super) fn eval_unfold(
 
         let body_val = eval_expr(
             body,
-            values,
+            &overlay_values,
             &scan_locals,
             builtin_consts,
             builtin_fns,
@@ -274,9 +277,6 @@ pub(super) fn eval_unfold(
         )?;
         result_entries.insert(variants[i].clone(), body_val);
     }
-
-    // Remove the partial value we inserted
-    values.remove(self_name);
 
     Ok(RuntimeValue::Indexed {
         index_name,
@@ -363,7 +363,7 @@ pub(super) fn run_eval_loop(
                 prev_name,
                 curr_name,
                 body,
-                &mut values,
+                &values,
                 builtin_consts,
                 builtin_fns,
                 &tir.registry,
