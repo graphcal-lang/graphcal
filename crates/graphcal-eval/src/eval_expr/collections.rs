@@ -184,8 +184,10 @@ pub(super) fn eval_scan(
 
     let mut acc = init_val;
     let mut result_entries = IndexMap::new();
+    // Pre-build scan_locals with parent scope + the two loop-variable keys.
+    // Reuse across iterations instead of cloning local_values each time.
+    let mut scan_locals = local_values.clone();
     for (variant, val) in &source_entries {
-        let mut scan_locals = local_values.clone();
         scan_locals.insert(acc_name.name.clone(), acc);
         scan_locals.insert(val_name.name.clone(), val.clone());
         let body_val = eval_expr(
