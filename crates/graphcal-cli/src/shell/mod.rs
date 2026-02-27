@@ -645,7 +645,8 @@ fn handle_type(name: &str, state: &ShellState) {
     };
 
     // Look up in resolved_decl_types.
-    if let Some(resolved_type) = tir.resolved_decl_types.get(name) {
+    let name_scoped = graphcal_eval::resolve::ScopedName::local(name);
+    if let Some(resolved_type) = tir.resolved_decl_types.get(&name_scoped) {
         println!("  {name}: {resolved_type:?}");
     } else {
         eprintln!("  error: `{name}` not found");

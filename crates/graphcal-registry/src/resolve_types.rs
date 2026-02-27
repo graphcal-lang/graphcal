@@ -135,6 +135,21 @@ pub enum ScopedName {
 }
 
 impl ScopedName {
+    /// Create a `Local` name.
+    #[must_use]
+    pub fn local(name: impl Into<String>) -> Self {
+        Self::Local(name.into())
+    }
+
+    /// Create a `Qualified` name.
+    #[must_use]
+    pub fn qualified(module: impl Into<String>, member: impl Into<String>) -> Self {
+        Self::Qualified {
+            module: module.into(),
+            member: member.into(),
+        }
+    }
+
     /// Returns the member (leaf) part of the name.
     ///
     /// For `Local("x")` this returns `"x"`.
@@ -144,6 +159,33 @@ impl ScopedName {
         match self {
             Self::Local(name) => name,
             Self::Qualified { member, .. } => member,
+        }
+    }
+
+    /// Returns the module part, if qualified.
+    #[must_use]
+    pub fn module(&self) -> Option<&str> {
+        match self {
+            Self::Qualified { module, .. } => Some(module),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// Returns whether this is a qualified name.
+    #[must_use]
+    pub const fn is_qualified(&self) -> bool {
+        matches!(self, Self::Qualified { .. })
+    }
+
+    /// Qualify a name with a prefix.
+    ///
+    /// `Local("x").with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    /// `Qualified { module: "m", member: "x" }.with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    #[must_use]
+    pub fn with_prefix(&self, prefix: &str) -> Self {
+        Self::Qualified {
+            module: prefix.to_string(),
+            member: self.member().to_string(),
         }
     }
 }

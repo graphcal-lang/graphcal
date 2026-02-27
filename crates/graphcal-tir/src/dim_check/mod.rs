@@ -86,10 +86,11 @@ pub fn check_dimensions_tir(
 
     // Check consts (always have expressions)
     for entry in &tir.consts {
-        let declared = &declared_types[entry.name.as_str()];
+        let name_str = entry.name.to_string();
+        let declared = &declared_types[name_str.as_str()];
         let inferred = infer_type_with_owner(
             &entry.expr,
-            Some(entry.name.as_str()),
+            Some(name_str.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
@@ -110,10 +111,11 @@ pub fn check_dimensions_tir(
 
     // Check nodes (always have expressions)
     for entry in &tir.nodes {
-        let declared = &declared_types[entry.name.as_str()];
+        let name_str = entry.name.to_string();
+        let declared = &declared_types[name_str.as_str()];
         let inferred = infer_type_with_owner(
             &entry.expr,
-            Some(entry.name.as_str()),
+            Some(name_str.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,
@@ -137,10 +139,11 @@ pub fn check_dimensions_tir(
         let Some(ref value_expr) = entry.default_expr else {
             continue;
         };
-        let declared = &declared_types[entry.name.as_str()];
+        let name_str = entry.name.to_string();
+        let declared = &declared_types[name_str.as_str()];
         let inferred = infer_type_with_owner(
             value_expr,
-            Some(entry.name.as_str()),
+            Some(name_str.as_str()),
             &declared_types,
             &empty_locals,
             &tir.registry,

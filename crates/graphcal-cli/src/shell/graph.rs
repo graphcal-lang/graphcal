@@ -66,12 +66,14 @@ fn build_graph(tir: &TIR) -> DiGraph<String, ()> {
 ///
 /// Returns all nodes that directly or transitively depend on `name`.
 pub fn transitive_dependents(tir: &TIR, name: &str) -> HashSet<String> {
+    use graphcal_eval::resolve::ScopedName;
     let mut result = HashSet::new();
     let mut stack = vec![name.to_string()];
     while let Some(current) = stack.pop() {
+        let current_scoped = ScopedName::local(&current);
         for (dep_name, deps) in &tir.runtime_deps {
-            if deps.contains(&current) && result.insert(dep_name.clone()) {
-                stack.push(dep_name.clone());
+            if deps.contains(&current_scoped) && result.insert(dep_name.to_string()) {
+                stack.push(dep_name.to_string());
             }
         }
     }
@@ -80,10 +82,12 @@ pub fn transitive_dependents(tir: &TIR, name: &str) -> HashSet<String> {
 
 /// Get the set of direct dependents of a given name.
 pub fn direct_dependents(tir: &TIR, name: &str) -> HashSet<String> {
+    use graphcal_eval::resolve::ScopedName;
+    let name_scoped = ScopedName::local(name);
     let mut result = HashSet::new();
     for (dep_name, deps) in &tir.runtime_deps {
-        if deps.contains(name) {
-            result.insert(dep_name.clone());
+        if deps.contains(&name_scoped) {
+            result.insert(dep_name.to_string());
         }
     }
     result
