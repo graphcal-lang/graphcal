@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use graphcal_eval::eval::{Value, format_number};
+use graphcal_eval::eval::Value;
 use graphcal_syntax::dimension::BaseDimId;
 
 /// Format a single named value as a display string.
@@ -17,33 +17,22 @@ pub fn format_value_line(
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> String {
     match value {
-        Value::Bool(b) => format!("  {name} = {b}"),
-        Value::Int(i) => format!("  {name} = {i}"),
-        Value::Label {
-            index_name,
-            variant,
-        } => format!("  {name} = {index_name}::{variant}"),
+        // Recursive cases: expand structs and indexed values into multiple lines.
         Value::Struct {
             variant,
             type_name,
             fields,
-        } => {
-            if fields.is_empty() || variant.as_str() != type_name.as_str() {
-                format!("  {name} = {}", variant.as_str())
-            } else {
-                fields
-                    .iter()
-                    .map(|(field_name, field_val)| {
-                        format_value_line(
-                            &format!("{name}.{}", field_name.as_str()),
-                            field_val,
-                            symbols,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-        }
+        } if !fields.is_empty() && variant.as_str() == type_name.as_str() => fields
+            .iter()
+            .map(|(field_name, field_val)| {
+                format_value_line(
+                    &format!("{name}.{}", field_name.as_str()),
+                    field_val,
+                    symbols,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         Value::Indexed { entries, .. } => entries
             .iter()
             .map(|(variant, entry_val)| {
@@ -51,17 +40,8 @@ pub fn format_value_line(
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        Value::Datetime { .. } => {
-            let formatted = value.format_datetime().unwrap_or_default();
-            format!("  {name} = {formatted}")
-        }
-        Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value().unwrap_or_default());
-            value.display_label(symbols).map_or_else(
-                || format!("  {name} = {formatted}"),
-                |label| format!("  {name} = {formatted} [{label}]"),
-            )
-        }
+        // Leaf cases: format as "  name = value".
+        _ => format!("  {name} = {}", value.format_display(Some(symbols))),
     }
 }
 
@@ -75,34 +55,12 @@ pub fn format_value_changed(
     symbols: &BTreeMap<BaseDimId, String>,
     is_primary: bool,
 ) -> Option<String> {
-    let new_str = format_value_short(new_value, symbols);
-    let old_str = format_value_short(old_value, symbols);
+    let new_str = new_value.format_display(Some(symbols));
+    let old_str = old_value.format_display(Some(symbols));
     if new_str == old_str {
         None
     } else {
         let prefix = if is_primary { " " } else { "  -> " };
         Some(format!("{prefix}{name} = {new_str}  (was {old_str})"))
-    }
-}
-
-/// Format a value as a short string (just the value + unit, no name).
-fn format_value_short(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> String {
-    match value {
-        Value::Bool(b) => b.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Label {
-            index_name,
-            variant,
-        } => format!("{index_name}::{variant}"),
-        Value::Struct { variant, .. } => variant.as_str().to_string(),
-        Value::Datetime { .. } => value.format_datetime().unwrap_or_default(),
-        Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value().unwrap_or_default());
-            match value.display_label(symbols) {
-                Some(label) => format!("{formatted} [{label}]"),
-                None => formatted,
-            }
-        }
-        Value::Indexed { .. } => "[...]".to_string(),
     }
 }
