@@ -6,12 +6,12 @@ use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
 use crate::convert::span_to_range;
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
+use crate::symbol_table::{SymbolCategory, SymbolKey};
 
 /// Internal target info for the symbol being renamed.
 struct RenameTarget {
     /// The symbol table key for this target.
-    key: String,
+    key: SymbolKey,
     /// Whether the definition is local (in this file) vs imported.
     is_local: bool,
 }
@@ -46,9 +46,8 @@ fn find_rename_target(analysis: &AnalysisResult, offset: usize) -> Option<Rename
                 is_local: false,
             });
         } else {
-            // Reference to something we can't find — might be a field reference
-            // (e.g., "field::name"). Reject.
-            if key.starts_with("field::") {
+            // Reference to something we can't find — might be a field reference.
+            if key.is_field() {
                 return None;
             }
         }
@@ -61,14 +60,16 @@ fn find_rename_target(analysis: &AnalysisResult, offset: usize) -> Option<Rename
         ) {
             return None;
         }
-        let key = definition.name.clone();
-        // Check if it's stored under a scoped key (e.g., "fn_name::param").
+        // Use pointer-based reverse lookup to get the correct scoped key.
         let actual_key = analysis
             .symbol_table
             .definitions
             .iter()
             .find(|(_, d)| std::ptr::eq(*d, definition))
-            .map_or(key, |(k, _)| k.clone());
+            .map_or_else(
+                || SymbolKey::TopLevel(definition.name.clone()),
+                |(k, _)| k.clone(),
+            );
         Some(RenameTarget {
             key: actual_key,
             is_local: true,
@@ -92,10 +93,11 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
     };
 
     // Get the current name text for the placeholder.
+    let key_str = target.key.to_string();
     let placeholder = analysis
         .source
         .get(span.offset()..span.offset() + span.len())
-        .unwrap_or(&target.key)
+        .unwrap_or(&key_str)
         .to_string();
 
     Some(PrepareRenameResponse::RangeWithPlaceholder {

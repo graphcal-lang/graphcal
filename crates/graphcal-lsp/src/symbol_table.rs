@@ -15,6 +15,84 @@ use graphcal_eval::format::format_unit_expr_with_config;
 use graphcal_eval::registry::{IndexKind, Registry};
 use graphcal_eval::tir::{ResolvedFnSig, ResolvedIndex, ResolvedTypeExpr, TIR};
 
+/// The kind of expression scope that introduces local variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExprScopeKind {
+    Block,
+    For,
+    Scan,
+    Unfold,
+    Match,
+}
+
+/// A typed key for symbol table entries.
+///
+/// Replaces ad-hoc `String` keys like `"fn_name::param"` or `"field::name"`
+/// with a structured enum that can be pattern-matched.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SymbolKey {
+    /// Top-level declaration: param, node, const, dim, unit, type, fn, index,
+    /// assert, plot, figure, builtins.
+    TopLevel(String),
+    /// Variant of a type or index: e.g., `Season::Winter`.
+    Variant { parent: String, variant: String },
+    /// Field reference: e.g., `field::thrust`.
+    Field(String),
+    /// Function-scoped: parameter or block-local in a function body.
+    FnScoped { fn_name: String, local: String },
+    /// Expression-scoped local variable (block, for, scan, unfold, match).
+    ExprScoped {
+        kind: ExprScopeKind,
+        offset: usize,
+        local: String,
+    },
+}
+
+impl std::fmt::Display for SymbolKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TopLevel(name) => write!(f, "{name}"),
+            Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
+            Self::Field(name) => write!(f, "field::{name}"),
+            Self::FnScoped { fn_name, local } => write!(f, "{fn_name}::{local}"),
+            Self::ExprScoped {
+                kind,
+                offset,
+                local,
+            } => {
+                let kind_str = match kind {
+                    ExprScopeKind::Block => "block",
+                    ExprScopeKind::For => "for",
+                    ExprScopeKind::Scan => "scan",
+                    ExprScopeKind::Unfold => "unfold",
+                    ExprScopeKind::Match => "match",
+                };
+                write!(f, "{kind_str}@{offset}::{local}")
+            }
+        }
+    }
+}
+
+impl SymbolKey {
+    /// Returns `true` if this is a `Field` key.
+    pub const fn is_field(&self) -> bool {
+        matches!(self, Self::Field(_))
+    }
+
+    /// Returns `true` if this is a `Variant` whose parent matches the given name.
+    pub fn is_variant_of(&self, parent_name: &str) -> bool {
+        matches!(self, Self::Variant { parent, .. } if parent == parent_name)
+    }
+
+    /// Returns the top-level name if this is a `TopLevel` key.
+    pub fn top_level_name(&self) -> Option<&str> {
+        match self {
+            Self::TopLevel(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
 /// The category of a symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolCategory {
@@ -57,14 +135,14 @@ pub struct ReferenceInfo {
     /// Byte-offset span of this reference in the current file.
     pub span: Span,
     /// Key into `definitions` that this reference points to.
-    pub target: String,
+    pub target: SymbolKey,
 }
 
 /// The complete symbol table for one file.
 #[derive(Debug, Default)]
 pub struct SymbolTable {
-    /// All symbol definitions keyed by a unique ID string.
-    pub definitions: HashMap<String, DefinitionInfo>,
+    /// All symbol definitions keyed by a typed `SymbolKey`.
+    pub definitions: HashMap<SymbolKey, DefinitionInfo>,
     /// All reference occurrences sorted by span offset.
     pub references: Vec<ReferenceInfo>,
 }
@@ -95,11 +173,11 @@ impl SymbolTable {
         })
     }
 
-    /// Find all references that point to the given target name.
-    pub fn find_all_references(&self, target: &str) -> Vec<&ReferenceInfo> {
+    /// Find all references that point to the given target key.
+    pub fn find_all_references(&self, target: &SymbolKey) -> Vec<&ReferenceInfo> {
         self.references
             .iter()
-            .filter(|r| r.target == target)
+            .filter(|r| &r.target == target)
             .collect()
     }
 }
@@ -107,7 +185,7 @@ impl SymbolTable {
 /// Scope stack for tracking local variable bindings.
 struct ScopeStack {
     /// Each scope maps local name -> definition key in the symbol table.
-    scopes: Vec<HashMap<String, String>>,
+    scopes: Vec<HashMap<String, SymbolKey>>,
 }
 
 impl ScopeStack {
@@ -125,13 +203,13 @@ impl ScopeStack {
         self.scopes.pop();
     }
 
-    fn insert(&mut self, name: String, key: String) {
+    fn insert(&mut self, name: String, key: SymbolKey) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, key);
         }
     }
 
-    fn resolve(&self, name: &str) -> Option<&str> {
+    fn resolve(&self, name: &str) -> Option<&SymbolKey> {
         for scope in self.scopes.iter().rev() {
             if let Some(key) = scope.get(name) {
                 return Some(key);
@@ -175,7 +253,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
 fn register_builtins(table: &mut SymbolTable) {
     for name in builtin_constants().keys() {
         table.definitions.insert(
-            (*name).to_string(),
+            SymbolKey::TopLevel((*name).to_string()),
             DefinitionInfo {
                 name: (*name).to_string(),
                 category: SymbolCategory::BuiltinConst,
@@ -189,7 +267,7 @@ fn register_builtins(table: &mut SymbolTable) {
 
     for (name, f) in builtin_functions() {
         table.definitions.insert(
-            (*name).to_string(),
+            SymbolKey::TopLevel((*name).to_string()),
             DefinitionInfo {
                 name: (*name).to_string(),
                 category: SymbolCategory::BuiltinFn,
@@ -209,7 +287,7 @@ fn collect_attribute_refs(attributes: &[graphcal_syntax::ast::Attribute], table:
                 if let Some(ident) = arg.as_single_ident() {
                     table.references.push(ReferenceInfo {
                         span: ident.span,
-                        target: ident.name.clone(),
+                        target: SymbolKey::TopLevel(ident.name.clone()),
                     });
                 }
             }
@@ -225,7 +303,7 @@ fn collect_param_decl(
 ) {
     let name = p.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Param,
@@ -249,7 +327,7 @@ fn collect_node_decl(
 ) {
     let name = n.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Node,
@@ -271,7 +349,7 @@ fn collect_const_decl(
 ) {
     let name = c.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Const,
@@ -288,7 +366,7 @@ fn collect_const_decl(
 fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = d.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Dimension,
@@ -311,7 +389,7 @@ fn collect_unit_decl(
 ) {
     let name = u.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Unit,
@@ -331,7 +409,7 @@ fn collect_unit_decl(
 fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = t.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name: name.clone(),
             category: SymbolCategory::StructType,
@@ -345,7 +423,10 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
     if t.variants.len() > 1 {
         for variant in &t.variants {
             let vname = variant.name.value.to_string();
-            let key = format!("{name}::{vname}");
+            let key = SymbolKey::Variant {
+                parent: name.clone(),
+                variant: vname.clone(),
+            };
             table.definitions.insert(
                 key,
                 DefinitionInfo {
@@ -370,7 +451,7 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
 fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes: &mut ScopeStack) {
     let fname = f.name.value.to_string();
     table.definitions.insert(
-        fname.clone(),
+        SymbolKey::TopLevel(fname.clone()),
         DefinitionInfo {
             name: fname.clone(),
             category: SymbolCategory::Function,
@@ -385,7 +466,10 @@ fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes:
     scopes.push();
     for param in &f.params {
         let pname = param.name.name.clone();
-        let key = format!("{fname}::{pname}");
+        let key = SymbolKey::FnScoped {
+            fn_name: fname.clone(),
+            local: pname.clone(),
+        };
         table.definitions.insert(
             key.clone(),
             DefinitionInfo {
@@ -412,7 +496,10 @@ fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes:
             for stmt in stmts {
                 collect_expr_refs(&stmt.value, table, scopes);
                 let lname = stmt.name.name.clone();
-                let key = format!("{fname}::{lname}");
+                let key = SymbolKey::FnScoped {
+                    fn_name: fname.clone(),
+                    local: lname.clone(),
+                };
                 table.definitions.insert(
                     key.clone(),
                     DefinitionInfo {
@@ -439,7 +526,7 @@ fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes:
 fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = idx.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name: name.clone(),
             category: SymbolCategory::Index,
@@ -452,7 +539,10 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
     if let IndexDeclKind::Named { variants } = &idx.kind {
         for variant in variants {
             let vname = variant.value.to_string();
-            let key = format!("{name}::{vname}");
+            let key = SymbolKey::Variant {
+                parent: name.clone(),
+                variant: vname.clone(),
+            };
             table.definitions.insert(
                 key,
                 DefinitionInfo {
@@ -476,7 +566,7 @@ fn collect_assert_decl(
 ) {
     let name = a.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Assert,
@@ -511,7 +601,7 @@ fn collect_plot_decl(
 ) {
     let name = p.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Plot,
@@ -534,7 +624,7 @@ fn collect_figure_decl(
 ) {
     let name = f.name.value.to_string();
     table.definitions.insert(
-        name.clone(),
+        SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
             category: SymbolCategory::Figure,
@@ -556,13 +646,13 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
-                target: import_item.name.name.clone(),
+                target: SymbolKey::TopLevel(import_item.name.name.clone()),
             });
             // If aliased, the alias also resolves to the same target.
             if let Some(alias) = &import_item.alias {
                 table.references.push(ReferenceInfo {
                     span: alias.span,
-                    target: import_item.name.name.clone(),
+                    target: SymbolKey::TopLevel(import_item.name.name.clone()),
                 });
             }
         }
@@ -586,13 +676,13 @@ fn collect_expr_refs(
         | ExprKind::QualifiedConstRef { name, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: name.value.to_string(),
+                target: SymbolKey::TopLevel(name.value.to_string()),
             });
         }
         ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: name.value.to_string(),
+                target: SymbolKey::TopLevel(name.value.to_string()),
             });
             for arg in args {
                 collect_expr_refs(arg, table, scopes);
@@ -601,7 +691,8 @@ fn collect_expr_refs(
         ExprKind::LocalRef(ident) => {
             let target = scopes
                 .resolve(&ident.name)
-                .map_or_else(|| ident.name.clone(), ToString::to_string);
+                .cloned()
+                .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.clone()));
             table.references.push(ReferenceInfo {
                 span: ident.span,
                 target,
@@ -639,11 +730,15 @@ fn collect_expr_refs(
         }
         ExprKind::Block { stmts, expr } => {
             scopes.push();
-            let scope_prefix = format!("block@{}", expr.span.offset());
+            let scope_offset = expr.span.offset();
             for stmt in stmts {
                 collect_expr_refs(&stmt.value, table, scopes);
                 let lname = stmt.name.name.clone();
-                let key = format!("{scope_prefix}::{lname}");
+                let key = SymbolKey::ExprScoped {
+                    kind: ExprScopeKind::Block,
+                    offset: scope_offset,
+                    local: lname.clone(),
+                };
                 table.definitions.insert(
                     key.clone(),
                     DefinitionInfo {
@@ -668,7 +763,7 @@ fn collect_expr_refs(
             // Field reference -- target is approximate without type info.
             table.references.push(ReferenceInfo {
                 span: field.span,
-                target: format!("field::{}", field.value),
+                target: SymbolKey::Field(field.value.to_string()),
             });
         }
         ExprKind::StructConstruction {
@@ -678,7 +773,7 @@ fn collect_expr_refs(
         } => {
             table.references.push(ReferenceInfo {
                 span: type_name.span,
-                target: type_name.value.to_string(),
+                target: SymbolKey::TopLevel(type_name.value.to_string()),
             });
             for type_arg in type_args {
                 collect_type_expr_refs(type_arg, table);
@@ -690,7 +785,8 @@ fn collect_expr_refs(
                     // Shorthand: `{ dv1 }` -- the field name is also a local reference.
                     let target = scopes
                         .resolve(field.name.value.as_str())
-                        .map_or_else(|| field.name.value.to_string(), ToString::to_string);
+                        .cloned()
+                        .unwrap_or_else(|| SymbolKey::TopLevel(field.name.value.to_string()));
                     table.references.push(ReferenceInfo {
                         span: field.name.span,
                         target,
@@ -704,7 +800,7 @@ fn collect_expr_refs(
                 for idx in indexes {
                     table.references.push(ReferenceInfo {
                         span: idx.span,
-                        target: idx.value.to_string(),
+                        target: SymbolKey::TopLevel(idx.value.to_string()),
                     });
                 }
             }
@@ -712,12 +808,14 @@ fn collect_expr_refs(
                 for key in &entry.keys {
                     table.references.push(ReferenceInfo {
                         span: key.index.span,
-                        target: key.index.value.to_string(),
+                        target: SymbolKey::TopLevel(key.index.value.to_string()),
                     });
-                    let variant_key = format!("{}::{}", key.index.value, key.variant.value);
                     table.references.push(ReferenceInfo {
                         span: key.variant.span,
-                        target: variant_key,
+                        target: SymbolKey::Variant {
+                            parent: key.index.value.to_string(),
+                            variant: key.variant.value.to_string(),
+                        },
                     });
                 }
                 collect_expr_refs(&entry.value, table, scopes);
@@ -728,10 +826,14 @@ fn collect_expr_refs(
             for binding in bindings {
                 table.references.push(ReferenceInfo {
                     span: binding.index.span,
-                    target: binding.index.value.to_string(),
+                    target: SymbolKey::TopLevel(binding.index.value.to_string()),
                 });
                 let var_name = binding.var.name.clone();
-                let key = format!("for@{}::{var_name}", binding.var.span.offset());
+                let key = SymbolKey::ExprScoped {
+                    kind: ExprScopeKind::For,
+                    offset: binding.var.span.offset(),
+                    local: var_name.clone(),
+                };
                 table.definitions.insert(
                     key.clone(),
                     DefinitionInfo {
@@ -755,18 +857,21 @@ fn collect_expr_refs(
                     graphcal_syntax::ast::IndexArg::Variant { index, variant } => {
                         table.references.push(ReferenceInfo {
                             span: index.span,
-                            target: index.value.to_string(),
+                            target: SymbolKey::TopLevel(index.value.to_string()),
                         });
-                        let variant_key = format!("{}::{}", index.value, variant.value);
                         table.references.push(ReferenceInfo {
                             span: variant.span,
-                            target: variant_key,
+                            target: SymbolKey::Variant {
+                                parent: index.value.to_string(),
+                                variant: variant.value.to_string(),
+                            },
                         });
                     }
                     graphcal_syntax::ast::IndexArg::Var(ident) => {
                         let target = scopes
                             .resolve(&ident.name)
-                            .map_or_else(|| ident.name.clone(), ToString::to_string);
+                            .cloned()
+                            .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.clone()));
                         table.references.push(ReferenceInfo {
                             span: ident.span,
                             target,
@@ -785,8 +890,17 @@ fn collect_expr_refs(
             collect_expr_refs(source, table, scopes);
             collect_expr_refs(init, table, scopes);
             scopes.push();
-            let acc_key = format!("scan@{}::acc", expr.span.offset());
-            let val_key = format!("scan@{}::val", expr.span.offset());
+            let scan_offset = expr.span.offset();
+            let acc_key = SymbolKey::ExprScoped {
+                kind: ExprScopeKind::Scan,
+                offset: scan_offset,
+                local: "acc".to_string(),
+            };
+            let val_key = SymbolKey::ExprScoped {
+                kind: ExprScopeKind::Scan,
+                offset: scan_offset,
+                local: "val".to_string(),
+            };
             table.definitions.insert(
                 acc_key.clone(),
                 DefinitionInfo {
@@ -822,8 +936,17 @@ fn collect_expr_refs(
         } => {
             collect_expr_refs(init, table, scopes);
             scopes.push();
-            let prev_key = format!("unfold@{}::prev", expr.span.offset());
-            let curr_key = format!("unfold@{}::curr", expr.span.offset());
+            let unfold_offset = expr.span.offset();
+            let prev_key = SymbolKey::ExprScoped {
+                kind: ExprScopeKind::Unfold,
+                offset: unfold_offset,
+                local: "prev".to_string(),
+            };
+            let curr_key = SymbolKey::ExprScoped {
+                kind: ExprScopeKind::Unfold,
+                offset: unfold_offset,
+                local: "curr".to_string(),
+            };
             table.definitions.insert(
                 prev_key.clone(),
                 DefinitionInfo {
@@ -855,12 +978,15 @@ fn collect_expr_refs(
             // Reference to the index name
             table.references.push(ReferenceInfo {
                 span: index.span,
-                target: index.value.to_string(),
+                target: SymbolKey::TopLevel(index.value.to_string()),
             });
             // Reference to the qualified variant: Index::Variant
             table.references.push(ReferenceInfo {
                 span: variant.span,
-                target: format!("{}::{}", index.value, variant.value),
+                target: SymbolKey::Variant {
+                    parent: index.value.to_string(),
+                    variant: variant.value.to_string(),
+                },
             });
         }
         ExprKind::Match { scrutinee, arms } => {
@@ -873,18 +999,21 @@ fn collect_expr_refs(
                 if let Some(qi) = &arm.pattern.qualified_index {
                     table.references.push(ReferenceInfo {
                         span: qi.span,
-                        target: qi.value.to_string(),
+                        target: SymbolKey::TopLevel(qi.value.to_string()),
                     });
                     // Reference the qualified variant: Index::Variant
                     table.references.push(ReferenceInfo {
                         span: arm.pattern.variant_name.span,
-                        target: format!("{}::{}", qi.value, variant_name),
+                        target: SymbolKey::Variant {
+                            parent: qi.value.to_string(),
+                            variant: variant_name.clone(),
+                        },
                     });
                 } else {
                     // Try to resolve variant as Type::Variant (tagged union).
                     table.references.push(ReferenceInfo {
                         span: arm.pattern.variant_name.span,
-                        target: variant_name.clone(),
+                        target: SymbolKey::TopLevel(variant_name.clone()),
                     });
                 }
 
@@ -894,9 +1023,13 @@ fn collect_expr_refs(
                         PatternBinding::Bind { field, var } => {
                             table.references.push(ReferenceInfo {
                                 span: field.span,
-                                target: format!("field::{}", field.value),
+                                target: SymbolKey::Field(field.value.to_string()),
                             });
-                            let var_key = format!("match@{}::{}", arm.span.offset(), var.name);
+                            let var_key = SymbolKey::ExprScoped {
+                                kind: ExprScopeKind::Match,
+                                offset: arm.span.offset(),
+                                local: var.name.clone(),
+                            };
                             table.definitions.insert(
                                 var_key.clone(),
                                 DefinitionInfo {
@@ -913,7 +1046,7 @@ fn collect_expr_refs(
                         PatternBinding::Wildcard { field, .. } => {
                             table.references.push(ReferenceInfo {
                                 span: field.span,
-                                target: format!("field::{}", field.value),
+                                target: SymbolKey::Field(field.value.to_string()),
                             });
                         }
                     }
@@ -957,14 +1090,14 @@ fn collect_type_expr_refs(type_expr: &graphcal_syntax::ast::TypeExpr, table: &mu
             for idx in indexes {
                 table.references.push(ReferenceInfo {
                     span: idx.span,
-                    target: idx.name.clone(),
+                    target: SymbolKey::TopLevel(idx.name.clone()),
                 });
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: name.name.clone(),
+                target: SymbolKey::TopLevel(name.name.clone()),
             });
             for arg in type_args {
                 collect_type_expr_refs(arg, table);
@@ -995,7 +1128,7 @@ fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: item.term.name.name.clone(),
+            target: SymbolKey::TopLevel(item.term.name.name.clone()),
         });
     }
 }
@@ -1005,7 +1138,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
     for item in &unit_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.name.span,
-            target: item.name.value.to_string(),
+            target: SymbolKey::TopLevel(item.name.value.to_string()),
         });
     }
 }
@@ -1145,7 +1278,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     // Enrich param/node/const declarations with resolved types + constraints.
     for (name, resolved_type) in &tir.resolved_decl_types {
         let name_str = name.to_string();
-        if let Some(def) = table.definitions.get_mut(&name_str) {
+        let key = SymbolKey::TopLevel(name_str.clone());
+        if let Some(def) = table.definitions.get_mut(&key) {
             let type_desc = decl_constraints.get(&name_str).map_or_else(
                 || resolved_type.format(registry),
                 |constraints| format_type_with_constraints(resolved_type, constraints, registry),
@@ -1156,23 +1290,27 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
 
     // Enrich function definitions with signatures.
     for (fn_name, sig) in &tir.resolved_fn_sigs {
-        if let Some(def) = table.definitions.get_mut(fn_name.as_str()) {
+        let key = SymbolKey::TopLevel(fn_name.as_str().to_string());
+        if let Some(def) = table.definitions.get_mut(&key) {
             def.type_description = Some(format_fn_signature(fn_name.as_str(), sig, registry));
         }
     }
 
     // Enrich dimension/unit/index/struct definitions from registry.
     // Collect keys and categories first to avoid cloning the entire HashMap.
-    let definition_keys: Vec<(String, SymbolCategory)> = table
+    let definition_keys: Vec<(SymbolKey, SymbolCategory)> = table
         .definitions
         .iter()
         .map(|(k, d)| (k.clone(), d.category))
         .collect();
-    for (name, category) in &definition_keys {
+    for (key, category) in &definition_keys {
+        let Some(name) = key.top_level_name() else {
+            continue;
+        };
         match category {
             SymbolCategory::Dimension => {
                 if let Some(dim) = registry.dimensions.get_dimension(name)
-                    && let Some(def_mut) = table.definitions.get_mut(name)
+                    && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     def_mut.type_description = Some(format!(
                         "dimension {name} = {}",
@@ -1182,7 +1320,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
             }
             SymbolCategory::Unit => {
                 if let Some(unit_info) = registry.units.get_unit(name)
-                    && let Some(def_mut) = table.definitions.get_mut(name)
+                    && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     def_mut.type_description = Some(format!(
                         "{}, scale = {}",
@@ -1193,7 +1331,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
             }
             SymbolCategory::Index => {
                 if let Some(idx_def) = registry.indexes.get_index(name)
-                    && let Some(def_mut) = table.definitions.get_mut(name)
+                    && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     match &idx_def.kind {
                         IndexKind::Named { variants } => {
@@ -1214,7 +1352,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
             }
             SymbolCategory::StructType => {
                 if let Some(type_def) = registry.types.get_type(name)
-                    && let Some(def_mut) = table.definitions.get_mut(name)
+                    && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let variants_desc: Vec<String> = type_def
                         .variants
@@ -1241,7 +1379,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     for type_def in registry.types.all_types() {
         for variant in &type_def.variants {
             for field in &variant.fields {
-                let field_key = format!("field::{}", field.name);
+                let field_key = SymbolKey::Field(field.name.to_string());
                 table
                     .definitions
                     .entry(field_key)
@@ -1278,14 +1416,16 @@ mod tests {
             .unwrap();
         let table = build_from_ast(&file);
 
-        assert!(table.definitions.contains_key("x"));
-        assert!(table.definitions.contains_key("y"));
-        assert_eq!(table.definitions["x"].category, SymbolCategory::Param);
-        assert_eq!(table.definitions["y"].category, SymbolCategory::Node);
+        let x_key = SymbolKey::TopLevel("x".to_string());
+        let y_key = SymbolKey::TopLevel("y".to_string());
+        assert!(table.definitions.contains_key(&x_key));
+        assert!(table.definitions.contains_key(&y_key));
+        assert_eq!(table.definitions[&x_key].category, SymbolCategory::Param);
+        assert_eq!(table.definitions[&y_key].category, SymbolCategory::Node);
 
         // @x is a reference
         assert!(
-            table.references.iter().any(|r| r.target == "x"),
+            table.references.iter().any(|r| r.target == x_key),
             "expected @x reference"
         );
     }
@@ -1298,14 +1438,19 @@ mod tests {
             .unwrap();
         let table = build_from_ast(&file);
 
-        assert!(table.definitions.contains_key("double"));
+        let double_key = SymbolKey::TopLevel("double".to_string());
+        let double_x_key = SymbolKey::FnScoped {
+            fn_name: "double".to_string(),
+            local: "x".to_string(),
+        };
+        assert!(table.definitions.contains_key(&double_key));
         assert_eq!(
-            table.definitions["double"].category,
+            table.definitions[&double_key].category,
             SymbolCategory::Function
         );
-        assert!(table.definitions.contains_key("double::x"));
+        assert!(table.definitions.contains_key(&double_x_key));
         assert_eq!(
-            table.definitions["double::x"].category,
+            table.definitions[&double_x_key].category,
             SymbolCategory::LocalVar
         );
     }
@@ -1322,6 +1467,62 @@ mod tests {
         let at_x_offset = source.find("@x").unwrap() + 1; // offset of 'x' in '@x'
         let reference = table.find_reference_at(at_x_offset);
         assert!(reference.is_some(), "expected to find reference at @x");
-        assert_eq!(reference.unwrap().target, "x");
+        assert_eq!(
+            reference.unwrap().target,
+            SymbolKey::TopLevel("x".to_string())
+        );
+    }
+
+    #[test]
+    fn symbol_key_display() {
+        assert_eq!(SymbolKey::TopLevel("x".to_string()).to_string(), "x");
+        assert_eq!(
+            SymbolKey::Variant {
+                parent: "Phase".to_string(),
+                variant: "Launch".to_string()
+            }
+            .to_string(),
+            "Phase::Launch"
+        );
+        assert_eq!(
+            SymbolKey::Field("thrust".to_string()).to_string(),
+            "field::thrust"
+        );
+        assert_eq!(
+            SymbolKey::FnScoped {
+                fn_name: "sqrt".to_string(),
+                local: "x".to_string()
+            }
+            .to_string(),
+            "sqrt::x"
+        );
+        assert_eq!(
+            SymbolKey::ExprScoped {
+                kind: ExprScopeKind::Block,
+                offset: 42,
+                local: "temp".to_string()
+            }
+            .to_string(),
+            "block@42::temp"
+        );
+    }
+
+    #[test]
+    fn symbol_key_helpers() {
+        assert!(SymbolKey::Field("x".to_string()).is_field());
+        assert!(!SymbolKey::TopLevel("x".to_string()).is_field());
+
+        let variant = SymbolKey::Variant {
+            parent: "Phase".to_string(),
+            variant: "Launch".to_string(),
+        };
+        assert!(variant.is_variant_of("Phase"));
+        assert!(!variant.is_variant_of("Other"));
+
+        assert_eq!(
+            SymbolKey::TopLevel("x".to_string()).top_level_name(),
+            Some("x")
+        );
+        assert_eq!(SymbolKey::Field("x".to_string()).top_level_name(), None);
     }
 }
