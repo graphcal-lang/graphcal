@@ -1028,7 +1028,7 @@ fn register_unit_decl(
                     span: def.span.into(),
                 }
             })?;
-        def.scale * base_scale
+        eval_scale_expr(&def.scale_expr, src)? * base_scale
     } else {
         1.0
     };
@@ -1132,6 +1132,61 @@ fn register_type_decl(
         derives,
         variants,
     });
+}
+
+/// Evaluate a constant scale expression (e.g. `1000`, `PI / 180`) to `f64`.
+///
+/// Scale expressions appear in unit definitions and are restricted to numeric
+/// literals, built-in constants (`PI`, `E`), and basic arithmetic.
+fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, GraphcalError> {
+    match &expr.kind {
+        ExprKind::Number(n) => Ok(*n),
+        #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
+        ExprKind::Integer(n) => Ok(*n as f64),
+        ExprKind::ConstRef(ident) => match ident.value.as_str() {
+            "PI" => Ok(std::f64::consts::PI),
+            "E" => Ok(std::f64::consts::E),
+            _ => Err(GraphcalError::EvalError {
+                message: format!(
+                    "unknown constant `{}` in scale expression; only `PI` and `E` are supported",
+                    ident.value
+                ),
+                src: src.clone(),
+                span: ident.span.into(),
+            }),
+        },
+        ExprKind::BinOp { op, lhs, rhs } => {
+            use graphcal_syntax::ast::BinOp;
+            let l = eval_scale_expr(lhs, src)?;
+            let r = eval_scale_expr(rhs, src)?;
+            match op {
+                BinOp::Add => Ok(l + r),
+                BinOp::Sub => Ok(l - r),
+                BinOp::Mul => Ok(l * r),
+                BinOp::Div => Ok(l / r),
+                BinOp::Pow => Ok(l.powf(r)),
+                _ => Err(GraphcalError::EvalError {
+                    message: format!(
+                        "unsupported operator `{op:?}` in scale expression; \
+                         only `+`, `-`, `*`, `/`, `^` are allowed"
+                    ),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                }),
+            }
+        }
+        ExprKind::UnaryOp {
+            op: graphcal_syntax::ast::UnaryOp::Neg,
+            operand,
+        } => Ok(-eval_scale_expr(operand, src)?),
+        _ => Err(GraphcalError::EvalError {
+            message: "scale expression must be a constant expression \
+                      (numbers, PI, E, and arithmetic)"
+                .to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
+    }
 }
 
 /// Evaluate a range expression (e.g. `0.0 s`) to get its SI value and dimension.

@@ -4,7 +4,6 @@ use graphcal_syntax::ast::{
     IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnitDecl,
     UnitDef, VariantDecl,
 };
-use graphcal_syntax::span::Span;
 use pretty::RcDoc;
 
 use super::{
@@ -135,7 +134,7 @@ fn format_dim_decl(_fmt: &Formatter<'_>, d: &DimDecl) -> RcDoc<'static> {
 }
 
 /// `unit name: Dim = scale unit_expr;` or `unit name: Dim;`
-fn format_unit_decl(fmt: &Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
+fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
     let mut doc = RcDoc::text("unit ")
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(": "))
@@ -148,16 +147,17 @@ fn format_unit_decl(fmt: &Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
     doc.append(RcDoc::text(";"))
 }
 
-fn format_unit_def(fmt: &Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
-    // Recover original scale text from source
-    let scale_text = fmt.slice(Span::new(
-        def.span.offset(),
-        // Find where the unit expr starts
-        def.unit_expr.span.offset() - def.span.offset(),
-    ));
-    // The scale text includes the number and trailing space; trim it
-    let scale_text = scale_text.trim_end();
-    RcDoc::text(scale_text.to_string())
+fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
+    use graphcal_syntax::ast::ExprKind;
+    // Simple numeric literals are formatted directly (preserving original text);
+    // complex expressions are wrapped in parentheses.
+    let scale_doc = match &def.scale_expr.kind {
+        ExprKind::Number(_) | ExprKind::Integer(_) => format_expr(fmt, &def.scale_expr),
+        _ => RcDoc::text("(")
+            .append(format_expr(fmt, &def.scale_expr))
+            .append(RcDoc::text(")")),
+    };
+    scale_doc
         .append(RcDoc::text(" "))
         .append(format_unit_expr_inline(&def.unit_expr))
 }

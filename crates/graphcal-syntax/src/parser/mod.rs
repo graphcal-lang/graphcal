@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::ast::{BinOp, Expr, ExprKind, Ident, UnaryOp};
+use crate::ast::{Expr, Ident};
 use crate::lexer::Lexer;
 use crate::span::Span;
 use crate::token::Token;
@@ -246,48 +246,6 @@ impl<'src> Parser<'src> {
             }),
             Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),
             None => Err(self.unexpected_eof("identifier")),
-        }
-    }
-
-    /// Evaluate a simple constant expression at parse time (for unit definitions).
-    /// Only supports: numbers, PI, E, +, -, *, /, ^, unary -.
-    pub(super) fn eval_const_expr(&self, expr: &Expr) -> Result<f64, ParseError> {
-        match &expr.kind {
-            ExprKind::Number(n) => Ok(*n),
-            #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
-            ExprKind::Integer(n) => Ok(*n as f64),
-            ExprKind::ConstRef(ident) => match ident.value.as_str() {
-                "PI" => Ok(std::f64::consts::PI),
-                "E" => Ok(std::f64::consts::E),
-                _ => Err(self.unexpected_token(
-                    "PI or E",
-                    &format!("constant `{}`", ident.value),
-                    ident.span,
-                )),
-            },
-            ExprKind::BinOp { op, lhs, rhs } => {
-                let l = self.eval_const_expr(lhs)?;
-                let r = self.eval_const_expr(rhs)?;
-                Ok(match op {
-                    BinOp::Add => l + r,
-                    BinOp::Sub => l - r,
-                    BinOp::Mul => l * r,
-                    BinOp::Div => l / r,
-                    BinOp::Pow => l.powf(r),
-                    _ => {
-                        return Err(self.unexpected_token(
-                            "arithmetic operator",
-                            &format!("`{op:?}`"),
-                            expr.span,
-                        ));
-                    }
-                })
-            }
-            ExprKind::UnaryOp {
-                op: UnaryOp::Neg,
-                operand,
-            } => Ok(-self.eval_const_expr(operand)?),
-            _ => Err(self.unexpected_token("constant expression", "complex expression", expr.span)),
         }
     }
 }
