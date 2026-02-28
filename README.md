@@ -57,7 +57,7 @@ graphcal eval path/to/file.gcl --input params.json
 # Multi-file project (import declarations resolved automatically)
 graphcal eval project/main.gcl
 
-# Plot output (open interactive Plotly chart in browser)
+# Plot output (open interactive Vega-Lite chart in browser)
 graphcal eval path/to/file.gcl --plot browser
 ```
 
@@ -283,11 +283,12 @@ import "./constants.gcl" { G0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
 
-### Plotting with Plotly
+### Plotting with Vega-Lite
 
 Declare interactive charts alongside your calculations using `plot` declarations.
-Graphcal renders them with [Plotly.js](https://plotly.com/javascript/) for
-publication-quality, interactive visualizations.
+Graphcal renders them with [Vega-Lite](https://vega.github.io/vega-lite/) for
+publication-quality, interactive visualizations. Specify a **mark** type and
+**encoding channels** to map data to visual properties.
 
 ```gcl
 index Step = { First, Second, Third, Fourth }
@@ -297,15 +298,21 @@ node values: Dimensionless[Step] = {
     Step::Third: 4.0, Step::Fourth: 8.0,
 };
 
-plot my_scatter = scatter {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] * @values[s] },
+plot my_scatter = {
+    mark: point,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] * @values[s] },
+    },
     title: "Values Squared",
 };
 
-plot power_bars = bar {
-    x: for s: Step { @values[s] },
-    y: for s: Step { @values[s] + 1.0 },
+plot power_bars = {
+    mark: bar,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] + 1.0 },
+    },
     title: "Values Plus One",
 };
 ```
@@ -314,22 +321,22 @@ plot power_bars = bar {
 # Open interactive chart in default browser
 $ graphcal eval analysis.gcl --plot browser
 
-# Print Plotly JSON spec to stdout
+# Print Vega-Lite JSON spec to stdout
 $ graphcal eval analysis.gcl --plot json
 ```
 
-Supported chart types: `line`, `scatter`, `bar`, `heatmap`.
+Supported mark types: `point`, `line`, `bar`, `area`, `rect`, `tick`.
 
-Group plots into combined subplot figures with `figure` declarations. Use
-`#[hidden]` to suppress standalone output for plots that only belong in a
-combined view:
+Group plots into combined subplot figures with `figure` declarations, or
+overlay them on shared axes with `layer` declarations. Use `#[hidden]` to
+suppress standalone output for plots that only belong in a combined view:
 
 ```gcl
 #[hidden]
-plot my_scatter = scatter { ... };
+plot my_scatter = { mark: point, encode: { ... } };
 
 #[hidden]
-plot power_bars = bar { ... };
+plot power_bars = { mark: bar, encode: { ... } };
 
 figure combined = {
     plots: [my_scatter, power_bars],
