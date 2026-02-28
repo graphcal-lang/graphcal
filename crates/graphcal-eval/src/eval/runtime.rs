@@ -18,10 +18,10 @@ use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
 use crate::registry::Registry;
 use crate::resolve::{DeclCategory, ExpectedFail};
 
-use super::display::{attach_display_units, format_range_step};
+use super::display::{attach_display_units, extract_flat_display_unit, format_range_step};
 use super::project::resolve_field_declared_type;
 use super::types::{
-    AssertResult, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
+    AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
 #[expect(
@@ -387,6 +387,7 @@ pub(super) fn evaluate_plan(
                 &values,
                 &empty_locals,
                 &ctx,
+                declared_types,
             )
         })
         .collect();
@@ -924,8 +925,10 @@ fn evaluate_plot(
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
+    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
 ) -> Option<PlotSpec> {
     let mut fields = Vec::new();
+    let mut encoding_meta = Vec::new();
 
     // Evaluate encoding channels
     for encoding in &decl.encodings {
@@ -936,6 +939,11 @@ fn evaluate_plot(
         }
         let rv = eval_expr(&encoding.value, values, local_values, ctx).ok()?;
         let field_value = runtime_to_plot_field_value(&rv);
+
+        // Extract axis metadata: dimension from graph refs, display unit from expression
+        let meta = extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry);
+        encoding_meta.push((channel_name.clone(), meta));
+
         fields.push((channel_name, field_value));
     }
 
@@ -965,8 +973,77 @@ fn evaluate_plot(
         name: DeclName::new(name),
         mark_type: decl.mark.mark_type,
         fields,
+        encoding_meta,
         hidden,
     })
+}
+
+/// Extract axis metadata (dimension name + display unit) from an encoding expression.
+///
+/// Walks the expression tree to find `@`-references (graph refs) and looks up
+/// their declared type for the dimension. Also extracts display unit info from
+/// unit literals and conversion targets.
+fn extract_encoding_axis_meta(
+    expr: &graphcal_syntax::ast::Expr,
+    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    registry: &Registry,
+) -> AxisMeta {
+    let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
+    let unit_label = extract_flat_display_unit(expr, registry).map(|du| du.label);
+    AxisMeta {
+        dimension_label,
+        unit_label,
+    }
+}
+
+/// Walk an expression tree to find the first `@`-reference and extract its dimension name.
+fn extract_dimension_from_expr(
+    expr: &graphcal_syntax::ast::Expr,
+    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    registry: &Registry,
+) -> Option<String> {
+    use graphcal_syntax::ast::ExprKind;
+    match &expr.kind {
+        ExprKind::GraphRef(name) => {
+            let dt = declared_types.get(name.value.as_str())?;
+            dimension_label_from_declared_type(dt, registry)
+        }
+        ExprKind::ForComp { body, .. } => {
+            extract_dimension_from_expr(body, declared_types, registry)
+        }
+        ExprKind::IndexAccess { expr: inner, .. }
+        | ExprKind::Convert { expr: inner, .. }
+        | ExprKind::Block { expr: inner, .. } => {
+            extract_dimension_from_expr(inner, declared_types, registry)
+        }
+        ExprKind::BinOp { lhs, .. } => {
+            // For binary ops like `@x[m] * @x[m]`, try left first
+            extract_dimension_from_expr(lhs, declared_types, registry)
+        }
+        _ => None,
+    }
+}
+
+/// Convert a `DeclaredType` to a human-readable dimension label.
+///
+/// Returns `None` for dimensionless, bool, int, etc.
+fn dimension_label_from_declared_type(
+    dt: &crate::declared_type::DeclaredType,
+    registry: &Registry,
+) -> Option<String> {
+    match dt {
+        crate::declared_type::DeclaredType::Scalar(dim) => {
+            if dim.is_dimensionless() {
+                None
+            } else {
+                Some(registry.dimensions.format_dimension(dim))
+            }
+        }
+        crate::declared_type::DeclaredType::Indexed { element, .. } => {
+            dimension_label_from_declared_type(element, registry)
+        }
+        _ => None,
+    }
 }
 
 /// Convert a `RuntimeValue` to a `PlotFieldValue`.

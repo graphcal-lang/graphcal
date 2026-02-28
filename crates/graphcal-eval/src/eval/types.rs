@@ -354,6 +354,9 @@ pub struct PlotSpec {
     /// Evaluated plot fields as (`field_name`, values).
     /// Encoding channels and properties are flattened into this list.
     pub fields: Vec<(String, PlotFieldValue)>,
+    /// Axis metadata per encoding channel (`channel_name` → `AxisMeta`).
+    /// Used by the CLI to auto-generate axis titles like "Velocity (km/s)".
+    pub encoding_meta: Vec<(String, AxisMeta)>,
     /// Whether this plot is hidden from standalone output (`#[hidden]`).
     pub hidden: bool,
 }
@@ -378,6 +381,15 @@ pub struct LayerSpec {
     pub plot_names: Vec<DeclName>,
     /// Additional evaluated fields (e.g., `title`).
     pub fields: Vec<(String, PlotFieldValue)>,
+}
+
+/// Axis metadata for auto-generating axis titles from dimension/unit info.
+#[derive(Debug, Clone, Default)]
+pub struct AxisMeta {
+    /// The dimension name (e.g., "Velocity", "Length * Time^-1").
+    pub dimension_label: Option<String>,
+    /// The display unit label (e.g., "km/s", "m").
+    pub unit_label: Option<String>,
 }
 
 /// A resolved value for a plot field.

@@ -16,7 +16,7 @@ pub use project::{
     compile_to_tir_from_project, compile_to_tir_project,
 };
 pub use types::{
-    AssertResult, CompileError, DeclType, DisplayUnit, EvalResult, FigureSpec, LayerSpec,
+    AssertResult, AxisMeta, CompileError, DeclType, DisplayUnit, EvalResult, FigureSpec, LayerSpec,
     NodeError, PlotFieldValue, PlotSpec, Value, ValueError, format_epoch_with_tz,
 };
 

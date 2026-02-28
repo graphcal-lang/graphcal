@@ -1,4 +1,4 @@
-use graphcal_eval::eval::{FigureSpec, LayerSpec, PlotFieldValue, PlotSpec};
+use graphcal_eval::eval::{AxisMeta, FigureSpec, LayerSpec, PlotFieldValue, PlotSpec};
 use graphcal_syntax::ast::MarkType;
 use serde_json::{Value as JsonValue, json};
 
@@ -240,14 +240,18 @@ fn build_encoding(spec: &PlotSpec) -> JsonValue {
             ch_spec.insert("field".to_string(), json!(ch));
             ch_spec.insert("type".to_string(), json!(vega_type));
 
-            // Add axis title from x_label/y_label properties
-            let axis_label = match ch {
+            // Axis title: explicit x_label/y_label overrides auto-generated titles
+            let explicit_label = match ch {
                 "x" => get_string_field(spec, "x_label"),
                 "y" => get_string_field(spec, "y_label"),
                 _ => None,
             };
-            if let Some(label) = axis_label {
-                ch_spec.insert("axis".to_string(), json!({ "title": label }));
+            let axis_title = explicit_label.or_else(|| {
+                let meta = get_encoding_meta(spec, ch)?;
+                format_axis_title(meta)
+            });
+            if let Some(title) = axis_title {
+                ch_spec.insert("axis".to_string(), json!({ "title": title }));
             }
 
             encoding.insert(ch.to_string(), JsonValue::Object(ch_spec));
@@ -255,6 +259,28 @@ fn build_encoding(spec: &PlotSpec) -> JsonValue {
     }
 
     JsonValue::Object(encoding)
+}
+
+/// Look up axis metadata for an encoding channel.
+fn get_encoding_meta<'a>(spec: &'a PlotSpec, channel: &str) -> Option<&'a AxisMeta> {
+    spec.encoding_meta
+        .iter()
+        .find(|(name, _)| name == channel)
+        .map(|(_, meta)| meta)
+}
+
+/// Format an axis title from dimension and unit metadata.
+///
+/// - Dimension "Velocity" + unit "km/s" → "Velocity (km/s)"
+/// - Dimension "Velocity" alone → "Velocity"
+/// - Unit "km/s" alone → None (unit without dimension isn't meaningful as title)
+/// - Neither → None
+fn format_axis_title(meta: &AxisMeta) -> Option<String> {
+    match (&meta.dimension_label, &meta.unit_label) {
+        (Some(dim), Some(unit)) => Some(format!("{dim} ({unit})")),
+        (Some(dim), None) => Some(dim.clone()),
+        _ => None,
+    }
 }
 
 /// Infer Vega-Lite data type from field values.
