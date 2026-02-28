@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Proposal. This document outlines the motivation, proposed syntax, and implementation strategy.
+**Decision level:** Implemented. The Vega-Lite plotting system has replaced the previous Plotly-based system.
 
 ## Summary
 
