@@ -1,8 +1,8 @@
 use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
     FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
-    IndexDecl, IndexDeclKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr,
-    UnitDecl, UnitDef, VariantDecl,
+    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
+    TypeExpr, UnitDecl, UnitDef, VariantDecl,
 };
 use pretty::RcDoc;
 
@@ -29,6 +29,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
+        DeclKind::Layer(d) => format_layer_decl(fmt, d),
     };
 
     if decl.attributes.is_empty() {
@@ -520,6 +521,50 @@ fn format_encode_block(fmt: &mut Formatter<'_>, encodings: &[Encoding]) -> RcDoc
 /// `figure name = { plots: [a, b], title: "...", };`
 fn format_figure_decl(fmt: &mut Formatter<'_>, d: &FigureDecl) -> RcDoc<'static> {
     let header = RcDoc::text(format!("figure {} = ", d.name.value));
+
+    let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
+
+    // Emit `plots: [name1, name2],`
+    if !d.plot_names.is_empty() {
+        let names: Vec<RcDoc<'static>> = d
+            .plot_names
+            .iter()
+            .map(|p| RcDoc::text(p.value.as_str().to_string()))
+            .collect();
+        field_docs.push(
+            RcDoc::text("plots: [")
+                .append(RcDoc::intersperse(names, RcDoc::text(", ")))
+                .append(RcDoc::text("],")),
+        );
+    }
+
+    // Emit other fields
+    for f in &d.fields {
+        field_docs.push(
+            RcDoc::text(f.name.name.clone())
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &f.value))
+                .append(RcDoc::text(",")),
+        );
+    }
+
+    if field_docs.is_empty() {
+        return header.append(RcDoc::text("{};"));
+    }
+
+    header
+        .append(RcDoc::text("{"))
+        .append(
+            RcDoc::hardline()
+                .append(RcDoc::intersperse(field_docs, RcDoc::hardline()))
+                .nest(INDENT),
+        )
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("};"))
+}
+
+fn format_layer_decl(fmt: &mut Formatter<'_>, d: &LayerDecl) -> RcDoc<'static> {
+    let header = RcDoc::text(format!("layer {} = ", d.name.value));
 
     let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
 

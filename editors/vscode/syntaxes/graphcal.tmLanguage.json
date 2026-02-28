@@ -19,6 +19,7 @@
     { "include": "#mark-keyword" },
     { "include": "#encode-keyword" },
     { "include": "#figure-declaration" },
+    { "include": "#layer-declaration" },
     { "include": "#import-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
@@ -185,6 +186,14 @@
       "match": "\\b(figure)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.declaration.figure.graphcal" },
+        "2": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "layer-declaration": {
+      "match": "\\b(layer)\\s+([a-z][a-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.layer.graphcal" },
         "2": { "name": "variable.other.graphcal" }
       }
     },

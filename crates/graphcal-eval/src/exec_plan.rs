@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, PlotDecl};
+use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use graphcal_syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -41,6 +41,13 @@ pub struct FigureBodyEntry {
     pub decl: FigureDecl,
 }
 
+/// A layer body entry for execution.
+#[derive(Debug, Clone)]
+pub struct LayerBodyEntry {
+    pub name: String,
+    pub decl: LayerDecl,
+}
+
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
 pub struct ExecPlan {
@@ -59,6 +66,8 @@ pub struct ExecPlan {
     pub plot_bodies: Vec<PlotBodyEntry>,
     /// Figure declarations in source order.
     pub figure_bodies: Vec<FigureBodyEntry>,
+    /// Layer declarations in source order.
+    pub layer_bodies: Vec<LayerBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<String, Vec<String>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -110,6 +119,15 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         })
         .collect();
 
+    let layer_bodies: Vec<LayerBodyEntry> = tir
+        .layers
+        .iter()
+        .map(|entry| LayerBodyEntry {
+            name: entry.name.to_string(),
+            decl: entry.decl.clone(),
+        })
+        .collect();
+
     // Resolve domain constraints from type annotations.
     let domain_constraints = resolve_domain_constraints(tir, &const_values, src)?;
 
@@ -125,6 +143,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         assert_bodies,
         plot_bodies,
         figure_bodies,
+        layer_bodies,
         assumes_map: tir
             .assumes_map
             .iter()

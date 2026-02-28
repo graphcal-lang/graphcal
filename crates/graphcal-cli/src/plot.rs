@@ -1,4 +1,4 @@
-use graphcal_eval::eval::{FigureSpec, PlotFieldValue, PlotSpec};
+use graphcal_eval::eval::{FigureSpec, LayerSpec, PlotFieldValue, PlotSpec};
 use graphcal_syntax::ast::MarkType;
 use serde_json::{Value as JsonValue, json};
 
@@ -10,11 +10,16 @@ pub struct RenderedFigure {
     pub spec: JsonValue,
 }
 
-/// Build figures from evaluated plot and figure specs.
+/// Build figures from evaluated plot, figure, and layer specs.
 ///
 /// - Each non-hidden `PlotSpec` produces one standalone figure.
 /// - Each `FigureSpec` produces one combined figure with `hconcat`.
-pub fn build_figures(plots: &[PlotSpec], figures: &[FigureSpec]) -> Vec<RenderedFigure> {
+/// - Each `LayerSpec` produces one combined figure with `layer`.
+pub fn build_figures(
+    plots: &[PlotSpec],
+    figures: &[FigureSpec],
+    layers: &[LayerSpec],
+) -> Vec<RenderedFigure> {
     let mut result = Vec::new();
 
     // Standalone figures from non-hidden plots
@@ -33,6 +38,14 @@ pub fn build_figures(plots: &[PlotSpec], figures: &[FigureSpec]) -> Vec<Rendered
         result.push(RenderedFigure {
             name: fig.name.as_str().to_string(),
             spec: build_figure_spec(fig, plots),
+        });
+    }
+
+    // Layered figures from layer specs
+    for layer in layers {
+        result.push(RenderedFigure {
+            name: layer.name.as_str().to_string(),
+            spec: build_layer_spec(layer, plots),
         });
     }
 
@@ -91,6 +104,46 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
 
     if let Some(title) = get_string_field_from_fields(&fig.fields, "title") {
         vl["title"] = json!(title);
+    }
+
+    vl
+}
+
+/// Build a Vega-Lite `layer` spec from a `LayerSpec`.
+fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
+    let referenced: Vec<&PlotSpec> = layer
+        .plot_names
+        .iter()
+        .filter_map(|name| all_plots.iter().find(|p| p.name == *name))
+        .collect();
+
+    // Each sub-spec is a layer entry: mark + encoding + data (no $schema).
+    let sub_specs: Vec<JsonValue> = referenced
+        .iter()
+        .map(|spec| {
+            let mut entry = json!({});
+            entry["data"] = json!({ "values": build_data_values(spec) });
+            entry["mark"] = build_mark(spec);
+            entry["encoding"] = build_encoding(spec);
+            entry
+        })
+        .collect();
+
+    let mut vl = json!({
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "layer": sub_specs,
+    });
+
+    if let Some(title) = get_string_field_from_fields(&layer.fields, "title") {
+        vl["title"] = json!(title);
+    }
+
+    // Width/height from layer fields
+    if let Some(w) = get_number_field_from_fields(&layer.fields, "width") {
+        vl["width"] = json!(w);
+    }
+    if let Some(h) = get_number_field_from_fields(&layer.fields, "height") {
+        vl["height"] = json!(h);
     }
 
     vl
@@ -275,6 +328,23 @@ fn get_string_field_from_fields(
         if name == field_name {
             return match value {
                 PlotFieldValue::String(s) => Some(s.clone()),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Get a single numeric value from a list of (name, value) pairs.
+fn get_number_field_from_fields(
+    fields: &[(String, PlotFieldValue)],
+    field_name: &str,
+) -> Option<f64> {
+    for (name, value) in fields {
+        if name == field_name {
+            return match value {
+                PlotFieldValue::Number(n) => Some(*n),
+                PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
                 _ => None,
             };
         }

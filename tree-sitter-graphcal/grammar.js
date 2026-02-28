@@ -51,6 +51,7 @@ module.exports = grammar({
       $.assert_declaration,
       $.plot_declaration,
       $.figure_declaration,
+      $.layer_declaration,
     ),
 
     // #[name] or #[name(arg1, arg2)] or #[name(Index::Variant, (A::X, B::Y))]
@@ -452,6 +453,50 @@ module.exports = grammar({
 
     // title: "...", or other key: value fields
     figure_named_field: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("value", $._expr),
+    ),
+
+    // layer decay_with_points = {
+    //     plots: [line_layer, point_layer],
+    //     title: "Decay Curve with Points",
+    // };
+    layer_declaration: $ => seq(
+      repeat($.attribute),
+      "layer",
+      field("name", $.identifier),
+      "=",
+      "{",
+      optional(seq(
+        $.layer_field,
+        repeat(seq(",", $.layer_field)),
+        optional(","),
+      )),
+      "}",
+      ";",
+    ),
+
+    layer_field: $ => choice(
+      $.layer_plots_field,
+      $.layer_named_field,
+    ),
+
+    // plots: [name1, name2]
+    layer_plots_field: $ => seq(
+      "plots",
+      ":",
+      "[",
+      optional(seq(
+        $.identifier,
+        repeat(seq(",", $.identifier)),
+        optional(","),
+      )),
+      "]",
+    ),
+
+    // title: "...", or other key: value fields
+    layer_named_field: $ => seq(
       field("name", $.identifier),
       ":",
       field("value", $._expr),

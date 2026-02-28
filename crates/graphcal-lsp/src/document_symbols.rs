@@ -28,9 +28,10 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             SymbolCategory::StructType => SymbolKind::STRUCT,
             SymbolCategory::Dimension => SymbolKind::TYPE_PARAMETER,
             SymbolCategory::Index => SymbolKind::ENUM,
-            SymbolCategory::Assert | SymbolCategory::Plot | SymbolCategory::Figure => {
-                SymbolKind::EVENT
-            }
+            SymbolCategory::Assert
+            | SymbolCategory::Plot
+            | SymbolCategory::Figure
+            | SymbolCategory::Layer => SymbolKind::EVENT,
             SymbolCategory::IndexVariant
             | SymbolCategory::Field
             | SymbolCategory::LocalVar

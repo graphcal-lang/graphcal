@@ -47,6 +47,8 @@ pub enum Token {
     Plot,
     #[token("figure")]
     Figure,
+    #[token("layer")]
+    Layer,
     #[token("scan")]
     Scan,
     #[token("unfold")]
@@ -171,6 +173,7 @@ impl std::fmt::Display for Token {
             Self::Table => write!(f, "table"),
             Self::Plot => write!(f, "plot"),
             Self::Figure => write!(f, "figure"),
+            Self::Layer => write!(f, "layer"),
             Self::Scan => write!(f, "scan"),
             Self::Unfold => write!(f, "unfold"),
             Self::Range => write!(f, "range"),

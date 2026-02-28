@@ -1412,7 +1412,10 @@ fn evaluate_project_perfile(
                             all_params.push((decl_name.clone(), Ok(value.clone())));
                             all_all.push((decl_name, Ok(value), super::types::DeclType::Node));
                         }
-                        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => {}
+                        DeclCategory::Assert
+                        | DeclCategory::Plot
+                        | DeclCategory::Figure
+                        | DeclCategory::Layer => {}
                     }
                 }
             }
@@ -1430,6 +1433,7 @@ fn evaluate_project_perfile(
                 assertions: all_assertions,
                 plots: eval_result.plots,
                 figures: eval_result.figures,
+                layers: eval_result.layers,
                 assumes_map: eval_result.assumes_map,
                 base_dim_symbols: eval_result.base_dim_symbols,
                 domain_constraints: eval_result.domain_constraints,
@@ -1885,6 +1889,7 @@ pub(super) fn file_has_declaration(file: &graphcal_syntax::ast::File, name: &str
         DeclKind::Type(t) => t.name.value.as_str() == name,
         DeclKind::Plot(p) => p.name.value.as_str() == name,
         DeclKind::Figure(f) => f.name.value.as_str() == name,
+        DeclKind::Layer(l) => l.name.value.as_str() == name,
         DeclKind::Import(_) => false,
     })
 }
