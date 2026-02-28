@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use graphcal_syntax::ast::{
     AssertDecl, ConstDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody,
-    FnDecl, ImportDecl, IndexDecl, IndexDeclKind, NodeDecl, ParamDecl, PatternBinding, PlotDecl,
-    TypeDecl, TypeExpr, TypeExprKind, UnitDecl, UnitExpr,
+    FnDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PatternBinding,
+    PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_syntax::span::Span;
 
@@ -112,6 +112,7 @@ pub enum SymbolCategory {
     Assert,
     Plot,
     Figure,
+    Layer,
 }
 
 /// Information about a symbol definition.
@@ -241,6 +242,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
             DeclKind::Assert(a) => collect_assert_decl(a, decl.span, &mut table, &mut scopes),
             DeclKind::Plot(p) => collect_plot_decl(p, decl.span, &mut table, &mut scopes),
             DeclKind::Figure(f) => collect_figure_decl(f, decl.span, &mut table, &mut scopes),
+            DeclKind::Layer(l) => collect_layer_decl(l, decl.span, &mut table, &mut scopes),
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
         }
     }
@@ -641,6 +643,29 @@ fn collect_figure_decl(
         },
     );
     for field in &f.fields {
+        collect_expr_refs(&field.value, table, scopes);
+    }
+}
+
+fn collect_layer_decl(
+    l: &LayerDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = l.name.value.to_string();
+    table.definitions.insert(
+        SymbolKey::TopLevel(name.clone()),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Layer,
+            name_span: l.name.span,
+            decl_span,
+            type_description: Some("layer".to_string()),
+            detail: Some("layer".to_string()),
+        },
+    );
+    for field in &l.fields {
         collect_expr_refs(&field.value, table, scopes);
     }
 }

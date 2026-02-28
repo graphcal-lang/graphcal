@@ -17,7 +17,7 @@ use graphcal_registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::resolve_types::{
     ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedFunctionEntry,
-    ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
+    ResolvedLayerEntry, ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -95,6 +95,7 @@ struct CollectedDeclarations {
     asserts: Vec<ResolvedAssertEntry>,
     plots: Vec<ResolvedPlotEntry>,
     figures: Vec<ResolvedFigureEntry>,
+    layers: Vec<ResolvedLayerEntry>,
     functions: Vec<ResolvedFunctionEntry>,
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
@@ -127,6 +128,7 @@ fn collect_local_declarations(
     let mut asserts = Vec::new();
     let mut plots = Vec::new();
     let mut figures = Vec::new();
+    let mut layers = Vec::new();
     let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
@@ -147,6 +149,7 @@ fn collect_local_declarations(
             DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
             DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
             DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
+            DeclKind::Layer(l) => (l.name.value.to_string(), l.name.span, false),
             DeclKind::Fn(f) => {
                 let fn_name_str = f.name.value.to_string();
                 // Check fn name for duplicates (same namespace as param/node/const)
@@ -199,6 +202,7 @@ fn collect_local_declarations(
             }
             DeclKind::Plot(_) => DeclCategory::Plot,
             DeclKind::Figure(_) => DeclCategory::Figure,
+            DeclKind::Layer(_) => DeclCategory::Layer,
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
@@ -349,6 +353,28 @@ fn collect_local_declarations(
                     span: decl.span,
                 });
             }
+            DeclKind::Layer(l) => {
+                // Validate references in layer field expressions (layers CAN use @)
+                for field in &l.fields {
+                    let (_graph_refs, _const_refs) = extract_all_refs(
+                        &field.value,
+                        &all_runtime_names,
+                        &all_const_names,
+                        builtin_consts,
+                        builtin_fns,
+                        &all_user_fn_names,
+                        src,
+                        None,
+                    )?;
+                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                }
+                let lname = l.name.value.to_string();
+                layers.push(ResolvedLayerEntry {
+                    name: lname,
+                    decl: l.clone(),
+                    span: decl.span,
+                });
+            }
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
@@ -430,6 +456,7 @@ fn collect_local_declarations(
         asserts,
         plots,
         figures,
+        layers,
         functions,
         runtime_deps,
         const_deps,
@@ -503,6 +530,7 @@ fn validate_attributes(
                         DeclKind::Const(_) => "const",
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Figure(_) => "figure",
+                        DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -525,6 +553,7 @@ fn validate_attributes(
                         DeclKind::Assert(_) => Some("assert"),
                         DeclKind::Plot(_) => Some("plot"),
                         DeclKind::Figure(_) => Some("figure"),
+                        DeclKind::Layer(_) => Some("layer"),
                         DeclKind::Fn(_) => Some("fn"),
                         DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
@@ -595,6 +624,7 @@ fn validate_attributes(
                         DeclKind::Const(_) => "const",
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
+                        DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -621,6 +651,7 @@ fn validate_attributes(
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
+                        DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -671,6 +702,7 @@ fn validate_attributes(
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
+                        DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
@@ -903,6 +935,7 @@ pub fn resolve_with_imports(
         asserts: all_asserts,
         plots: local.plots,
         figures: local.figures,
+        layers: local.layers,
         runtime_deps,
         const_deps,
         source_order: all_source_order,
@@ -986,6 +1019,7 @@ pub fn resolve_with_imported_values(
         asserts: local.asserts,
         plots: local.plots,
         figures: local.figures,
+        layers: local.layers,
         runtime_deps: local.runtime_deps,
         const_deps: local.const_deps,
         source_order: local.source_order,

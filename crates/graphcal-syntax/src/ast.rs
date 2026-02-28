@@ -73,6 +73,7 @@ pub enum DeclKind {
     Assert(AssertDecl),
     Plot(PlotDecl),
     Figure(FigureDecl),
+    Layer(LayerDecl),
 }
 
 /// Assert declaration: `assert name = <expr>;`
@@ -209,6 +210,22 @@ pub struct PlotDecl {
 pub struct FigureDecl {
     pub name: Spanned<DeclName>,
     /// The plot names referenced by this figure (from the `plots: [...]` field).
+    pub plot_names: Vec<Spanned<DeclName>>,
+    /// Additional fields (e.g., `title`).
+    pub fields: Vec<PlotField>,
+}
+
+/// A layer declaration: overlays multiple plots on shared axes.
+///
+/// Syntax: `layer name = { plots: [a, b], title: "..." };`
+///
+/// Unlike `figure` (which tiles plots side-by-side), `layer` overlays
+/// them on the same coordinate space. In Vega-Lite this maps to the
+/// `"layer"` composition operator.
+#[derive(Debug, Clone)]
+pub struct LayerDecl {
+    pub name: Spanned<DeclName>,
+    /// The plot names to overlay (from the `plots: [...]` field).
     pub plot_names: Vec<Spanned<DeclName>>,
     /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField>,
@@ -983,6 +1000,11 @@ pub fn desugar_tuple_matches(file: &mut File) {
             }
             DeclKind::Figure(f) => {
                 for field in &mut f.fields {
+                    desugar_expr(&mut field.value);
+                }
+            }
+            DeclKind::Layer(l) => {
+                for field in &mut l.fields {
                     desugar_expr(&mut field.value);
                 }
             }

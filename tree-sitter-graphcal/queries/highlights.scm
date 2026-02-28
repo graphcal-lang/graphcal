@@ -30,6 +30,7 @@
   "assert"
   "plot"
   "figure"
+  "layer"
   "table"
 ] @keyword
 
@@ -298,6 +299,13 @@
 
 (figure_declaration name: (identifier) @variable)
 (figure_named_field name: (identifier) @property)
+
+; ---------------------------------------------------------------
+; Layer declarations
+; ---------------------------------------------------------------
+
+(layer_declaration name: (identifier) @variable)
+(layer_named_field name: (identifier) @property)
 
 ; ---------------------------------------------------------------
 ; Range index

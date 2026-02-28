@@ -241,7 +241,7 @@ fn handle_eval(
 
             // Handle --plot output
             if let Some(plot_mode) = plot_output {
-                let rendered = plot::build_figures(&result.plots, &result.figures);
+                let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
                 if rendered.is_empty() {
                     eprintln!("warning: no plot declarations found");
                 } else {

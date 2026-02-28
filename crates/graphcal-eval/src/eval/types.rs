@@ -321,6 +321,8 @@ pub struct EvalResult {
     pub plots: Vec<PlotSpec>,
     /// Evaluated figure specifications in source order.
     pub figures: Vec<FigureSpec>,
+    /// Evaluated layer specifications in source order.
+    pub layers: Vec<LayerSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
@@ -362,6 +364,17 @@ pub struct FigureSpec {
     /// The figure declaration name.
     pub name: DeclName,
     /// The plot names referenced by this figure.
+    pub plot_names: Vec<DeclName>,
+    /// Additional evaluated fields (e.g., `title`).
+    pub fields: Vec<(String, PlotFieldValue)>,
+}
+
+/// A single evaluated layer specification.
+#[derive(Debug, Clone)]
+pub struct LayerSpec {
+    /// The layer declaration name.
+    pub name: DeclName,
+    /// The plot names to overlay in this layer.
     pub plot_names: Vec<DeclName>,
     /// Additional evaluated fields (e.g., `title`).
     pub fields: Vec<(String, PlotFieldValue)>,

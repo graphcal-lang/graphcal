@@ -1,0 +1,36 @@
+// layer_basic.gcl -- Layer declaration overlaying two plots
+//
+// Demonstrates a layer that overlays two plots on shared axes.
+index Step = { First, Second, Third, Fourth }
+
+param x0: Dimensionless = 1.0;
+
+node values: Dimensionless[Step] = {
+    Step::First: 1.0,
+    Step::Second: 2.0,
+    Step::Third: 4.0,
+    Step::Fourth: 8.0,
+};
+
+plot line_layer = {
+    mark: line,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] * @values[s] },
+    },
+    title: "Values Squared",
+};
+
+plot point_layer = {
+    mark: point,
+    encode: {
+        x: for s: Step { @values[s] },
+        y: for s: Step { @values[s] * @values[s] },
+    },
+    title: "Values Squared Points",
+};
+
+layer decay_with_points = {
+    plots: [line_layer, point_layer],
+    title: "Decay Curve with Points",
+};

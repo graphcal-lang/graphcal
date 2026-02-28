@@ -345,6 +345,7 @@ fn extract_decl_name(kind: &DeclKind) -> Option<String> {
         DeclKind::Assert(a) => Some(a.name.value.as_str().to_string()),
         DeclKind::Plot(p) => Some(p.name.value.as_str().to_string()),
         DeclKind::Figure(f) => Some(f.name.value.as_str().to_string()),
+        DeclKind::Layer(l) => Some(l.name.value.as_str().to_string()),
         DeclKind::Import(_) => None,
     }
 }

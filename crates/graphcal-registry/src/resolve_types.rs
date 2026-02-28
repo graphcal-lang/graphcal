@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, FnDecl, PlotDecl};
+use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, FnDecl, LayerDecl, PlotDecl};
 use graphcal_syntax::names::{IndexName, VariantName};
 use graphcal_syntax::span::Span;
 
@@ -227,6 +227,7 @@ pub enum DeclCategory {
     Assert,
     Plot,
     Figure,
+    Layer,
 }
 
 impl std::fmt::Display for DeclCategory {
@@ -238,6 +239,7 @@ impl std::fmt::Display for DeclCategory {
             Self::Assert => write!(f, "assert"),
             Self::Plot => write!(f, "plot"),
             Self::Figure => write!(f, "figure"),
+            Self::Layer => write!(f, "layer"),
         }
     }
 }
@@ -295,6 +297,14 @@ pub struct ResolvedFigureEntry {
     pub span: Span,
 }
 
+/// A resolved layer declaration.
+#[derive(Debug)]
+pub struct ResolvedLayerEntry {
+    pub name: String,
+    pub decl: LayerDecl,
+    pub span: Span,
+}
+
 /// A resolved function declaration.
 #[derive(Debug, Clone)]
 pub struct ResolvedFunctionEntry {
@@ -333,6 +343,8 @@ pub struct ResolvedFile {
     pub plots: Vec<ResolvedPlotEntry>,
     /// Figure declarations in source order.
     pub figures: Vec<ResolvedFigureEntry>,
+    /// Layer declarations in source order.
+    pub layers: Vec<ResolvedLayerEntry>,
     /// For each node/param, the set of `@`-references (graph deps).
     pub runtime_deps: HashMap<String, HashSet<String>>,
     /// For each const, the set of `CONST_REF` references (const deps).

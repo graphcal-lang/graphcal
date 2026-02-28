@@ -11,7 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::{
-    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, PlotDecl, TypeExpr,
+    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, LayerDecl, PlotDecl, TypeExpr,
 };
 use graphcal_syntax::dimension::Rational;
 use graphcal_syntax::names::{DeclName, DimName, FnName};
@@ -86,6 +86,14 @@ pub struct FigureEntry {
     pub span: Span,
 }
 
+/// A layer declaration.
+#[derive(Debug, Clone)]
+pub struct LayerEntry {
+    pub name: ScopedName,
+    pub decl: LayerDecl,
+    pub span: Span,
+}
+
 /// A function declaration.
 #[derive(Debug, Clone)]
 pub struct FunctionEntry {
@@ -118,6 +126,8 @@ pub struct IR {
     pub plots: Vec<PlotEntry>,
     /// Figure declarations in source order.
     pub figures: Vec<FigureEntry>,
+    /// Layer declarations in source order.
+    pub layers: Vec<LayerEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
@@ -332,6 +342,15 @@ pub fn lower_to_builder(
                 span: entry.span,
             })
             .collect(),
+        layers: resolved
+            .layers
+            .into_iter()
+            .map(|entry| LayerEntry {
+                name: ScopedName::local(entry.name),
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         runtime_deps: wrap_dep_map(resolved.runtime_deps),
         const_deps: wrap_dep_map(resolved.const_deps),
         source_order: resolved
@@ -520,6 +539,15 @@ pub fn lower_to_builder_with_imported_values(
                 span: entry.span,
             })
             .collect(),
+        layers: resolved
+            .layers
+            .into_iter()
+            .map(|entry| LayerEntry {
+                name: ScopedName::local(entry.name),
+                decl: entry.decl,
+                span: entry.span,
+            })
+            .collect(),
         runtime_deps: wrap_dep_map(resolved.runtime_deps),
         const_deps: wrap_dep_map(resolved.const_deps),
         source_order: resolved
@@ -570,6 +598,7 @@ pub struct UnfrozenIR {
     asserts: Vec<AssertEntry>,
     plots: Vec<PlotEntry>,
     figures: Vec<FigureEntry>,
+    layers: Vec<LayerEntry>,
     runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
@@ -594,6 +623,7 @@ impl UnfrozenIR {
             asserts: self.asserts,
             plots: self.plots,
             figures: self.figures,
+            layers: self.layers,
             runtime_deps: self.runtime_deps,
             const_deps: self.const_deps,
             source_order: self.source_order,
@@ -830,6 +860,29 @@ impl UnfrozenIR {
                 span: entry.span,
             });
             self.source_order.push((prefixed, DeclCategory::Figure));
+        }
+
+        // Merge layers
+        for mut entry in dep.layers {
+            for field in &mut entry.decl.fields {
+                prefix_expr_refs(&mut field.value, prefix, dep_names);
+            }
+            // Prefix plot names referenced by the layer
+            for plot_name in &mut entry.decl.plot_names {
+                if dep_names.contains(plot_name.value.as_str()) {
+                    plot_name.value = graphcal_syntax::names::DeclName::new(format!(
+                        "{prefix}::{}",
+                        plot_name.value
+                    ));
+                }
+            }
+            let prefixed = entry.name.with_prefix(prefix);
+            self.layers.push(LayerEntry {
+                name: prefixed.clone(),
+                decl: entry.decl,
+                span: entry.span,
+            });
+            self.source_order.push((prefixed, DeclCategory::Layer));
         }
 
         // Merge functions

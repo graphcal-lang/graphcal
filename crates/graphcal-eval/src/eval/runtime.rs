@@ -346,12 +346,18 @@ pub(super) fn evaluate_plan(
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
                 DeclCategory::Node => DeclType::Node,
-                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
+                DeclCategory::Assert
+                | DeclCategory::Plot
+                | DeclCategory::Figure
+                | DeclCategory::Layer => return None,
             };
             let result = match cat {
                 DeclCategory::Const => Ok(make_value(&name_str, &plan.const_values[&name_str])),
                 DeclCategory::Param | DeclCategory::Node => make_result(&name_str),
-                DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure => return None,
+                DeclCategory::Assert
+                | DeclCategory::Plot
+                | DeclCategory::Figure
+                | DeclCategory::Layer => return None,
             };
             Some((DeclName::new(&name_str), result, decl_type))
         })
@@ -409,6 +415,30 @@ pub(super) fn evaluate_plan(
         })
         .collect();
 
+    // Evaluate layer declarations
+    let layers: Vec<super::types::LayerSpec> = plan
+        .layer_bodies
+        .iter()
+        .map(|entry| {
+            let (name, decl) = (&entry.name, &entry.decl);
+            let mut fields = Vec::new();
+            for field in &decl.fields {
+                if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                    fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+                    continue;
+                }
+                if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
+                    fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
+                }
+            }
+            super::types::LayerSpec {
+                name: DeclName::new(name),
+                plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
+                fields,
+            }
+        })
+        .collect();
+
     // Convert domain constraints to DeclName-keyed map for the result.
     let domain_constraints = plan
         .domain_constraints
@@ -424,6 +454,7 @@ pub(super) fn evaluate_plan(
         assertions,
         plots,
         figures,
+        layers,
         assumes_map: plan.assumes_map.clone(),
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
