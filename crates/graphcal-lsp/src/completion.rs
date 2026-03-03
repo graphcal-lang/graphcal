@@ -15,7 +15,8 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
     "type",
     "dimension",
     "unit",
-    "index",
+    "cat",
+    "range",
     "import",
 ];
 

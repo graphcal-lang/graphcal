@@ -535,7 +535,7 @@ fn validate_attributes(
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) => "type",
-                        DeclKind::Index(_) => "index",
+                        DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
@@ -558,7 +558,7 @@ fn validate_attributes(
                         DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) => Some("type"),
-                        DeclKind::Index(_) => Some("index"),
+                        DeclKind::Index(_) => Some("cat/range"),
                         DeclKind::Import(_) => Some("import"),
                     };
                     if let Some(kind) = kind {
@@ -629,7 +629,7 @@ fn validate_attributes(
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) => "type",
-                        DeclKind::Index(_) => "index",
+                        DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                     };
                     return Err(GraphcalError::InvalidExpectedFailTarget {
@@ -656,7 +656,7 @@ fn validate_attributes(
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) => "type",
-                        DeclKind::Index(_) => "index",
+                        DeclKind::Index(_) => "cat/range",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),
@@ -706,7 +706,7 @@ fn validate_attributes(
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
-                        DeclKind::Index(_) => "index",
+                        DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {

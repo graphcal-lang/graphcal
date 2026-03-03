@@ -5,7 +5,7 @@
 
 dimension Frequency = Time^-1;
 
-index TimeStep = range(0.0 s, 2.0 s, step: 0.5 s);
+range TimeStep(0.0 s, 2.0 s, step: 0.5 s);
 
 param decay_rate: Frequency = 1.0 Hz;
 param initial_value: Dimensionless = 10.0;

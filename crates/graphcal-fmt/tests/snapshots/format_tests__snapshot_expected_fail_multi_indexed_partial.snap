@@ -7,8 +7,8 @@ expression: formatted
 // Setup: (Normal, Cruise), (Eco, Cruise), and (Boost, Launch) all fail.
 // Only (Normal, Cruise) and (Boost, Launch) are marked expected_fail.
 // Expected: (Eco, Cruise) failure should still be reported.
-index Mode = { Normal, Eco, Boost }
-index Phase = { Launch, Cruise }
+cat Mode { Normal, Eco, Boost }
+cat Phase { Launch, Cruise }
 
 param threshold: Dimensionless[Mode, Phase] = {
     (Mode::Normal, Phase::Launch): 10.0,

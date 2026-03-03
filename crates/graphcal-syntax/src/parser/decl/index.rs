@@ -5,45 +5,15 @@ use crate::token::Token;
 use super::super::{ParseError, Parser, is_pascal_case};
 
 impl Parser<'_> {
-    // --- index declaration ---
+    // --- cat declaration (categorical / named index) ---
 
-    /// Parse an index declaration:
-    /// `index Maneuver = { Departure, Correction, Insertion }`
-    pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
-        let (_, start_span) = self.expect(Token::Index)?;
+    /// Parse a cat declaration:
+    /// `cat Maneuver { Departure, Correction, Insertion }`
+    pub(super) fn parse_cat_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Cat)?;
         let name = self
             .parse_ident_with_casing("PascalCase", is_pascal_case)?
             .into_spanned::<IndexName>();
-        self.expect(Token::Eq)?;
-
-        // Check whether this is a range index or a named index
-        if self.lexer.peek() == Some(&Token::Range) {
-            // range(start, end, step: step)
-            self.expect(Token::Range)?;
-            self.expect(Token::LParen)?;
-            let start = self.parse_expr()?;
-            self.expect(Token::Comma)?;
-            let end = self.parse_expr()?;
-            self.expect(Token::Comma)?;
-            self.expect(Token::Step)?;
-            self.expect(Token::Colon)?;
-            let step = self.parse_expr()?;
-            let (_, end_span) = self.expect(Token::RParen)?;
-            self.expect(Token::Semicolon)?;
-            let span = start_span.merge(end_span);
-            return Ok(Declaration {
-                attributes: vec![],
-                kind: DeclKind::Index(IndexDecl {
-                    name,
-                    kind: IndexDeclKind::Range {
-                        start: Box::new(start),
-                        end: Box::new(end),
-                        step: Box::new(step),
-                    },
-                }),
-                span,
-            });
-        }
 
         self.expect(Token::LBrace)?;
 
@@ -75,6 +45,41 @@ impl Parser<'_> {
             kind: DeclKind::Index(IndexDecl {
                 name,
                 kind: IndexDeclKind::Named { variants },
+            }),
+            span,
+        })
+    }
+
+    // --- range declaration (range index) ---
+
+    /// Parse a range declaration:
+    /// `range TimeStep(0.0 s, 100.0 s, step: 0.1 s);`
+    pub(super) fn parse_range_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Range)?;
+        let name = self
+            .parse_ident_with_casing("PascalCase", is_pascal_case)?
+            .into_spanned::<IndexName>();
+
+        self.expect(Token::LParen)?;
+        let start = self.parse_expr()?;
+        self.expect(Token::Comma)?;
+        let end = self.parse_expr()?;
+        self.expect(Token::Comma)?;
+        self.expect(Token::Step)?;
+        self.expect(Token::Colon)?;
+        let step = self.parse_expr()?;
+        let (_, end_span) = self.expect(Token::RParen)?;
+        self.expect(Token::Semicolon)?;
+        let span = start_span.merge(end_span);
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Index(IndexDecl {
+                name,
+                kind: IndexDeclKind::Range {
+                    start: Box::new(start),
+                    end: Box::new(end),
+                    step: Box::new(step),
+                },
             }),
             span,
         })

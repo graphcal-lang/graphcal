@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // plot_basic.gcl -- Basic plot declaration tests
-index Step = { First, Second, Third, Fourth }
+cat Step { First, Second, Third, Fourth }
 
 param x0: Dimensionless = 1.0;
 

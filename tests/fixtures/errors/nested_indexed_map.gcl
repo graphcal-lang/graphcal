@@ -2,8 +2,8 @@
 // which violates type stratification (element must be a ValueType).
 dimension Velocity = Length / Time;
 
-index Maneuver = { Departure, Correction, Insertion }
-index Phase = { Coast, Burn }
+cat Maneuver { Departure, Correction, Insertion }
+cat Phase { Coast, Burn }
 
 // This should be rejected: inner map literal produces an Indexed type,
 // but element of Indexed must be a ValueType.

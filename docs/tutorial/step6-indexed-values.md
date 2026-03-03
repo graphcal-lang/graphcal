@@ -8,10 +8,10 @@ In this step, you'll work with indexed collections to handle multiple related va
 
 ## Defining an Index
 
-An `index` declares a finite set of labels:
+A `cat` declaration defines a finite set of labels:
 
 ```
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 ```
 
 ## Indexed Parameters
@@ -95,7 +95,7 @@ node total_check: Velocity = total(@delta_v);
 ```
 dimension Velocity = Length / Time;
 
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -115,7 +115,7 @@ node departure_dv: Velocity = @delta_v[Maneuver::Departure];
 
 ## What You Learned
 
-- **`index`** declarations for finite label sets
+- **`cat`** declarations for finite label sets
 - **Indexed values** with `Type[Index]` syntax
 - **`for` comprehensions** to transform each element
 - **Aggregations**: `sum`, `max`, `min`, `mean`, `count`

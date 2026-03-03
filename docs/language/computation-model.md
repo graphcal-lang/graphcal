@@ -119,7 +119,7 @@ Graphcal enforces naming conventions at parse time:
 | `fn` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |
 | `dimension` | `PascalCase` | `Velocity` |
-| `index` | `PascalCase` | `Maneuver` |
+| `cat`/`range` | `PascalCase` | `Maneuver` |
 | `unit` | (various) | `km`, `kN`, `MPa` |
 
 Using the wrong casing is a parse error.

@@ -191,7 +191,7 @@ fn range_index_step_count_precision() {
     // range(0.0 s, 1.0 s, step: 0.3 s) should give steps at 0.0, 0.3, 0.6, 0.9
     // That's (1.0 - 0.0) / 0.3 = 3.333... → round to 3, + 1 = 4 steps
     let source = r#"
-index TimeIdx = range(0.0 s, 1.0 s, step: 0.3 s);
+range TimeIdx(0.0 s, 1.0 s, step: 0.3 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
@@ -215,7 +215,7 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 fn range_index_step_count_exact_division() {
     // range(0.0 s, 1.0 s, step: 0.25 s) = 5 steps: 0.0, 0.25, 0.5, 0.75, 1.0
     let source = r#"
-index TimeIdx = range(0.0 s, 1.0 s, step: 0.25 s);
+range TimeIdx(0.0 s, 1.0 s, step: 0.25 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
@@ -235,7 +235,7 @@ fn range_index_floating_point_step_accumulation() {
     // This is tricky because 0.1 is not exactly representable in f64
     // (1.0 - 0.0) / 0.1 = 9.999...96 or 10.000...04 depending on rounding
     let source = r#"
-index TimeIdx = range(0.0 s, 1.0 s, step: 0.1 s);
+range TimeIdx(0.0 s, 1.0 s, step: 0.1 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
@@ -545,7 +545,7 @@ fn to_float_large_integer_precision() {
 #[test]
 fn sum_of_indexed_values() {
     let source = r#"
-index Maneuver = { Alpha, Beta, Charlie }
+cat Maneuver { Alpha, Beta, Charlie }
 param x: Dimensionless[Maneuver] = {
     Maneuver::Alpha: 1.0,
     Maneuver::Beta: 2.0,
@@ -564,7 +564,7 @@ node total: Dimensionless = sum(@x);
 #[test]
 fn mean_of_indexed_values() {
     let source = r#"
-index Maneuver = { Alpha, Beta, Charlie }
+cat Maneuver { Alpha, Beta, Charlie }
 param x: Dimensionless[Maneuver] = {
     Maneuver::Alpha: 1.0,
     Maneuver::Beta: 2.0,
@@ -799,8 +799,8 @@ node result: Dimensionless = identity(42.0,);
 #[test]
 fn assert_multi_dimensional_indexed() {
     let source = r#"
-index Row = { RowA, RowB }
-index Col = { ColA, ColB }
+cat Row { RowA, RowB }
+cat Col { ColA, ColB }
 
 param val: Dimensionless[Row, Col] = {
     (Row::RowA, Col::ColA): 5.0, (Row::RowA, Col::ColB): 3.0,
@@ -824,9 +824,9 @@ assert all_positive = for r: Row, c: Col {
 #[test]
 fn assert_three_dimensional_indexed() {
     let source = r#"
-index Layer = { Layer1, Layer2 }
-index Band = { Band1, Band2 }
-index Channel = { Ch1, Ch2 }
+cat Layer { Layer1, Layer2 }
+cat Band { Band1, Band2 }
+cat Channel { Ch1, Ch2 }
 
 param val: Dimensionless[Layer, Band, Channel] = {
     (Layer::Layer1, Band::Band1, Channel::Ch1): 1.0, (Layer::Layer1, Band::Band1, Channel::Ch2): 2.0,

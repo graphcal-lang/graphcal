@@ -3,7 +3,7 @@
 // A medium-size thermal model with many thermal nodes,
 // temperature-dependent heat flows, and multi-dimensional indexed values.
 // --- Thermal nodes representing spacecraft components (22 variants) ---
-index ThermalNode = {
+cat ThermalNode {
     SolarPanelPosX,
     SolarPanelNegX,
     RadiatorPosY,
@@ -29,7 +29,7 @@ index ThermalNode = {
 }
 
 // --- Orbit condition for different thermal scenarios (7 variants) ---
-index OrbitCondition = {
+cat OrbitCondition {
     HotCase,
     ColdCase,
     NominalSunlit,
@@ -40,7 +40,7 @@ index OrbitCondition = {
 }
 
 // --- Temperature limits (min, max) per node (22x2 = 44 cells) ---
-index Limit = { Min, Max }
+cat Limit { Min, Max }
 
 param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
                           Min,     Max;

@@ -24,7 +24,8 @@ Cellgraph uses a Rust-inspired DSL as its surface syntax. The `.graph` file is t
 | `unit` | Unit within a dimension | `unit km: Length = 1000 m;` |
 | `tag` | Semantic context tag family | `tag Frame { Body, ECI }` |
 | `as` | Explicit type cast (tag strip) | `@p_O2 as Pressure` |
-| `index` | Finite label set (table axis) | `index Region { LEO, GTO }` |
+| `cat` | Finite label set (table axis) | `cat Region { LEO, GTO }` |
+| `range` | Range index (numeric axis) | `range TimeStep(0.0 s, 1.0 s, step: 0.5 s);` |
 | `table` | Table schema declaration | `table maneuvers { name: Str, dv: Velocity }` |
 | `import` | Import from another module | `import orbit.transfer.{ transfer };` |
 | `private` | Restrict visibility to current file | `private node _helper = ...;` |

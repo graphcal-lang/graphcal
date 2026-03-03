@@ -16,7 +16,7 @@ import "./path/to/file.gcl" { name1, name2 };
 
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
-- All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `index`, `fn`
+- All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `cat`, `range`, `fn`
 
 ## Module Imports
 
@@ -154,7 +154,7 @@ node diff: Velocity = @velocity_a - @velocity_b;
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
-| `index` | `import "..." { IndexName }` | `IndexName` |
+| `cat`/`range` | `import "..." { IndexName }` | `IndexName` |
 | `fn` | `import "..." { fn_name }` | `fn_name(...)` |
 
 Imported `param` and `node` declarations are referenced with `@` just like local ones.

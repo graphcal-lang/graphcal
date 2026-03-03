@@ -339,7 +339,9 @@ pub enum GraphcalError {
     #[error("unknown index `{name}`")]
     #[diagnostic(
         code(graphcal::I001),
-        help("index must be declared with `index Name = {{ Variant1, Variant2, ... }}`")
+        help(
+            "declare with `cat Name {{ Variant1, Variant2, ... }}` or `range Name(start, end, step: step);`"
+        )
     )]
     UnknownIndex {
         name: IndexName,

@@ -29,8 +29,8 @@ pub enum Token {
     Let,
     #[token("fn")]
     Fn,
-    #[token("index")]
-    Index,
+    #[token("cat")]
+    Cat,
     #[token("for")]
     For,
     #[token("import")]
@@ -164,7 +164,7 @@ impl std::fmt::Display for Token {
             Self::Type => write!(f, "type"),
             Self::Let => write!(f, "let"),
             Self::Fn => write!(f, "fn"),
-            Self::Index => write!(f, "index"),
+            Self::Cat => write!(f, "cat"),
             Self::For => write!(f, "for"),
             Self::Import => write!(f, "import"),
             Self::Match => write!(f, "match"),
@@ -441,7 +441,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn index for import match as assert table plot figure scan unfold range step",
+            "param node const if else dimension unit type let fn cat for import match as assert table plot figure scan unfold range step",
         );
         assert_eq!(
             tokens,
@@ -456,7 +456,7 @@ mod tests {
                 Token::Type,
                 Token::Let,
                 Token::Fn,
-                Token::Index,
+                Token::Cat,
                 Token::For,
                 Token::Import,
                 Token::Match,
@@ -476,7 +476,9 @@ mod tests {
     #[test]
     fn lex_identifier_starting_with_new_keywords() {
         // "scanner" should be Ident, not Scan + "ner"
-        for word in ["scanner", "unfolder", "ranger", "stepped"] {
+        for word in [
+            "scanner", "unfolder", "ranger", "stepped", "catalog", "category",
+        ] {
             let mut lexer = Token::lexer(word);
             assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
             assert_eq!(lexer.slice(), word);

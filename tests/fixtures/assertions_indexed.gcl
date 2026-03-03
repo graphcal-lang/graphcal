@@ -1,5 +1,5 @@
 // assertions_indexed.gcl -- Indexed Bool assertion test
-index Mode = { Normal, Eco, Boost }
+cat Mode { Normal, Eco, Boost }
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,
@@ -17,7 +17,7 @@ param power_use: Dimensionless[Mode] = {
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
 
 // Multi-dimensional indexed assertion
-index Phase = { Launch, Cruise, Arrival }
+cat Phase { Launch, Cruise, Arrival }
 
 param threshold: Dimensionless[Mode, Phase] = {
     (Mode::Normal, Phase::Launch): 10.0,

@@ -1,4 +1,4 @@
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 param dv: Velocity[Phase] = {
     Phase::Coast: 2.46 km/s,
     Phase::Burn: 0.5 km/s,

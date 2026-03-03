@@ -2,7 +2,7 @@
 //
 // Demonstrates #[hidden] attribute on plots to suppress standalone output.
 // Only the figure's combined chart should appear in the output.
-index Step = { First, Second, Third, Fourth }
+cat Step { First, Second, Third, Fourth }
 
 param x0: Dimensionless = 1.0;
 

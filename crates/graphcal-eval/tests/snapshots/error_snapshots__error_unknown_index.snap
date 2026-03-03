@@ -8,5 +8,5 @@ Begin snippet for unknown_index.gcl starting at line 1, column 1
 
 snippet line 1: param x: Velocity[NoSuchIndex] = 1.0 m/s;
     label at line 1, columns 19 to 29: unknown index
-diagnostic help: index must be declared with `index Name = { Variant1, Variant2, ... }`
+diagnostic help: declare with `cat Name { Variant1, Variant2, ... }` or `range Name(start, end, step: step);`
 diagnostic code: graphcal::I001

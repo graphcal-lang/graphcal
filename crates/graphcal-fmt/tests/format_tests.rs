@@ -339,7 +339,7 @@ fn format_assert_tolerance_relative() {
 #[test]
 fn format_table_1d_preserves_syntax() {
     let source = r"
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Dimensionless[Maneuver] = table[Maneuver] {
     Departure: 2.46;
     Correction: 0.12;
@@ -364,7 +364,7 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 #[test]
 fn format_table_1d_aligns_values() {
     let source = r"
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Dimensionless[Maneuver] = table[Maneuver] {
     Departure: 2.46;
     Correction: 0.12;
@@ -392,8 +392,8 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 #[test]
 fn format_table_2d_preserves_syntax() {
     let source = r"
-index Phase = { Launch, Cruise }
-index Maneuver = { Departure, Correction }
+cat Phase { Launch, Cruise }
+cat Maneuver { Departure, Correction }
 param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
     Departure, Correction;
     Launch: 5000.0, 0.0;
@@ -418,7 +418,7 @@ param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
 #[test]
 fn format_map_literal_not_converted_to_table() {
     let source = r"
-index Maneuver = { Departure, Correction }
+cat Maneuver { Departure, Correction }
 param dv: Dimensionless[Maneuver] = {
     Maneuver::Departure: 2.46,
     Maneuver::Correction: 0.12,
@@ -924,7 +924,7 @@ snapshot_test!(snapshot_format_edge_cases, "format_edge_cases.gcl");
 #[test]
 fn preserves_trailing_comment_in_1d_table() {
     let source = r"
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Dimensionless[Maneuver] = table[Maneuver] {
     Departure:  2.46; // departure burn
     Correction: 0.12; // midcourse
@@ -954,7 +954,7 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 #[test]
 fn preserves_leading_comment_between_table_rows() {
     let source = r"
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Dimensionless[Maneuver] = table[Maneuver] {
     // first
     Departure:  2.46;
@@ -1019,7 +1019,7 @@ fn f(x: Dimensionless) -> Dimensionless {
 #[test]
 fn preserves_comment_in_match_arms() {
     let source = r"
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 node x: Dimensionless[Phase] = for p: Phase {
     match p {
         // coasting
@@ -1049,7 +1049,7 @@ node x: Dimensionless[Phase] = for p: Phase {
 #[test]
 fn preserves_trailing_comment_in_map_literal() {
     let source = r"
-index Maneuver = { Departure, Correction }
+cat Maneuver { Departure, Correction }
 param dv: Dimensionless[Maneuver] = {
     Maneuver::Departure: 2.46, // departure
     Maneuver::Correction: 0.12, // correction
@@ -1078,7 +1078,7 @@ param dv: Dimensionless[Maneuver] = {
 #[test]
 fn preserves_leading_comment_in_map_literal() {
     let source = r"
-index Maneuver = { Departure, Correction }
+cat Maneuver { Departure, Correction }
 param dv: Dimensionless[Maneuver] = {
     // departure entry
     Maneuver::Departure: 2.46,
@@ -1102,9 +1102,9 @@ param dv: Dimensionless[Maneuver] = {
 #[test]
 fn preserves_trailing_comment_on_3d_table_slice_header() {
     let source = r"
-index Scenario = { Nominal, Contingency }
-index Phase = { Launch, Cruise, Arrival }
-index Maneuver = { Departure, Correction, Insertion }
+cat Scenario { Nominal, Contingency }
+cat Phase { Launch, Cruise, Arrival }
+cat Maneuver { Departure, Correction, Insertion }
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
     [Scenario::Nominal] // nominal scenario
              Departure, Correction, Insertion;

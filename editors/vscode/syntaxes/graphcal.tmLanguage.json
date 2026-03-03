@@ -10,7 +10,8 @@
     { "include": "#type-declaration" },
     { "include": "#dimension-declaration" },
     { "include": "#unit-declaration" },
-    { "include": "#index-declaration" },
+    { "include": "#cat-declaration" },
+    { "include": "#range-declaration" },
     { "include": "#param-declaration" },
     { "include": "#node-declaration" },
     { "include": "#const-declaration" },
@@ -92,10 +93,18 @@
       }
     },
 
-    "index-declaration": {
-      "match": "\\b(index)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+    "cat-declaration": {
+      "match": "\\b(cat)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.index.graphcal" },
+        "1": { "name": "keyword.declaration.cat.graphcal" },
+        "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "range-declaration": {
+      "match": "\\b(range)\\s+([A-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.range.graphcal" },
         "2": { "name": "entity.name.type.graphcal" }
       }
     },
@@ -342,7 +351,7 @@
     },
 
     "control-keywords": {
-      "match": "\\b(if|else|for|match|table|scan|unfold|range|step)\\b",
+      "match": "\\b(if|else|for|match|table|scan|unfold|step)\\b",
       "name": "keyword.control.graphcal"
     },
 

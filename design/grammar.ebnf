@@ -39,7 +39,8 @@ KEYWORD
    | "type"
    | "let"
    | "fn"
-   | "index"
+   | "cat"
+   | "range"
    | "for"
    | "import"
    | "match"
@@ -48,7 +49,7 @@ KEYWORD
 
 (* The following identifiers are contextual keywords — they are parsed
    as keywords only in specific syntactic positions and are otherwise
-   valid identifiers: "scan", "unfold", "derive", "range", "step". *)
+   valid identifiers: "scan", "unfold", "derive", "step". *)
 (* --- Identifiers --- *)
 LETTER
    = "a"
@@ -269,7 +270,8 @@ declaration_kind
    | unit_decl
    | type_decl
    | fn_decl
-   | index_decl
+   | cat_decl
+   | range_decl
    | import_decl
    | assert_decl;
 
@@ -371,30 +373,23 @@ fn_body
    | "{", { let_binding }, expr, "}";
 
 (* block form *)
-(* --- index --- *)
+(* --- cat and range --- *)
 (* An index declares a finite, ordered set of labels usable as
-   collection axes in T[I]. A named index is a fieldless tagged union
-   additionally registered as a collection axis — its labels are
-   ValueTypes that can be passed to functions, stored in variables,
-   and pattern-matched. A range index generates scalar labels from a
-   range; its loop variable acts as a Scalar(Dim). Both flavors share
-   the same type constructor T[I] and consumption interface (for,
-   indexing, aggregation, scan). *)
-index_decl
-   = "index", pascal_case_ident, "=", index_kind;
+   collection axes in T[I]. A cat (categorical) index is a fieldless
+   tagged union additionally registered as a collection axis — its
+   labels are ValueTypes that can be passed to functions, stored in
+   variables, and pattern-matched. A range index generates scalar
+   labels from a range; its loop variable acts as a Scalar(Dim). Both
+   flavors share the same type constructor T[I] and consumption
+   interface (for, indexing, aggregation, scan). *)
+cat_decl
+   = "cat", pascal_case_ident, "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}";
 
-index_kind
-   = named_index
-   | range_index;
+range_decl
+   = "range", pascal_case_ident, "(", expr, ",", expr, ",", "step", ":", expr, ")", ";";
 
-named_index
-   = "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}";
-
-range_index
-   = "range", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";";
-
-(* "range" and "step" are contextual keywords here.
-   Note: named index has no trailing semicolon; range index does. *)
+(* "step" is a contextual keyword here.
+   Note: cat has no trailing semicolon; range does. *)
 (* --- import --- *)
 (* Import paths can be either a quoted string (file path) or a bare
    module path (slash-separated identifiers). File paths are resolved

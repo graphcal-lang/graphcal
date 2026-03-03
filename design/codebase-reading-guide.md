@@ -138,18 +138,18 @@ The `@` sigil is the central mechanism for:
 
 ### 2.5. Indexed Values
 
-Indexed values are like typed, finite-dimensional vectors. An `index` defines a finite label
+Indexed values are like typed, finite-dimensional vectors. A `cat` or `range` declaration defines a finite label
 set, and `T[I]` is a value of type `T` for each label in `I`. For example:
 
 ```gcl
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param delta_v: Velocity[Maneuver] = { ... };
 ```
 
 Operations on indexed values include `for` comprehensions (map), aggregations (`sum`, `max`,
 `min`, `mean`, `count`), `scan` (cumulative fold), and `unfold` (generate from seed).
 
-Range indexes provide numeric iteration: `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);`
+Range indexes provide numeric iteration: `range TimeStep(0.0 s, 100.0 s, step: 0.1 s);`
 
 ### 2.6. DateTime Support
 
@@ -346,7 +346,7 @@ Start with these fixture files to get an intuitive sense of the language:
    bindings, field access (`.`), and unit conversion (`->`).
 3. **`tests/fixtures/functions.gcl`** -- Adds pure functions (`fn`), dimension generics
    (`<D: Dim>`), block-body functions, and function-calling-function.
-4. **`tests/fixtures/indexed.gcl`** -- Adds `index`, indexed params (map literals), `for`
+4. **`tests/fixtures/indexed.gcl`** -- Adds `cat`, indexed params (map literals), `for`
    comprehensions, aggregations (`sum`, `max`, `min`, `mean`, `count`), `scan`, and index
    generics (`<I: Index>`).
 5. **`tests/fixtures/tagged_union.gcl`** -- Adds tagged union types and `match` expressions.
@@ -402,7 +402,7 @@ Read `crates/graphcal-syntax/src/parser/`. The parser is split into modules:
   - `type_decl.rs` -- `type` declarations (structs and tagged unions).
   - `dim_unit.rs` -- `dimension` and `unit` declarations.
   - `import.rs` -- `import` declarations (file paths, bare module paths, instantiated imports).
-  - `index.rs` -- `index` declarations (named and range).
+  - `index.rs` -- `cat`/`range` declarations (named and range).
   - `plot.rs` -- `plot` declarations.
   - `figure.rs` -- `figure` declarations.
   - `layer.rs` -- `layer` declarations.
@@ -414,7 +414,7 @@ The parser enforces **naming conventions** at parse time:
 | ------------- | ---------------- |
 | `const` | `UPPER_SNAKE_CASE` |
 | `param`, `node`, `fn` | `lower_snake_case` |
-| `type`, `index` | `PascalCase` |
+| `type`, `cat`, `range` | `PascalCase` |
 
 Expression precedence (lowest to highest):
 
@@ -638,7 +638,7 @@ Read **`crates/graphcal-registry/src/error.rs`**. All semantic errors are varian
 | `parser/decl/type_decl.rs` | `type` declarations (structs and tagged unions). |
 | `parser/decl/dim_unit.rs` | `dimension` and `unit` declarations. |
 | `parser/decl/import.rs` | `import` declarations. |
-| `parser/decl/index.rs` | `index` declarations. |
+| `parser/decl/index.rs` | `cat`/`range` declarations. |
 | `parser/decl/plot.rs` | `plot` declarations. |
 | `parser/decl/figure.rs` | `figure` declarations. |
 | `parser/decl/layer.rs` | `layer` declarations. |

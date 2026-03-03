@@ -9,7 +9,7 @@ expression: formatted
 unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
-index Subsystem = {
+cat Subsystem {
     CommandAndData,
     AttitudeControl,
     Propulsion,
@@ -25,7 +25,7 @@ index Subsystem = {
 }
 
 // --- Operating modes (8 variants) ---
-index OpMode = {
+cat OpMode {
     Safe,
     Detumble,
     NominalSunlit,

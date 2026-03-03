@@ -5,7 +5,7 @@
 
 ## Phase 7: N-Dimensional Tables and Indexes
 
-**Adds:** `index` keyword, multi-axis tables `[region: Region, fuel: Fuel]`,
+**Adds:** `cat`/`range` keywords, multi-axis tables `[region: Region, fuel: Fuel]`,
 aggregation across axes `sum(over: fuel)`.
 
 **Depends on:** Phase 5 (1D tables).
@@ -49,7 +49,7 @@ ODE solving, mixed static + dynamic in one file.
 - Space-generic functions (`<S: Frame>`) -- needed?
 - Multi-space values (`in Frame.ECI in Craft.Chaser`)?
 - `Transform` composition type checking?
-- Variant separator syntax (`;` vs `,` -- consistency with `index`)?
+- Variant separator syntax (`;` vs `,` -- consistency with `cat`)?
 
 **Design docs:** [06-spaces](../06-spaces.md)
 

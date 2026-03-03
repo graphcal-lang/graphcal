@@ -46,7 +46,8 @@ module.exports = grammar({
       $.unit_declaration,
       $.type_declaration,
       $.fn_declaration,
-      $.index_declaration,
+      $.cat_declaration,
+      $.range_declaration,
       $.import_declaration,
       $.assert_declaration,
       $.plot_declaration,
@@ -188,38 +189,33 @@ module.exports = grammar({
       )),
     ),
 
-    // index Maneuver = { Departure, Correction, Insertion }
-    // index TimeStep = range(0.0 s, 1.0 s, step: 0.1 s);
-    index_declaration: $ => seq(
-      "index",
+    // cat Maneuver { Departure, Correction, Insertion }
+    cat_declaration: $ => seq(
+      "cat",
       field("name", $.identifier),
-      "=",
-      choice(
-        // Named variants: { Departure, Correction, Insertion }
-        seq(
-          "{",
-          optional(seq(
-            $.variant,
-            repeat(seq(",", $.variant)),
-            optional(","),
-          )),
-          "}",
-        ),
-        // Range index: range(start, end, step: step)
-        seq(
-          "range",
-          "(",
-          field("start", $._expr),
-          ",",
-          field("end", $._expr),
-          ",",
-          "step",
-          ":",
-          field("step", $._expr),
-          ")",
-          ";",
-        ),
-      ),
+      "{",
+      optional(seq(
+        $.variant,
+        repeat(seq(",", $.variant)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    // range TimeStep(0.0 s, 1.0 s, step: 0.1 s);
+    range_declaration: $ => seq(
+      "range",
+      field("name", $.identifier),
+      "(",
+      field("start", $._expr),
+      ",",
+      field("end", $._expr),
+      ",",
+      "step",
+      ":",
+      field("step", $._expr),
+      ")",
+      ";",
     ),
 
     variant: $ => $.identifier,

@@ -128,9 +128,9 @@ pub struct FnDef {
 /// The kind of an index: either named variants or a numeric range.
 #[derive(Debug, Clone)]
 pub enum IndexKind {
-    /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
+    /// A named label set, e.g. `cat Maneuver { Departure, Correction, Insertion };`
     Named { variants: Vec<VariantName> },
-    /// A numeric range, e.g. `index T = range(0.0 s, 100.0 s, step: 0.1 s);`
+    /// A numeric range, e.g. `range T(0.0 s, 100.0 s, step: 0.1 s);`
     Range {
         start: f64,
         end: f64,

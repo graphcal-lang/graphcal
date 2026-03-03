@@ -7,7 +7,7 @@ range index `TimeStep`: start, end, and step must have the same dimension (found
 Begin snippet for range_index_dim_mismatch.gcl starting at line 1, column 1
 
 snippet line 1: // Error: range index with mismatched dimensions
-snippet line 2: index TimeStep = range(0.0 s, 100.0 kg, step: 0.1 s);
-    label at line 2, columns 1 to 52: dimension mismatch
+snippet line 2: range TimeStep(0.0 s, 100.0 kg, step: 0.1 s);
+    label at line 2, columns 1 to 44: dimension mismatch
 diagnostic help: all three values in range(start, end, step: step) must share the same dimension
 diagnostic code: graphcal::I006

@@ -11,7 +11,7 @@ Indexes are finite label sets used for collections of values. They enable typed,
 Declare a finite index with named labels:
 
 ```
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 ```
 
 Labels follow `PascalCase` convention and are namespaced by the index: `Maneuver::Departure`.
@@ -99,7 +99,7 @@ The result is an indexed value where each element is the accumulated result up t
 Values can be indexed by multiple indexes using tuple keys:
 
 ```
-index Phase = { Launch, Cruise, Arrival }
+cat Phase { Launch, Cruise, Arrival }
 
 param spacecraft_mass: Mass[Phase, Maneuver] = {
     (Phase::Launch, Maneuver::Departure): 5000.0 kg,
@@ -178,7 +178,7 @@ The `table` expression is pure syntax sugar -- it desugars to a map literal at p
 Range indexes generate labels from numeric stepping:
 
 ```
-index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
+range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
 ```
 
 This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.

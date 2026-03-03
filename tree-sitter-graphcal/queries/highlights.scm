@@ -19,7 +19,8 @@
   "unit"
   "type"
   "fn"
-  "index"
+  "cat"
+  "range"
   "import"
   "as"
   "let"
@@ -100,8 +101,11 @@
 ; type TransferResult
 (type_declaration name: (identifier) @type)
 
-; index Maneuver
-(index_declaration name: (identifier) @type)
+; cat Maneuver
+(cat_declaration name: (identifier) @type)
+
+; range TimeStep
+(range_declaration name: (identifier) @type)
 
 ; fn orbital_velocity
 (fn_declaration name: (identifier) @function)
@@ -308,10 +312,10 @@
 (layer_named_field name: (identifier) @property)
 
 ; ---------------------------------------------------------------
-; Range index
+; Range declaration — "step" keyword
 ; ---------------------------------------------------------------
 
-(index_declaration "range" @function.builtin)
+(range_declaration "step" @keyword)
 
 ; ---------------------------------------------------------------
 ; Table expressions

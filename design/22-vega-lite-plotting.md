@@ -77,7 +77,7 @@ The `PlotFieldValue` enum holds `Numbers(Vec<f64>)`, `Labels(Vec<String>)`, `Num
 |---------|---------------|---------------|-------------|
 | **Mark** | `mark` | Mark type | The geometric primitive: `point`, `line`, `bar`, `area`, `rect`, `tick`, `arc`, `rule`, `text` |
 | **Encoding** | `encoding` | Encoding block | Maps data fields to visual channels: `x`, `y`, `color`, `size`, `shape`, `opacity`, `detail`, `text`, `tooltip` |
-| **Data type** | `quantitative`, `nominal`, `ordinal`, `temporal` | Inferred from Graphcal types | `f64` / dimensioned → quantitative, `index` labels → nominal/ordinal, datetime → temporal |
+| **Data type** | `quantitative`, `nominal`, `ordinal`, `temporal` | Inferred from Graphcal types | `f64` / dimensioned → quantitative, `cat` labels → nominal/ordinal, datetime → temporal |
 | **Data** | `data` | Implicit from `@`-references | Vega-Lite takes a flat table; Graphcal computes the table from for-comprehensions over indexes |
 | **Layer** | `layer` | `layer` declaration | Multiple marks on the same axes |
 | **Facet** | `facet` | `facet` channel | Split data into sub-plots by an index |
