@@ -28,21 +28,38 @@ A different mission may have different subsystems. Without injectable indices, t
 
 ### Principle: Indices Follow the Same Required/Default Pattern as Params
 
-| Concept | Param | Index |
-| --- | --- | --- |
-| Has default | `param x: Length = 5.0 m;` | `index Phase { Design, Build, Test }` |
-| Required (no default) | `param x: Length;` | `index Subsystem;` |
-| Bound via import | `(x = 5.0 m)` | `(Subsystem = MySubsystems)` |
+| Concept | Param | Named Index | Range Index |
+| --- | --- | --- | --- |
+| Has default | `param x: Length = 5.0 m;` | `index Phase { Design, Build, Test }` | `index TimeStep = range(0.0 s, 1.0 s, step: 0.1 s);` |
+| Required (no default) | `param x: Length;` | `index Subsystem;` | `index TimeStep: range(Time);` |
+| Bound via import | `(x = 5.0 m)` | `(Subsystem = MySubsystems)` | `(TimeStep = MyTimeStep)` |
 
 ### Required Index Declaration
 
-A new form of index declaration with no variants:
+A required index declaration has no variants but must declare its **kind** — named or range — because the two kinds have fundamentally different semantics:
+
+| Kind | Loop variable type | Semantics |
+| --- | --- | --- |
+| Named | `Label(IndexName)` | Categorical labels — identity, not arithmetic |
+| Range | `Scalar(Dimension)` | Numeric steps — supports arithmetic, has physical dimension |
+
+Code written for a named index (comparing labels, matching on variants) cannot work with a range index (doing arithmetic on scalar values), and vice versa. Therefore, a required index must commit to a kind so the compiler can type-check the library in isolation.
+
+**Named required index:**
 
 ```gcl
-index Subsystem;  // required — must be provided via parameterized import
+index Subsystem;  // required named index
 ```
 
-This is syntactically minimal and directly analogous to `param x: Length;` (required param with no default value). A file containing required indices cannot be evaluated standalone, just like a file with required params.
+**Range required index:**
+
+```gcl
+index TimeStep: range(Time);  // required range index over the Time dimension
+```
+
+The dimension constraint in `range(Time)` is mandatory — range index loop variables are `Scalar(Dimension)`, so the compiler needs the dimension to type-check expressions like `@velocity[t] * dt` inside the library.
+
+Both forms are analogous to `param x: Length;` (required param with no default value). A file containing required indices cannot be evaluated standalone, just like a file with required params.
 
 ### Binding Syntax: Reuse the Same Parentheses
 
@@ -83,17 +100,56 @@ The dependency's index registry entry for the bound index is **not** registered 
 
 A required index has no variants defined, so the library can only use it **generically**:
 
-| Operation | Allowed | Example |
-| --- | --- | --- |
-| Type annotation (axis) | Yes | `param x: Velocity[Subsystem]` |
-| `for` comprehension | Yes | `for s: Subsystem { @x[s] }` |
-| Generic function call | Yes | `total<Velocity, Subsystem>(@x)` |
-| Index access with loop var | Yes | `@x[s]` where `s: Subsystem` |
-| Aggregation | Yes | `sum(for s: Subsystem { @x[s] })` |
-| Variant literal | **No** | `Subsystem::ADCS` — variants unknown |
-| Map literal | **No** | `{ Subsystem::ADCS: ... }` — can't enumerate |
+| Operation | Named Required | Range Required | Example |
+| --- | --- | --- | --- |
+| Type annotation (axis) | Yes | Yes | `param x: Velocity[Subsystem]` |
+| `for` comprehension | Yes | Yes | `for s: Subsystem { @x[s] }` |
+| Generic function call | Yes | Yes | `total<Velocity, Subsystem>(@x)` |
+| Index access with loop var | Yes | Yes | `@x[s]` where `s: Subsystem` |
+| Aggregation | Yes | Yes | `sum(for s: Subsystem { @x[s] })` |
+| Arithmetic on loop var | **No** | Yes | `t * 2.0` where `t: TimeStep` (scalar) |
+| `unfold` | **No** | Yes | `unfold(@x0, \|prev, curr\| { ... })` |
+| Variant literal | **No** | **No** | `Subsystem::ADCS` — variants unknown |
+| Map literal | **No** | **No** | `{ Subsystem::ADCS: ... }` — can't enumerate |
 
 This constraint is a feature: it forces library code to be truly generic over the index, using `for` comprehensions and aggregations rather than hardcoded variants. The compiler rejects variant literals and map literal keys for required indices at the type-checking stage.
+
+### Kind Matching: No Mixing Named and Range
+
+When binding a required index, the bound index must match the declared kind:
+
+| Required declaration | Can bind to | Cannot bind to |
+| --- | --- | --- |
+| `index Subsystem;` (named) | Named index | Range index |
+| `index TimeStep: range(Time);` (range) | Range index with dimension `Time` | Named index, Range index with wrong dimension |
+
+**Named → Named:** The bound index must be a named index (one with explicit label variants).
+
+```gcl
+// OK: Color is a named index
+index Color { Red, Green, Blue }
+import "./lib.gcl"(I = Color) { ... };
+
+// ERROR: TimeStep is a range index, but I is a required named index
+index TimeStep = range(0.0 s, 1.0 s, step: 0.1 s);
+import "./lib.gcl"(I = TimeStep) { ... };
+//  error: index kind mismatch: `I` requires a named index, but `TimeStep` is a range index
+```
+
+**Range → Range with matching dimension:** The bound index must be a range index whose dimension matches the declared constraint.
+
+```gcl
+// OK: MyTimeStep is a range index over Time
+index MyTimeStep = range(0.0 s, 10.0 s, step: 0.5 s);
+import "./sim.gcl"(TimeStep = MyTimeStep) { ... };
+
+// ERROR: DistStep is a range index over Length, not Time
+index DistStep = range(0.0 m, 100.0 m, step: 1.0 m);
+import "./sim.gcl"(TimeStep = DistStep) { ... };
+//  error: dimension mismatch: `TimeStep` requires range(Time), but `DistStep` has dimension Length
+```
+
+This rule is essential for type safety. A library that does `@velocity[t] * (t_next - t_prev)` relies on the loop variable having a specific physical dimension. Allowing a length-dimensioned range index would produce dimensionally incorrect results — exactly the kind of error Graphcal is designed to prevent.
 
 ### Strict Binding Mode: Extends to Indices
 
@@ -223,6 +279,44 @@ import "./thermal_analysis.gcl"(
 // @prop_thermal::temperature_rise     : Temperature[Propulsion, Mode]
 ```
 
+### Range Index Injection
+
+```gcl
+// integrator.gcl — generic time-stepping library
+index TimeStep: range(Time);  // required range index over Time
+
+param x0: Length;
+param velocity: Velocity[TimeStep];
+
+node position: Length[TimeStep] = unfold(@x0, |prev_t, t| {
+    let dt = t - prev_t;
+    @position[prev_t] + @velocity[t] * dt
+});
+```
+
+```gcl
+// mission.gcl
+index FlightTime = range(0.0 s, 100.0 s, step: 1.0 s);
+
+param flight_velocity: Velocity[FlightTime] = for t: FlightTime { 100.0 m/s };
+
+import "./integrator.gcl"(
+    TimeStep = FlightTime,
+    x0 = 0.0 m,
+    velocity = @flight_velocity,
+) { position };
+
+// @position has type Length[FlightTime]
+```
+
+```gcl
+// ERROR: cannot bind a named index to a range-required index
+index Phases { Launch, Coast, Entry }
+import "./integrator.gcl"(TimeStep = Phases, ...) { position };
+//  error: index kind mismatch: `TimeStep` requires a range index (dimension: Time),
+//         but `Phases` is a named index
+```
+
 ### Mixed Required and Default Indices
 
 ```gcl
@@ -249,21 +343,24 @@ import "./budget.gcl"(
 
 ### Phase 1: AST and Parser
 
-1. Add `Required` variant to `IndexDeclKind`:
+1. Add required variants to `IndexDeclKind`:
 
     ```rust
     pub enum IndexDeclKind {
         Named { variants: Vec<Spanned<VariantName>> },
         Range { start: Box<Expr>, end: Box<Expr>, step: Box<Expr> },
-        Required,  // NEW
+        RequiredNamed,                             // NEW: `index Foo;`
+        RequiredRange { dimension: DimExpr },       // NEW: `index Foo: range(Time);`
     }
     ```
 
-2. Parse `index Foo;` as `IndexDeclKind::Required`.
+2. Parse `index Foo;` as `IndexDeclKind::RequiredNamed`.
 
-3. In the tree-sitter grammar, add the `index IDENT ;` production.
+3. Parse `index Foo: range(DimExpr);` as `IndexDeclKind::RequiredRange`.
 
-4. In the import param binding parser, no changes needed — bindings are already `name = expr`. The distinction between index binding and param binding is made during semantic analysis, not parsing. For the RHS of an index binding, the "expression" will parse as an identifier which is then validated to be an index name.
+4. In the tree-sitter grammar, add the `index IDENT ;` and `index IDENT : range ( DimExpr ) ;` productions.
+
+5. In the import param binding parser, no changes needed — bindings are already `name = expr`. The distinction between index binding and param binding is made during semantic analysis, not parsing. For the RHS of an index binding, the "expression" will parse as an identifier which is then validated to be an index name.
 
 ### Phase 2: Semantic Analysis (Import Processing)
 
@@ -295,11 +392,19 @@ import "./budget.gcl"(
 
 ### Phase 4: Type Checking
 
-1. `IndexKind::Required` in the index registry indicates an unresolved index. Type-checking a file with unresolved required indices produces a clear error (unless they are being resolved via parameterized import).
+1. `IndexKind::RequiredNamed` and `IndexKind::RequiredRange` in the index registry indicate unresolved indices. Type-checking a file with unresolved required indices produces a clear error (unless they are being resolved via parameterized import).
 
 2. Reject variant literals and map literal keys that reference a required index.
 
 3. Allow required indices in type annotations, `for` bindings, and generic constraints.
+
+4. For `RequiredNamed`: infer loop variables as `Label(IndexName)`.
+
+5. For `RequiredRange { dimension }`: infer loop variables as `Scalar(dimension)`.
+
+6. **Kind matching validation** during import processing:
+    - `RequiredNamed` binding: verify the bound index is `IndexKind::Named`. Error if it's `Range`.
+    - `RequiredRange { dimension }` binding: verify the bound index is `IndexKind::Range` and its dimension matches. Error if it's `Named` or has a different dimension.
 
 ### Phase 5: LSP, Docs, Tests
 
@@ -310,15 +415,17 @@ import "./budget.gcl"(
 5. Tests: add fixtures for required index imports, multi-index imports, strict mode interactions.
 6. Documentation: update `docs/language/indexes.md`, `docs/tutorial/`, and `README.md`.
 
+## Resolved Questions
+
+- **Range index injection?** Named and range indices have fundamentally different loop variable types (`Label` vs `Scalar`). **No mixing.** A required named index can only be bound to a named index. A required range index can only be bound to a range index with a matching dimension. The required index declaration must commit to a kind: `index Foo;` (named) or `index Foo: range(Dim);` (range).
+
+- **Index constraint syntax?** Required range indices use `index Foo: range(Dim);` to declare the kind and dimension constraint. Required named indices use `index Foo;` (bare, since no additional constraint is needed). The `range(Dim)` syntax mirrors the existing `range(start, end, step: s)` syntax for concrete range indices.
+
 ## Open Questions
 
 - **Inline index definition in binding?** Should `(Subsystem = { A, B, C })` be allowed as a shorthand that creates an anonymous index? *Recommendation: no — require a named index for explicitness. Consistent with Graphcal's safety-over-usability philosophy.*
 
-- **Range index injection?** Can a required index be bound to a range index? *Recommendation: yes. The library code only uses the index generically (`for` loops, aggregations), which work identically for named and range indices. This maximizes reusability.*
-
 - **CLI binding for required indices?** Can `--set` or `--input` provide index definitions for a standalone file with required indices? *Recommendation: defer. Focus on parameterized import bindings first. CLI binding can be designed later as a natural extension.*
-
-- **Index constraint syntax?** Should a required index declaration support constraints like minimum variant count or required dimension (for range indices)? E.g., `index TimeAxis: range(Time);` or `index Items: named;`. *Recommendation: defer. Start with unconstrained required indices. Constraints can be added later if needed.*
 
 - **Can a required index appear in a const declaration?** E.g., `const weights: Dimensionless[I] = ...;`. Since const values must be fully evaluable at compile time and a required index has unknown variants, this seems problematic. *Recommendation: disallow required indices in const declarations for now.*
 
