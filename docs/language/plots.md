@@ -104,7 +104,7 @@ plot custom_labels = {
 ### Line chart
 
 ```gcl
-index Time = { T0, T1, T2, T3, T4 }
+cat Time { T0, T1, T2, T3, T4 }
 
 node altitude: Length[Time] = { ... };
 
@@ -121,7 +121,7 @@ plot altitude_over_time = {
 ### Bar chart
 
 ```gcl
-index Mode = { Normal, Eco, Boost }
+cat Mode { Normal, Eco, Boost }
 
 node power: Power[Mode] = { ... };
 
@@ -138,7 +138,7 @@ plot power_by_mode = {
 ### Scatter plot
 
 ```gcl
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 node delta_v: Velocity[Maneuver] = { ... };
 node mass: Mass[Maneuver] = { ... };

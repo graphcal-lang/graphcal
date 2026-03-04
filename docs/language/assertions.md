@@ -233,7 +233,7 @@ For indexed assertions, specific index variants can be marked as expected
 failures while other variants must still pass:
 
 ```
-index Mode = { Normal, Eco, Boost }
+cat Mode { Normal, Eco, Boost }
 
 #[expected_fail(Mode::Boost)]
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
@@ -247,8 +247,8 @@ while `Mode::Normal` and `Mode::Eco` must still pass normally.
 For multi-indexed assertions, tuple keys identify specific index combinations:
 
 ```
-index Mode = { Normal, Eco, Boost }
-index Phase = { Launch, Cruise }
+cat Mode { Normal, Eco, Boost }
+cat Phase { Launch, Cruise }
 
 #[expected_fail((Mode::Normal, Phase::Cruise), (Mode::Boost, Phase::Launch))]
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };

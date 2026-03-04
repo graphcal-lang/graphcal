@@ -1,5 +1,5 @@
 // Error: non-exhaustive index match — missing Insertion variant
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 node result: Dimensionless[Maneuver] = for m: Maneuver {
     match m {

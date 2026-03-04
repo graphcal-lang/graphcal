@@ -566,8 +566,8 @@ fn parse_type_decl_no_derive() {
 }
 
 #[test]
-fn parse_index_decl() {
-    let source = "index Maneuver = { Departure, Correction, Insertion }";
+fn parse_cat_decl() {
+    let source = "cat Maneuver { Departure, Correction, Insertion }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -583,13 +583,13 @@ fn parse_index_decl() {
                 IndexDeclKind::Range { .. } => panic!("expected named index"),
             }
         }
-        _ => panic!("expected index declaration"),
+        _ => panic!("expected cat declaration"),
     }
 }
 
 #[test]
-fn parse_index_decl_trailing_comma() {
-    let source = "index Phase = { Boost, Coast, }";
+fn parse_cat_decl_trailing_comma() {
+    let source = "cat Phase { Boost, Coast, }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Index(idx) => {
@@ -601,13 +601,13 @@ fn parse_index_decl_trailing_comma() {
                 IndexDeclKind::Range { .. } => panic!("expected named index"),
             }
         }
-        _ => panic!("expected index declaration"),
+        _ => panic!("expected cat declaration"),
     }
 }
 
 #[test]
-fn parse_range_index_decl() {
-    let source = "index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);";
+fn parse_range_decl() {
+    let source = "range TimeStep(0.0 s, 100.0 s, step: 0.1 s);";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -615,7 +615,7 @@ fn parse_range_index_decl() {
             assert_eq!(idx.name.value.as_str(), "TimeStep");
             assert!(matches!(idx.kind, IndexDeclKind::Range { .. }));
         }
-        _ => panic!("expected index declaration"),
+        _ => panic!("expected range declaration"),
     }
 }
 

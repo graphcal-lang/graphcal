@@ -314,12 +314,12 @@ fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
         .append(RcDoc::text(">"))
 }
 
-/// `index Name = { V1, V2, V3 }` or `index Name = range(...)`
+/// `cat Name { V1, V2, V3 }` or `range Name(start, end, step: step);`
 fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
-    let header = RcDoc::text("index ").append(RcDoc::text(d.name.value.as_str().to_string()));
-
     match &d.kind {
         IndexDeclKind::Named { variants } => {
+            let header = RcDoc::text("cat ").append(RcDoc::text(d.name.value.as_str().to_string()));
+
             let variant_docs: Vec<RcDoc<'static>> = variants
                 .iter()
                 .map(|v| RcDoc::text(v.value.as_str().to_string()))
@@ -328,13 +328,13 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
             let single_sep = RcDoc::text(", ");
             let single_line = header
                 .clone()
-                .append(RcDoc::text(" = { "))
+                .append(RcDoc::text(" { "))
                 .append(RcDoc::intersperse(variant_docs.clone(), single_sep))
                 .append(RcDoc::text(" }"));
 
             let multi_sep = RcDoc::text(",").append(RcDoc::hardline());
             let multi_line = header
-                .append(RcDoc::text(" = {"))
+                .append(RcDoc::text(" {"))
                 .append(
                     RcDoc::hardline()
                         .append(RcDoc::intersperse(variant_docs, multi_sep))
@@ -346,14 +346,19 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 
             multi_line.flat_alt(single_line).group()
         }
-        IndexDeclKind::Range { start, end, step } => header
-            .append(RcDoc::text(" = range("))
-            .append(format_expr(fmt, start))
-            .append(RcDoc::text(", "))
-            .append(format_expr(fmt, end))
-            .append(RcDoc::text(", step: "))
-            .append(format_expr(fmt, step))
-            .append(RcDoc::text(");")),
+        IndexDeclKind::Range { start, end, step } => {
+            let header =
+                RcDoc::text("range ").append(RcDoc::text(d.name.value.as_str().to_string()));
+
+            header
+                .append(RcDoc::text("("))
+                .append(format_expr(fmt, start))
+                .append(RcDoc::text(", "))
+                .append(format_expr(fmt, end))
+                .append(RcDoc::text(", step: "))
+                .append(format_expr(fmt, step))
+                .append(RcDoc::text(");"))
+        }
     }
 }
 

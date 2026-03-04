@@ -297,7 +297,7 @@ mod tests {
     fn recursion_through_index_access() {
         // collect_fn_calls_in_expr on IndexAccess traverses the inner expression
         let source = r"
-            index Phase = { Coast, Burn }
+            cat Phase { Coast, Burn }
             fn helper(v: Dimensionless) -> Dimensionless = v;
             fn bad(v: Dimensionless) -> Dimensionless = helper(bad(v));
         ";
@@ -309,7 +309,7 @@ mod tests {
     fn recursion_through_map_literal() {
         // Recursion hidden inside a map literal value expression
         let source = r"
-            index Phase = { Coast, Burn }
+            cat Phase { Coast, Burn }
             fn helper(x: Dimensionless) -> Dimensionless[Phase] = {
                 Phase::Coast: helper2(x),
                 Phase::Burn: x,
@@ -324,7 +324,7 @@ mod tests {
     fn recursion_through_for_comp() {
         // Recursion hidden inside a for comprehension body
         let source = r"
-            index Phase = { Coast, Burn }
+            cat Phase { Coast, Burn }
             fn helper(x: Dimensionless) -> Dimensionless[Phase] =
                 for p: Phase { helper2(x) };
             fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
@@ -337,7 +337,7 @@ mod tests {
     fn recursion_through_scan() {
         // Recursion hidden inside a scan body
         let source = r"
-            index Phase = { Coast, Burn }
+            cat Phase { Coast, Burn }
             fn helper(x: Dimensionless) -> Dimensionless[Phase] =
                 scan({ Phase::Coast: x, Phase::Burn: x }, 0.0, |acc, val| helper2(acc));
             fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];

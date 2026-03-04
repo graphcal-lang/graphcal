@@ -26,11 +26,11 @@ type StateVec<D: Dim, V: Dim, F: Type> {
     vel_z: V,
 }
 
-index Phase = { Launch, Coast, Burn, Insertion, Deorbit }
+cat Phase { Launch, Coast, Burn, Insertion, Deorbit }
 
-index Maneuver = { Departure, Midcourse1, Midcourse2, Correction, Insertion }
+cat Maneuver { Departure, Midcourse1, Midcourse2, Correction, Insertion }
 
-index Step = range(0.0 s, 10.0 s, step: 1.0 s);
+range Step(0.0 s, 10.0 s, step: 1.0 s);
 
 const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 const R_EARTH: Length = 6371.0 km;

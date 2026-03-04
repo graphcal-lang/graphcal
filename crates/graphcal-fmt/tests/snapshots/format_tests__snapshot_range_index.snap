@@ -6,7 +6,7 @@ expression: formatted
 dimension Frequency = Time^-1;
 
 // A range index with time dimension
-index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
+range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
 
 // Growth rate (1/s)
 param rate: Frequency = 0.5 Hz;

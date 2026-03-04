@@ -1,6 +1,6 @@
 // expected_fail_all_on_indexed.gcl -- #[expected_fail] without arguments on an
 // indexed assertion should be a compile error.
-index Mode = { Normal, Eco, Boost }
+cat Mode { Normal, Eco, Boost }
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

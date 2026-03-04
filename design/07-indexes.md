@@ -40,7 +40,7 @@ node cost_by_region [region] = mass_budget.cost_per_kg.sum(over: fuel);
 
 | Construct | Purpose | Size | Values |
 | --- | --- | --- | --- |
-| `index` | Table axis labels | Finite, fixed at compile time | Label identifiers |
+| `cat`/`range` | Table axis labels | Finite, fixed at compile time | Label identifiers |
 | `type` (tagged union) | Algebraic data type | Finite variants | Each variant can carry data |
 | `space` | Semantic context tag | Finite variants | Phantom type (no data) |
 | `dimension` | Physical quantity | Continuous | Numeric with units |

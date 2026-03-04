@@ -44,7 +44,7 @@ Phase 6: Scenarios & CLI Workflow
 | [2](./phase-2-structs.md) | Structs & Multi-Line Nodes | `type` (single-variant), block bodies, `let` |
 | [3](./phase-3-pure-functions.md) | Pure Functions | `fn`, `<D: Dim>`, stdlib math |
 | [4](./phase-4-multi-file.md) | Multi-File & Namespaces | `import`, `private`, `project.graph`, prelude |
-| [5](./phase-5-tables.md) | Indexed Values | `index`, `T[I]`, `for`, sum/reduce/scan |
+| [5](./phase-5-tables.md) | Indexed Values | `cat`/`range`, `T[I]`, `for`, sum/reduce/scan |
 | [6](./phase-6-scenarios.md) | Scenarios & CLI | `.scenario`, `cellgraph check`, assertions |
 
 ### Post-MVP

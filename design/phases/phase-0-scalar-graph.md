@@ -173,7 +173,7 @@ UPPER_IDENT   = [A-Z][A-Z0-9_]*
 - Type annotations (`: Type`)
 - Units after literals (`400 km`)
 - Block bodies (`{ let ...; expr }`)
-- `type`, `dimension`, `unit`, `space`, `index`, `table`, `fn`
+- `type`, `dimension`, `unit`, `space`, `cat`, `range`, `table`, `fn`
 - `import`, `private`
 - Multi-file
 - Doc comments (`///`)

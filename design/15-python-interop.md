@@ -19,7 +19,7 @@ Graphcal is implemented as a Rust workspace with four crates (`graphcal-cli`, `g
 - Phase 2: Structs & multi-line nodes (`type`, block bodies, `let` bindings)
 - Phase 3: Pure functions (`fn`, `<D: Dim>` generics)
 - Phase 4: Multi-file & namespaces (`import "./file.gcl" { name }`, `private`)
-- Phase 5: Indexed values (`index`, `T[I]`, `for` comprehensions, `sum`/`scan`)
+- Phase 5: Indexed values (`cat`/`range`, `T[I]`, `for` comprehensions, `sum`/`scan`)
 
 The CLI currently supports `graphcal eval <file>` with `--set 'name=expr'` for parameter overrides and `--format {text|json}` for output format. No Python bindings exist yet.
 

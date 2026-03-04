@@ -1,7 +1,7 @@
 // layer_basic.gcl -- Layer declaration overlaying two plots
 //
 // Demonstrates a layer that overlays two plots on shared axes.
-index Step = { First, Second, Third, Fourth }
+cat Step { First, Second, Third, Fourth }
 
 param x0: Dimensionless = 1.0;
 

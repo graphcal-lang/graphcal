@@ -1,5 +1,5 @@
 // expected_fail_indexed.gcl -- Per-variant expected_fail on single-index assertion
-index Mode = { Normal, Eco, Boost }
+cat Mode { Normal, Eco, Boost }
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

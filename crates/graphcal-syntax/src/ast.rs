@@ -427,8 +427,8 @@ pub enum IndexDeclKind {
     },
 }
 
-/// Index declaration: `index Maneuver = { Departure, Correction, Insertion }`
-/// or `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);`
+/// Index declaration: `cat Maneuver { Departure, Correction, Insertion }`
+/// or `range TimeStep(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl {
     pub name: Spanned<IndexName>,

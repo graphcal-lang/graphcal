@@ -3,7 +3,7 @@
 // Demonstrates a scatter chart using computed x and y data from
 // the same index, useful for visualizing correlations.
 
-index Maneuver = { Departure, MidCourse, Insertion }
+cat Maneuver { Departure, MidCourse, Insertion }
 
 dimension Velocity = Length / Time;
 

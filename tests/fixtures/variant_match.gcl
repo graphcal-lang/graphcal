@@ -1,7 +1,7 @@
 // variant_match.gcl -- Match expressions on loop variables (index variants)
 dimension Velocity = Length / Time;
 
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -22,7 +22,7 @@ node scale_factor: Dimensionless[Maneuver] = for m: Maneuver {
 node scaled_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
 
 // Match with multi-binding for comprehension
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 
 param base_cost: Velocity[Maneuver, Phase] = {
     (Maneuver::Departure, Phase::Coast): 0.0 m/s,

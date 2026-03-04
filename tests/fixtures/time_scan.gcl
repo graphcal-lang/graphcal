@@ -2,7 +2,7 @@
 // y(t) = y0 * exp(-k * t), discretized as y(t+dt) = y(t) * (1 - k * dt)
 dimension Frequency = Time^-1;
 
-index Step = range(0.0 s, 1.0 s, step: 0.25 s);
+range Step(0.0 s, 1.0 s, step: 0.25 s);
 
 param k: Frequency = 2.0 Hz;
 param y0: Dimensionless = 10.0;

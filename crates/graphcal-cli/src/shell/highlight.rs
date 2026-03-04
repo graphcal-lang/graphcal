@@ -136,13 +136,14 @@ const fn token_color(token: &Token) -> Option<&'static str> {
         | Token::Type
         | Token::Let
         | Token::Fn
-        | Token::Index
+        | Token::Cat
         | Token::For
         | Token::Import
         | Token::Match
         | Token::As
         | Token::Assert
-        | Token::Table => Some(BOLD_BLUE),
+        | Token::Table
+        | Token::Range => Some(BOLD_BLUE),
 
         // Booleans
         Token::True | Token::False => Some(BOLD_CYAN),

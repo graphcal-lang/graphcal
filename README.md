@@ -110,7 +110,7 @@ Graphcal has three primitive types:
 | `Int` | 64-bit signed integer | `42`, `1_000` |
 | `Bool` | Boolean | `true`, `false` |
 
-Every `Float` carries a dimension -- `Length`, `Velocity`, `Dimensionless`, etc. -- and the compiler ensures dimensional consistency across all operations. On top of these primitives, algebraic types (`type` declarations) compose them into structs and tagged unions, and index sets (`index` declarations) create indexed collections.
+Every `Float` carries a dimension -- `Length`, `Velocity`, `Dimensionless`, etc. -- and the compiler ensures dimensional consistency across all operations. On top of these primitives, algebraic types (`type` declarations) compose them into structs and tagged unions, and index sets (`cat`/`range` declarations) create indexed collections.
 
 Integer arithmetic uses checked overflow detection. Convert between types explicitly:
 
@@ -236,7 +236,7 @@ node dv_neg: DeriveVec3<Velocity, Eci> = -@dv_a;           // component-wise
 Define named index sets and operate over them with `for` comprehensions and aggregation functions.
 
 ```gcl
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -259,7 +259,7 @@ Available aggregation functions: `sum`, `min`, `max`, `mean`, `count`.
 Define numeric-stepping indexes for time-series or iterative computations. Use `unfold` to generate indexed values from a seed with recurrence relations.
 
 ```gcl
-index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
+range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
 
 param rate: Frequency = 0.5 Hz;
 param x0: Dimensionless = 1.0;
@@ -291,7 +291,7 @@ publication-quality, interactive visualizations. Specify a **mark** type and
 **encoding channels** to map data to visual properties.
 
 ```gcl
-index Step = { First, Second, Third, Fourth }
+cat Step { First, Second, Third, Fourth }
 
 node values: Dimensionless[Step] = {
     Step::First: 1.0, Step::Second: 2.0,
@@ -598,7 +598,7 @@ node dv_neg: Vec3<Velocity, Eci> = -@dv_a;
 // indexed.gcl
 dimension Velocity = Length / Time;
 
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -638,7 +638,7 @@ total_check               = 4410 m/s
 // decay.gcl
 dimension Frequency = Time^-1;
 
-index Step = range(0.0 s, 1.0 s, step: 0.25 s);
+range Step(0.0 s, 1.0 s, step: 0.25 s);
 
 param k: Frequency = 2.0 Hz;
 param y0: Dimensionless = 10.0;

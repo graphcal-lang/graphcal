@@ -5,7 +5,7 @@ expression: formatted
 // variant_comparison.gcl -- Comparing loop variables to index variant literals
 dimension Velocity = Length / Time;
 
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,

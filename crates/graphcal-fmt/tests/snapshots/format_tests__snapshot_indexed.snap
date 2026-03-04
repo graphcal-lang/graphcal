@@ -6,9 +6,9 @@ expression: formatted
 dimension Velocity = Length / Time;
 dimension Mass = Mass;
 
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 
-index Phase = { Launch, Cruise, Arrival }
+cat Phase { Launch, Cruise, Arrival }
 
 param spacecraft_mass: Mass[Phase, Maneuver] = for p: Phase, m: Maneuver {
     if p == Phase::Launch && m == Maneuver::Departure {

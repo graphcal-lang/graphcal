@@ -221,7 +221,7 @@ fn check_fn_unknown_function() {
 #[test]
 fn check_indexed_param_map_literal() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -242,7 +242,7 @@ Maneuver::Insertion: 1.8 km / s,
 #[test]
 fn check_for_comprehension() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -255,7 +255,7 @@ node doubled: Velocity[Maneuver] = for m: Maneuver { @dv[m] + @dv[m] };";
 #[test]
 fn check_for_comprehension_type_mismatch() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -272,7 +272,7 @@ node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
 #[test]
 fn check_index_access_with_variant() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -285,7 +285,7 @@ node first: Velocity = @dv[Maneuver::Departure];";
 #[test]
 fn check_map_literal_missing_variant() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -300,7 +300,7 @@ Maneuver::Correction: 0.5 km / s,
 #[test]
 fn check_map_literal_extra_variant() {
     let source = "\
-index Maneuver = { Departure, Correction }
+cat Maneuver { Departure, Correction }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -316,8 +316,8 @@ Maneuver::Insertion: 1.8 km / s,
 #[test]
 fn check_index_mismatch_in_for() {
     let source = "\
-index Phase = { Coast, Burn }
-index Maneuver = { Departure, Correction, Insertion }
+cat Phase { Coast, Burn }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -334,7 +334,7 @@ node bad: Velocity[Phase] = for p: Phase { @dv[p] };";
 #[test]
 fn check_sum_aggregation() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -347,7 +347,7 @@ node total_dv: Velocity = sum(@dv);";
 #[test]
 fn check_count_aggregation() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -360,7 +360,7 @@ node n: Dimensionless = count(@dv);";
 #[test]
 fn check_mean_aggregation() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -373,7 +373,7 @@ node avg_dv: Velocity = mean(@dv);";
 #[test]
 fn check_scan() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -386,7 +386,7 @@ node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
 #[test]
 fn check_scan_type_mismatch() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -414,7 +414,7 @@ fn check_unknown_index_in_type_annotation() {
 fn check_generic_index_fn() {
     // fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
@@ -428,7 +428,7 @@ node total_dv: Velocity = total(@dv);";
 #[test]
 fn check_generic_index_fn_wrong_return() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
@@ -447,7 +447,7 @@ node bad: Length = total(@dv);";
 fn check_for_with_sum() {
     // sum over a for comprehension
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -677,7 +677,7 @@ node bad: Dimensionless = for m: NoSuchIndex { @x };";
 #[test]
 fn check_scan_body_type_mismatch() {
     let source = "\
-index Maneuver = { Departure, Correction, Insertion }
+cat Maneuver { Departure, Correction, Insertion }
 param dv: Velocity[Maneuver] = {
 Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
@@ -710,7 +710,7 @@ node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
 #[test]
 fn check_map_literal_inconsistent_element_dims() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Phase::Burn: 2.0 m,
@@ -732,7 +732,7 @@ Phase::Burn: 2.0 m,
 #[test]
 fn check_index_access_unknown_variant() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Phase::Burn: 2.0,
@@ -750,7 +750,7 @@ node bad: Dimensionless = @x[Phase::NoSuch];";
 #[test]
 fn check_index_access_on_scalar() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 param x: Dimensionless = 1.0;
 node bad: Dimensionless = @x[Phase::Coast];";
     let err = check(source).unwrap_err();
@@ -765,8 +765,8 @@ node bad: Dimensionless = @x[Phase::Coast];";
 #[test]
 fn check_index_access_wrong_index() {
     let source = "\
-index Phase = { Coast, Burn }
-index Stage = { First, Second }
+cat Phase { Coast, Burn }
+cat Stage { First, Second }
 param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Phase::Burn: 2.0,
@@ -884,7 +884,7 @@ node o: Orbit = Orbit { altitude: 1.0 foobar, speed: 7.6 km / s };";
 #[test]
 fn check_for_comp_error_in_body() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 node bad: Dimensionless[Phase] = for p: Phase { 1.0 foobar };";
     let err = check(source).unwrap_err();
     assert!(
@@ -925,7 +925,7 @@ node bad: Dimensionless = identity(1.0 foobar);";
 #[test]
 fn check_scan_error_in_source() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
     assert!(
@@ -939,7 +939,7 @@ node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
 #[test]
 fn check_map_literal_error_in_entry() {
     let source = "\
-index Phase = { Coast, Burn }
+cat Phase { Coast, Burn }
 node bad: Dimensionless[Phase] = {
 Phase::Coast: 1.0 foobar,
 Phase::Burn: 2.0,
@@ -956,8 +956,8 @@ Phase::Burn: 2.0,
 #[test]
 fn check_map_literal_mixed_index_names() {
     let source = "\
-index Phase = { Coast, Burn }
-index Stage = { First, Second }
+cat Phase { Coast, Burn }
+cat Stage { First, Second }
 param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Stage::Second: 2.0,
