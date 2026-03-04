@@ -190,32 +190,47 @@ module.exports = grammar({
     ),
 
     // cat Maneuver { Departure, Correction, Insertion }
-    cat_declaration: $ => seq(
-      "cat",
-      field("name", $.identifier),
-      "{",
-      optional(seq(
-        $.variant,
-        repeat(seq(",", $.variant)),
-        optional(","),
-      )),
-      "}",
+    cat_declaration: $ => choice(
+      // cat Maneuver { Departure, Correction, Insertion }
+      seq(
+        "cat",
+        field("name", $.identifier),
+        "{",
+        optional(seq(
+          $.variant,
+          repeat(seq(",", $.variant)),
+          optional(","),
+        )),
+        "}",
+      ),
+      // cat Foo;  (required — must be bound via parameterized import)
+      seq("cat", field("name", $.identifier), ";"),
     ),
 
     // range TimeStep(0.0 s, 1.0 s, step: 0.1 s);
-    range_declaration: $ => seq(
-      "range",
-      field("name", $.identifier),
-      "(",
-      field("start", $._expr),
-      ",",
-      field("end", $._expr),
-      ",",
-      "step",
-      ":",
-      field("step", $._expr),
-      ")",
-      ";",
+    // range Foo: Time;  (required — must be bound via parameterized import)
+    range_declaration: $ => choice(
+      seq(
+        "range",
+        field("name", $.identifier),
+        "(",
+        field("start", $._expr),
+        ",",
+        field("end", $._expr),
+        ",",
+        "step",
+        ":",
+        field("step", $._expr),
+        ")",
+        ";",
+      ),
+      seq(
+        "range",
+        field("name", $.identifier),
+        ":",
+        field("dimension", $.dim_expr),
+        ";",
+      ),
     ),
 
     variant: $ => $.identifier,

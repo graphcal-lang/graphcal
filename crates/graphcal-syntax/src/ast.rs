@@ -425,6 +425,14 @@ pub enum IndexDeclKind {
         end: Box<Expr>,
         step: Box<Expr>,
     },
+    /// Required named index (no variants): `cat Foo;`
+    ///
+    /// Must be bound via parameterized import.
+    RequiredNamed,
+    /// Required range index with dimension constraint: `range Foo: Time;`
+    ///
+    /// Must be bound via parameterized import.
+    RequiredRange { dimension: DimExpr },
 }
 
 /// Index declaration: `cat Maneuver { Departure, Correction, Insertion }`

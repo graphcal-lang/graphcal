@@ -187,14 +187,18 @@ pub(super) fn infer_match(
                     span: scrutinee.span.into(),
                 })?;
 
-            let graphcal_registry::registry::IndexKind::Named { variants } = &index_def.kind else {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "cannot match on range index `{index_name}`; only named indexes can be matched"
-                    ),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
-                });
+            let variants = match &index_def.kind {
+                graphcal_registry::registry::IndexKind::Named { variants } => variants.clone(),
+                graphcal_registry::registry::IndexKind::RequiredNamed => vec![],
+                _ => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "cannot match on range index `{index_name}`; only named indexes can be matched"
+                        ),
+                        src: src.clone(),
+                        span: scrutinee.span.into(),
+                    });
+                }
             };
 
             let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();

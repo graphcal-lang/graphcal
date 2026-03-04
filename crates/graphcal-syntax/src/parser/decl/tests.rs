@@ -580,7 +580,7 @@ fn parse_cat_decl() {
                     assert_eq!(variants[1].value.as_str(), "Correction");
                     assert_eq!(variants[2].value.as_str(), "Insertion");
                 }
-                IndexDeclKind::Range { .. } => panic!("expected named index"),
+                other => panic!("expected named index, got {other:?}"),
             }
         }
         _ => panic!("expected cat declaration"),
@@ -598,7 +598,7 @@ fn parse_cat_decl_trailing_comma() {
                 IndexDeclKind::Named { variants } => {
                     assert_eq!(variants.len(), 2);
                 }
-                IndexDeclKind::Range { .. } => panic!("expected named index"),
+                other => panic!("expected named index, got {other:?}"),
             }
         }
         _ => panic!("expected cat declaration"),
@@ -966,4 +966,62 @@ fn parse_attribute_multiple_groups() {
     assert_eq!(attr.args.len(), 2);
     assert!(matches!(&attr.args[0], AttributeArg::Group { elements, .. } if elements.len() == 2));
     assert!(matches!(&attr.args[1], AttributeArg::Group { elements, .. } if elements.len() == 2));
+}
+
+#[test]
+fn parse_required_cat() {
+    let source = "cat Foo;";
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => {
+            assert_eq!(idx.name.value.as_str(), "Foo");
+            assert!(matches!(idx.kind, IndexDeclKind::RequiredNamed));
+        }
+        other => panic!("expected cat declaration, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_required_range_simple() {
+    let source = "range Foo: Time;";
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => {
+            assert_eq!(idx.name.value.as_str(), "Foo");
+            match &idx.kind {
+                IndexDeclKind::RequiredRange { dimension } => {
+                    assert_eq!(dimension.terms.len(), 1);
+                    assert_eq!(dimension.terms[0].term.name.name.as_str(), "Time");
+                }
+                other => panic!("expected required range, got {other:?}"),
+            }
+        }
+        other => panic!("expected range declaration, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_required_range_compound_dim() {
+    let source = "range Foo: Mass * Length / Time^2;";
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => {
+            assert_eq!(idx.name.value.as_str(), "Foo");
+            match &idx.kind {
+                IndexDeclKind::RequiredRange { dimension } => {
+                    assert_eq!(dimension.terms.len(), 3);
+                    assert_eq!(dimension.terms[0].term.name.name.as_str(), "Mass");
+                    assert_eq!(dimension.terms[1].term.name.name.as_str(), "Length");
+                    assert_eq!(dimension.terms[2].term.name.name.as_str(), "Time");
+                    assert_eq!(dimension.terms[2].term.power, Some(2));
+                    assert_eq!(dimension.terms[2].op, MulDivOp::Div);
+                }
+                other => panic!("expected required range, got {other:?}"),
+            }
+        }
+        other => panic!("expected range declaration, got {other:?}"),
+    }
 }

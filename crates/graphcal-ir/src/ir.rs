@@ -1181,6 +1181,17 @@ fn register_index_decl(
             src,
             decl_span,
         )?,
+        graphcal_syntax::ast::IndexDeclKind::RequiredNamed => registry::IndexKind::RequiredNamed,
+        graphcal_syntax::ast::IndexDeclKind::RequiredRange { dimension } => {
+            let dim = registry.resolve_dim_expr(dimension).ok_or_else(|| {
+                GraphcalError::UnknownDimension {
+                    name: graphcal_syntax::names::DimName::new(idx.name.value.as_str()),
+                    src: src.clone(),
+                    span: dimension.span.into(),
+                }
+            })?;
+            registry::IndexKind::RequiredRange { dimension: dim }
+        }
     };
     registry.register_index(registry::IndexDef {
         name: idx.name.value.clone(),

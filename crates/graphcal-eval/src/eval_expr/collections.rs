@@ -359,11 +359,13 @@ fn eval_for_comp(
     for variant in &variants {
         let mut inner_locals = local_values.clone();
         let binding_value = match &idx_def.kind {
-            crate::registry::IndexKind::Named { .. } => RuntimeValue::Label {
+            crate::registry::IndexKind::Named { .. }
+            | crate::registry::IndexKind::RequiredNamed => RuntimeValue::Label {
                 index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
-            crate::registry::IndexKind::Range { .. } => {
+            crate::registry::IndexKind::Range { .. }
+            | crate::registry::IndexKind::RequiredRange { .. } => {
                 let step_index = variant
                     .as_str()
                     .strip_prefix('#')

@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// Required index declarations — must be bound via parameterized import.
+// This file cannot be evaluated standalone.
+dimension Velocity = Length / Time;
+dimension Acceleration = Length / Time^2;
+
+// Required named index (no variants specified)
+cat Phase;
+
+// Required range indexes with dimension constraints
+range Step: Time;
+range Accel: Length / Time^2;
