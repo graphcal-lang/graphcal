@@ -402,15 +402,15 @@ range_decl
    1. Selective import:               import "./file.gcl" { name1, name2 };
    2. Module import:                  import "./file.gcl";
    3. Module with alias:              import "./file.gcl" as alias;
-   4. Instantiated selective import:  import "./file.gcl"(p = expr) { name1 };
-   5. Instantiated module import:     import "./file.gcl"(p = expr);
-   6. Instantiated module with alias: import "./file.gcl"(p = expr) as alias;
+   4. Instantiated selective import:  import "./file.gcl"(p: expr) { name1 };
+   5. Instantiated module import:     import "./file.gcl"(p: expr);
+   6. Instantiated module with alias: import "./file.gcl"(p: expr) as alias;
 
    Bare module path examples:
    7. Bare selective:                 import nasa/rocket { delta_v };
    8. Bare module:                    import nasa/rocket;
    9. Bare module with alias:         import nasa/rocket as r;
-  10. Bare instantiated:              import nasa/rocket(dry_mass = 800 kg) as r;
+  10. Bare instantiated:              import nasa/rocket(dry_mass: 800 kg) as r;
 
    Module imports bring the entire file in as a namespace. Members are
    accessed via "::" (e.g., constants::G0, @params::dry_mass).
@@ -436,7 +436,7 @@ import_param_bindings
    = "(", import_param_binding, { ",", import_param_binding }, [ "," ], ")";
 
 import_param_binding
-   = lower_snake_case_ident, "=", expr;
+   = lower_snake_case_ident, ":", expr;
 
 import_body
    = "{", import_item, { ",", import_item }, [ "," ], "}", ";"   (* selective *)

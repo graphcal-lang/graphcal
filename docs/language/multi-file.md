@@ -102,8 +102,8 @@ Now `import myproject/helpers` resolves to `<project_root>/lib/myproject/helpers
 Module paths work with all import forms, including parameterized imports:
 
 ```
-import nasa/rocket(dry_mass = 800.0 kg) as stage_1;
-import nasa/rocket(dry_mass = 500.0 kg, isp = 450.0 s) as stage_2;
+import nasa/rocket(dry_mass: 800.0 kg) as stage_1;
+import nasa/rocket(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
 
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
@@ -182,7 +182,7 @@ You can instantiate a file with different parameter values by supplying **param 
 ### Selective instantiation
 
 ```
-import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };
+import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };
 
 node result: Velocity = @delta_v;
 ```
@@ -192,7 +192,7 @@ Only `delta_v` is exposed to the importing file. Other declarations from `rocket
 ### Module instantiation
 
 ```
-import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
 
 node dv: Velocity = @r::delta_v;
 node mr: Dimensionless = @r::mass_ratio;
@@ -205,8 +205,8 @@ All declarations from `rocket.gcl` are accessible via the `r::` prefix.
 The same file can be instantiated multiple times with different parameters:
 
 ```
-import "./rocket.gcl"(dry_mass = 800.0 kg, isp = 320.0 s) as stage_1;
-import "./rocket.gcl"(dry_mass = 500.0 kg, isp = 450.0 s) as stage_2;
+import "./rocket.gcl"(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;
+import "./rocket.gcl"(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
 
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
@@ -219,7 +219,7 @@ Binding expressions can reference `@` values from the importing file's scope:
 
 ```
 param my_mass: Mass = 800.0 kg;
-import "./rocket.gcl"(dry_mass = @my_mass) { delta_v };
+import "./rocket.gcl"(dry_mass: @my_mass) { delta_v };
 ```
 
 The dependency's computation graph is merged into the importer's DAG, so the topological sort naturally handles evaluation order.
@@ -245,14 +245,14 @@ The importer binds it to a concrete index:
 cat MyPhase { Design, Build, Test }
 
 import "./lib/budget.gcl"(
-    Phase = MyPhase,
-    cost = { MyPhase::Design: 10.0, MyPhase::Build: 20.0, MyPhase::Test: 5.0 },
+    Phase: MyPhase,
+    cost: { MyPhase::Design: 10.0, MyPhase::Build: 20.0, MyPhase::Test: 5.0 },
 ) { total };
 
 node result: Dimensionless = @total;  // 35.0
 ```
 
-Index bindings use the same `Name = Value` syntax as param bindings, but the right-hand side must be the **name of a concrete index** (not an expression).
+Index bindings use the same `Name: Value` syntax as param bindings, but the right-hand side must be the **name of a concrete index** (not an expression).
 
 #### Kind matching
 
@@ -268,10 +268,10 @@ range Step: Time;   // requires dimension Time
 
 // main.gcl
 range MyStep(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
-import "./lib.gcl"(Step = MyStep) { ... };
+import "./lib.gcl"(Step: MyStep) { ... };
 
 range DistStep(0.0 m, 100.0 m, step: 10.0 m);  // ERROR: dimension is Length
-import "./lib.gcl"(Step = DistStep) { ... };     // dimension mismatch
+import "./lib.gcl"(Step: DistStep) { ... };     // dimension mismatch
 ```
 
 ### Strict Binding Mode
@@ -282,10 +282,10 @@ When a parameterized import has **any** bindings (param or index), **all** param
 // rocket.gcl has params: dry_mass (default), fuel_mass (default), isp (default)
 
 // ERROR: only dry_mass is bound; fuel_mass and isp are not explicitly provided
-import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
 
 // OK: all params are explicitly bound
-import "./rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2800.0 kg, isp = 320.0 s) as r;
+import "./rocket.gcl"(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 ```
 
 #### Opting out with `#[allow_defaults]`
@@ -294,7 +294,7 @@ If you intentionally want to bind only some params and let the rest use their de
 
 ```
 #[allow_defaults]
-import "./rocket.gcl"(dry_mass = 800.0 kg) as r;
+import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
 // fuel_mass and isp keep their default values
 ```
 
@@ -315,7 +315,7 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 
 ```
 // consumer: main.gcl
-import "./rocket_engine.gcl"(dry_mass = 800.0 kg) as engine;
+import "./rocket_engine.gcl"(dry_mass: 800.0 kg) as engine;
 
 node dv: Velocity = @engine::delta_v;
 ```
@@ -410,8 +410,8 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 ```
 // main.gcl
-import "./lib/rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2000.0 kg, isp = 320.0 s) as stage_1;
-import "./lib/rocket.gcl"(dry_mass = 500.0 kg, fuel_mass = 1200.0 kg, isp = 450.0 s) as stage_2;
+import "./lib/rocket.gcl"(dry_mass: 800.0 kg, fuel_mass: 2000.0 kg, isp: 320.0 s) as stage_1;
+import "./lib/rocket.gcl"(dry_mass: 500.0 kg, fuel_mass: 1200.0 kg, isp: 450.0 s) as stage_2;
 
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
@@ -440,8 +440,8 @@ node total: Dimensionless = sum(for p: Phase { @cost[p] });
 cat ProjectPhase { Design, Build, Test }
 
 import "./lib/budget.gcl"(
-    Phase = ProjectPhase,
-    cost = { ProjectPhase::Design: 10.0, ProjectPhase::Build: 20.0, ProjectPhase::Test: 5.0 },
+    Phase: ProjectPhase,
+    cost: { ProjectPhase::Design: 10.0, ProjectPhase::Build: 20.0, ProjectPhase::Test: 5.0 },
 ) { total };
 
 node project_cost: Dimensionless = @total;

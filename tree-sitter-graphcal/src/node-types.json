@@ -2503,6 +2503,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -4426,9 +4436,19 @@
     "type": "range_declaration",
     "named": true,
     "fields": {
+      "dimension": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "dim_expr",
+            "named": true
+          }
+        ]
+      },
       "end": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "as_cast_expr",
@@ -4540,7 +4560,7 @@
       },
       "start": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "as_cast_expr",
@@ -4642,7 +4662,7 @@
       },
       "step": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "as_cast_expr",

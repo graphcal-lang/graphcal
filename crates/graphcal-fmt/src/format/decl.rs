@@ -423,7 +423,7 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
     }
 }
 
-/// Format param bindings: `(name = expr, ...)` or empty if no bindings.
+/// Format param bindings: `(name: expr, ...)` or empty if no bindings.
 fn format_import_param_bindings(
     fmt: &mut Formatter<'_>,
     bindings: &[ParamBinding],
@@ -435,7 +435,7 @@ fn format_import_param_bindings(
         .iter()
         .map(|b| {
             RcDoc::text(b.name.name.clone())
-                .append(RcDoc::text(" = "))
+                .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &b.value))
         })
         .collect();

@@ -2,8 +2,8 @@
 cat MyPhase { Design, Build }
 
 import "./lib.gcl"(
-    Phase = MyPhase,
-    cost = { MyPhase::Design: 10.0, MyPhase::Build: 20.0 },
+    Phase: MyPhase,
+    cost: { MyPhase::Design: 10.0, MyPhase::Build: 20.0 },
 ) { total };
 
 node result: Dimensionless = @total;
