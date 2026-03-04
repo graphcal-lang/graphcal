@@ -1406,8 +1406,6 @@ fn project_required_param_import() {
 }
 
 // --- Injectable index tests ---
-// Note: happy-path tests (basic, expected_fail) require Phase 3 (index name
-// substitution during IR merge) and are deferred until that is implemented.
 
 #[test]
 fn project_injectable_index_kind_mismatch() {
@@ -1438,4 +1436,35 @@ fn project_injectable_index_strict_default_not_provided() {
         }
         other => panic!("expected DefaultIndexNotProvided, got {other:?}"),
     }
+}
+
+#[test]
+fn project_injectable_index_basic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/injectable_index_basic/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // total = sum(10.0 + 20.0) = 30.0
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - 30.0).abs() < 1e-10,
+        "result = {result_val}, expected 30.0"
+    );
+}
+
+#[test]
+fn project_injectable_index_expected_fail() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // The within_limit assertion should pass overall because Overdrive is marked expected_fail.
+    let assert_result = result
+        .assertions
+        .iter()
+        .find(|(name, _, _)| name.as_str().contains("within_limit"))
+        .expect("within_limit assertion not found");
+    assert!(
+        matches!(assert_result.1, AssertResult::Pass),
+        "expected Pass, got {:?}",
+        assert_result.1
+    );
 }

@@ -714,7 +714,9 @@ impl UnfrozenIR {
 
         // Merge consts
         for mut entry in dep.consts {
+            substitute_index_names(&mut entry.expr, index_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             // Prefix const deps
             if let Some(deps) = dep.const_deps.get(&entry.name) {
@@ -741,11 +743,13 @@ impl UnfrozenIR {
                 // for refs that belong to the importer — only dep-internal refs get prefixed)
                 entry.default_expr = Some(binding_expr.clone());
             } else if let Some(ref mut expr) = entry.default_expr {
-                // Keep default, but prefix internal refs
+                // Keep default, but substitute index names and prefix internal refs
+                substitute_index_names(expr, index_bindings);
                 prefix_expr_refs(expr, prefix, dep_names);
             } else {
                 // Required param without binding — stays None, caught later in exec_plan
             }
+            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = HashSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
@@ -775,7 +779,9 @@ impl UnfrozenIR {
 
         // Merge nodes
         for mut entry in dep.nodes {
+            substitute_index_names(&mut entry.expr, index_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             if let Some(deps) = dep.runtime_deps.get(&entry.name) {
                 let prefixed_deps = deps
@@ -797,6 +803,7 @@ impl UnfrozenIR {
         for mut entry in dep.asserts {
             match &mut entry.body {
                 graphcal_syntax::ast::AssertBody::Expr(e) => {
+                    substitute_index_names(e, index_bindings);
                     prefix_expr_refs(e, prefix, dep_names);
                 }
                 graphcal_syntax::ast::AssertBody::Tolerance {
@@ -805,8 +812,11 @@ impl UnfrozenIR {
                     tolerance,
                     ..
                 } => {
+                    substitute_index_names(actual, index_bindings);
                     prefix_expr_refs(actual, prefix, dep_names);
+                    substitute_index_names(expected, index_bindings);
                     prefix_expr_refs(expected, prefix, dep_names);
+                    substitute_index_names(tolerance, index_bindings);
                     prefix_expr_refs(tolerance, prefix, dep_names);
                 }
             }
@@ -823,12 +833,15 @@ impl UnfrozenIR {
         // Merge plots
         for mut entry in dep.plots {
             for encoding in &mut entry.decl.encodings {
+                substitute_index_names(&mut encoding.value, index_bindings);
                 prefix_expr_refs(&mut encoding.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.mark.properties {
+                substitute_index_names(&mut prop.value, index_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.properties {
+                substitute_index_names(&mut prop.value, index_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -844,6 +857,7 @@ impl UnfrozenIR {
         // Merge figures
         for mut entry in dep.figures {
             for field in &mut entry.decl.fields {
+                substitute_index_names(&mut field.value, index_bindings);
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             // Prefix plot names referenced by the figure
@@ -867,6 +881,7 @@ impl UnfrozenIR {
         // Merge layers
         for mut entry in dep.layers {
             for field in &mut entry.decl.fields {
+                substitute_index_names(&mut field.value, index_bindings);
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             // Prefix plot names referenced by the layer
@@ -891,15 +906,22 @@ impl UnfrozenIR {
         for mut entry in dep.functions {
             match &mut entry.decl.body {
                 graphcal_syntax::ast::FnBody::Short(e) => {
+                    substitute_index_names(e, index_bindings);
                     prefix_expr_refs(e, prefix, dep_names);
                 }
                 graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
                     for stmt in stmts {
+                        substitute_index_names(&mut stmt.value, index_bindings);
                         prefix_expr_refs(&mut stmt.value, prefix, dep_names);
                     }
+                    substitute_index_names(expr, index_bindings);
                     prefix_expr_refs(expr, prefix, dep_names);
                 }
             }
+            for param in &mut entry.decl.params {
+                substitute_type_expr_index_names(&mut param.type_ann, index_bindings);
+            }
+            substitute_type_expr_index_names(&mut entry.decl.return_type, index_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             self.functions.push(FunctionEntry {
                 name: prefixed,
@@ -1068,6 +1090,249 @@ impl ExprVisitorMut for RefPrefixer<'_> {
 pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
     let mut prefixer = RefPrefixer { prefix, dep_names };
     let _ = prefixer.visit_expr_mut(expr);
+}
+
+/// Visitor that rewrites index names in expressions according to a binding map.
+///
+/// The default `ExprVisitorMut::dispatch_mut` only recurses into child
+/// *expressions* — it does not touch index name fields in `VariantLiteral`,
+/// `ForComp` bindings, `IndexAccess` args, map/table entry keys, or `Match`
+/// arm patterns. This visitor overrides `dispatch_mut` to intercept those
+/// nodes and rewrite index names before recursing into child expressions.
+struct IndexSubstituter<'a> {
+    bindings: &'a HashMap<String, String>,
+}
+
+impl ExprVisitorMut for IndexSubstituter<'_> {
+    type Error = std::convert::Infallible;
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive match over all ExprKind variants"
+    )]
+    fn dispatch_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use graphcal_syntax::ast::IndexArg;
+        use graphcal_syntax::names::IndexName;
+
+        match &mut expr.kind {
+            ExprKind::VariantLiteral { index, .. } => {
+                if let Some(new) = self.bindings.get(index.value.as_str()) {
+                    index.value = IndexName::new(new);
+                }
+                Ok(())
+            }
+            ExprKind::ForComp { bindings, body } => {
+                for b in bindings {
+                    if let Some(new) = self.bindings.get(b.index.value.as_str()) {
+                        b.index.value = IndexName::new(new);
+                    }
+                }
+                self.visit_expr_mut(body)
+            }
+            ExprKind::IndexAccess { expr: inner, args } => {
+                for arg in args.iter_mut() {
+                    if let IndexArg::Variant { index, .. } = arg
+                        && let Some(new) = self.bindings.get(index.value.as_str())
+                    {
+                        index.value = IndexName::new(new);
+                    }
+                }
+                self.visit_expr_mut(inner)
+            }
+            ExprKind::MapLiteral { entries } => {
+                for entry in entries.iter_mut() {
+                    for key in &mut entry.keys {
+                        if let Some(new) = self.bindings.get(key.index.value.as_str()) {
+                            key.index.value = IndexName::new(new);
+                        }
+                    }
+                    self.visit_expr_mut(&mut entry.value)?;
+                }
+                Ok(())
+            }
+            ExprKind::TableLiteral { indexes, entries } => {
+                for idx in indexes.iter_mut() {
+                    if let Some(new) = self.bindings.get(idx.value.as_str()) {
+                        idx.value = IndexName::new(new);
+                    }
+                }
+                for entry in entries.iter_mut() {
+                    for key in &mut entry.keys {
+                        if let Some(new) = self.bindings.get(key.index.value.as_str()) {
+                            key.index.value = IndexName::new(new);
+                        }
+                    }
+                    self.visit_expr_mut(&mut entry.value)?;
+                }
+                Ok(())
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.visit_expr_mut(scrutinee)?;
+                for arm in arms {
+                    if let Some(ref mut idx) = arm.pattern.qualified_index
+                        && let Some(new) = self.bindings.get(idx.value.as_str())
+                    {
+                        idx.value = IndexName::new(new);
+                    }
+                    self.visit_expr_mut(&mut arm.body)?;
+                }
+                Ok(())
+            }
+            // All other variants: delegate to the default dispatch which
+            // recurses into child expressions without touching index names.
+            _ => {
+                // Re-dispatch through the default logic. We cannot call
+                // `ExprVisitorMut::dispatch_mut` (would be recursive), so
+                // inline the default recursion for the remaining variants.
+                match &mut expr.kind {
+                    // Leaves
+                    ExprKind::Number(_)
+                    | ExprKind::Integer(_)
+                    | ExprKind::Bool(_)
+                    | ExprKind::StringLiteral(_)
+                    | ExprKind::UnitLiteral { .. }
+                    | ExprKind::LocalRef(_) => Ok(()),
+
+                    ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
+                    ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
+                    ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
+                    ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
+                    ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
+                    ExprKind::QualifiedFnCall { .. } => self.visit_qualified_fn_call_mut(expr),
+
+                    ExprKind::BinOp { lhs, rhs, .. } => {
+                        self.visit_expr_mut(lhs)?;
+                        self.visit_expr_mut(rhs)
+                    }
+                    ExprKind::UnaryOp { operand, .. } => self.visit_expr_mut(operand),
+                    ExprKind::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
+                        self.visit_expr_mut(condition)?;
+                        self.visit_expr_mut(then_branch)?;
+                        self.visit_expr_mut(else_branch)
+                    }
+                    ExprKind::Convert { expr: inner, .. }
+                    | ExprKind::DisplayTimezone { expr: inner, .. }
+                    | ExprKind::AsCast { expr: inner, .. }
+                    | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
+                    ExprKind::Block { stmts, expr: body } => {
+                        for stmt in stmts {
+                            self.visit_expr_mut(&mut stmt.value)?;
+                        }
+                        self.visit_expr_mut(body)
+                    }
+                    ExprKind::StructConstruction { fields, .. } => {
+                        for field in fields {
+                            if let Some(val) = &mut field.value {
+                                self.visit_expr_mut(val)?;
+                            }
+                        }
+                        Ok(())
+                    }
+                    ExprKind::Scan {
+                        source, init, body, ..
+                    } => {
+                        self.visit_expr_mut(source)?;
+                        self.visit_expr_mut(init)?;
+                        self.visit_expr_mut(body)
+                    }
+                    ExprKind::Unfold { init, body, .. } => {
+                        self.visit_expr_mut(init)?;
+                        self.visit_expr_mut(body)
+                    }
+                    ExprKind::TupleMatch { scrutinees, arms } => {
+                        for s in scrutinees {
+                            self.visit_expr_mut(s)?;
+                        }
+                        for arm in arms {
+                            if let Some(patterns) = &mut arm.patterns {
+                                for p in patterns {
+                                    self.visit_expr_mut(p)?;
+                                }
+                            }
+                            self.visit_expr_mut(&mut arm.body)?;
+                        }
+                        Ok(())
+                    }
+                    // Already handled in the outer match — unreachable but needed
+                    // for exhaustiveness.
+                    ExprKind::VariantLiteral { .. }
+                    | ExprKind::ForComp { .. }
+                    | ExprKind::IndexAccess { .. }
+                    | ExprKind::MapLiteral { .. }
+                    | ExprKind::TableLiteral { .. }
+                    | ExprKind::Match { .. } => {
+                        debug_assert!(false, "handled in outer match");
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Rewrite index names within an expression according to a binding map.
+///
+/// For example, if `bindings` maps `"Phase"` to `"MyPhase"`, then
+/// `VariantLiteral { index: Phase, variant: A }` becomes
+/// `VariantLiteral { index: MyPhase, variant: A }`.
+///
+/// This must be called **before** `prefix_expr_refs` so that index names are
+/// correct before ref-prefixing adds the `prefix::` qualifier.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<String, String>) {
+    if bindings.is_empty() {
+        return;
+    }
+    let mut sub = IndexSubstituter { bindings };
+    let _ = sub.visit_expr_mut(expr);
+}
+
+/// Rewrite index names within a type expression according to a binding map.
+///
+/// `TypeExpr` is not part of the `Expr` tree, so it needs a separate
+/// substitution pass. This rewrites index identifiers in `Indexed` types
+/// (e.g., `Dimensionless[Phase]` → `Dimensionless[MyPhase]`) and recurses
+/// into `TypeApplication` arguments.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn substitute_type_expr_index_names(
+    type_expr: &mut TypeExpr,
+    bindings: &HashMap<String, String>,
+) {
+    use graphcal_syntax::ast::TypeExprKind;
+
+    if bindings.is_empty() {
+        return;
+    }
+    match &mut type_expr.kind {
+        TypeExprKind::Indexed { base, indexes } => {
+            for idx_ident in indexes.iter_mut() {
+                if let Some(new_name) = bindings.get(&idx_ident.name) {
+                    idx_ident.name = new_name.clone();
+                }
+            }
+            substitute_type_expr_index_names(base, bindings);
+        }
+        TypeExprKind::TypeApplication { type_args, .. } => {
+            for arg in type_args {
+                substitute_type_expr_index_names(arg, bindings);
+            }
+        }
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::DimExpr(_) => {}
+    }
 }
 
 /// Visitor that collects graph references from expressions.
