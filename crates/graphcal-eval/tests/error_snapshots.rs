@@ -477,3 +477,10 @@ fn error_variant_literal_in_node() {
     let rendered = render_error(source, "variant_literal_in_node.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_required_index_standalone() {
+    let source = include_str!("../../../tests/fixtures/errors/required_index_standalone.gcl");
+    let rendered = render_error(source, "required_index_standalone.gcl");
+    insta::assert_snapshot!(rendered);
+}

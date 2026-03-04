@@ -1518,20 +1518,53 @@ fn evaluate_project_perfile(
             &override_targets,
         )?;
 
-        // Files with required params (no default) cannot be evaluated standalone.
-        // They are only consumed via instantiated imports where `merge_dependency`
-        // provides the bindings. Skip standalone evaluation for these files.
+        // Files with required params (no default) or required indexes cannot be
+        // evaluated standalone. They are only consumed via instantiated imports
+        // where `merge_dependency` provides the bindings.
         let has_required_params = compiled
             .tir
             .params
             .iter()
             .any(|entry| entry.default_expr.is_none());
+        let has_required_indexes = compiled
+            .tir
+            .registry
+            .indexes
+            .all_indexes()
+            .any(graphcal_registry::registry::IndexDef::is_required);
 
-        if !is_root && has_required_params {
+        if !is_root && (has_required_params || has_required_indexes) {
             continue;
         }
 
         if is_root {
+            // Reject standalone evaluation of files with required indexes.
+            if has_required_indexes {
+                let file_src = &project.files[file_path].named_source;
+                for idx_def in compiled.tir.registry.indexes.all_indexes() {
+                    if idx_def.is_required() {
+                        let span = project.files[file_path]
+                            .ast
+                            .declarations
+                            .iter()
+                            .find_map(|d| {
+                                if let DeclKind::Index(idx) = &d.kind
+                                    && idx.name.value.as_str() == idx_def.name.as_str()
+                                {
+                                    Some(d.span.into())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| miette::SourceSpan::from((0, 0)));
+                        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+                            name: idx_def.name.to_string(),
+                            src: file_src.clone(),
+                            span,
+                        }));
+                    }
+                }
+            }
             let file_src = &project.files[file_path].named_source;
             let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
             let eval_result =
