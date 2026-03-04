@@ -233,7 +233,7 @@
     },
 
     "import-param-bindings": {
-      "comment": "Param bindings for module instantiation: (name = expr, ...)",
+      "comment": "Param bindings for module instantiation: (name: expr, ...)",
       "begin": "\\(",
       "end": "\\)",
       "beginCaptures": {
@@ -244,11 +244,11 @@
       },
       "patterns": [
         {
-          "comment": "Param binding: name = expr",
-          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(=)",
+          "comment": "Param binding: name: expr",
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)",
           "captures": {
             "1": { "name": "variable.other.graphcal" },
-            "2": { "name": "keyword.operator.assignment.graphcal" }
+            "2": { "name": "punctuation.separator.colon.graphcal" }
           }
         },
         { "include": "#graph-ref" },

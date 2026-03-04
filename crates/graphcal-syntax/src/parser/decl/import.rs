@@ -70,7 +70,7 @@ impl Parser<'_> {
             }
         };
 
-        // Optional param bindings: `(name = expr, ...)`
+        // Optional param bindings: `(name: expr, ...)`
         let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
             self.parse_import_param_bindings()?
         } else {
@@ -201,7 +201,7 @@ impl Parser<'_> {
         Ok(names)
     }
 
-    /// Parse the `(name = expr, ...)` param bindings of an instantiated import.
+    /// Parse the `(name: expr, ...)` param bindings of an instantiated import.
     fn parse_import_param_bindings(&mut self) -> Result<Vec<crate::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;
 
@@ -212,7 +212,7 @@ impl Parser<'_> {
             }
             let name_ident = self.parse_any_ident()?;
             let name_span = name_ident.span;
-            self.expect(Token::Eq)?;
+            self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             let binding_span = name_span.merge(value.span);
             bindings.push(crate::ast::ParamBinding {

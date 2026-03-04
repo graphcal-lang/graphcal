@@ -1,3 +1,3 @@
 // Import a library with a required param, providing the value.
 
-import "./library.gcl"(radius = 6371.0 km) { circumference };
+import "./library.gcl"(radius: 6371.0 km) { circumference };

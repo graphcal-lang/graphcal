@@ -9,5 +9,5 @@ Begin snippet for required_index_standalone.gcl starting at line 1, column 1
 snippet line 1: cat Phase;
     label at line 1, columns 1 to 10: required index declared here
 snippet line 2: 
-diagnostic help: use `import "./file.gcl"(Phase = SomeIndex)` to bind this index
+diagnostic help: use `import "./file.gcl"(Phase: SomeIndex)` to bind this index
 diagnostic code: graphcal::I010

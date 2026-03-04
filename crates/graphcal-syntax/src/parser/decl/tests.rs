@@ -780,7 +780,7 @@ fn parse_import_bare_path_with_alias() {
 
 #[test]
 fn parse_import_bare_path_with_param_bindings() {
-    let file = Parser::new("import nasa/rocket(dry_mass = 800.0 kg) as stage_1;")
+    let file = Parser::new("import nasa/rocket(dry_mass: 800.0 kg) as stage_1;")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
@@ -1005,7 +1005,7 @@ fn parse_required_range_simple() {
 
 #[test]
 fn parse_import_item_with_expected_fail() {
-    let source = r#"import "./lib.gcl"(Phase = MyPhase) {
+    let source = r#"import "./lib.gcl"(Phase: MyPhase) {
     #[expected_fail(MyPhase::X)]
     my_assert,
 };"#;
@@ -1025,7 +1025,7 @@ fn parse_import_item_with_expected_fail() {
 
 #[test]
 fn parse_import_item_with_expected_fail_and_alias() {
-    let source = r#"import "./lib.gcl"(Phase = MyPhase) {
+    let source = r#"import "./lib.gcl"(Phase: MyPhase) {
     #[expected_fail]
     my_assert as local_assert,
 };"#;

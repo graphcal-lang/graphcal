@@ -276,7 +276,7 @@ impl ImportPath {
 ///
 /// Supports file paths (`import "./file.gcl" { ... };`) and bare module paths
 /// (`import nasa/rocket { ... };`). Optionally instantiated with param bindings:
-/// `import "./rocket.gcl"(dry_mass = 800.0 kg) { delta_v };`.
+/// `import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     /// The import path (file-based or bare module path).
@@ -287,16 +287,16 @@ pub struct ImportDecl {
     pub kind: ImportKind,
 }
 
-/// A param binding in a module instantiation: `name = expr`.
+/// A param binding in a module instantiation: `name: expr`.
 ///
-/// Used in `import "path"(name = expr, ...) { ... };`
+/// Used in `import "path"(name: expr, ...) { ... };`
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     /// The param name in the imported file.
     pub name: Ident,
     /// The value expression (evaluated in the importer's scope).
     pub value: Expr,
-    /// Span covering the entire `name = expr`.
+    /// Span covering the entire `name: expr`.
     pub span: Span,
 }
 

@@ -187,9 +187,9 @@
 ; import "./path.gcl" as alias;
 (import_declaration alias: (identifier) @module)
 
-; Param bindings in instantiated imports: import "path"(name = expr) { ... }
+; Param bindings in instantiated imports: import "path"(name: expr) { ... }
 (import_param_binding name: (identifier) @variable)
-(import_param_binding "=" @operator)
+(import_param_binding ":" @operator)
 
 ; ---------------------------------------------------------------
 ; Struct and index usage

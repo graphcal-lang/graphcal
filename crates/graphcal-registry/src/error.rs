@@ -906,7 +906,7 @@ pub enum GraphcalError {
     #[error("required index `{name}` must be bound via parameterized import")]
     #[diagnostic(
         code(graphcal::I010),
-        help("use `import \"./file.gcl\"({name} = SomeIndex)` to bind this index")
+        help("use `import \"./file.gcl\"({name}: SomeIndex)` to bind this index")
     )]
     RequiredIndexNotBound {
         name: String,
