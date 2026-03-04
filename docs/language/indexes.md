@@ -183,6 +183,39 @@ range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
 
 This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.
 
+## Required Indexes
+
+A `cat` or `range` index can be declared **without** specifying its variants or range values. These are **required indexes** — they must be bound via a [parameterized import](multi-file.md#index-bindings) when the file is used as a library.
+
+### Required Named Index
+
+```
+cat Phase;
+```
+
+This declares a named index `Phase` with no variants. A file importing this library must bind it to a concrete named index.
+
+### Required Range Index
+
+```
+range Step: Time;
+```
+
+This declares a range index `Step` constrained to have dimension `Time`. The importer must bind it to a concrete range index with the same dimension.
+
+### Using Required Indexes
+
+Required indexes are used exactly like concrete indexes — in type annotations, `for` comprehensions, index access, `match`, and map/table literals:
+
+```
+cat Phase;
+
+param cost: Dimensionless[Phase];
+node total: Dimensionless = sum(for p: Phase { @cost[p] });
+```
+
+The file cannot be evaluated standalone. It must be imported with a binding that supplies a concrete index (see [Index Bindings](multi-file.md#index-bindings)).
+
 ## `unfold` (Recurrence Relations)
 
 `unfold` computes values over a range index where each value depends on the previous:
