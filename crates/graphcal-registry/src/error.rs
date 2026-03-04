@@ -899,6 +899,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    /// A required index was not bound via parameterized import.
+    ///
+    /// Required indexes (`cat Foo;`, `range Foo: Time;`) must be bound when the
+    /// file is imported. They cannot be evaluated standalone.
+    #[error("required index `{name}` must be bound via parameterized import")]
+    #[diagnostic(
+        code(graphcal::I010),
+        help("use `import \"./file.gcl\"({name} = SomeIndex)` to bind this index")
+    )]
+    RequiredIndexNotBound {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("required index declared here")]
+        span: SourceSpan,
+    },
+
     // --- Domain constraint errors ---
     #[error("unknown timezone `{timezone}`")]
     #[diagnostic(

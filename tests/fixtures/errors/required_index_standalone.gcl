@@ -1,0 +1,3 @@
+cat Phase;
+
+param cost: Dimensionless[Phase];
