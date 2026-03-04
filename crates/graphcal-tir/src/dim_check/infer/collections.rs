@@ -47,10 +47,12 @@ pub(super) fn infer_for_comp(
         inner_locals.insert(
             binding.var.name.clone(),
             match &idx_def.kind {
-                graphcal_registry::registry::IndexKind::Named { .. } => {
+                graphcal_registry::registry::IndexKind::Named { .. }
+                | graphcal_registry::registry::IndexKind::RequiredNamed => {
                     InferredType::Label(binding.index.value.clone())
                 }
-                graphcal_registry::registry::IndexKind::Range { dimension, .. } => {
+                graphcal_registry::registry::IndexKind::Range { dimension, .. }
+                | graphcal_registry::registry::IndexKind::RequiredRange { dimension } => {
                     InferredType::Scalar(dimension.clone())
                 }
             },
@@ -569,7 +571,14 @@ pub(super) fn infer_unfold(
     });
 
     if let Some((_index_name, idx_def)) = &owner_range_index {
-        if let graphcal_registry::registry::IndexKind::Range { dimension, .. } = &idx_def.kind {
+        let dimension = match &idx_def.kind {
+            graphcal_registry::registry::IndexKind::Range { dimension, .. }
+            | graphcal_registry::registry::IndexKind::RequiredRange { dimension } => {
+                Some(dimension)
+            }
+            _ => None,
+        };
+        if let Some(dimension) = dimension {
             scan_locals.insert(
                 prev_name.name.clone(),
                 InferredType::Scalar(dimension.clone()),

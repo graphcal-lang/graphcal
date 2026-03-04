@@ -989,6 +989,7 @@ pub fn resolve_type_expr(
                     && matches!(
                         idx_def.kind,
                         graphcal_registry::registry::IndexKind::Named { .. }
+                            | graphcal_registry::registry::IndexKind::RequiredNamed
                     )
                 {
                     return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));

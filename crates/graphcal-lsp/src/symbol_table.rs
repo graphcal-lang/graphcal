@@ -538,25 +538,31 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
             detail: None,
         },
     );
-    if let IndexDeclKind::Named { variants } = &idx.kind {
-        for variant in variants {
-            let vname = variant.value.to_string();
-            let key = SymbolKey::Variant {
-                parent: name.clone(),
-                variant: vname.clone(),
-            };
-            table.definitions.insert(
-                key,
-                DefinitionInfo {
-                    name: vname,
-                    category: SymbolCategory::IndexVariant,
-                    name_span: variant.span,
-                    decl_span: variant.span,
-                    type_description: None,
-                    detail: Some(format!("label/value variant of index {name}")),
-                },
-            );
+    match &idx.kind {
+        IndexDeclKind::Named { variants } => {
+            for variant in variants {
+                let vname = variant.value.to_string();
+                let key = SymbolKey::Variant {
+                    parent: name.clone(),
+                    variant: vname.clone(),
+                };
+                table.definitions.insert(
+                    key,
+                    DefinitionInfo {
+                        name: vname,
+                        category: SymbolCategory::IndexVariant,
+                        name_span: variant.span,
+                        decl_span: variant.span,
+                        type_description: None,
+                        detail: Some(format!("label/value variant of index {name}")),
+                    },
+                );
+            }
         }
+        IndexDeclKind::RequiredRange { dimension } => {
+            collect_dim_expr_refs(dimension, table);
+        }
+        IndexDeclKind::Range { .. } | IndexDeclKind::RequiredNamed => {}
     }
 }
 
@@ -1377,6 +1383,15 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                         } => {
                             def_mut.type_description =
                                 Some(format!("range({start}, {end}, step: {step})"));
+                        }
+                        IndexKind::RequiredNamed => {
+                            def_mut.type_description = Some("(required)".to_string());
+                        }
+                        IndexKind::RequiredRange { dimension } => {
+                            def_mut.type_description = Some(format!(
+                                "(required, dim: {})",
+                                registry.dimensions.format_dimension(dimension)
+                            ));
                         }
                     }
                 }

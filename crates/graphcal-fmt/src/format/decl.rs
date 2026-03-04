@@ -314,9 +314,18 @@ fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
         .append(RcDoc::text(">"))
 }
 
-/// `cat Name { V1, V2, V3 }` or `range Name(start, end, step: step);`
+/// `cat Name { V1, V2, V3 }` or `cat Name;` (required)
+/// or `range Name(start, end, step: step);` or `range Name: Dim;` (required)
 fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
     match &d.kind {
+        IndexDeclKind::RequiredNamed => RcDoc::text("cat ")
+            .append(RcDoc::text(d.name.value.as_str().to_string()))
+            .append(RcDoc::text(";")),
+        IndexDeclKind::RequiredRange { dimension } => RcDoc::text("range ")
+            .append(RcDoc::text(d.name.value.as_str().to_string()))
+            .append(RcDoc::text(": "))
+            .append(format_dim_expr_inline(dimension))
+            .append(RcDoc::text(";")),
         IndexDeclKind::Named { variants } => {
             let header = RcDoc::text("cat ").append(RcDoc::text(d.name.value.as_str().to_string()));
 

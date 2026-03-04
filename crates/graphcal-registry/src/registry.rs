@@ -141,6 +141,10 @@ pub enum IndexKind {
         /// Scale factor from SI to display unit: `display_value = si_value / scale`.
         display_scale: f64,
     },
+    /// Required named index (no variants): must be bound via parameterized import.
+    RequiredNamed,
+    /// Required range index with dimension constraint: must be bound via parameterized import.
+    RequiredRange { dimension: Dimension },
 }
 
 /// A declared index with its ordered variants.
@@ -155,6 +159,7 @@ impl IndexDef {
     ///
     /// For named indexes, returns the declared variants.
     /// For range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
+    /// For required indexes, returns an empty vec (no variants until bound).
     #[must_use]
     pub fn variants(&self) -> Vec<VariantName> {
         match &self.kind {
@@ -165,10 +170,13 @@ impl IndexDef {
                     .map(|i| VariantName::new(format!("#{i}")))
                     .collect()
             }
+            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
         }
     }
 
     /// Returns the number of steps/variants in this index.
+    ///
+    /// Returns 0 for required indexes (no variants until bound).
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
@@ -181,6 +189,7 @@ impl IndexDef {
             IndexKind::Range {
                 start, end, step, ..
             } => (((end - start) / step).round() as usize) + 1,
+            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }
     }
 
@@ -188,31 +197,50 @@ impl IndexDef {
     ///
     /// # Errors
     ///
-    /// Returns an error message if this is a named (non-range) index.
+    /// Returns an error message if this is a named or required index.
     #[expect(
         clippy::cast_precision_loss,
         reason = "range step indices are small enough for exact f64 representation"
     )]
     pub fn step_value(&self, i: usize) -> Result<f64, String> {
         match &self.kind {
-            IndexKind::Named { .. } => Err(format!(
+            IndexKind::Named { .. } | IndexKind::RequiredNamed => Err(format!(
                 "step_value() called on named index `{}`",
                 self.name
             )),
             IndexKind::Range { start, step, .. } => Ok(start + (i as f64) * step),
+            IndexKind::RequiredRange { .. } => Err(format!(
+                "step_value() called on required range index `{}`",
+                self.name
+            )),
         }
     }
 
-    /// Returns true if this is a range index.
+    /// Returns true if this is a range index (concrete or required).
     #[must_use]
     pub const fn is_range(&self) -> bool {
-        matches!(self.kind, IndexKind::Range { .. })
+        matches!(
+            self.kind,
+            IndexKind::Range { .. } | IndexKind::RequiredRange { .. }
+        )
     }
 
-    /// Returns true if this is a named index.
+    /// Returns true if this is a named index (concrete or required).
     #[must_use]
     pub const fn is_named(&self) -> bool {
-        matches!(self.kind, IndexKind::Named { .. })
+        matches!(
+            self.kind,
+            IndexKind::Named { .. } | IndexKind::RequiredNamed
+        )
+    }
+
+    /// Returns true if this is a required index (must be bound via parameterized import).
+    #[must_use]
+    pub const fn is_required(&self) -> bool {
+        matches!(
+            self.kind,
+            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. }
+        )
     }
 }
 
