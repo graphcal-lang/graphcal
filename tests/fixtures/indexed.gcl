@@ -57,8 +57,9 @@ node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 // Aggregation: count
 node n_maneuvers: Dimensionless = count(for m: Maneuver { @delta_v[m] });
 
-// Direct variant access
-node departure_dv: Velocity = @delta_v[Maneuver::Departure];
+// Direct variant access (extracted to param to avoid variant literal in node)
+param departure_maneuver: Velocity = @delta_v[Maneuver::Departure];
+node departure_dv: Velocity = @departure_maneuver;
 
 // Scan: cumulative delta-v
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);

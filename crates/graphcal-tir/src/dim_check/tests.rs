@@ -278,7 +278,7 @@ Maneuver::Departure: 2.46 km / s,
 Maneuver::Correction: 0.5 km / s,
 Maneuver::Insertion: 1.8 km / s,
 };
-node first: Velocity = @dv[Maneuver::Departure];";
+param first: Velocity = @dv[Maneuver::Departure];";
     check(source).unwrap();
 }
 
@@ -737,7 +737,7 @@ param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Phase::Burn: 2.0,
 };
-node bad: Dimensionless = @x[Phase::NoSuch];";
+param bad: Dimensionless = @x[Phase::NoSuch];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::UnknownVariant { .. }),
@@ -752,7 +752,7 @@ fn check_index_access_on_scalar() {
     let source = "\
 cat Phase { Coast, Burn }
 param x: Dimensionless = 1.0;
-node bad: Dimensionless = @x[Phase::Coast];";
+param bad: Dimensionless = @x[Phase::Coast];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::EvalError { .. }),
@@ -771,7 +771,7 @@ param x: Dimensionless[Phase] = {
 Phase::Coast: 1.0,
 Phase::Burn: 2.0,
 };
-node bad: Dimensionless = @x[Stage::First];";
+param bad: Dimensionless = @x[Stage::First];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::IndexMismatch { .. }),
@@ -940,7 +940,7 @@ node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
 fn check_map_literal_error_in_entry() {
     let source = "\
 cat Phase { Coast, Burn }
-node bad: Dimensionless[Phase] = {
+param bad: Dimensionless[Phase] = {
 Phase::Coast: 1.0 foobar,
 Phase::Burn: 2.0,
 };";

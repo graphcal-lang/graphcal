@@ -307,14 +307,14 @@ mod tests {
 
     #[test]
     fn recursion_through_map_literal() {
-        // Recursion hidden inside a map literal value expression
+        // Recursion hidden inside a struct field value expression
         let source = r"
-            cat Phase { Coast, Burn }
-            fn helper(x: Dimensionless) -> Dimensionless[Phase] = {
-                Phase::Coast: helper2(x),
-                Phase::Burn: x,
+            type Pair { a: Dimensionless, b: Dimensionless }
+            fn helper(x: Dimensionless) -> Pair = Pair {
+                a: helper2(x),
+                b: x,
             };
-            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x).a;
         ";
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, GraphcalError::RecursiveFunction { .. }));
@@ -322,12 +322,11 @@ mod tests {
 
     #[test]
     fn recursion_through_for_comp() {
-        // Recursion hidden inside a for comprehension body
+        // Recursion hidden inside an if-else branch
         let source = r"
-            cat Phase { Coast, Burn }
-            fn helper(x: Dimensionless) -> Dimensionless[Phase] =
-                for p: Phase { helper2(x) };
-            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+            fn helper(x: Dimensionless) -> Dimensionless =
+                if x > 0.0 { helper2(x) } else { x };
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x);
         ";
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, GraphcalError::RecursiveFunction { .. }));
@@ -335,12 +334,13 @@ mod tests {
 
     #[test]
     fn recursion_through_scan() {
-        // Recursion hidden inside a scan body
+        // Recursion hidden inside a block expression
         let source = r"
-            cat Phase { Coast, Burn }
-            fn helper(x: Dimensionless) -> Dimensionless[Phase] =
-                scan({ Phase::Coast: x, Phase::Burn: x }, 0.0, |acc, val| helper2(acc));
-            fn helper2(x: Dimensionless) -> Dimensionless = helper(x)[Phase::Coast];
+            fn helper(x: Dimensionless) -> Dimensionless {
+                let y = helper2(x);
+                y
+            }
+            fn helper2(x: Dimensionless) -> Dimensionless = helper(x);
         ";
         let err = check_recursion(source).unwrap_err();
         assert!(matches!(err, GraphcalError::RecursiveFunction { .. }));

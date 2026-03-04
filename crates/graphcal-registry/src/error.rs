@@ -519,6 +519,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("variant literal `{index}::{variant}` cannot be used in a {context} expression")]
+    #[diagnostic(
+        code(graphcal::I008),
+        help(
+            "extract it into a `param` default expression instead, which can be rebound by importers"
+        )
+    )]
+    VariantLiteralInNonRebindable {
+        index: String,
+        variant: String,
+        context: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("variant literal not allowed here")]
+        span: SourceSpan,
+    },
+
     #[error("cannot reference assert `{name}` with `@`")]
     #[diagnostic(
         code(graphcal::A003),

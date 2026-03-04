@@ -6,7 +6,7 @@ non-exhaustive match: variant `Maneuver::Insertion` not covered
     Diagnostic severity: error
 Begin snippet for non_exhaustive_index_match.gcl starting at line 4, column 1
 
-snippet line 4: node result: Dimensionless[Maneuver] = for m: Maneuver {
+snippet line 4: param result: Dimensionless[Maneuver] = for m: Maneuver {
 snippet line 5:     match m {
     label starting at line 5, column 5: error here
 snippet line 6:         Maneuver::Departure => 1.0,

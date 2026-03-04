@@ -82,9 +82,12 @@ param mass_3d_map: Mass[Scenario, Phase, Maneuver] = {
 // Derived node using table-defined params
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 
-// Access specific 2D entry
-node launch_departure_mass: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+// Access specific 2D entry (extracted to params to avoid variant literals in nodes)
+param launch_departure_mass_val: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+node launch_departure_mass: Mass = @launch_departure_mass_val;
 
-// Access specific 3D entry
-node nominal_launch_departure: Mass = @mass_3d[Scenario::Nominal, Phase::Launch, Maneuver::Departure];
-node contingency_arrival_insertion: Mass = @mass_3d[Scenario::Contingency, Phase::Arrival, Maneuver::Insertion];
+// Access specific 3D entry (extracted to params to avoid variant literals in nodes)
+param nominal_launch_departure_val: Mass = @mass_3d[Scenario::Nominal, Phase::Launch, Maneuver::Departure];
+param contingency_arrival_insertion_val: Mass = @mass_3d[Scenario::Contingency, Phase::Arrival, Maneuver::Insertion];
+node nominal_launch_departure: Mass = @nominal_launch_departure_val;
+node contingency_arrival_insertion: Mass = @contingency_arrival_insertion_val;

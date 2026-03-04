@@ -7,6 +7,6 @@ unknown variant `NoSuch` in index `Phase`
 Begin snippet for unknown_variant.gcl starting at line 5, column 1
 
 snippet line 5: };
-snippet line 6: node bad: Dimensionless = @x[Phase::NoSuch];
-    label at line 6, columns 37 to 42: not a variant of `Phase`
+snippet line 6: param bad: Dimensionless = @x[Phase::NoSuch];
+    label at line 6, columns 38 to 43: not a variant of `Phase`
 diagnostic code: graphcal::I002

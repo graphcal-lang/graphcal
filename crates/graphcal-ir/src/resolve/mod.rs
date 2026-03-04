@@ -10,7 +10,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::TypeExpr;
-use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnDecl};
+use graphcal_syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
 use graphcal_syntax::span::Span;
 
 use graphcal_registry::builtins::{builtin_constants, builtin_functions};
@@ -35,7 +35,10 @@ pub use names::{is_lower_snake_case, is_upper_snake_case};
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
-use scope::{check_no_assert_graph_refs, check_no_graph_refs, check_no_graph_refs_in_fn};
+use scope::{
+    check_no_assert_graph_refs, check_no_graph_refs, check_no_graph_refs_in_fn,
+    check_no_variant_literals,
+};
 
 /// Known attribute names in the language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +276,7 @@ fn collect_local_declarations(
                     )?;
                     // Check that assert body doesn't reference other assert names via @
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                    check_no_variant_literals(body_expr, "assert", src)?;
                 }
                 let aname = a.name.value.to_string();
                 asserts.push(ResolvedAssertEntry {
@@ -295,6 +299,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
+                    check_no_variant_literals(&encoding.value, "plot", src)?;
                 }
                 for prop in &p.mark.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -308,6 +313,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
+                    check_no_variant_literals(&prop.value, "plot", src)?;
                 }
                 for prop in &p.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -321,6 +327,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
+                    check_no_variant_literals(&prop.value, "plot", src)?;
                 }
                 let pname = p.name.value.to_string();
                 let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
@@ -345,6 +352,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                    check_no_variant_literals(&field.value, "figure", src)?;
                 }
                 let fname = f.name.value.to_string();
                 figures.push(ResolvedFigureEntry {
@@ -367,6 +375,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                    check_no_variant_literals(&field.value, "layer", src)?;
                 }
                 let lname = l.name.value.to_string();
                 layers.push(ResolvedLayerEntry {
@@ -378,6 +387,19 @@ fn collect_local_declarations(
             DeclKind::Fn(f) => {
                 // Enforce @ prohibition in function bodies
                 check_no_graph_refs_in_fn(f, src)?;
+                // Enforce variant literal prohibition in function bodies
+                let check_fn_variant = |expr: &Expr| -> Result<(), GraphcalError> {
+                    check_no_variant_literals(expr, "fn", src)
+                };
+                match &f.body {
+                    FnBody::Short(expr) => check_fn_variant(expr)?,
+                    FnBody::Block { stmts, expr } => {
+                        for stmt in stmts {
+                            check_fn_variant(&stmt.value)?;
+                        }
+                        check_fn_variant(expr)?;
+                    }
+                }
                 functions.push(ResolvedFunctionEntry {
                     name: f.name.value.to_string(),
                     decl: f.clone(),
@@ -386,6 +408,7 @@ fn collect_local_declarations(
             }
             DeclKind::Const(c) => {
                 check_no_graph_refs(&c.value, src)?;
+                check_no_variant_literals(&c.value, "const", src)?;
                 let deps = extract_const_refs(
                     &c.value,
                     &all_const_names,
@@ -428,6 +451,7 @@ fn collect_local_declarations(
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
+                check_no_variant_literals(&n.value, "node", src)?;
                 let nname = n.name.value.to_string();
                 let (graph_refs, _const_refs) = extract_all_refs(
                     &n.value,

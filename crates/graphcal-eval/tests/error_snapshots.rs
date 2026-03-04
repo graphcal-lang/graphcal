@@ -470,3 +470,10 @@ fn error_domain_invalid_key() {
     let rendered = render_error(source, "domain_invalid_key.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+#[test]
+fn error_variant_literal_in_node() {
+    let source = include_str!("../../../tests/fixtures/errors/variant_literal_in_node.gcl");
+    let rendered = render_error(source, "variant_literal_in_node.gcl");
+    insta::assert_snapshot!(rendered);
+}

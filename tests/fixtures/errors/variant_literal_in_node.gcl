@@ -1,0 +1,8 @@
+// Error: variant literal used in a node expression
+cat Phase { Design, Build, Test }
+param cost: Dimensionless[Phase] = {
+    Phase::Design: 100.0,
+    Phase::Build: 200.0,
+    Phase::Test: 50.0,
+};
+node design_cost: Dimensionless = @cost[Phase::Design];

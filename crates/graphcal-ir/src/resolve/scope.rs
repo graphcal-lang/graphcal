@@ -4,7 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_registry::error::GraphcalError;
-use graphcal_syntax::ast::{Expr, ExprKind, FnBody, FnDecl};
+use graphcal_syntax::ast::{Expr, ExprKind, FnBody, FnDecl, IndexArg, MapEntry, MatchArm};
 use graphcal_syntax::visitor::ExprVisitor;
 
 /// Visitor that checks for graph references in const expressions.
@@ -158,5 +158,105 @@ pub(super) fn check_no_assert_graph_refs(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut checker = NoAssertGraphRefChecker { assert_names, src };
+    checker.visit_expr(expr)
+}
+
+/// Visitor that checks for variant literals in non-rebindable contexts.
+///
+/// Variant literals (e.g., `Phase::Design`) cannot appear in node, const, assert,
+/// fn, or plot expressions because they prevent the file from being reused as a
+/// library with a different index definition. Users must extract variant-specific
+/// logic into `param` declarations instead.
+///
+/// This checker catches variant literals in four forms:
+/// 1. `ExprKind::VariantLiteral` — standalone variant references
+/// 2. `IndexArg::Variant` in `IndexAccess` — e.g., `@cost[Phase::Design]`
+/// 3. `MapEntryKey` in map/table literals — e.g., `{ Phase::Design: 1.0 }`
+/// 4. `MatchPattern.qualified_index` in match arms — e.g., `Phase::Design => ...`
+struct VariantLiteralChecker<'a> {
+    context: &'a str,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl VariantLiteralChecker<'_> {
+    fn make_error(
+        &self,
+        index: &impl std::fmt::Display,
+        variant: &impl std::fmt::Display,
+        span: graphcal_syntax::span::Span,
+    ) -> GraphcalError {
+        GraphcalError::VariantLiteralInNonRebindable {
+            index: index.to_string(),
+            variant: variant.to_string(),
+            context: self.context.to_string(),
+            src: self.src.clone(),
+            span: span.into(),
+        }
+    }
+}
+
+impl ExprVisitor for VariantLiteralChecker<'_> {
+    type Error = GraphcalError;
+
+    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::VariantLiteral { index, variant } = &expr.kind {
+            return Err(self.make_error(&index.value, &variant.value, expr.span));
+        }
+        Ok(())
+    }
+
+    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
+        // Check IndexAccess args for variant literals before recursing into inner expr.
+        if let ExprKind::IndexAccess { args, .. } = &expr.kind {
+            for arg in args {
+                if let IndexArg::Variant { index, variant } = arg {
+                    return Err(self.make_error(&index.value, &variant.value, expr.span));
+                }
+            }
+        }
+        self.visit_expr(inner)
+    }
+
+    fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
+        for entry in entries {
+            if let Some(key) = entry.keys.first() {
+                return Err(self.make_error(&key.index.value, &key.variant.value, key.index.span));
+            }
+            self.visit_expr(&entry.value)?;
+        }
+        Ok(())
+    }
+
+    fn visit_match(
+        &mut self,
+        _expr: &Expr,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<(), Self::Error> {
+        self.visit_expr(scrutinee)?;
+        for arm in arms {
+            if let Some(qi) = &arm.pattern.qualified_index {
+                return Err(self.make_error(
+                    &qi.value,
+                    &arm.pattern.variant_name.value,
+                    arm.pattern.span,
+                ));
+            }
+            self.visit_expr(&arm.body)?;
+        }
+        Ok(())
+    }
+}
+
+/// Check that an expression contains no variant literals (for non-rebindable contexts).
+///
+/// Variant literals are banned in node, const, assert, fn, and plot expressions
+/// to ensure files can be reused as libraries with different index definitions.
+pub(super) fn check_no_variant_literals(
+    expr: &Expr,
+    context: &str,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let mut checker = VariantLiteralChecker { context, src };
     checker.visit_expr(expr)
 }

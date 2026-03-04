@@ -50,16 +50,14 @@ fn compute(v: Velocity) -> Velocity {
     b
 }
 
-// Match with comments before arms
-node scale: Dimensionless[Maneuver] = for m: Maneuver {
-    match m {
-        // main engine burn
-        Maneuver::Departure => 2.0,
-        // small thruster
-        Maneuver::Correction => 0.5,
-        // insertion burn
-        Maneuver::Insertion => 1.5,
-    }
+// Variant-specific scaling extracted to param (variant literals not allowed in nodes)
+param scale: Dimensionless[Maneuver] = {
+    // main engine burn
+    Maneuver::Departure: 2.0,
+    // small thruster
+    Maneuver::Correction: 0.5,
+    // insertion burn
+    Maneuver::Insertion: 1.5,
 };
 
 // Map literal with trailing comments

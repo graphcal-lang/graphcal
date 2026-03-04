@@ -98,7 +98,8 @@ node peak_power: Power = max(for m: OpMode { @wall_plug_power[m] });
 node sa_margin: Power = @solar_array_power - @peak_power;
 
 // --- Eclipse energy requirement (worst-case eclipse mode) ---
-node eclipse_energy: Energy = @wall_plug_power[OpMode::NominalEclipse] * @eclipse_duration;
+param eclipse_mode_power: Power = @wall_plug_power[OpMode::NominalEclipse];
+node eclipse_energy: Energy = @eclipse_mode_power * @eclipse_duration;
 
 // --- Battery depth-of-discharge ---
 node battery_dod: Dimensionless = @eclipse_energy / @battery_capacity;
