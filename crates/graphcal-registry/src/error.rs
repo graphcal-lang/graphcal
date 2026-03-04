@@ -519,12 +519,12 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error(
-        "variant literal `{index}::{variant}` cannot be used in a {context} expression"
-    )]
+    #[error("variant literal `{index}::{variant}` cannot be used in a {context} expression")]
     #[diagnostic(
         code(graphcal::I008),
-        help("extract it into a `param` default expression instead, which can be rebound by importers")
+        help(
+            "extract it into a `param` default expression instead, which can be rebound by importers"
+        )
     )]
     VariantLiteralInNonRebindable {
         index: String,

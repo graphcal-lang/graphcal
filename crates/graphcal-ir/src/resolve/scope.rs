@@ -217,11 +217,7 @@ impl ExprVisitor for VariantLiteralChecker<'_> {
         self.visit_expr(inner)
     }
 
-    fn visit_map_entries(
-        &mut self,
-        _expr: &Expr,
-        entries: &[MapEntry],
-    ) -> Result<(), Self::Error> {
+    fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
         for entry in entries {
             if let Some(key) = entry.keys.first() {
                 return Err(self.make_error(&key.index.value, &key.variant.value, key.index.span));
