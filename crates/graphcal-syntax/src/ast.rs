@@ -306,6 +306,8 @@ pub struct ParamBinding {
 /// Example: `name1` → `ImportItem { name: "name1", alias: None }`
 #[derive(Debug, Clone)]
 pub struct ImportItem {
+    /// Attributes on this import item (e.g., `#[expected_fail(...)]`).
+    pub attributes: Vec<Attribute>,
     /// The original name from the imported file.
     pub name: Ident,
     /// Optional local alias (introduced by `as`).
@@ -433,6 +435,14 @@ pub enum IndexDeclKind {
     ///
     /// Must be bound via parameterized import.
     RequiredRange { dimension: DimExpr },
+}
+
+impl IndexDeclKind {
+    /// Returns `true` for required index declarations that must be bound via import.
+    #[must_use]
+    pub const fn is_required(&self) -> bool {
+        matches!(self, Self::RequiredNamed | Self::RequiredRange { .. })
+    }
 }
 
 /// Index declaration: `cat Maneuver { Departure, Correction, Insertion }`

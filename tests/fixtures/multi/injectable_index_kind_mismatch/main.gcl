@@ -1,0 +1,9 @@
+// main.gcl -- tries to bind a named index to a range (should fail)
+dimension Time;
+range TimeStep(0.0, 1.0, step: 0.5);
+
+#[allow_defaults]
+import "./lib.gcl"(
+    Phase = TimeStep,
+    cost = for t: TimeStep { 1.0 },
+) { cost };

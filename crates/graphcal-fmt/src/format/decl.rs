@@ -395,7 +395,11 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
             let name_docs: Vec<RcDoc<'static>> = names
                 .iter()
                 .map(|item| {
-                    let mut doc = RcDoc::text(item.name.name.clone());
+                    let mut doc = RcDoc::nil();
+                    for attr in &item.attributes {
+                        doc = doc.append(format_attribute(attr)).append(RcDoc::text(" "));
+                    }
+                    doc = doc.append(RcDoc::text(item.name.name.clone()));
                     if let Some(ref alias) = item.alias {
                         doc = doc
                             .append(RcDoc::text(" as "))

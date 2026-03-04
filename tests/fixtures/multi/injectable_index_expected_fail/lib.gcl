@@ -1,0 +1,7 @@
+// lib.gcl -- library with a required named index and an assertion
+cat Mode;
+
+param limit: Dimensionless[Mode];
+param actual: Dimensionless[Mode];
+
+assert within_limit = for m: Mode { @actual[m] <= @limit[m] };

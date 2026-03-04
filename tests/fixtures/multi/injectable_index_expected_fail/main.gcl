@@ -1,0 +1,11 @@
+// main.gcl -- binds Mode, marks Overdrive as expected to fail
+cat MyModes { Idle, Active, Overdrive }
+
+import "./lib.gcl"(
+    Mode = MyModes,
+    limit = { MyModes::Idle: 100.0, MyModes::Active: 200.0, MyModes::Overdrive: 50.0 },
+    actual = { MyModes::Idle: 10.0, MyModes::Active: 150.0, MyModes::Overdrive: 100.0 },
+) {
+    #[expected_fail(MyModes::Overdrive)]
+    within_limit,
+};

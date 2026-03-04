@@ -337,6 +337,7 @@ module.exports = grammar({
 
     // Import item with optional alias: name or name as alias
     import_item: $ => seq(
+      repeat($.attribute),
       field("name", $.identifier),
       optional(seq("as", field("alias", $.identifier))),
     ),

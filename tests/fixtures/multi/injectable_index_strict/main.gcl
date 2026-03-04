@@ -1,0 +1,2 @@
+// main.gcl -- omits the index binding without #[allow_defaults] (should fail)
+import "./lib.gcl"(x = { Phase::Alpha: 10.0, Phase::Beta: 20.0 }) { x };
