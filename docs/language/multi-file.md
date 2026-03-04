@@ -224,9 +224,59 @@ import "./rocket.gcl"(dry_mass = @my_mass) { delta_v };
 
 The dependency's computation graph is merged into the importer's DAG, so the topological sort naturally handles evaluation order.
 
+### Index Bindings
+
+In addition to `param` bindings, parameterized imports can bind **indexes**. This enables library files that are generic over their label sets.
+
+A library declares a [required index](indexes.md#required-indexes):
+
+```
+// lib/budget.gcl
+cat Phase;
+
+param cost: Dimensionless[Phase];
+node total: Dimensionless = sum(for p: Phase { @cost[p] });
+```
+
+The importer binds it to a concrete index:
+
+```
+// main.gcl
+cat MyPhase { Design, Build, Test }
+
+import "./lib/budget.gcl"(
+    Phase = MyPhase,
+    cost = { MyPhase::Design: 10.0, MyPhase::Build: 20.0, MyPhase::Test: 5.0 },
+) { total };
+
+node result: Dimensionless = @total;  // 35.0
+```
+
+Index bindings use the same `Name = Value` syntax as param bindings, but the right-hand side must be the **name of a concrete index** (not an expression).
+
+#### Kind matching
+
+Named indexes (`cat`) can only be bound to named indexes, and range indexes (`range`) can only be bound to range indexes. Binding a named index to a range or vice versa is a compile error.
+
+#### Dimension matching for range indexes
+
+When binding a required range index, the concrete range index must have the **same dimension**:
+
+```
+// lib.gcl
+range Step: Time;   // requires dimension Time
+
+// main.gcl
+range MyStep(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
+import "./lib.gcl"(Step = MyStep) { ... };
+
+range DistStep(0.0 m, 100.0 m, step: 10.0 m);  // ERROR: dimension is Length
+import "./lib.gcl"(Step = DistStep) { ... };     // dimension mismatch
+```
+
 ### Strict Binding Mode
 
-When a parameterized import has **any** param bindings, **all** params (including those with defaults) must be explicitly bound. This prevents accidentally relying on stale default values when you intend to customize the module.
+When a parameterized import has **any** bindings (param or index), **all** params and indexes with defaults must be explicitly bound. This prevents accidentally relying on stale default values when you intend to customize the module. Required indexes must **always** be bound, regardless of `#[allow_defaults]`.
 
 ```
 // rocket.gcl has params: dry_mass (default), fuel_mass (default), isp (default)
@@ -287,10 +337,14 @@ Required params can also be satisfied from the command line with `--set` or `--i
 
 ### Validation
 
-- Binding names must be `param` declarations in the imported file
+- Binding names must be `param` or index (`cat`/`range`) declarations in the imported file
 - Binding a `node`, `const`, or unknown name is a compile error
 - All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
-- When any binding is provided, all params (including those with defaults) must be bound, unless `#[allow_defaults]` is present
+- All required indexes must be provided by bindings
+- Index binding values must be the name of a concrete index in the importer's scope
+- Named indexes can only be bound to named indexes; range indexes can only be bound to range indexes
+- Range index dimensions must match between the required index and the bound index
+- When any binding is provided, all params and indexes with defaults must be bound, unless `#[allow_defaults]` is present
 - Dimension mismatches are caught by the normal dimension checker after merging
 
 ## Circular Import Detection
@@ -360,6 +414,37 @@ import "./lib/rocket.gcl"(dry_mass = 800.0 kg, fuel_mass = 2000.0 kg, isp = 320.
 import "./lib/rocket.gcl"(dry_mass = 500.0 kg, fuel_mass = 1200.0 kg, isp = 450.0 s) as stage_2;
 
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
+```
+
+### Reusable Templates with Required Indexes
+
+Use required indexes to create library files that are generic over their label sets:
+
+```
+project/
+  lib/
+    budget.gcl    -- template with required index (Phase) and required param (cost)
+  main.gcl        -- instantiates budget.gcl with a concrete Phase index
+```
+
+```
+// lib/budget.gcl
+cat Phase;
+
+param cost: Dimensionless[Phase];
+node total: Dimensionless = sum(for p: Phase { @cost[p] });
+```
+
+```
+// main.gcl
+cat ProjectPhase { Design, Build, Test }
+
+import "./lib/budget.gcl"(
+    Phase = ProjectPhase,
+    cost = { ProjectPhase::Design: 10.0, ProjectPhase::Build: 20.0, ProjectPhase::Test: 5.0 },
+) { total };
+
+node project_cost: Dimensionless = @total;
 ```
 
 ## Assertions in Imported Files
