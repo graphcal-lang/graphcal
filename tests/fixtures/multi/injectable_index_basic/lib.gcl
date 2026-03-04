@@ -1,0 +1,6 @@
+// lib.gcl -- library with a required named index
+cat Phase;
+
+param cost: Dimensionless[Phase];
+
+node total: Dimensionless = sum(for p: Phase { @cost[p] });

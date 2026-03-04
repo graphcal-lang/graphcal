@@ -1,0 +1,4 @@
+// lib.gcl -- library with a required named index
+cat Phase;
+
+param cost: Dimensionless[Phase];

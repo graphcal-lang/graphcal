@@ -700,6 +700,8 @@ impl UnfrozenIR {
         prefix: &str,
         bindings: &HashMap<String, Expr>,
         dep_names: &HashSet<String>,
+        index_bindings: &HashMap<String, String>,
+        import_item_attributes: &HashMap<String, Vec<graphcal_syntax::ast::Attribute>>,
     ) {
         /// Prefix a `ScopedName` dep if its member is in `dep_names`.
         fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<String>) -> ScopedName {
@@ -918,8 +920,95 @@ impl UnfrozenIR {
         }
         for (assert_name, ef) in dep.expected_fail {
             let prefixed = assert_name.with_prefix(prefix);
-            self.expected_fail.insert(prefixed, ef);
+
+            // If the expected_fail references overridden indexes, filter or drop.
+            if index_bindings.is_empty() {
+                self.expected_fail.insert(prefixed, ef);
+            } else {
+                match ef {
+                    ExpectedFail::All => {
+                        self.expected_fail.insert(prefixed, ExpectedFail::All);
+                    }
+                    ExpectedFail::Variants(keys) => {
+                        let filtered: Vec<_> = keys
+                            .into_iter()
+                            .filter(|key| {
+                                // Drop keys that reference any overridden index.
+                                !key.iter()
+                                    .any(|(idx, _)| index_bindings.contains_key(idx.as_str()))
+                            })
+                            .collect();
+                        if !filtered.is_empty() {
+                            self.expected_fail
+                                .insert(prefixed, ExpectedFail::Variants(filtered));
+                        }
+                        // If all keys were dropped, don't insert any expected_fail.
+                    }
+                }
+            }
         }
+
+        // Apply import-item expected_fail attributes (from the importing file).
+        for (orig_name, attrs) in import_item_attributes {
+            for attr in attrs {
+                if attr.name.name == "expected_fail" {
+                    let prefixed_assert = ScopedName::Local(orig_name.clone()).with_prefix(prefix);
+                    // Parse the attribute args into an ExpectedFail value.
+                    // We use a simplified parsing here since parse_expected_fail_args
+                    // requires a NamedSource — reuse the attribute args directly.
+                    if attr.args.is_empty() {
+                        self.expected_fail
+                            .insert(prefixed_assert, ExpectedFail::All);
+                    } else {
+                        let mut keys = Vec::new();
+                        for arg in &attr.args {
+                            if let Some(key) = expected_fail_key_from_attr_arg(arg) {
+                                keys.push(key);
+                            }
+                        }
+                        if !keys.is_empty() {
+                            self.expected_fail
+                                .insert(prefixed_assert, ExpectedFail::Variants(keys));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Extract an [`ExpectedFailKey`] from an attribute argument.
+///
+/// Returns `None` if the arg doesn't match the expected `Index::Variant` pattern.
+fn expected_fail_key_from_attr_arg(
+    arg: &graphcal_syntax::ast::AttributeArg,
+) -> Option<
+    Vec<(
+        graphcal_syntax::names::IndexName,
+        graphcal_syntax::names::VariantName,
+    )>,
+> {
+    use graphcal_syntax::ast::AttributeArg;
+    match arg {
+        AttributeArg::Path { segments, .. } if segments.len() == 2 => Some(vec![(
+            graphcal_syntax::names::IndexName::new(&segments[0].name),
+            graphcal_syntax::names::VariantName::new(&segments[1].name),
+        )]),
+        AttributeArg::Group { elements, .. } => {
+            let mut key = Vec::new();
+            for elem in elements {
+                if let AttributeArg::Path { segments, .. } = elem
+                    && segments.len() == 2
+                {
+                    key.push((
+                        graphcal_syntax::names::IndexName::new(&segments[0].name),
+                        graphcal_syntax::names::VariantName::new(&segments[1].name),
+                    ));
+                }
+            }
+            if key.is_empty() { None } else { Some(key) }
+        }
+        AttributeArg::Path { .. } => None,
     }
 }
 

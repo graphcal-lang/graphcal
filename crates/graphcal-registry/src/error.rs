@@ -823,6 +823,82 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::M015))]
     ManifestError { message: String },
 
+    #[error("binding target `{name}` is an index, not a param")]
+    #[diagnostic(
+        code(graphcal::M016),
+        help("index bindings must use another index name as the value, e.g., `{name} = MyIndex`")
+    )]
+    BindingTargetsIndex {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("targets an index, not a param")]
+        span: SourceSpan,
+    },
+
+    #[error("index binding `{dep_index} = {value}`: `{value}` is not a known index")]
+    #[diagnostic(
+        code(graphcal::M017),
+        help(
+            "the right-hand side of an index binding must be a `cat` or `range` index declared in the importing file or its transitive imports"
+        )
+    )]
+    IndexBindingNotAnIndex {
+        dep_index: String,
+        value: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a known index")]
+        span: SourceSpan,
+    },
+
+    #[error("index kind mismatch: `{dep_index}` is {dep_kind} but `{bound_index}` is {bound_kind}")]
+    #[diagnostic(
+        code(graphcal::M018),
+        help(
+            "named indexes (`cat`) can only be bound to named indexes; range indexes can only be bound to range indexes"
+        )
+    )]
+    IndexKindMismatch {
+        dep_index: String,
+        dep_kind: String,
+        bound_index: String,
+        bound_kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("kind mismatch")]
+        span: SourceSpan,
+    },
+
+    #[error("index `{name}` has a default but was not explicitly bound")]
+    #[diagnostic(code(graphcal::M019), help("{help}"))]
+    DefaultIndexNotProvided {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has default but not explicitly bound")]
+        span: SourceSpan,
+        help: String,
+    },
+
+    #[error(
+        "index dimension mismatch: `{dep_index}` requires dimension {expected_dim} but `{bound_index}` has dimension {found_dim}"
+    )]
+    #[diagnostic(
+        code(graphcal::I009),
+        help("range index bindings must have matching dimensions")
+    )]
+    IndexBindingDimensionMismatch {
+        dep_index: String,
+        expected_dim: String,
+        bound_index: String,
+        found_dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("dimension mismatch")]
+        span: SourceSpan,
+    },
+
     // --- Domain constraint errors ---
     #[error("unknown timezone `{timezone}`")]
     #[diagnostic(

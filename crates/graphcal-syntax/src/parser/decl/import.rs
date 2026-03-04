@@ -137,6 +137,13 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break;
             }
+
+            // Collect any leading attributes on this import item
+            let mut item_attributes = Vec::new();
+            while self.lexer.peek() == Some(&Token::Hash) {
+                item_attributes.push(self.parse_attribute()?);
+            }
+
             // Accept any identifier (imports can be any casing)
             let (name_str, name_span) = match self.lexer.next_token() {
                 Some((Token::Ident, span)) => (self.lexer.slice_at(span).to_string(), span),
@@ -175,6 +182,7 @@ impl Parser<'_> {
             };
 
             names.push(crate::ast::ImportItem {
+                attributes: item_attributes,
                 name: crate::ast::Ident {
                     name: name_str,
                     span: name_span,

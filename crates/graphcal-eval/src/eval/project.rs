@@ -290,11 +290,16 @@ struct DeferredInstantiatedImport {
     prefix: String,
     /// Param bindings: `param_name` → binding expression.
     bindings: HashMap<String, Expr>,
+    /// Index bindings: `dep_index_name` → `importer_index_name`.
+    index_bindings: HashMap<String, String>,
     /// For selective imports: the selected names and their local aliases.
     /// `None` for module imports (all names are accessible via `prefix::`).
     selective_names: Option<Vec<(String, String)>>, // (orig_name, local_name)
     /// Span of the import declaration (for diagnostics).
     import_span: Span,
+    /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on imported assertions).
+    /// Key = original name in dep, Value = list of attributes from the import item.
+    import_item_attributes: HashMap<String, Vec<graphcal_syntax::ast::Attribute>>,
 }
 
 /// Mutable state accumulated while processing import declarations.
@@ -356,6 +361,7 @@ fn compile_single_file_in_project(
             } else {
                 process_instantiated_import(
                     project,
+                    file_path,
                     &import_canonical,
                     import_decl,
                     decl,
@@ -389,8 +395,13 @@ fn compile_single_file_in_project(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and allow_defaults check form a single cohesive pipeline"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "needs access to project, importer, dep, and context"
+)]
 fn process_instantiated_import<'a>(
     project: &'a crate::loader::LoadedProject,
+    importer_path: &Path,
     import_canonical: &PathBuf,
     import_decl: &graphcal_syntax::ast::ImportDecl,
     decl: &graphcal_syntax::ast::Declaration,
@@ -399,6 +410,7 @@ fn process_instantiated_import<'a>(
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_canonical];
+    let importer_loaded = &project.files[importer_path];
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &import_decl.kind {
@@ -430,47 +442,138 @@ fn process_instantiated_import<'a>(
         (import_canonical.clone(), import_decl.path.span()),
     );
 
-    // Validate param bindings against the dependency's AST.
+    // Classify and validate bindings against the dependency's AST.
+    // Each binding is either a param binding (name targets a `param`) or an
+    // index binding (name targets a `cat`/`range` index).
     let mut bindings = HashMap::new();
+    let mut index_bindings = HashMap::new();
     for binding in &import_decl.param_bindings {
         let binding_name = &binding.name.name;
-        // Check that the binding name is a param in the dependency.
+
+        // Check if the binding name is a param in the dependency.
         let is_param = dep_loaded.ast.declarations.iter().any(
             |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name),
         );
-        if !is_param {
-            // Check if it's some other kind of declaration.
-            let actual_kind = dep_loaded
-                .ast
-                .declarations
-                .iter()
-                .find_map(|d| match &d.kind {
-                    DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
-                    DeclKind::Const(c) if c.name.value.as_str() == binding_name => Some("const"),
-                    DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
-                    DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
-                    _ => None,
-                });
-            if let Some(kind) = actual_kind {
-                return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                    name: binding_name.clone(),
-                    actual_kind: kind.to_string(),
+        if is_param {
+            bindings.insert(binding_name.clone(), binding.value.clone());
+            continue;
+        }
+
+        // Check if it's an index in the dependency.
+        let dep_index = dep_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Index(idx) if idx.name.value.as_str() == binding_name => Some(idx),
+                _ => None,
+            });
+        if let Some(dep_idx) = dep_index {
+            // Index binding: extract the RHS index name from the expression.
+            let rhs_name =
+                extract_index_name_from_binding_expr(&binding.value, binding_name, file_src)?;
+
+            // Validate the RHS resolves to an index in the importer's scope.
+            // Check 1: importer's own AST.
+            let importer_idx_ast =
+                importer_loaded
+                    .ast
+                    .declarations
+                    .iter()
+                    .find_map(|d| match &d.kind {
+                        DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
+                        _ => None,
+                    });
+            // Check 2: already-evaluated dependency registries.
+            let importer_idx_from_registry = if importer_idx_ast.is_none() {
+                ctx.extra_registry_builders
+                    .iter()
+                    .find_map(|reg| reg.indexes.get_index(&rhs_name))
+                    .or_else(|| {
+                        evaluated_files
+                            .values()
+                            .find_map(|ef| ef.registry.indexes.get_index(&rhs_name))
+                    })
+            } else {
+                None
+            };
+
+            if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
+                return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                    dep_index: binding_name.clone(),
+                    value: rhs_name,
+                    src: file_src.clone(),
+                    span: binding.value.span.into(),
+                }));
+            }
+
+            // Validate kind matching (named-to-named, range-to-range).
+            let dep_is_named = matches!(
+                dep_idx.kind,
+                graphcal_syntax::ast::IndexDeclKind::Named { .. }
+                    | graphcal_syntax::ast::IndexDeclKind::RequiredNamed
+            );
+            let imp_is_named = importer_idx_ast.map_or_else(
+                || importer_idx_from_registry.map(graphcal_registry::registry::IndexDef::is_named),
+                |imp_idx| {
+                    Some(matches!(
+                        imp_idx.kind,
+                        graphcal_syntax::ast::IndexDeclKind::Named { .. }
+                            | graphcal_syntax::ast::IndexDeclKind::RequiredNamed
+                    ))
+                },
+            );
+            if let Some(imp_named) = imp_is_named
+                && dep_is_named != imp_named
+            {
+                return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
+                    dep_index: binding_name.clone(),
+                    dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
+                    bound_index: rhs_name,
+                    bound_kind: if imp_named { "named" } else { "range" }.to_string(),
                     src: file_src.clone(),
                     span: binding.name.span.into(),
                 }));
             }
-            return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+            // Dimension matching for range indexes is deferred to
+            // process_deferred_instantiated_imports() where registries are available.
+
+            index_bindings.insert(binding_name.clone(), rhs_name);
+            continue;
+        }
+
+        // Check if it's some other kind of declaration.
+        let actual_kind = dep_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
+                DeclKind::Const(c) if c.name.value.as_str() == binding_name => Some("const"),
+                DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
+                DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
+                _ => None,
+            });
+        if let Some(kind) = actual_kind {
+            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
                 name: binding_name.clone(),
-                file_path: import_decl.path.display_path(),
+                actual_kind: kind.to_string(),
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
         }
-        bindings.insert(binding_name.clone(), binding.value.clone());
+        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+            name: binding_name.clone(),
+            file_path: import_decl.path.display_path(),
+            src: file_src.clone(),
+            span: binding.name.span.into(),
+        }));
     }
 
     // Register the dependency's declaration names in the importer's scope
     // so that the resolver recognizes references to them.
+    let mut import_item_attributes: HashMap<String, Vec<graphcal_syntax::ast::Attribute>> =
+        HashMap::new();
     let selective_names = match &import_decl.kind {
         graphcal_syntax::ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
@@ -486,6 +589,12 @@ fn process_instantiated_import<'a>(
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
                     }));
+                }
+
+                // Collect import-item attributes for deferred processing.
+                if !import_item.attributes.is_empty() {
+                    import_item_attributes
+                        .insert(orig_name.clone(), import_item.attributes.clone());
                 }
 
                 // Register the local name in scope for the resolver.
@@ -556,8 +665,24 @@ fn process_instantiated_import<'a>(
         }
     };
 
-    // Strict check: when any binding is provided, ALL params of the
-    // imported file must be explicitly bound unless #[allow_defaults].
+    // Required indexes must always be bound (regardless of allow_defaults).
+    for dep_decl in &dep_loaded.ast.declarations {
+        if let DeclKind::Index(idx) = &dep_decl.kind
+            && idx.kind.is_required()
+            && !index_bindings.contains_key(idx.name.value.as_str())
+        {
+            return Err(CompileError::Eval(
+                GraphcalError::RequiredParamNotProvided {
+                    name: idx.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: import_decl.path.span().into(),
+                },
+            ));
+        }
+    }
+
+    // Strict check: when any binding is provided, ALL params and indexes
+    // with defaults must be explicitly bound unless #[allow_defaults].
     let allow_defaults = decl
         .attributes
         .iter()
@@ -578,6 +703,21 @@ fn process_instantiated_import<'a>(
                     ),
                 }));
             }
+            // Indexes with defaults (Named/Range, not Required*) must also be bound.
+            if let DeclKind::Index(idx) = &dep_decl.kind
+                && !idx.kind.is_required()
+                && !index_bindings.contains_key(idx.name.value.as_str())
+            {
+                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
+                    name: idx.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: import_decl.path.span().into(),
+                    help: format!(
+                        "provide `{name} = <IndexName>` in the import binding or add `#[allow_defaults]` to the import",
+                        name = idx.name.value,
+                    ),
+                }));
+            }
         }
     }
 
@@ -585,8 +725,10 @@ fn process_instantiated_import<'a>(
         dep_path: import_canonical.clone(),
         prefix,
         bindings,
+        index_bindings,
         selective_names,
         import_span: decl.span,
+        import_item_attributes,
     });
     Ok(())
 }
@@ -870,6 +1012,32 @@ fn process_deferred_instantiated_imports(
         let dep_registry = dep_builder.build();
         merge_registry_into_builder(builder, &dep_registry);
 
+        // Validate range index dimension matching (Phase B — requires compiled registries).
+        for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
+            if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name)
+                && let crate::registry::IndexKind::RequiredRange { dimension: dep_dim } =
+                    &dep_idx_def.kind
+                && let Some(imp_idx_def) = builder.get_index(importer_idx_name)
+                && let crate::registry::IndexKind::Range {
+                    dimension: imp_dim, ..
+                }
+                | crate::registry::IndexKind::RequiredRange { dimension: imp_dim } =
+                    &imp_idx_def.kind
+                && dep_dim != imp_dim
+            {
+                return Err(CompileError::Eval(
+                    GraphcalError::IndexBindingDimensionMismatch {
+                        dep_index: dep_idx_name.clone(),
+                        expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
+                        bound_index: importer_idx_name.clone(),
+                        found_dim: builder.format_dimension(imp_dim),
+                        src: dep_src.clone(),
+                        span: deferred.import_span.into(),
+                    },
+                ));
+            }
+        }
+
         // Collect all declaration names in the dependency (for prefix_expr_refs).
         // These are un-prefixed member names used for containment checks.
         let mut dep_names: HashSet<String> = HashSet::new();
@@ -887,6 +1055,8 @@ fn process_deferred_instantiated_imports(
             &deferred.prefix,
             &deferred.bindings,
             &dep_names,
+            &deferred.index_bindings,
+            &deferred.import_item_attributes,
         );
 
         // For selective instantiated imports, add alias nodes that reference
@@ -1868,6 +2038,33 @@ pub fn compile_to_tir_project<F: crate::io::FileSystemReader>(
     let project = crate::loader::load_project(root_path, project_root, fs)?;
     let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))
+}
+
+/// Extract a `PascalCase` index name from a binding expression.
+///
+/// Index bindings use the form `DepIndex = ImporterIndex`, where both sides are
+/// `PascalCase` identifiers. The parser produces `ExprKind::StructConstruction`
+/// (with empty `fields`/`type_args`) for bare `PascalCase` identifiers in
+/// expression position, because it cannot distinguish a bare type name from an
+/// index name at parse time.
+fn extract_index_name_from_binding_expr(
+    expr: &Expr,
+    dep_index_name: &str,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<String, CompileError> {
+    match &expr.kind {
+        ExprKind::ConstRef(name) => Ok(name.value.to_string()),
+        ExprKind::StructConstruction {
+            type_name,
+            type_args,
+            fields,
+        } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
+        _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
+            name: dep_index_name.to_string(),
+            src: file_src.clone(),
+            span: expr.span.into(),
+        })),
+    }
 }
 
 /// Check whether a file contains a declaration with the given name.

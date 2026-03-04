@@ -7,7 +7,8 @@
 )]
 
 use crate::ast::{
-    AttributeArg, DeclKind, ExprKind, GenericConstraint, IndexDeclKind, MulDivOp, TypeExprKind,
+    AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportKind, IndexDeclKind, MulDivOp,
+    TypeExprKind,
 };
 use crate::parser::Parser;
 
@@ -1000,6 +1001,61 @@ fn parse_required_range_simple() {
         }
         other => panic!("expected range declaration, got {other:?}"),
     }
+}
+
+#[test]
+fn parse_import_item_with_expected_fail() {
+    let source = r#"import "./lib.gcl"(Phase = MyPhase) {
+    #[expected_fail(MyPhase::X)]
+    my_assert,
+};"#;
+    let file = Parser::new(source).parse_file().unwrap();
+    let DeclKind::Import(imp) = &file.declarations[0].kind else {
+        panic!("expected import");
+    };
+    let ImportKind::Selective(items) = &imp.kind else {
+        panic!("expected selective import");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name.name, "my_assert");
+    assert_eq!(items[0].attributes.len(), 1);
+    assert_eq!(items[0].attributes[0].name.name, "expected_fail");
+    assert_eq!(items[0].attributes[0].args.len(), 1);
+}
+
+#[test]
+fn parse_import_item_with_expected_fail_and_alias() {
+    let source = r#"import "./lib.gcl"(Phase = MyPhase) {
+    #[expected_fail]
+    my_assert as local_assert,
+};"#;
+    let file = Parser::new(source).parse_file().unwrap();
+    let DeclKind::Import(imp) = &file.declarations[0].kind else {
+        panic!("expected import");
+    };
+    let ImportKind::Selective(items) = &imp.kind else {
+        panic!("expected selective import");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name.name, "my_assert");
+    assert_eq!(items[0].alias.as_ref().unwrap().name, "local_assert");
+    assert_eq!(items[0].attributes.len(), 1);
+    assert_eq!(items[0].attributes[0].name.name, "expected_fail");
+}
+
+#[test]
+fn parse_import_item_no_attributes() {
+    let source = r#"import "./lib.gcl" { x, y };"#;
+    let file = Parser::new(source).parse_file().unwrap();
+    let DeclKind::Import(imp) = &file.declarations[0].kind else {
+        panic!("expected import");
+    };
+    let ImportKind::Selective(items) = &imp.kind else {
+        panic!("expected selective import");
+    };
+    assert_eq!(items.len(), 2);
+    assert!(items[0].attributes.is_empty());
+    assert!(items[1].attributes.is_empty());
 }
 
 #[test]

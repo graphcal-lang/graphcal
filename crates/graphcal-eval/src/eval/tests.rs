@@ -1404,3 +1404,38 @@ fn project_required_param_import() {
         "circumference = {circumference}, expected = {expected}"
     );
 }
+
+// --- Injectable index tests ---
+// Note: happy-path tests (basic, expected_fail) require Phase 3 (index name
+// substitution during IR merge) and are deferred until that is implemented.
+
+#[test]
+fn project_injectable_index_kind_mismatch() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/injectable_index_kind_mismatch/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    match result {
+        Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
+            dep_index,
+            bound_index,
+            ..
+        })) => {
+            assert_eq!(dep_index, "Phase");
+            assert_eq!(bound_index, "TimeStep");
+        }
+        other => panic!("expected IndexKindMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_injectable_index_strict_default_not_provided() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/injectable_index_strict/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    match result {
+        Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided { name, .. })) => {
+            assert_eq!(name, "Phase");
+        }
+        other => panic!("expected DefaultIndexNotProvided, got {other:?}"),
+    }
+}
