@@ -7,7 +7,7 @@ cat Step { First, Second, Third, Fourth }
 
 param x0: Dimensionless = 1.0;
 
-node values: Dimensionless[Step] = {
+param values: Dimensionless[Step] = {
     Step::First: 1.0,
     Step::Second: 2.0,
     Step::Third: 4.0,
