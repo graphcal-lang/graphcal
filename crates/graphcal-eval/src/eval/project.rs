@@ -933,7 +933,7 @@ fn lower_and_finalize(
 
     // Merge type-system declarations from module-imported registries.
     for dep_registry in &ctx.extra_registry_builders {
-        merge_registry_into_builder(&mut builder, dep_registry);
+        merge_registry_into_builder(&mut builder, dep_registry, &HashMap::new());
     }
 
     // Process deferred instantiated imports: compile dep to IR and merge.
@@ -1010,7 +1010,7 @@ fn process_deferred_instantiated_imports(
 
         // Merge the dependency's type-system declarations into the importer's registry.
         let dep_registry = dep_builder.build();
-        merge_registry_into_builder(builder, &dep_registry);
+        merge_registry_into_builder(builder, &dep_registry, &deferred.index_bindings);
 
         // Validate range index dimension matching (Phase B — requires compiled registries).
         for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
@@ -1097,9 +1097,12 @@ fn add_selective_aliases(
                 _ => None,
             });
 
-        let Some(type_ann) = type_ann else {
+        let Some(mut type_ann) = type_ann else {
             continue;
         };
+
+        // Substitute index names in the type annotation.
+        graphcal_ir::ir::substitute_type_expr_index_names(&mut type_ann, &deferred.index_bindings);
 
         // Determine if this is a const or runtime declaration.
         let is_const =
@@ -1860,7 +1863,11 @@ fn extract_runtime_values(
 ///
 /// This imports dimensions, units, indexes, and struct types so that the
 /// importing file can reference them.
-fn merge_registry_into_builder(builder: &mut RegistryBuilder, dep_registry: &Registry) {
+fn merge_registry_into_builder(
+    builder: &mut RegistryBuilder,
+    dep_registry: &Registry,
+    index_bindings: &HashMap<String, String>,
+) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
         builder.register_base_dimension(graphcal_syntax::names::DimName::new(name), id.clone());
@@ -1881,9 +1888,11 @@ fn merge_registry_into_builder(builder: &mut RegistryBuilder, dep_registry: &Reg
         builder.register_unit((*name).clone(), dim.clone(), *scale);
     }
 
-    // Import indexes.
+    // Import indexes — skip bound indexes (they are replaced by the importer's index).
     for idx_def in dep_registry.indexes.all_indexes() {
-        builder.register_index(idx_def.clone());
+        if !index_bindings.contains_key(idx_def.name.as_str()) {
+            builder.register_index(idx_def.clone());
+        }
     }
 
     // Import struct types.
