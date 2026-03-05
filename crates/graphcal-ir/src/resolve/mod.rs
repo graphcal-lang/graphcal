@@ -22,10 +22,8 @@ use graphcal_registry::resolve_types::{
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use graphcal_registry::resolve_types::{
-    DATETIME_EXTRACT_FNS, DATETIME_FROM_FNS, DATETIME_TO_FNS, DeclCategory, ExpectedFail,
-    ExpectedFailKey, ImportedValueNames, ResolvedFile, ScopedName, is_aggregation_fn,
-    is_constructor_fn, is_conversion_fn, is_datetime_extract_fn, is_datetime_from_fn,
-    is_datetime_to_fn, is_time_scale_name,
+    DeclCategory, ExpectedFail, ExpectedFailKey, ImportedValueNames, ResolvedFile, ScopedName,
+    is_aggregation_fn, is_time_scale_name,
 };
 
 // Re-export public items from submodules.

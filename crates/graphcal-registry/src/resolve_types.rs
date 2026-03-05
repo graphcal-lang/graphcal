@@ -15,18 +15,18 @@ use graphcal_syntax::span::Span;
 
 /// Aggregation functions recognized as special forms (not registered as builtins).
 pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
-pub const CONVERSION_FNS: &[&str] = &[
+const CONVERSION_FNS: &[&str] = &[
     "to_float", "to_int", "to_utc", "to_tai", "to_tt", "to_tdb", "to_et", "to_gpst", "to_gst",
     "to_bdt", "to_qzsst",
 ];
 /// Constructor functions that create values from string literals (not registered as builtins).
-pub const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
+const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
 /// Functions that construct a Datetime from a numeric value (Julian Date, MJD, Unix).
-pub const DATETIME_FROM_FNS: &[&str] = &["from_jd", "from_mjd", "from_unix"];
+const DATETIME_FROM_FNS: &[&str] = &["from_jd", "from_mjd", "from_unix"];
 /// Functions that convert a Datetime to a numeric value (Julian Date, MJD, Unix).
-pub const DATETIME_TO_FNS: &[&str] = &["to_jd", "to_mjd", "to_unix"];
+const DATETIME_TO_FNS: &[&str] = &["to_jd", "to_mjd", "to_unix"];
 /// Datetime component extraction functions.
-pub const DATETIME_EXTRACT_FNS: &[&str] = &[
+const DATETIME_EXTRACT_FNS: &[&str] = &[
     "year",
     "month",
     "day",
@@ -80,36 +80,6 @@ pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
 #[must_use]
 pub fn is_aggregation_fn(name: &str) -> bool {
     AGGREGATION_FNS.contains(&name)
-}
-
-/// Returns `true` if `name` is a built-in conversion function (`to_float`, `to_int`).
-#[must_use]
-pub fn is_conversion_fn(name: &str) -> bool {
-    CONVERSION_FNS.contains(&name)
-}
-
-/// Returns `true` if `name` is a constructor function (`datetime`, `epoch`).
-#[must_use]
-pub fn is_constructor_fn(name: &str) -> bool {
-    CONSTRUCTOR_FNS.contains(&name)
-}
-
-/// Returns `true` if `name` is a datetime extraction function (`year`, `month`, etc.).
-#[must_use]
-pub fn is_datetime_extract_fn(name: &str) -> bool {
-    DATETIME_EXTRACT_FNS.contains(&name)
-}
-
-/// Returns `true` if `name` is a datetime-from-numeric constructor (`from_jd`, etc.).
-#[must_use]
-pub fn is_datetime_from_fn(name: &str) -> bool {
-    DATETIME_FROM_FNS.contains(&name)
-}
-
-/// Returns `true` if `name` is a datetime-to-numeric function (`to_jd`, etc.).
-#[must_use]
-pub fn is_datetime_to_fn(name: &str) -> bool {
-    DATETIME_TO_FNS.contains(&name)
 }
 
 /// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).
