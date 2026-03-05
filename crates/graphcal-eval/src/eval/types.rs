@@ -15,7 +15,7 @@ pub enum DeclType {
 }
 
 /// Display unit metadata: the unit name(s) and scale factor for pretty-printing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DisplayUnit {
     /// Human-readable unit string (e.g., "km", "m/s^2", "km/hour")
     pub label: String,
@@ -24,7 +24,7 @@ pub struct DisplayUnit {
 }
 
 /// A runtime value: either a scalar with dimension and display info, a bool, an integer, or a struct.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Scalar {
         /// The value in base SI units.
@@ -261,7 +261,7 @@ fn epoch_to_jiff_timestamp(epoch: &hifitime::Epoch) -> Result<jiff::Timestamp, j
 }
 
 /// A runtime error associated with a specific node or param evaluation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeError {
     /// The expression evaluation failed directly (e.g., division by zero).
     EvalFailed {
@@ -288,7 +288,7 @@ impl std::fmt::Display for NodeError {
 }
 
 /// The result of evaluating an assertion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AssertResult {
     /// The assertion passed (body evaluated to `true`).
     Pass,
