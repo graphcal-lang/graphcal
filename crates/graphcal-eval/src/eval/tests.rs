@@ -7,25 +7,7 @@
 )]
 use super::*;
 use crate::error::GraphcalError;
-
-/// Test-only real filesystem implementation (avoids circular dev-dependency on `graphcal-io`).
-#[derive(Debug, Clone, Copy)]
-struct TestRealFs;
-
-impl crate::io::FileSystemReader for TestRealFs {
-    fn read_to_string(&self, path: &std::path::Path) -> Result<String, std::io::Error> {
-        std::fs::read_to_string(path)
-    }
-    fn canonicalize(&self, path: &std::path::Path) -> Result<std::path::PathBuf, std::io::Error> {
-        path.canonicalize()
-    }
-    fn is_file(&self, path: &std::path::Path) -> bool {
-        path.is_file()
-    }
-    fn exists(&self, path: &std::path::Path) -> bool {
-        path.exists()
-    }
-}
+use crate::io::TestRealFs;
 
 const FS: TestRealFs = TestRealFs;
 

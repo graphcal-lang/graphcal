@@ -419,25 +419,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Test-only real filesystem implementation (avoids circular dev-dependency
-    /// on `graphcal-io`).
-    #[derive(Debug, Clone, Copy)]
-    struct TestRealFs;
-
-    impl crate::io::FileSystemReader for TestRealFs {
-        fn read_to_string(&self, path: &Path) -> Result<String, std::io::Error> {
-            std::fs::read_to_string(path)
-        }
-        fn canonicalize(&self, path: &Path) -> Result<PathBuf, std::io::Error> {
-            path.canonicalize()
-        }
-        fn is_file(&self, path: &Path) -> bool {
-            path.is_file()
-        }
-        fn exists(&self, path: &Path) -> bool {
-            path.exists()
-        }
-    }
+    use crate::io::TestRealFs;
 
     const FS: TestRealFs = TestRealFs;
 

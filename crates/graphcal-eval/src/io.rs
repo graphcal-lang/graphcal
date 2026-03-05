@@ -87,6 +87,27 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 }
 
+/// Test-only real filesystem implementation (avoids circular dev-dependency on `graphcal-io`).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TestRealFs;
+
+#[cfg(test)]
+impl FileSystemReader for TestRealFs {
+    fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
+        std::fs::read_to_string(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
+        path.canonicalize()
+    }
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
