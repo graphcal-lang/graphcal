@@ -51,64 +51,30 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
 
 /// Format a declared type for display in diagnostics.
 pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> String {
-    match dt {
-        DeclaredType::Scalar(d) => registry.dimensions.format_dimension(d),
-        DeclaredType::Bool => "Bool".to_string(),
-        DeclaredType::Int => "Int".to_string(),
-        DeclaredType::Datetime(scale) => {
-            if scale.is_utc() {
-                "Datetime".to_string()
-            } else {
-                format!("Datetime<{scale}>")
-            }
-        }
-        DeclaredType::Label(index) => format!("Label({index})"),
-        DeclaredType::Struct(name, args) => {
-            if args.is_empty() {
-                name.to_string()
-            } else {
-                let args_str: Vec<String> = args
-                    .iter()
-                    .map(|a| format_declared_type(a, registry))
-                    .collect();
-                format!("{name}<{}>", args_str.join(", "))
-            }
-        }
-        DeclaredType::Indexed { element, index } => {
-            format!("{}[{index}]", format_declared_type(element, registry))
-        }
-    }
+    dt.format(&registry.dimensions)
 }
 
 /// Format an inferred type for display in diagnostics.
 #[must_use]
 pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
+    inferred_to_declared(it).format(&registry.dimensions)
+}
+
+/// Convert an `InferredType` to the corresponding `DeclaredType`.
+fn inferred_to_declared(it: &InferredType) -> DeclaredType {
     match it {
-        InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-        InferredType::Bool => "Bool".to_string(),
-        InferredType::Int => "Int".to_string(),
-        InferredType::Datetime(scale) => {
-            if scale.is_utc() {
-                "Datetime".to_string()
-            } else {
-                format!("Datetime<{scale}>")
-            }
+        InferredType::Scalar(d) => DeclaredType::Scalar(d.clone()),
+        InferredType::Bool => DeclaredType::Bool,
+        InferredType::Int => DeclaredType::Int,
+        InferredType::Datetime(scale) => DeclaredType::Datetime(*scale),
+        InferredType::Label(index) => DeclaredType::Label(index.clone()),
+        InferredType::Struct(n, args) => {
+            DeclaredType::Struct(n.clone(), args.iter().map(inferred_to_declared).collect())
         }
-        InferredType::Label(index) => format!("Label({index})"),
-        InferredType::Struct(name, args) => {
-            if args.is_empty() {
-                name.to_string()
-            } else {
-                let args_str: Vec<String> = args
-                    .iter()
-                    .map(|a| format_inferred_type(a, registry))
-                    .collect();
-                format!("{name}<{}>", args_str.join(", "))
-            }
-        }
-        InferredType::Indexed { element, index } => {
-            format!("{}[{index}]", format_inferred_type(element, registry))
-        }
+        InferredType::Indexed { element, index } => DeclaredType::Indexed {
+            element: Box::new(inferred_to_declared(element)),
+            index: index.clone(),
+        },
     }
 }
 

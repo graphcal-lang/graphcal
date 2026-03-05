@@ -3,6 +3,7 @@
 use graphcal_syntax::dimension::Dimension;
 use graphcal_syntax::names::{IndexName, StructTypeName};
 
+use crate::registry::DimensionRegistry;
 use crate::time_scale::TimeScale;
 
 /// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
@@ -21,4 +22,35 @@ pub enum DeclaredType {
         element: Box<Self>,
         index: IndexName,
     },
+}
+
+impl DeclaredType {
+    /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
+    #[must_use]
+    pub fn format(&self, dims: &DimensionRegistry) -> String {
+        match self {
+            Self::Scalar(d) => dims.format_dimension(d),
+            Self::Bool => "Bool".to_string(),
+            Self::Int => "Int".to_string(),
+            Self::Datetime(scale) => {
+                if scale.is_utc() {
+                    "Datetime".to_string()
+                } else {
+                    format!("Datetime<{scale}>")
+                }
+            }
+            Self::Label(index) => format!("Label({index})"),
+            Self::Struct(name, args) => {
+                if args.is_empty() {
+                    name.to_string()
+                } else {
+                    let args_str: Vec<String> = args.iter().map(|a| a.format(dims)).collect();
+                    format!("{name}<{}>", args_str.join(", "))
+                }
+            }
+            Self::Indexed { element, index } => {
+                format!("{}[{index}]", element.format(dims))
+            }
+        }
+    }
 }
