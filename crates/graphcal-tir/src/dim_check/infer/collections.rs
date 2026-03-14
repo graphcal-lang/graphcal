@@ -135,7 +135,7 @@ pub(super) fn infer_map_or_table_literal(
             }
         }
     }
-    // Validate each index exists and collect their variant lists
+    // Validate each index exists, reject range indexes as keys, and collect variant lists
     let mut axes_variants: Vec<Vec<graphcal_syntax::names::VariantName>> = Vec::new();
     for key in &entries[0].keys {
         let idx_def = registry
@@ -146,6 +146,16 @@ pub(super) fn infer_map_or_table_literal(
                 src: src.clone(),
                 span: key.index.span.into(),
             })?;
+        if idx_def.is_range() {
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "range index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
+                    key.index.value
+                ),
+                src: src.clone(),
+                span: key.index.span.into(),
+            });
+        }
         axes_variants.push(idx_def.variants());
     }
     // Check totality over the Cartesian product
@@ -278,13 +288,22 @@ pub(super) fn infer_map_or_table_literal(
         resolved_fn_sigs,
         src,
     )?;
-    // Reject nested Indexed as element type (ValueType constraint)
-    if matches!(first_type, InferredType::Indexed { .. }) {
-        return Err(GraphcalError::EvalError {
-            message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
-            src: src.clone(),
-            span: entries[0].value.span.into(),
-        });
+    // Reject nested Indexed when the inner index is a label (named) index.
+    // Label-indexed elements should use tuple keys instead: { (I::A, J::B): expr, ... }.
+    // Allow when the inner index is a range index, enabling mixed-index construction:
+    //   { LabelIndex::Variant: for t: RangeIndex { ... }, ... }
+    if let InferredType::Indexed { index, .. } = &first_type {
+        let inner_is_label = registry
+            .indexes
+            .get_index(index.as_str())
+            .is_some_and(|def| !def.is_range());
+        if inner_is_label {
+            return Err(GraphcalError::EvalError {
+                message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
+                src: src.clone(),
+                span: entries[0].value.span.into(),
+            });
+        }
     }
     for entry in &entries[1..] {
         let entry_type = infer_type(

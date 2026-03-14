@@ -96,7 +96,7 @@ The result is an indexed value where each element is the accumulated result up t
 
 ## Multi-Indexed Values
 
-Values can be indexed by multiple indexes using tuple keys:
+Values can be indexed by multiple label indexes using tuple keys:
 
 ```
 cat Phase { Launch, Cruise, Arrival }
@@ -118,6 +118,67 @@ Access elements with multiple index arguments:
 
 ```
 node launch_dep: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+```
+
+## Mixed Label and Range Indexes
+
+Values can be indexed by a combination of label indexes and range indexes. This is useful when you have categorical axes (e.g., maneuver types) combined with continuous axes (e.g., time steps).
+
+### Construction via `for` Comprehension
+
+The most common way to create a mixed-index value is with a multi-binding `for` comprehension:
+
+```
+cat Maneuver { Departure, Correction, Insertion }
+range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
+
+param accel: Acceleration[Maneuver] = {
+    Maneuver::Departure: 10.0 m/s^2,
+    Maneuver::Correction: 5.0 m/s^2,
+    Maneuver::Insertion: -3.0 m/s^2,
+};
+
+node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
+    @accel[m] * t
+};
+```
+
+### Construction via Map Literal with `for` Values
+
+You can also use a map literal where the keys are label index variants and each value is a `for` comprehension over a range index:
+
+```
+param v: Velocity[Maneuver, TimeStep] = {
+    Maneuver::Departure: for t: TimeStep { @accel[Maneuver::Departure] * t },
+    Maneuver::Correction: for t: TimeStep { @accel[Maneuver::Correction] * t },
+    Maneuver::Insertion: for t: TimeStep { @accel[Maneuver::Insertion] * t },
+};
+```
+
+### Mixed-Index Element Access
+
+Access elements by providing both a label and a range variable:
+
+```
+node departure_v: Velocity[TimeStep] = for t: TimeStep {
+    @v[Maneuver::Departure, t]
+};
+```
+
+### Aggregation
+
+Aggregate over either axis independently:
+
+```
+// Sum over the label axis for each time step
+node total_v: Velocity[TimeStep] = for t: TimeStep {
+    sum(for m: Maneuver { @v[m, t] })
+};
+
+// Max over the time axis for each maneuver
+node max_v: Velocity[Maneuver] = for m: Maneuver {
+    max(for t: TimeStep { @v[m, t] })
+};
 ```
 
 ## Table Literals
