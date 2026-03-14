@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use graphcal_syntax::ast::{
-    DimExpr, FnBody, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+    DimExpr, Expr, FnBody, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use graphcal_syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_syntax::names::{
@@ -10,8 +10,48 @@ use graphcal_syntax::names::{
 use graphcal_syntax::span::Span;
 
 // ---------------------------------------------------------------------------
-// Data types (unchanged)
+// Data types
 // ---------------------------------------------------------------------------
+
+/// How a unit's scale factor is determined.
+#[derive(Debug, Clone)]
+pub enum UnitScale {
+    /// Scale factor known at compile time (e.g., `unit km: Length = 1000 m;`).
+    Static(f64),
+    /// Scale factor depends on runtime values (e.g., `unit EUR: Money = (@rate) USD;`).
+    ///
+    /// The final SI scale = `eval(scale_expr) * base_unit_scale`.
+    Dynamic {
+        /// The unevaluated scale expression containing `@`-references.
+        scale_expr: Expr,
+        /// The scale factor of the base unit in the definition (resolved at compile time).
+        /// For `(@rate) USD` where USD has scale 1.0, this is 1.0.
+        base_unit_scale: f64,
+    },
+}
+
+impl UnitScale {
+    /// Returns the static scale factor, or `None` if the scale is dynamic.
+    #[must_use]
+    pub const fn as_static(&self) -> Option<f64> {
+        match self {
+            Self::Static(s) => Some(*s),
+            Self::Dynamic { .. } => None,
+        }
+    }
+
+    /// Returns `true` if the scale is resolved at compile time.
+    #[must_use]
+    pub const fn is_static(&self) -> bool {
+        matches!(self, Self::Static(_))
+    }
+
+    /// Returns `true` if the scale depends on runtime values.
+    #[must_use]
+    pub const fn is_dynamic(&self) -> bool {
+        matches!(self, Self::Dynamic { .. })
+    }
+}
 
 /// Information about a registered unit.
 #[derive(Debug, Clone)]
@@ -19,8 +59,8 @@ pub struct UnitInfo {
     /// The dimension this unit measures.
     pub dimension: Dimension,
     /// Scale factor to convert 1 of this unit to base SI units.
-    /// e.g., km -> 1000.0 (1 km = 1000 m)
-    pub scale: f64,
+    /// e.g., km -> `Static(1000.0)` (1 km = 1000 m)
+    pub scale: UnitScale,
 }
 
 /// A field in a type variant definition.
@@ -282,7 +322,9 @@ fn resolve_type_expr_impl(
     }
 }
 
-/// Shared implementation for resolving a `UnitExpr` to its dimension and scale factor.
+/// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
+///
+/// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
 fn resolve_unit_expr_impl(
     units: &HashMap<UnitName, UnitInfo>,
     expr: &UnitExpr,
@@ -293,10 +335,31 @@ fn resolve_unit_expr_impl(
             let info = units.get(item.name.value.as_str())?;
             let exp = item.power.unwrap_or(1);
             let powered_dim = info.dimension.pow(Rational::from_int(exp));
-            let powered_scale = info.scale.powi(exp);
+            let static_scale = info.scale.as_static()?;
+            let powered_scale = static_scale.powi(exp);
             Some(match item.op {
                 MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
                 MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
+            })
+        })
+}
+
+/// Shared implementation for resolving a `UnitExpr` to its dimension only (ignoring scales).
+///
+/// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
+fn resolve_unit_dimension_impl(
+    units: &HashMap<UnitName, UnitInfo>,
+    expr: &UnitExpr,
+) -> Option<Dimension> {
+    expr.terms
+        .iter()
+        .try_fold(Dimension::dimensionless(), |dim, item| {
+            let info = units.get(item.name.value.as_str())?;
+            let exp = item.power.unwrap_or(1);
+            let powered_dim = info.dimension.pow(Rational::from_int(exp));
+            Some(match item.op {
+                MulDivOp::Mul => dim * powered_dim,
+                MulDivOp::Div => dim / powered_dim,
             })
         })
 }
@@ -379,18 +442,26 @@ impl UnitRegistry {
     }
 
     /// Iterate over all units: (name, dimension, scale).
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &f64)> {
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &UnitScale)> {
         self.units
             .iter()
             .map(|(name, info)| (name, &info.dimension, &info.scale))
     }
 
-    /// Resolve a `UnitExpr` to its dimension and compound scale factor.
+    /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `None` if any unit name is unknown.
+    /// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
         resolve_unit_expr_impl(&self.units, expr)
+    }
+
+    /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
+    ///
+    /// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
+    #[must_use]
+    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Option<Dimension> {
+        resolve_unit_dimension_impl(&self.units, expr)
     }
 }
 
@@ -572,6 +643,22 @@ impl RegistryBuilder {
 
     /// Register a named unit with its dimension and SI scale factor.
     pub fn register_unit(&mut self, name: UnitName, dimension: Dimension, scale: f64) {
+        self.units.insert(
+            name,
+            UnitInfo {
+                dimension,
+                scale: UnitScale::Static(scale),
+            },
+        );
+    }
+
+    /// Register a named unit with a dynamic scale factor.
+    pub fn register_unit_dynamic(
+        &mut self,
+        name: UnitName,
+        dimension: Dimension,
+        scale: UnitScale,
+    ) {
         self.units.insert(name, UnitInfo { dimension, scale });
     }
 
@@ -606,6 +693,13 @@ impl RegistryBuilder {
     #[must_use]
     pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
         self.units.get(name)
+    }
+
+    /// Iterate over all units: (name, dimension, scale).
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &UnitScale)> {
+        self.units
+            .iter()
+            .map(|(name, info)| (name, &info.dimension, &info.scale))
     }
 
     /// Look up a type definition by type name.
@@ -654,12 +748,20 @@ impl RegistryBuilder {
         resolve_type_expr_impl(&self.dimensions, type_expr)
     }
 
-    /// Resolve a `UnitExpr` to its dimension and compound scale factor.
+    /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `None` if any unit name is unknown.
+    /// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
     #[must_use]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
         resolve_unit_expr_impl(&self.units, expr)
+    }
+
+    /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
+    ///
+    /// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
+    #[must_use]
+    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Option<Dimension> {
+        resolve_unit_dimension_impl(&self.units, expr)
     }
 }
 
@@ -757,7 +859,7 @@ mod tests {
         let r = make_registry();
         let m = r.units.get_unit("m").unwrap();
         assert_eq!(m.dimension, Dimension::base(length_id()));
-        assert!((m.scale - 1.0).abs() < f64::EPSILON);
+        assert!((m.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -765,7 +867,7 @@ mod tests {
         let r = make_registry();
         let km = r.units.get_unit("km").unwrap();
         assert_eq!(km.dimension, Dimension::base(length_id()));
-        assert!((km.scale - 1000.0).abs() < f64::EPSILON);
+        assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }
 
     #[test]

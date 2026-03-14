@@ -26,7 +26,7 @@ use graphcal_registry::declared_type::DeclaredType;
 use graphcal_registry::error::GraphcalError;
 use graphcal_registry::format::format_unit_expr;
 use graphcal_registry::prelude::load_prelude;
-use graphcal_registry::registry::{self, Registry, RegistryBuilder};
+use graphcal_registry::registry::{self, Registry, RegistryBuilder, UnitScale};
 use graphcal_registry::resolve_types::ScopedName;
 use graphcal_registry::runtime_value::RuntimeValue;
 
@@ -211,12 +211,23 @@ pub fn lower_to_builder(
     imported: &ImportedNames,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution
-    let resolved = resolve_with_imports(ast, src, imported)?;
+    let mut resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
     register_file_declarations(ast, &mut builder, src)?;
+
+    // Step 2b: Augment runtime deps with transitive dependencies through dynamic units.
+    // This must happen after registry construction (which registers dynamic units)
+    // but before the resolved entries are consumed.
+    let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
+    augment_runtime_deps_for_dynamic_units(
+        &mut resolved.runtime_deps,
+        &dynamic_unit_deps,
+        &resolved.params,
+        &resolved.nodes,
+    );
 
     // Step 3: Register user-defined functions
     register_functions(&resolved, &mut builder, src)?;
@@ -419,12 +430,21 @@ pub fn lower_to_builder_with_imported_values(
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
-    let resolved = resolve_with_imported_values(ast, src, imported_names)?;
+    let mut resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
     // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
     register_file_declarations(ast, &mut builder, src)?;
+
+    // Step 2b: Augment runtime deps with transitive dependencies through dynamic units.
+    let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
+    augment_runtime_deps_for_dynamic_units(
+        &mut resolved.runtime_deps,
+        &dynamic_unit_deps,
+        &resolved.params,
+        &resolved.nodes,
+    );
 
     // Step 3: Register user-defined functions (including imported functions)
     register_functions(&resolved, &mut builder, src)?;
@@ -1482,17 +1502,28 @@ fn register_unit_decl(
                 span: u.name.span.into(),
             })?;
     let scale = if let Some(def) = &u.definition {
-        let (_unit_dim, base_scale) =
-            registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
-                GraphcalError::UnknownUnit {
-                    name: u.name.value.clone(),
-                    src: src.clone(),
-                    span: def.span.into(),
-                }
-            })?;
-        eval_scale_expr(&def.scale_expr, src)? * base_scale
+        if contains_graph_ref(&def.scale_expr) {
+            // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
+            // Resolve the base unit's dimension and static scale factor.
+            let base_scale = resolve_base_unit_static_scale(registry, &def.unit_expr, src)?;
+            UnitScale::Dynamic {
+                scale_expr: def.scale_expr.clone(),
+                base_unit_scale: base_scale,
+            }
+        } else {
+            // Static unit: scale is a compile-time constant.
+            let (_unit_dim, base_scale) =
+                registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
+                    GraphcalError::UnknownUnit {
+                        name: u.name.value.clone(),
+                        src: src.clone(),
+                        span: def.span.into(),
+                    }
+                })?;
+            UnitScale::Static(eval_scale_expr(&def.scale_expr, src)? * base_scale)
+        }
     } else {
-        1.0
+        UnitScale::Static(1.0)
     };
     // If this is a base unit (scale=1, no definition) for a single
     // base dimension, record the unit name as the SI symbol for
@@ -1508,8 +1539,183 @@ fn register_unit_decl(
             registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
         }
     }
-    registry.register_unit(u.name.value.clone(), dim, scale);
+    registry.register_unit_dynamic(u.name.value.clone(), dim, scale);
     Ok(())
+}
+
+/// Resolve the static scale factor of the base unit expression in a unit definition.
+///
+/// For `unit EUR: Money = (@rate) USD;`, the base unit expr is `USD` with scale 1.0.
+/// The base unit itself must be static (not dynamic).
+fn resolve_base_unit_static_scale(
+    registry: &RegistryBuilder,
+    unit_expr: &graphcal_syntax::ast::UnitExpr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<f64, GraphcalError> {
+    let (_dim, base_scale) =
+        registry
+            .resolve_unit_expr(unit_expr)
+            .ok_or_else(|| GraphcalError::UnknownUnit {
+                name: format_unit_expr(unit_expr).into(),
+                src: src.clone(),
+                span: unit_expr.span.into(),
+            })?;
+    Ok(base_scale)
+}
+
+/// Check if an expression contains any `@`-references (graph refs).
+fn contains_graph_ref(expr: &Expr) -> bool {
+    struct GraphRefDetector {
+        found: bool,
+    }
+    impl ExprVisitor for GraphRefDetector {
+        type Error = std::convert::Infallible;
+        fn visit_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+            self.found = true;
+            Ok(())
+        }
+        fn visit_qualified_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+            self.found = true;
+            Ok(())
+        }
+    }
+    let mut detector = GraphRefDetector { found: false };
+    let _ = detector.visit_expr(expr);
+    detector.found
+}
+
+/// Build a map of dynamic unit name → set of `@`-reference names from the registry.
+///
+/// For each dynamic unit, extracts the graph refs from its `scale_expr` using
+/// the `GraphRefCollector` visitor. Returns an empty map if no dynamic units exist.
+fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<String, HashSet<String>> {
+    let mut dynamic_deps: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for (name, _dim, scale) in registry.all_units() {
+        if let UnitScale::Dynamic { scale_expr, .. } = scale {
+            let mut refs = HashSet::new();
+            let mut collector = GraphRefNameCollector { refs: &mut refs };
+            let _ = collector.visit_expr(scale_expr);
+            if !refs.is_empty() {
+                dynamic_deps.insert(name.to_string(), refs);
+            }
+        }
+    }
+
+    dynamic_deps
+}
+
+/// Visitor that collects `@`-reference names from an expression.
+struct GraphRefNameCollector<'a> {
+    refs: &'a mut HashSet<String>,
+}
+
+impl ExprVisitor for GraphRefNameCollector<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::GraphRef(ident) = &expr.kind {
+            self.refs.insert(ident.value.to_string());
+        }
+        Ok(())
+    }
+
+    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind {
+            self.refs.insert(ident.value.to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Visitor that collects all unit names referenced by `UnitLiteral` and `Convert` nodes.
+struct UnitNameCollector {
+    unit_names: HashSet<String>,
+}
+
+impl ExprVisitor for UnitNameCollector {
+    type Error = std::convert::Infallible;
+
+    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::UnitLiteral { unit, .. } = &expr.kind {
+            for term in &unit.terms {
+                self.unit_names.insert(term.name.value.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
+        // Collect unit names from Convert targets
+        if let ExprKind::Convert { target, .. } = &expr.kind {
+            for term in &target.terms {
+                self.unit_names.insert(term.name.value.to_string());
+            }
+        }
+        // Continue recursion into the inner expression
+        self.visit_expr(inner)
+    }
+}
+
+/// Augment `runtime_deps` with transitive dependencies through dynamic units.
+///
+/// When a param/node expression references a dynamic unit (via `UnitLiteral` or
+/// `Convert`), the `@`-references in that unit's scale expression become implicit
+/// dependencies of the param/node. This ensures correct topological ordering:
+/// the params referenced by dynamic unit scales are evaluated before any
+/// node/param that uses the dynamic unit.
+fn augment_runtime_deps_for_dynamic_units(
+    runtime_deps: &mut HashMap<String, HashSet<String>>,
+    dynamic_unit_deps: &HashMap<String, HashSet<String>>,
+    params: &[graphcal_registry::resolve_types::ResolvedParamEntry],
+    nodes: &[graphcal_registry::resolve_types::ResolvedNodeEntry],
+) {
+    if dynamic_unit_deps.is_empty() {
+        return;
+    }
+
+    // For each param with a default expression, check for dynamic unit references
+    for param in params {
+        if let Some(expr) = &param.default_expr {
+            let extra_deps = collect_dynamic_unit_deps_from_expr(expr, dynamic_unit_deps);
+            if !extra_deps.is_empty() {
+                runtime_deps
+                    .entry(param.name.clone())
+                    .or_default()
+                    .extend(extra_deps);
+            }
+        }
+    }
+
+    // For each node, check for dynamic unit references
+    for node in nodes {
+        let extra_deps = collect_dynamic_unit_deps_from_expr(&node.expr, dynamic_unit_deps);
+        if !extra_deps.is_empty() {
+            runtime_deps
+                .entry(node.name.clone())
+                .or_default()
+                .extend(extra_deps);
+        }
+    }
+}
+
+/// Collect transitive `@`-dependencies from dynamic units referenced in an expression.
+fn collect_dynamic_unit_deps_from_expr(
+    expr: &Expr,
+    dynamic_unit_deps: &HashMap<String, HashSet<String>>,
+) -> HashSet<String> {
+    let mut collector = UnitNameCollector {
+        unit_names: HashSet::new(),
+    };
+    let _ = collector.visit_expr(expr);
+
+    let mut extra_deps = HashSet::new();
+    for unit_name in &collector.unit_names {
+        if let Some(deps) = dynamic_unit_deps.get(unit_name) {
+            extra_deps.extend(deps.iter().cloned());
+        }
+    }
+    extra_deps
 }
 
 fn register_index_decl(

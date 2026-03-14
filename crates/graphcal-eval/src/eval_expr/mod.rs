@@ -13,13 +13,13 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{Expr, ExprKind};
+use graphcal_syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 use graphcal_syntax::names::VariantName;
 
 use crate::builtins::BuiltinFunction;
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
-use crate::registry::Registry;
+use crate::registry::{Registry, UnitScale};
 
 pub use crate::runtime_value::RuntimeValue;
 
@@ -70,13 +70,7 @@ pub fn eval_expr(
             span: expr.span.into(),
         }),
         ExprKind::UnitLiteral { value, unit } => {
-            let (_dim, scale) = ctx.registry.units.resolve_unit_expr(unit).ok_or_else(|| {
-                GraphcalError::EvalError {
-                    message: "unknown unit in literal".to_string(),
-                    src: ctx.src.clone(),
-                    span: unit.span.into(),
-                }
-            })?;
+            let scale = resolve_unit_scale(unit, values, local_values, ctx)?;
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
@@ -274,4 +268,59 @@ pub fn eval_expr(
         #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
         ExprKind::TupleMatch { .. } => unreachable!("TupleMatch should be desugared before eval"),
     }
+}
+
+/// Resolve a `UnitExpr` to its compound scale factor at runtime.
+///
+/// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
+/// For dynamic units, the scale expression is evaluated using the current `values`
+/// and `local_values` maps, then multiplied by the base unit's static scale.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
+/// fails to evaluate to a scalar.
+pub fn resolve_unit_scale(
+    unit: &UnitExpr,
+    values: &HashMap<String, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<f64, GraphcalError> {
+    let mut compound_scale = 1.0;
+    for item in &unit.terms {
+        let info = ctx
+            .registry
+            .units
+            .get_unit(item.name.value.as_str())
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!("unknown unit `{}`", item.name.value),
+                src: ctx.src.clone(),
+                span: item.name.span.into(),
+            })?;
+        let unit_scale = match &info.scale {
+            UnitScale::Static(s) => *s,
+            UnitScale::Dynamic {
+                scale_expr,
+                base_unit_scale,
+            } => {
+                let scale_val = eval_expr(scale_expr, values, local_values, ctx)?;
+                let RuntimeValue::Scalar(scale_f64) = scale_val else {
+                    return Err(GraphcalError::EvalError {
+                        message: "dynamic unit scale expression must evaluate to a scalar"
+                            .to_string(),
+                        src: ctx.src.clone(),
+                        span: scale_expr.span.into(),
+                    });
+                };
+                scale_f64 * base_unit_scale
+            }
+        };
+        let exp = item.power.unwrap_or(1);
+        let powered_scale = unit_scale.powi(exp);
+        match item.op {
+            MulDivOp::Mul => compound_scale *= powered_scale,
+            MulDivOp::Div => compound_scale /= powered_scale,
+        }
+    }
+    Ok(compound_scale)
 }

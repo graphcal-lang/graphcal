@@ -299,7 +299,7 @@ pub(super) fn evaluate_plan(
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
         let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
         if let Some(expr) = expr_map.get(name) {
-            attach_display_units(&mut value, expr, &tir.registry);
+            attach_display_units(&mut value, expr, &tir.registry, &values);
         }
         value
     };
@@ -941,7 +941,8 @@ fn evaluate_plot(
         let field_value = runtime_to_plot_field_value(&rv);
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
-        let meta = extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry);
+        let meta =
+            extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry, values);
         encoding_meta.push((channel_name.clone(), meta));
 
         fields.push((channel_name, field_value));
@@ -987,9 +988,10 @@ fn extract_encoding_axis_meta(
     expr: &graphcal_syntax::ast::Expr,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     registry: &Registry,
+    values: &HashMap<String, RuntimeValue>,
 ) -> AxisMeta {
     let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
-    let unit_label = extract_flat_display_unit(expr, registry).map(|du| du.label);
+    let unit_label = extract_flat_display_unit(expr, registry, values).map(|du| du.label);
     AxisMeta {
         dimension_label,
         unit_label,

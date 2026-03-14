@@ -12,7 +12,7 @@ use graphcal_syntax::span::Span;
 use graphcal_eval::builtins::{builtin_constants, builtin_functions};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::format::format_unit_expr_with_config;
-use graphcal_eval::registry::{IndexKind, Registry};
+use graphcal_eval::registry::{IndexKind, Registry, UnitScale};
 use graphcal_eval::tir::{ResolvedFnSig, ResolvedIndex, ResolvedTypeExpr, TIR};
 
 /// The kind of expression scope that introduces local variables.
@@ -1359,10 +1359,13 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                 if let Some(unit_info) = registry.units.get_unit(name)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
+                    let scale_str = match &unit_info.scale {
+                        UnitScale::Static(s) => format!("{s}"),
+                        UnitScale::Dynamic { .. } => "dynamic".to_string(),
+                    };
                     def_mut.type_description = Some(format!(
-                        "{}, scale = {}",
+                        "{}, scale = {scale_str}",
                         registry.dimensions.format_dimension(&unit_info.dimension),
-                        unit_info.scale
                     ));
                 }
             }

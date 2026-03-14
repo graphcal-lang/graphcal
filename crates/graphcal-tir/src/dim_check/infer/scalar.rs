@@ -413,22 +413,25 @@ pub(super) fn infer_convert(
         src,
     )?;
     let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
-    let (target_dim, _scale) = registry.units.resolve_unit_expr(target).ok_or_else(|| {
-        for item in &target.terms {
-            if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                return GraphcalError::UnknownUnit {
-                    name: item.name.value.clone(),
-                    src: src.clone(),
-                    span: item.name.span.into(),
-                };
+    let target_dim = registry
+        .units
+        .resolve_unit_dimension(target)
+        .ok_or_else(|| {
+            for item in &target.terms {
+                if registry.units.get_unit(item.name.value.as_str()).is_none() {
+                    return GraphcalError::UnknownUnit {
+                        name: item.name.value.clone(),
+                        src: src.clone(),
+                        span: item.name.span.into(),
+                    };
+                }
             }
-        }
-        GraphcalError::UnknownUnit {
-            name: UnitName::new("unknown"),
-            src: src.clone(),
-            span: target.span.into(),
-        }
-    })?;
+            GraphcalError::UnknownUnit {
+                name: UnitName::new("unknown"),
+                src: src.clone(),
+                span: target.span.into(),
+            }
+        })?;
 
     if expr_dim != target_dim {
         return Err(GraphcalError::ConversionDimensionMismatch {

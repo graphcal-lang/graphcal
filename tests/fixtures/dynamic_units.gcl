@@ -1,0 +1,19 @@
+// Dynamic unit definitions: conversion factors from runtime values.
+// Example: currency exchange rates.
+dimension Money;
+unit USD: Money;
+
+// Exchange rate as a param (can be overridden)
+param usd_per_eur: Dimensionless = 1.08;
+
+// EUR is defined dynamically: 1 EUR = usd_per_eur USD
+unit EUR: Money = (@usd_per_eur) USD;
+
+// Use the dynamic unit in expressions
+node price_eur: Money = 100.0 EUR;
+
+// Convert back to USD for display
+node price_usd: Money = @price_eur -> USD;
+
+// A static computation using the dynamic unit
+node total: Money = @price_eur + 50.0 USD;

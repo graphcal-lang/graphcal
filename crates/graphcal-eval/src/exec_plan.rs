@@ -537,9 +537,7 @@ fn infer_bound_dimension(
 ) -> Option<graphcal_syntax::dimension::Dimension> {
     use graphcal_syntax::ast::ExprKind;
     match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => {
-            registry.units.resolve_unit_expr(unit).map(|(dim, _)| dim)
-        }
+        ExprKind::UnitLiteral { unit, .. } => registry.units.resolve_unit_dimension(unit),
         ExprKind::UnaryOp { operand, .. } => infer_bound_dimension(operand, registry),
         ExprKind::BinOp { lhs, rhs, .. } => {
             // Try lhs first, fall back to rhs

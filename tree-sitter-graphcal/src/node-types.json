@@ -6832,15 +6832,26 @@
   {
     "type": "unit_def",
     "named": true,
-    "fields": {},
+    "fields": {
+      "scale": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
-      "multiple": true,
+      "multiple": false,
       "required": true,
       "types": [
-        {
-          "type": "number",
-          "named": true
-        },
         {
           "type": "unit_expr",
           "named": true

@@ -626,8 +626,9 @@ module.exports = grammar({
     )),
 
     // Unit definition in unit declaration: 1000 m, 1 kg * m / s^2
+    // Also supports dynamic scale: (@rate) USD
     unit_def: $ => seq(
-      $.number,
+      field("scale", choice($.number, $.parenthesized_expr)),
       $.unit_expr,
     ),
 

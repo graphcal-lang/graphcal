@@ -104,7 +104,7 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
-            let (dim, _scale) = registry.units.resolve_unit_expr(unit).ok_or_else(|| {
+            let dim = registry.units.resolve_unit_dimension(unit).ok_or_else(|| {
                 for item in &unit.terms {
                     if registry.units.get_unit(item.name.value.as_str()).is_none() {
                         return GraphcalError::UnknownUnit {
