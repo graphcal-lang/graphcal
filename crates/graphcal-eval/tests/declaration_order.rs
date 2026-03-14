@@ -157,4 +157,15 @@ proptest! {
             .unwrap_or_else(|e| panic!("shuffled source (seed={seed}) failed to evaluate: {e}"));
         assert_results_equal(&original_result, &shuffled_result);
     }
+
+    #[test]
+    fn mixed_index_order_independent(seed in 0u64..10000) {
+        let source = include_str!("../../../tests/fixtures/mixed_index.gcl");
+        let shuffled = shuffle_source(source, seed);
+        let original_result = compile_and_eval(source)
+            .expect("original source must evaluate");
+        let shuffled_result = compile_and_eval(&shuffled)
+            .unwrap_or_else(|e| panic!("shuffled source (seed={seed}) failed to evaluate: {e}"));
+        assert_results_equal(&original_result, &shuffled_result);
+    }
 }
