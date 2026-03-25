@@ -29,3 +29,5 @@
 - [ ] Parallel evaluation of independent DAG branches via Rayon fork-join.
 - [ ] Accumulator-based error collection during evaluation (Salsa pattern) -- errors as side channel, not in return types.
 - [ ] Age-based cache eviction for long-running live view sessions.
+- [ ] Automatic differentiation (`diff`, `grad`, `jacobian`) for sensitivity analysis and optimization. See [23-auto-differentiation-and-gpu.md](./23-auto-differentiation-and-gpu.md).
+- [ ] GPU/TPU batch evaluation via Burn framework for parameter sweeps and Monte Carlo analysis. See [23-auto-differentiation-and-gpu.md](./23-auto-differentiation-and-gpu.md).
