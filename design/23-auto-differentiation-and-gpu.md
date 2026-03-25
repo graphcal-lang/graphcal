@@ -447,11 +447,40 @@ gradients = model.grad("total_cost", backend="gpu")
    - Stream batches (evaluate in chunks)
    - Fuse operations (eliminate intermediate tensors)
 
+## Rust Ecosystem Status (as of March 2026)
+
+| Capability | Best Current Option | Maturity |
+|-----------|-------------------|----------|
+| Forward-mode AD | `ad-trait` crate, `autodiff` crate | Usable |
+| Reverse-mode AD | Burn (`burn-autodiff`), `ad-trait` | Usable |
+| Compiler-level AD | `#[autodiff]` (Enzyme in rustc nightly) | Experimental (RFC pending, nightly-only, cross-crate broken) |
+| Cross-platform GPU compute | wgpu | Mature |
+| NVIDIA GPU compute | cudarc (v0.19) | Mature |
+| Write GPU shaders in Rust | rust-gpu (SPIR-V codegen) | Experimental (all major GPU backends demonstrated July 2025) |
+| Full DL framework | Burn (v0.20) | Active development, CubeCL replacing candle backend |
+| Automatic batching (vmap-style) | None in Rust | Not available |
+| Composable transforms (JAX-like) | None in Rust | Not available |
+
+### Notable Details
+
+- **Rust `#[autodiff]`** (tracking issue `rust-lang/rust#124509`): Uses Enzyme at LLVM IR level. Available on `rustc 1.96.0-nightly` with `-Zautodiff=Enable`. Batching support merged early 2025. However: not shipped in standard nightly distribution, doesn't work across crate boundaries, and fails on `impl` blocks. Rust's aliasing guarantees (`&` vs `&mut`) give Enzyme performance advantages over C++ — this is a [Rust project goal](https://rust-lang.github.io/rust-project-goals/2024h2/Rust-for-SciComp.html) for scientific computing.
+
+- **`ad-trait`** (April 2025, [arXiv:2504.15976](https://arxiv.org/abs/2504.15976)): New crate supporting both forward and reverse mode via operator overloading. Integrates with nalgebra/ndarray.
+
+- **Burn v0.20**: Most active Rust DL framework. Backends: wgpu (cross-platform), CUDA/ROCm (via CubeCL), LibTorch, ndarray (CPU, supports `no_std`). Supports WebAssembly via wgpu/WebGPU. Autodiff is a composable backend layer (`Autodiff<Wgpu>`). Candle backend deprecated in favor of CubeCL.
+
+- **rust-gpu**: Compiles Rust to SPIR-V via `rustc_codegen_spirv`. Major milestone in July 2025: all major GPU backends demonstrated from single Rust codebase. SPIR-V consumed by wgpu via naga translation.
+
+- **No vmap equivalent in Rust**: JAX's `vmap` (automatic batching) has no Rust equivalent. Batching must be done manually via tensor operations or by compiling to a framework that supports it (Burn tensors, or generating JAX code).
+
 ## References
 
 - **Rust `#[autodiff]`**: Nightly feature using Enzyme for LLVM-level AD. Tracks `rust-lang/rust#124509`. Currently experimental but promising for source-level AD in Rust.
-- **Burn framework**: https://burn.dev — Multi-backend tensor framework in Rust with built-in autodiff.
+- **ad-trait**: Fast forward+reverse AD via operator overloading. https://arxiv.org/abs/2504.15976
+- **Burn framework**: https://burn.dev — Multi-backend tensor framework in Rust with built-in autodiff (v0.20).
 - **JAX**: https://jax.readthedocs.io — `grad`, `vmap`, `jit` composable transformations. Gold standard for batch+AD on GPU/TPU.
 - **Enzyme**: https://enzyme.mit.edu — LLVM-level AD. Powers Rust's `#[autodiff]`.
+- **rust-gpu**: https://rust-gpu.github.io — Compile Rust to SPIR-V for GPU shaders.
 - **wgpu**: https://wgpu.rs — WebGPU implementation in Rust. Portable GPU compute.
+- **cudarc**: https://docs.rs/cudarc — Safe Rust bindings for CUDA driver API.
 - **Dual numbers**: Clifford (1873). Modern treatment in "Automatic Differentiation in Machine Learning: a Survey" (Baydin et al., 2018).
