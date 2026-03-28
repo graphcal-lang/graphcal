@@ -205,7 +205,7 @@ fn lower_with_imports(
     clippy::too_many_lines,
     reason = "will be decomposed in a later refactor phase"
 )]
-pub fn lower_to_builder(
+pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
@@ -407,7 +407,7 @@ pub fn lower_to_builder(
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
 /// that can be further mutated before freezing.
 ///
-/// Unlike [`lower_to_builder`], this uses [`resolve_with_imported_values`] which
+/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values` which
 /// only adds imported names to the scope (not their expressions). The actual
 /// imported values are stored in `UnfrozenIR::imported_values` and injected
 /// into the execution plan at runtime.
@@ -1302,11 +1302,7 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
 ///
 /// This must be called **before** `prefix_expr_refs` so that index names are
 /// correct before ref-prefixing adds the `prefix::` qualifier.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<String, String>) {
+pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<String, String>) {
     if bindings.is_empty() {
         return;
     }
@@ -1395,7 +1391,7 @@ fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<ScopedName>) {
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
-pub fn register_file_declarations(
+pub(crate) fn register_file_declarations(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
@@ -1407,7 +1403,7 @@ pub fn register_file_declarations(
 /// Register only the named type-system declarations (dimensions, units, indexes, types)
 /// from a file into the registry.
 ///
-/// This is the selective counterpart to [`register_file_declarations`]: instead of
+/// This is the selective counterpart to `register_file_declarations`: instead of
 /// registering everything, it only registers declarations whose names are in `names`.
 ///
 /// # Errors

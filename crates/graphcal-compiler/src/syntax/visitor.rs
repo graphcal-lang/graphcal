@@ -3,7 +3,7 @@
 //! These traits eliminate the need for hand-written recursive match expressions
 //! across the codebase. Two traits are provided:
 //!
-//! - [`ExprVisitor`] for read-only traversals (reference collection, validation)
+//! - `ExprVisitor` for read-only traversals (reference collection, validation)
 //! - [`ExprVisitorMut`] for in-place rewriting (name prefixing, qualification rewriting)
 //!
 //! Default implementations recurse into child expressions. Implementors override
@@ -15,7 +15,7 @@ use crate::syntax::ast::{Expr, ExprKind};
 ///
 /// Default implementations for container nodes recurse into children.
 /// Override leaf methods to intercept specific node types.
-pub trait ExprVisitor {
+pub(crate) trait ExprVisitor {
     type Error;
 
     /// Top-level dispatch. Override to add pre/post-visit logic.
@@ -238,7 +238,7 @@ pub trait ExprVisitor {
 
 /// Mutable visitor for in-place rewriting of [`Expr`] trees.
 ///
-/// Same structure as [`ExprVisitor`] but takes `&mut Expr` references.
+/// Same structure as `ExprVisitor` but takes `&mut Expr` references.
 pub trait ExprVisitorMut {
     type Error;
 

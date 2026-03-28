@@ -19,7 +19,7 @@ struct BaseDimIds {
 }
 
 /// Load all built-in dimensions and units into the registry builder.
-pub fn load_prelude(builder: &mut RegistryBuilder) {
+pub(crate) fn load_prelude(builder: &mut RegistryBuilder) {
     let ids = load_base_dimensions(builder);
     load_derived_dimensions(builder, &ids);
     load_base_units(builder, &ids);

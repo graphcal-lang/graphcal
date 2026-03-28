@@ -14,7 +14,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
 use crate::tir::tir::ResolvedFnSig;
 
-pub use helpers::format_inferred_type;
+pub(crate) use helpers::format_inferred_type;
 use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
 use infer::{infer_type, infer_type_with_owner};
 

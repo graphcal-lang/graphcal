@@ -26,9 +26,9 @@ pub use crate::registry::resolve_types::{
     is_aggregation_fn, is_time_scale_name,
 };
 
-// Re-export public items from submodules.
+// Re-export items from submodules (crate-internal only).
 pub use deps::collect_graph_refs;
-pub use names::{is_lower_snake_case, is_upper_snake_case};
+pub(crate) use names::{is_lower_snake_case, is_upper_snake_case};
 
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
@@ -756,7 +756,7 @@ fn validate_attributes(
 ///
 /// These are treated as if they were declared locally, appearing before local declarations.
 #[derive(Debug, Default)]
-pub struct ImportedNames {
+pub(crate) struct ImportedNames {
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
@@ -788,7 +788,7 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
     clippy::too_many_lines,
     reason = "complex resolution logic with multiple passes"
 )]
-pub fn resolve_with_imports(
+pub(crate) fn resolve_with_imports(
     file: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
@@ -983,7 +983,7 @@ pub fn resolve_with_imports(
 ///
 /// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
 /// violations, or arity mismatches are found.
-pub fn resolve_with_imported_values(
+pub(crate) fn resolve_with_imported_values(
     file: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
