@@ -185,7 +185,7 @@ mod tests {
 
     /// Build a minimal `AnalysisResult` from source text.
     fn analysis_from_source(source: &str) -> AnalysisResult {
-        let ast = graphcal_syntax::parser::Parser::with_name(source, "test.gcl")
+        let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
         let symbol_table = symbol_table::build_from_ast(&ast);

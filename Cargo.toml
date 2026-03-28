@@ -25,11 +25,8 @@ hifitime = "4.2.4"
 jiff = "0.2.21"
 graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.1.0" }
 graphcal-io = { path = "crates/graphcal-io", version = "0.1.0" }
-graphcal-ir = { path = "crates/graphcal-ir", version = "0.1.0" }
-graphcal-registry = { path = "crates/graphcal-registry", version = "0.1.0" }
-graphcal-tir = { path = "crates/graphcal-tir", version = "0.1.0" }
+graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.1.0" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.1.0" }
-graphcal-syntax = { path = "crates/graphcal-syntax", version = "0.1.0" }
 logos = "0.16.1"
 miette = "7.6.0"
 open = "5.3.3"

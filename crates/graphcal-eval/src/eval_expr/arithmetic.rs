@@ -3,9 +3,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{BinOp, Expr, UnaryOp};
-use graphcal_syntax::names::{FieldName, StructTypeName};
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::ast::{BinOp, Expr, UnaryOp};
+use graphcal_compiler::syntax::names::{FieldName, StructTypeName};
+use graphcal_compiler::syntax::span::Span;
 
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;

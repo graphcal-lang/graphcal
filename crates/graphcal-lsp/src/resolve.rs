@@ -1,6 +1,6 @@
 //! Shared symbol resolution for LSP features (hover, go-to-definition, etc.).
 
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::span::Span;
 
 use crate::server::{AnalysisResult, ImportedDefinition};
 use crate::symbol_table::{DefinitionInfo, SymbolKey};

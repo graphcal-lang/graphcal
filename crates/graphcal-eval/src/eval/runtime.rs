@@ -7,9 +7,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{DeclName, IndexName, VariantName};
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::dimension::Dimension;
+use graphcal_compiler::syntax::names::{DeclName, IndexName, VariantName};
+use graphcal_compiler::syntax::span::Span;
 
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::declared_type::DeclaredType;
@@ -274,7 +274,7 @@ pub(super) fn evaluate_plan(
     let EvalLoopResult { values, errors } = run_eval_loop(plan, tir, declared_types, src);
 
     // Build a map from name -> expression for display unit extraction
-    let expr_map: HashMap<String, &graphcal_syntax::ast::Expr> = tir
+    let expr_map: HashMap<String, &graphcal_compiler::syntax::ast::Expr> = tir
         .consts
         .iter()
         .map(|e| (e.name.to_string(), &e.expr))
@@ -390,7 +390,9 @@ pub(super) fn evaluate_plan(
             let (name, decl) = (&entry.name, &entry.decl);
             let mut fields = Vec::new();
             for field in &decl.fields {
-                if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
+                    &field.value.kind
+                {
                     fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
                     continue;
                 }
@@ -414,7 +416,9 @@ pub(super) fn evaluate_plan(
             let (name, decl) = (&entry.name, &entry.decl);
             let mut fields = Vec::new();
             for field in &decl.fields {
-                if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
+                    &field.value.kind
+                {
                     fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
                     continue;
                 }
@@ -460,7 +464,7 @@ pub(super) fn evaluate_plan(
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
 fn evaluate_assert_with_expected_fail(
-    body: &graphcal_syntax::ast::AssertBody,
+    body: &graphcal_compiler::syntax::ast::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -481,7 +485,7 @@ fn evaluate_assert_with_expected_fail(
         Some(ExpectedFail::Variants(keys)) => {
             // Per-variant: we need the raw RuntimeValue to invert specific entries.
             // Only Expr-based assertions can be indexed; Tolerance assertions are scalar.
-            let graphcal_syntax::ast::AssertBody::Expr(body_expr) = body else {
+            let graphcal_compiler::syntax::ast::AssertBody::Expr(body_expr) = body else {
                 // Tolerance assertions cannot be indexed, so Variants makes no sense.
                 // The resolver should have caught this, but be safe.
                 return AssertResult::Error {
@@ -753,13 +757,13 @@ fn collect_failing_paths(
 
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
-    body: &graphcal_syntax::ast::AssertBody,
+    body: &graphcal_compiler::syntax::ast::AssertBody,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match body {
-        graphcal_syntax::ast::AssertBody::Expr(body_expr) => {
+        graphcal_compiler::syntax::ast::AssertBody::Expr(body_expr) => {
             match eval_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
                 Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
@@ -777,7 +781,7 @@ pub(super) fn evaluate_assert_body(
                 },
             }
         }
-        graphcal_syntax::ast::AssertBody::Tolerance {
+        graphcal_compiler::syntax::ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -909,7 +913,7 @@ fn check_scalar_constraint(
 /// (they are not runtime values in Graphcal).
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
-    decl: &graphcal_syntax::ast::PlotDecl,
+    decl: &graphcal_compiler::syntax::ast::PlotDecl,
     name: &str,
     hidden: bool,
     values: &HashMap<String, RuntimeValue>,
@@ -923,7 +927,7 @@ fn evaluate_plot(
     // Evaluate encoding channels
     for encoding in &decl.encodings {
         let channel_name = encoding.channel.to_string();
-        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &encoding.value.kind {
+        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &encoding.value.kind {
             fields.push((channel_name, PlotFieldValue::String(s.clone())));
             continue;
         }
@@ -940,7 +944,7 @@ fn evaluate_plot(
 
     // Evaluate mark properties (e.g., stroke_width, opacity)
     for prop in &decl.mark.properties {
-        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
+        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
             fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
             continue;
         }
@@ -951,7 +955,7 @@ fn evaluate_plot(
 
     // Evaluate top-level properties (e.g., title, width, height)
     for prop in &decl.properties {
-        if let graphcal_syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
+        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
             fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
             continue;
         }
@@ -975,7 +979,7 @@ fn evaluate_plot(
 /// their declared type for the dimension. Also extracts display unit info from
 /// unit literals and conversion targets.
 fn extract_encoding_axis_meta(
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
@@ -990,11 +994,11 @@ fn extract_encoding_axis_meta(
 
 /// Walk an expression tree to find the first `@`-reference and extract its dimension name.
 fn extract_dimension_from_expr(
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     registry: &Registry,
 ) -> Option<String> {
-    use graphcal_syntax::ast::ExprKind;
+    use graphcal_compiler::syntax::ast::ExprKind;
     match &expr.kind {
         ExprKind::GraphRef(name) => {
             let dt = declared_types.get(name.value.as_str())?;
@@ -1076,7 +1080,7 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
                 PlotFieldValue::Labels(
                     entries
                         .keys()
-                        .map(graphcal_syntax::names::VariantName::to_string)
+                        .map(graphcal_compiler::syntax::names::VariantName::to_string)
                         .collect(),
                 )
             }

@@ -2,9 +2,9 @@ mod decl;
 mod expr;
 mod type_expr;
 
-use graphcal_syntax::ast::File;
-use graphcal_syntax::comments::SourceMetadata;
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::ast::File;
+use graphcal_compiler::syntax::comments::SourceMetadata;
+use graphcal_compiler::syntax::span::Span;
 use pretty::RcDoc;
 
 // Re-export the public entry point

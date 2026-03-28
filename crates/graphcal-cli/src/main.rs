@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
 use graphcal_io::RealFileSystem;
-use graphcal_syntax::names::DeclName;
 
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
@@ -106,7 +106,7 @@ enum PlotOutput {
 fn parse_overrides(
     set: &[String],
     input: Option<&std::path::Path>,
-) -> std::collections::HashMap<DeclName, graphcal_syntax::ast::Expr> {
+) -> std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr> {
     let mut overrides = std::collections::HashMap::new();
     for s in set {
         let Some((name, value_str)) = s.split_once('=') else {
@@ -115,7 +115,7 @@ fn parse_overrides(
         };
         let name = name.trim();
         let value_str = value_str.trim();
-        match graphcal_syntax::parser::Parser::new(value_str).parse_single_expr() {
+        match graphcal_compiler::syntax::parser::Parser::new(value_str).parse_single_expr() {
             Ok(expr) => {
                 overrides.insert(DeclName::new(name), expr);
             }
@@ -221,7 +221,7 @@ fn main() {
 fn handle_eval(
     file: &Path,
     format: &OutputFormat,
-    overrides: &std::collections::HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     no_assert: bool,
     root: Option<&Path>,
     allow_defaults: bool,
@@ -427,7 +427,7 @@ fn index_depth(value: &graphcal_eval::eval::Value) -> usize {
 /// Walk into nested `Indexed` to find the first leaf scalar's display label (unit).
 fn extract_unit_label(
     value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
 ) -> Option<String> {
     match value {
         graphcal_eval::eval::Value::Scalar { .. } => value.display_label(symbols),
@@ -466,7 +466,7 @@ fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
     };
     let col_names: Vec<&str> = col_entries
         .keys()
-        .map(graphcal_syntax::names::VariantName::as_str)
+        .map(graphcal_compiler::syntax::names::VariantName::as_str)
         .collect();
 
     let mut builder = Builder::default();
@@ -503,7 +503,7 @@ fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
 fn format_indexed_table(
     name: &str,
     value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
 ) -> String {
     let unit_label = extract_unit_label(value, symbols);
     let header = unit_label
@@ -525,7 +525,7 @@ fn format_indexed_table(
 /// Recursively peel outer index dimensions and render 2D table slices with section headers.
 fn format_table_slices(
     value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     depth: usize,
     parts: &mut Vec<String>,
 ) {
@@ -777,7 +777,10 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
 
     fn value_to_json(
         v: &Value,
-        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+        symbols: &std::collections::BTreeMap<
+            graphcal_compiler::syntax::dimension::BaseDimId,
+            String,
+        >,
     ) -> serde_json::Value {
         match v {
             Value::Scalar {
@@ -883,7 +886,10 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
 
     fn result_to_json(
         r: &Result<Value, NodeError>,
-        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+        symbols: &std::collections::BTreeMap<
+            graphcal_compiler::syntax::dimension::BaseDimId,
+            String,
+        >,
     ) -> serde_json::Value {
         match r {
             Ok(v) => value_to_json(v, symbols),

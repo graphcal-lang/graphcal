@@ -1,6 +1,6 @@
 //! textDocument/documentLink handler.
 
-use graphcal_syntax::ast::ImportPath;
+use graphcal_compiler::syntax::ast::ImportPath;
 use tower_lsp::lsp_types::{DocumentLink, Url};
 
 use crate::convert::span_to_range;

@@ -7,7 +7,7 @@ use miette::NamedSource;
 use crate::error::GraphcalError;
 use crate::eval::CompileError;
 use crate::io::FileSystemReader;
-use graphcal_syntax::ast::{DeclKind, File, ImportPath};
+use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
@@ -47,8 +47,9 @@ impl LoadedProject {
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
         let source = Arc::new(source.to_string());
         let named_source = NamedSource::new(name, Arc::clone(&source));
-        let mut ast = graphcal_syntax::parser::Parser::with_name(&source, name).parse_file()?;
-        graphcal_syntax::ast::desugar_tuple_matches(&mut ast);
+        let mut ast =
+            graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
+        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
         let path = PathBuf::from(name);
         let loaded_file = LoadedFile {
             path: path.clone(),
@@ -158,8 +159,9 @@ fn load_file_dfs<F: FileSystemReader>(
         .file_name()
         .map_or_else(|| display_name.clone(), |n| n.to_string_lossy().to_string());
     let named_source = NamedSource::new(&name, Arc::clone(&source));
-    let mut ast = graphcal_syntax::parser::Parser::with_name(&source, &name).parse_file()?;
-    graphcal_syntax::ast::desugar_tuple_matches(&mut ast);
+    let mut ast =
+        graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
+    graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
 
     // Find import declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
@@ -322,8 +324,8 @@ fn resolve_import_path<F: FileSystemReader>(
 ///
 /// For `nasa/rocket`, resolves to `<project_root>/<source_dir>/nasa/rocket.gcl`.
 fn resolve_module_path<F: FileSystemReader>(
-    segments: &[graphcal_syntax::ast::Ident],
-    span: graphcal_syntax::span::Span,
+    segments: &[graphcal_compiler::syntax::ast::Ident],
+    span: graphcal_compiler::syntax::span::Span,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
     manifest: &mut Option<crate::manifest::Manifest>,

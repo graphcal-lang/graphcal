@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
-use graphcal_syntax::names::{DeclName, FnName, Spanned};
-use graphcal_syntax::span::Span;
-use graphcal_syntax::visitor::ExprVisitorMut;
+use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
+use graphcal_compiler::syntax::names::{DeclName, FnName, Spanned};
+use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
@@ -252,7 +252,7 @@ struct EvaluatedFile {
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
     /// Functions declared in this file.
-    functions: Vec<graphcal_ir::ir::FunctionEntry>,
+    functions: Vec<graphcal_compiler::ir::ir::FunctionEntry>,
 }
 
 impl EvaluatedFile {
@@ -299,7 +299,7 @@ struct DeferredInstantiatedImport {
     import_span: Span,
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on imported assertions).
     /// Key = original name in dep, Value = list of attributes from the import item.
-    import_item_attributes: HashMap<String, Vec<graphcal_syntax::ast::Attribute>>,
+    import_item_attributes: HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
 }
 
 /// Mutable state accumulated while processing import declarations.
@@ -326,7 +326,7 @@ fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_path: &Path,
     evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     override_targets: &HashMap<DeclName, (PathBuf, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     let loaded_file = &project.files[file_path];
@@ -403,8 +403,8 @@ fn process_instantiated_import<'a>(
     project: &'a crate::loader::LoadedProject,
     importer_path: &Path,
     import_canonical: &PathBuf,
-    import_decl: &graphcal_syntax::ast::ImportDecl,
-    decl: &graphcal_syntax::ast::Declaration,
+    import_decl: &graphcal_compiler::syntax::ast::ImportDecl,
+    decl: &graphcal_compiler::syntax::ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
@@ -414,14 +414,14 @@ fn process_instantiated_import<'a>(
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &import_decl.kind {
-        graphcal_syntax::ast::ImportKind::Module { alias } => {
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
             if let Some(alias_ident) = alias {
                 alias_ident.name.clone()
             } else {
                 derive_module_name_from_import_path(&import_decl.path, file_src)?
             }
         }
-        graphcal_syntax::ast::ImportKind::Selective(_) => {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(_) => {
             // For selective instantiated imports, we still need a prefix
             // for the merged declarations. Derive from filename.
             derive_module_name_from_import_path(&import_decl.path, file_src)?
@@ -510,16 +510,19 @@ fn process_instantiated_import<'a>(
             // Validate kind matching (named-to-named, range-to-range).
             let dep_is_named = matches!(
                 dep_idx.kind,
-                graphcal_syntax::ast::IndexDeclKind::Named { .. }
-                    | graphcal_syntax::ast::IndexDeclKind::RequiredNamed
+                graphcal_compiler::syntax::ast::IndexDeclKind::Named { .. }
+                    | graphcal_compiler::syntax::ast::IndexDeclKind::RequiredNamed
             );
             let imp_is_named = importer_idx_ast.map_or_else(
-                || importer_idx_from_registry.map(graphcal_registry::registry::IndexDef::is_named),
+                || {
+                    importer_idx_from_registry
+                        .map(graphcal_compiler::registry::registry::IndexDef::is_named)
+                },
                 |imp_idx| {
                     Some(matches!(
                         imp_idx.kind,
-                        graphcal_syntax::ast::IndexDeclKind::Named { .. }
-                            | graphcal_syntax::ast::IndexDeclKind::RequiredNamed
+                        graphcal_compiler::syntax::ast::IndexDeclKind::Named { .. }
+                            | graphcal_compiler::syntax::ast::IndexDeclKind::RequiredNamed
                     ))
                 },
             );
@@ -572,10 +575,12 @@ fn process_instantiated_import<'a>(
 
     // Register the dependency's declaration names in the importer's scope
     // so that the resolver recognizes references to them.
-    let mut import_item_attributes: HashMap<String, Vec<graphcal_syntax::ast::Attribute>> =
-        HashMap::new();
+    let mut import_item_attributes: HashMap<
+        String,
+        Vec<graphcal_compiler::syntax::ast::Attribute>,
+    > = HashMap::new();
     let selective_names = match &import_decl.kind {
-        graphcal_syntax::ast::ImportKind::Selective(names) => {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
@@ -635,7 +640,7 @@ fn process_instantiated_import<'a>(
             }
             Some(selective)
         }
-        graphcal_syntax::ast::ImportKind::Module { .. } => {
+        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
             let import_span = import_decl.path.span();
             for dep_decl in &dep_loaded.ast.declarations {
@@ -738,7 +743,7 @@ fn process_instantiated_import<'a>(
 fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_canonical: &PathBuf,
-    import_decl: &graphcal_syntax::ast::ImportDecl,
+    import_decl: &graphcal_compiler::syntax::ast::ImportDecl,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
@@ -755,7 +760,7 @@ fn process_non_instantiated_import<'a>(
     })?;
 
     match &import_decl.kind {
-        graphcal_syntax::ast::ImportKind::Selective(names) => {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
@@ -800,7 +805,7 @@ fn process_non_instantiated_import<'a>(
                 }
             }
         }
-        graphcal_syntax::ast::ImportKind::Module { alias } => {
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
             let module_name = if let Some(alias_ident) = alias {
                 alias_ident.name.clone()
             } else {
@@ -842,9 +847,9 @@ fn process_non_instantiated_import<'a>(
 /// Otherwise, clones the AST and rewrites `QualifiedGraphRef`, `QualifiedConstRef`,
 /// and `QualifiedFnCall` to their flat counterparts.
 fn rewrite_qualified_refs_in_ast<'a>(
-    ast: &'a graphcal_syntax::ast::File,
+    ast: &'a graphcal_compiler::syntax::ast::File,
     module_map: &HashMap<String, (PathBuf, Span)>,
-) -> std::borrow::Cow<'a, graphcal_syntax::ast::File> {
+) -> std::borrow::Cow<'a, graphcal_compiler::syntax::ast::File> {
     if module_map.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
     }
@@ -860,8 +865,8 @@ fn rewrite_qualified_refs_in_ast<'a>(
             }
             DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
             DeclKind::Assert(a) => match &mut a.body {
-                graphcal_syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
-                graphcal_syntax::ast::AssertBody::Tolerance {
+                graphcal_compiler::syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
+                graphcal_compiler::syntax::ast::AssertBody::Tolerance {
                     actual,
                     expected,
                     tolerance,
@@ -873,8 +878,8 @@ fn rewrite_qualified_refs_in_ast<'a>(
                 }
             },
             DeclKind::Fn(f) => match &mut f.body {
-                graphcal_syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
-                graphcal_syntax::ast::FnBody::Block { stmts, expr } => {
+                graphcal_compiler::syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
+                graphcal_compiler::syntax::ast::FnBody::Block { stmts, expr } => {
                     for stmt in stmts {
                         rewrite_qualified_refs(&mut stmt.value);
                     }
@@ -905,10 +910,10 @@ fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_path: &Path,
     file_src: &NamedSource<Arc<String>>,
-    file_ast: &graphcal_syntax::ast::File,
+    file_ast: &graphcal_compiler::syntax::ast::File,
     ctx: ImportContext<'_>,
     evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     override_targets: &HashMap<DeclName, (PathBuf, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     let saved_imported_values = ctx.imported_values.clone();
@@ -949,7 +954,7 @@ fn lower_and_finalize(
 
     // Apply overrides routed to this file (using original param names).
     let mut ir = ir;
-    let file_overrides: HashMap<DeclName, graphcal_syntax::ast::Expr> = override_targets
+    let file_overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr> = override_targets
         .iter()
         .filter(|(_, (target_path, _))| target_path == file_path)
         .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
@@ -991,7 +996,7 @@ fn process_deferred_instantiated_imports(
     deferred_imports: &[DeferredInstantiatedImport],
     evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
     builder: &mut RegistryBuilder,
-    unfrozen: &mut graphcal_ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
 ) -> Result<(), CompileError> {
     for deferred in deferred_imports {
         let dep_loaded = &project.files[&deferred.dep_path];
@@ -1076,7 +1081,7 @@ fn add_selective_aliases(
     dep_loaded: &crate::loader::LoadedFile,
     selective: &[(String, String)],
     deferred: &DeferredInstantiatedImport,
-    unfrozen: &mut graphcal_ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
 ) {
     for (orig_name, local_name) in selective {
         let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
@@ -1102,7 +1107,10 @@ fn add_selective_aliases(
         };
 
         // Substitute index names in the type annotation.
-        graphcal_ir::ir::substitute_type_expr_index_names(&mut type_ann, &deferred.index_bindings);
+        graphcal_compiler::ir::ir::substitute_type_expr_index_names(
+            &mut type_ann,
+            &deferred.index_bindings,
+        );
 
         // Determine if this is a const or runtime declaration.
         let is_const =
@@ -1185,7 +1193,7 @@ fn import_selective_item(
             .get(orig_name)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
-                graphcal_syntax::dimension::Dimension::dimensionless(),
+                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
             ));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
@@ -1200,7 +1208,7 @@ fn import_selective_item(
             .get(orig_name)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
-                graphcal_syntax::dimension::Dimension::dimensionless(),
+                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
             ));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Param));
@@ -1212,13 +1220,13 @@ fn import_selective_item(
         .iter()
         .find(|entry| entry.name.member() == orig_name)
     {
-        imported_names
-            .functions
-            .push(graphcal_registry::resolve_types::ResolvedFunctionEntry {
+        imported_names.functions.push(
+            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
                 name: local_name.to_string(),
                 decl: fn_entry.decl.clone(),
                 span: fn_entry.span,
-            });
+            },
+        );
         SelectiveImportResult::Function
     } else if dep.has_assert(orig_name) {
         SelectiveImportResult::Assert
@@ -1252,7 +1260,7 @@ fn import_module_values(
             .get(name)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
-                graphcal_syntax::dimension::Dimension::dimensionless(),
+                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
             ));
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
@@ -1272,7 +1280,7 @@ fn import_module_values(
             .get(name)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
-                graphcal_syntax::dimension::Dimension::dimensionless(),
+                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
             ));
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Param));
@@ -1281,13 +1289,13 @@ fn import_module_values(
     }
     for fn_entry in &dep.functions {
         let flat = format!("{module_name}::{}", fn_entry.name);
-        imported_names
-            .functions
-            .push(graphcal_registry::resolve_types::ResolvedFunctionEntry {
+        imported_names.functions.push(
+            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
                 name: flat,
                 decl: fn_entry.decl.clone(),
                 span: fn_entry.span,
-            });
+            },
+        );
     }
 }
 
@@ -1337,7 +1345,7 @@ fn build_dep_imported_values(
             })?;
 
             match &import_decl.kind {
-                graphcal_syntax::ast::ImportKind::Selective(names) => {
+                graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
                     for import_item in names {
                         let orig_name = &import_item.name.name;
                         let local_name = import_item.local_name().to_string();
@@ -1353,7 +1361,7 @@ fn build_dep_imported_values(
                         );
                     }
                 }
-                graphcal_syntax::ast::ImportKind::Module { alias } => {
+                graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
                     let module_name = alias.as_ref().map_or_else(
                         || {
                             derive_module_name_from_import_path(&import_decl.path, dep_src)
@@ -1421,7 +1429,7 @@ fn evaluate_and_store_file(
 )]
 fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     // Pre-compute override routing: map each override name to the file that owns
@@ -1464,7 +1472,9 @@ fn evaluate_project_perfile(
                 if !import_decl.param_bindings.is_empty() {
                     continue;
                 }
-                if let graphcal_syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) =
+                    &import_decl.kind
+                {
                     let import_canonical = resolve_import_to_canonical(
                         &import_decl.path,
                         root_dir,
@@ -1531,7 +1541,7 @@ fn evaluate_project_perfile(
             .registry
             .indexes
             .all_indexes()
-            .any(graphcal_registry::registry::IndexDef::is_required);
+            .any(graphcal_compiler::registry::registry::IndexDef::is_required);
 
         if !is_root && (has_required_params || has_required_indexes) {
             continue;
@@ -1767,7 +1777,7 @@ fn compile_to_tir_project_perfile(
 /// The `original_param_name` may differ from `override_name` when an alias is used.
 fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
 ) -> Result<HashMap<DeclName, (PathBuf, DeclName)>, CompileError> {
     if overrides.is_empty() {
         return Ok(HashMap::new());
@@ -1799,7 +1809,9 @@ fn route_overrides_to_files(
         let mut found = false;
         for decl in &root_file.ast.declarations {
             if let DeclKind::Import(import_decl) = &decl.kind {
-                if let graphcal_syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) =
+                    &import_decl.kind
+                {
                     for item in names {
                         let local_name = item.local_name().to_string();
                         if local_name == name_str {
@@ -1903,7 +1915,10 @@ fn merge_registry_into_builder(
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
-        builder.register_base_dimension(graphcal_syntax::names::DimName::new(name), id.clone());
+        builder.register_base_dimension(
+            graphcal_compiler::syntax::names::DimName::new(name),
+            id.clone(),
+        );
     }
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
@@ -1942,7 +1957,7 @@ fn merge_registry_into_builder(
 /// Validate and apply parameter overrides to an IR.
 pub(super) fn apply_overrides(
     ir: &mut crate::ir::IR,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
@@ -2013,7 +2028,7 @@ pub fn compile_to_tir_from_project(
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     evaluate_project_perfile(project, overrides, allow_defaults)
@@ -2039,7 +2054,7 @@ pub fn compile_and_eval_from_project(
 )]
 pub fn compile_and_eval_project<F: crate::io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     project_root: Option<&Path>,
     allow_defaults: bool,
     fs: &F,
@@ -2115,7 +2130,10 @@ fn extract_index_name_from_binding_expr(
 /// index, or struct type) with that name. This is used as a fallback when a
 /// selective import name is not found among the dependency's evaluated values
 /// or functions.
-pub(super) fn file_has_declaration(file: &graphcal_syntax::ast::File, name: &str) -> bool {
+pub(super) fn file_has_declaration(
+    file: &graphcal_compiler::syntax::ast::File,
+    name: &str,
+) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
         DeclKind::Const(c) => c.name.value.as_str() == name,
         DeclKind::Param(p) => p.name.value.as_str() == name,
@@ -2145,7 +2163,7 @@ pub(super) fn resolve_field_declared_type(
     registry: &Registry,
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
-    if let graphcal_syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field.type_ann.kind
+    if let graphcal_compiler::syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field.type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
     {

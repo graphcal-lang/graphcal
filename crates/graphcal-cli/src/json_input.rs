@@ -20,11 +20,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use graphcal_syntax::ast::{Expr, ExprKind, FieldInit, MapEntry, MapEntryKey};
-use graphcal_syntax::names::{
+use graphcal_compiler::syntax::ast::{Expr, ExprKind, FieldInit, MapEntry, MapEntryKey};
+use graphcal_compiler::syntax::names::{
     DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName,
 };
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::span::Span;
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
 const SYNTH_SPAN: Span = Span::new(0, 0);
@@ -172,7 +172,7 @@ fn convert_value(value: &serde_json::Value, param_name: &str) -> Result<Expr, Js
 
 /// Parse a string as a GCL expression.
 fn convert_string(s: &str, param_name: &str) -> Result<Expr, JsonInputError> {
-    graphcal_syntax::parser::Parser::new(s)
+    graphcal_compiler::syntax::parser::Parser::new(s)
         .parse_single_expr()
         .map_err(|e| JsonInputError::ParseFailed {
             param: param_name.to_string(),

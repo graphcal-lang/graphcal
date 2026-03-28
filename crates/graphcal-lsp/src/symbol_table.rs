@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use graphcal_syntax::ast::{
+use graphcal_compiler::syntax::ast::{
     AssertDecl, ConstDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody,
     FnDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PatternBinding,
     PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
 };
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::span::Span;
 
 use graphcal_eval::builtins::{builtin_constants, builtin_functions};
 use graphcal_eval::eval::format_number;
@@ -221,7 +221,7 @@ impl ScopeStack {
 }
 
 /// Build a symbol table from a parsed AST file.
-pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
+pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable {
     let mut table = SymbolTable::default();
     let mut scopes = ScopeStack::new();
 
@@ -283,7 +283,10 @@ fn register_builtins(table: &mut SymbolTable) {
     }
 }
 
-fn collect_attribute_refs(attributes: &[graphcal_syntax::ast::Attribute], table: &mut SymbolTable) {
+fn collect_attribute_refs(
+    attributes: &[graphcal_compiler::syntax::ast::Attribute],
+    table: &mut SymbolTable,
+) {
     for attr in attributes {
         if attr.name.name == "assumes" {
             for arg in &attr.args {
@@ -589,10 +592,10 @@ fn collect_assert_decl(
         },
     );
     match &a.body {
-        graphcal_syntax::ast::AssertBody::Expr(expr) => {
+        graphcal_compiler::syntax::ast::AssertBody::Expr(expr) => {
             collect_expr_refs(expr, table, scopes);
         }
-        graphcal_syntax::ast::AssertBody::Tolerance {
+        graphcal_compiler::syntax::ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -683,7 +686,7 @@ fn collect_layer_decl(
 fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     // Each imported name is a reference; target resolution for cross-file
     // go-to-definition is handled separately.
-    if let graphcal_syntax::ast::ImportKind::Selective(names) = &u.kind {
+    if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &u.kind {
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
@@ -706,7 +709,7 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     reason = "expression walker needs to handle every ExprKind variant"
 )]
 fn collect_expr_refs(
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -895,7 +898,7 @@ fn collect_expr_refs(
             collect_expr_refs(expr, table, scopes);
             for arg in args {
                 match arg {
-                    graphcal_syntax::ast::IndexArg::Variant { index, variant } => {
+                    graphcal_compiler::syntax::ast::IndexArg::Variant { index, variant } => {
                         table.references.push(ReferenceInfo {
                             span: index.span,
                             target: SymbolKey::TopLevel(index.value.to_string()),
@@ -908,7 +911,7 @@ fn collect_expr_refs(
                             },
                         });
                     }
-                    graphcal_syntax::ast::IndexArg::Var(ident) => {
+                    graphcal_compiler::syntax::ast::IndexArg::Var(ident) => {
                         let target = scopes
                             .resolve(&ident.name)
                             .cloned()
@@ -1117,7 +1120,10 @@ fn collect_expr_refs(
 }
 
 /// Collect references from a type expression.
-fn collect_type_expr_refs(type_expr: &graphcal_syntax::ast::TypeExpr, table: &mut SymbolTable) {
+fn collect_type_expr_refs(
+    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    table: &mut SymbolTable,
+) {
     match &type_expr.kind {
         TypeExprKind::Dimensionless
         | TypeExprKind::Bool
@@ -1152,7 +1158,10 @@ fn collect_type_expr_refs(type_expr: &graphcal_syntax::ast::TypeExpr, table: &mu
 }
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
-fn collect_constraint_expr_refs(expr: &graphcal_syntax::ast::Expr, table: &mut SymbolTable) {
+fn collect_constraint_expr_refs(
+    expr: &graphcal_compiler::syntax::ast::Expr,
+    table: &mut SymbolTable,
+) {
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => {
             collect_unit_expr_refs(unit, table);
@@ -1187,7 +1196,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 /// Format a domain bound expression as a human-readable string.
 ///
 /// Handles the common cases: number literals, unit-annotated literals, and negated forms.
-fn format_bound_expr(expr: &graphcal_syntax::ast::Expr) -> String {
+fn format_bound_expr(expr: &graphcal_compiler::syntax::ast::Expr) -> String {
     match &expr.kind {
         ExprKind::Number(v) => format_number(*v),
         ExprKind::Integer(v) => v.to_string(),
@@ -1197,7 +1206,7 @@ fn format_bound_expr(expr: &graphcal_syntax::ast::Expr) -> String {
             format!("{num} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_syntax::ast::UnaryOp::Neg,
+            op: graphcal_compiler::syntax::ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_expr(operand))
@@ -1381,7 +1390,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                         IndexKind::Named { variants } => {
                             let vs: Vec<&str> = variants
                                 .iter()
-                                .map(graphcal_syntax::names::VariantName::as_str)
+                                .map(graphcal_compiler::syntax::names::VariantName::as_str)
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }
@@ -1468,7 +1477,7 @@ mod tests {
     #[test]
     fn build_symbol_table_basic() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
-        let file = graphcal_syntax::parser::Parser::with_name(source, "test.gcl")
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
         let table = build_from_ast(&file);
@@ -1490,7 +1499,7 @@ mod tests {
     #[test]
     fn build_symbol_table_with_function() {
         let source = "fn double<D: Dim>(x: D) -> D = x + x;";
-        let file = graphcal_syntax::parser::Parser::with_name(source, "test.gcl")
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
         let table = build_from_ast(&file);
@@ -1515,7 +1524,7 @@ mod tests {
     #[test]
     fn find_reference_at_offset() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
-        let file = graphcal_syntax::parser::Parser::with_name(source, "test.gcl")
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
         let table = build_from_ast(&file);

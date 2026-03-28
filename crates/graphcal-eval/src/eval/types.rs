@@ -2,9 +2,11 @@ use indexmap::IndexMap;
 use miette::Diagnostic;
 use thiserror::Error;
 
-use graphcal_syntax::dimension::Dimension;
-use graphcal_syntax::names::{DeclName, FieldName, IndexName, StructTypeName, VariantName};
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::dimension::Dimension;
+use graphcal_compiler::syntax::names::{
+    DeclName, FieldName, IndexName, StructTypeName, VariantName,
+};
+use graphcal_compiler::syntax::span::Span;
 
 /// The kind of a declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +149,10 @@ impl Value {
     #[must_use]
     pub fn display_label(
         &self,
-        symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+        symbols: &std::collections::BTreeMap<
+            graphcal_compiler::syntax::dimension::BaseDimId,
+            String,
+        >,
     ) -> Option<String> {
         match self {
             Self::Scalar {
@@ -177,7 +182,9 @@ impl Value {
     #[must_use]
     pub fn format_display(
         &self,
-        symbols: Option<&std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>>,
+        symbols: Option<
+            &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+        >,
     ) -> String {
         match self {
             Self::Bool(b) => b.to_string(),
@@ -189,7 +196,7 @@ impl Value {
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
             Self::Datetime { .. } => self.format_datetime().unwrap_or_default(),
             Self::Scalar { .. } => {
-                let formatted = graphcal_registry::format::format_number(
+                let formatted = graphcal_compiler::registry::format::format_number(
                     self.display_value().unwrap_or_default(),
                 );
                 match symbols.and_then(|s| self.display_label(s)) {
@@ -324,7 +331,8 @@ pub struct EvalResult {
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<String, Vec<String>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
-    pub base_dim_symbols: std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    pub base_dim_symbols:
+        std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
     pub domain_constraints:
         std::collections::HashMap<DeclName, crate::tir::ResolvedDomainConstraint>,
@@ -348,7 +356,7 @@ pub struct PlotSpec {
     /// The plot declaration name.
     pub name: DeclName,
     /// The mark type (point, line, bar, area, rect, tick).
-    pub mark_type: graphcal_syntax::ast::MarkType,
+    pub mark_type: graphcal_compiler::syntax::ast::MarkType,
     /// Evaluated plot fields as (`field_name`, values).
     /// Encoding channels and properties are flattened into this list.
     pub fields: Vec<(String, PlotFieldValue)>,
@@ -408,7 +416,7 @@ pub enum PlotFieldValue {
 pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Parse(#[from] graphcal_syntax::parser::ParseError),
+    Parse(#[from] graphcal_compiler::syntax::parser::ParseError),
 
     #[error(transparent)]
     #[diagnostic(transparent)]

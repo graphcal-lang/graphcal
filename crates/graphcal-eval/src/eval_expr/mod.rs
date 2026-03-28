@@ -13,7 +13,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
+use graphcal_compiler::syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 
 use crate::builtins::BuiltinFunction;
 use crate::declared_type::DeclaredType;

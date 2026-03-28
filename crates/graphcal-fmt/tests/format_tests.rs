@@ -94,7 +94,8 @@ macro_rules! roundtrip_test {
         fn $name() {
             let source = include_str!(concat!("../../../tests/fixtures/", $fixture));
             let formatted = format_source(source).expect("format_source should succeed");
-            let parse_result = graphcal_syntax::parser::Parser::new(&formatted).parse_file();
+            let parse_result =
+                graphcal_compiler::syntax::parser::Parser::new(&formatted).parse_file();
             assert!(
                 parse_result.is_ok(),
                 "Formatted output of {} failed to parse: {:?}",

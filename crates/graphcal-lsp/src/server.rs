@@ -20,14 +20,14 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use graphcal_compiler::syntax::ast::DeclKind;
+use graphcal_compiler::syntax::names::VariantName;
 use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
     format_number,
 };
 use graphcal_eval::loader::LoadedProject;
-use graphcal_syntax::ast::DeclKind;
-use graphcal_syntax::names::VariantName;
 use indexmap::IndexMap;
 
 use crate::convert::position_to_byte_offset;
@@ -47,7 +47,7 @@ pub struct ImportedDefinition {
 /// Info about an `import` declaration for Document Links.
 pub struct ImportDeclInfo {
     /// The import path (file or module).
-    pub path: graphcal_syntax::ast::ImportPath,
+    pub path: graphcal_compiler::syntax::ast::ImportPath,
 }
 
 /// Structured function signature for Signature Help.
@@ -257,7 +257,7 @@ fn run_eval_from_project(
 }
 
 /// Extract import-declaration info from an AST for Document Links.
-fn collect_import_decl_info(ast: &graphcal_syntax::ast::File) -> Vec<ImportDeclInfo> {
+fn collect_import_decl_info(ast: &graphcal_compiler::syntax::ast::File) -> Vec<ImportDeclInfo> {
     ast.declarations
         .iter()
         .filter_map(|decl| {
@@ -317,7 +317,7 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
 }
 
 /// Format a dimension for display in builtin signatures (no registry needed).
-fn format_dim_display(dim: &graphcal_syntax::dimension::Dimension) -> String {
+fn format_dim_display(dim: &graphcal_compiler::syntax::dimension::Dimension) -> String {
     if dim.is_dimensionless() {
         return "Dimensionless".to_string();
     }
@@ -325,7 +325,7 @@ fn format_dim_display(dim: &graphcal_syntax::dimension::Dimension) -> String {
         .iter()
         .map(|(id, exp)| {
             let name = id.fallback_symbol();
-            if *exp == graphcal_syntax::dimension::Rational::ONE {
+            if *exp == graphcal_compiler::syntax::dimension::Rational::ONE {
                 name
             } else {
                 format!("{name}^{exp}")
@@ -385,7 +385,7 @@ const INLAY_HINT_MAX_LEN: usize = 80;
 /// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
 fn format_value_inline(
     value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
 ) -> String {
     format_value_inline_with_budget(value, symbols, INLAY_HINT_MAX_LEN)
 }
@@ -394,7 +394,7 @@ fn format_value_inline(
 /// exceed `max_len`, remaining entries are replaced with `...`.
 fn format_value_inline_with_budget(
     value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     match value {
@@ -460,7 +460,7 @@ fn format_value_inline_with_budget(
 fn format_braced_entries(
     prefix: &str,
     entries: Vec<(&str, &Value)>,
-    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     let mut result = format!("{prefix}{{ ");
@@ -521,7 +521,7 @@ fn flatten_indexed_entries<'a>(
 fn format_tuple_keyed_entries(
     prefix: &str,
     entries: &[(Vec<&str>, &Value)],
-    symbols: &std::collections::BTreeMap<graphcal_syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     let mut result = format!("{prefix}{{ ");
@@ -566,7 +566,7 @@ fn format_tuple_keyed_entries(
 )]
 fn collect_imported_definitions(
     root_uri: &Url,
-    root_ast: &graphcal_syntax::ast::File,
+    root_ast: &graphcal_compiler::syntax::ast::File,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_eval::tir::TIR>,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
@@ -584,7 +584,7 @@ fn collect_imported_definitions(
             // Resolve file-based imports only; module paths require manifest context
             // which the LSP doesn't currently track.
             let canonical = match &import_decl.path {
-                graphcal_syntax::ast::ImportPath::FilePath { path, .. } => {
+                graphcal_compiler::syntax::ast::ImportPath::FilePath { path, .. } => {
                     let import_path = root_dir.join(path);
                     let Ok(c) = import_path.canonicalize() else {
                         eprintln!(
@@ -595,7 +595,7 @@ fn collect_imported_definitions(
                     };
                     c
                 }
-                graphcal_syntax::ast::ImportPath::ModulePath { .. } => {
+                graphcal_compiler::syntax::ast::ImportPath::ModulePath { .. } => {
                     // Module path resolution needs manifest; skip for now.
                     continue;
                 }
@@ -620,7 +620,7 @@ fn collect_imported_definitions(
             let source = loaded_file.source.to_string();
 
             match &import_decl.kind {
-                graphcal_syntax::ast::ImportKind::Selective(names) => {
+                graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
                     for import_item in names {
                         let key = SymbolKey::TopLevel(import_item.name.name.clone());
                         if let Some(def) = imported_table.definitions.remove(&key) {
@@ -635,7 +635,7 @@ fn collect_imported_definitions(
                         }
                     }
                 }
-                graphcal_syntax::ast::ImportKind::Module { .. } => {
+                graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
                     for (key, def) in imported_table.definitions {
                         result.insert(
                             key,
@@ -870,14 +870,14 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use graphcal_compiler::syntax::dimension::Dimension;
+    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
     use graphcal_eval::eval::Value;
-    use graphcal_syntax::dimension::Dimension;
-    use graphcal_syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
     use indexmap::IndexMap;
 
     use super::*;
 
-    fn empty_symbols() -> BTreeMap<graphcal_syntax::dimension::BaseDimId, String> {
+    fn empty_symbols() -> BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String> {
         BTreeMap::new()
     }
 

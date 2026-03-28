@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_syntax::names::DeclName;
+use graphcal_compiler::syntax::names::DeclName;
 
 mod display;
 pub(crate) mod format;
@@ -49,7 +49,7 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
-    overrides: &HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::LoadedProject::from_source(source, name)?;

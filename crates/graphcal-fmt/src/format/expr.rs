@@ -1,8 +1,8 @@
-use graphcal_syntax::ast::{
+use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, LetBinding, MapEntry, MatchArm,
     MatchPattern, PatternBinding, TupleMatchArm, TypeExpr, UnaryOp,
 };
-use graphcal_syntax::names::{IndexName, Spanned};
+use graphcal_compiler::syntax::names::{IndexName, Spanned};
 use pretty::RcDoc;
 
 use super::{
@@ -302,7 +302,9 @@ pub fn format_let_binding(fmt: &mut Formatter<'_>, lb: &LetBinding) -> RcDoc<'st
 
 pub fn format_struct_construction(
     fmt: &mut Formatter<'_>,
-    type_name: &graphcal_syntax::names::Spanned<graphcal_syntax::names::StructTypeName>,
+    type_name: &graphcal_compiler::syntax::names::Spanned<
+        graphcal_compiler::syntax::names::StructTypeName,
+    >,
     type_args: &[TypeExpr],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {

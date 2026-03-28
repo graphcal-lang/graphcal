@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use graphcal_syntax::ast::{ExprKind, MapEntryKey, MulDivOp};
-use graphcal_syntax::names::VariantName;
+use graphcal_compiler::syntax::ast::{ExprKind, MapEntryKey, MulDivOp};
+use graphcal_compiler::syntax::names::VariantName;
 use indexmap::IndexMap;
 
 use crate::eval_expr::{RuntimeValue, eval_expr};
@@ -15,7 +15,7 @@ use crate::format::{format_number, format_unit_expr};
 
 pub(super) fn attach_display_units(
     value: &mut Value,
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) {
@@ -85,7 +85,7 @@ pub(super) fn attach_display_units(
 /// Handles both static and dynamic unit scales. For dynamic units, the scale
 /// expression is evaluated using the provided `values` map.
 pub(super) fn resolve_unit_to_display(
-    unit: &graphcal_syntax::ast::UnitExpr,
+    unit: &graphcal_compiler::syntax::ast::UnitExpr,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> Option<DisplayUnit> {
@@ -101,7 +101,7 @@ pub(super) fn resolve_unit_to_display(
 /// Used for indexed collections (for comprehensions, scan) where all entries
 /// share the same display unit.
 pub(super) fn extract_flat_display_unit(
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> Option<DisplayUnit> {
@@ -124,7 +124,7 @@ pub(super) fn extract_flat_display_unit(
 /// Similar to `eval_expr::resolve_unit_scale` but returns `Option` instead of `Result`
 /// and builds a minimal `EvalContext` for evaluating dynamic scale expressions.
 fn resolve_display_unit_scale(
-    unit: &graphcal_syntax::ast::UnitExpr,
+    unit: &graphcal_compiler::syntax::ast::UnitExpr,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> Option<f64> {

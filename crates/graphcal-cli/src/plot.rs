@@ -1,5 +1,5 @@
+use graphcal_compiler::syntax::ast::MarkType;
 use graphcal_eval::eval::{AxisMeta, FigureSpec, LayerSpec, PlotFieldValue, PlotSpec};
-use graphcal_syntax::ast::MarkType;
 use serde_json::{Value as JsonValue, json};
 
 /// A rendered figure ready for output.

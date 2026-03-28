@@ -1,0 +1,983 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    reason = "test code"
+)]
+use super::*;
+use crate::syntax::dimension::BaseDimId;
+use crate::syntax::parser::Parser;
+
+fn make_src(source: &str) -> NamedSource<Arc<String>> {
+    NamedSource::new("test", Arc::new(source.to_string()))
+}
+
+fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
+    let file = Parser::new(source).parse_file().unwrap();
+    let src = make_src(source);
+    let ir = crate::ir::ir::lower(&file, &src)?;
+    let tir = crate::tir::tir::type_resolve(ir, &src)?;
+    check_dimensions_tir(&tir, &src)?;
+    tir.build_declared_types(&src)
+}
+
+#[test]
+fn check_dimensionless_const() {
+    let types = check("const G0: Dimensionless = 9.80665;").unwrap();
+    assert_eq!(
+        types["G0"],
+        DeclaredType::Scalar(Dimension::dimensionless())
+    );
+}
+
+#[test]
+fn check_dimensionless_arithmetic() {
+    let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
+    assert_eq!(types["y"], DeclaredType::Scalar(Dimension::dimensionless()));
+}
+
+#[test]
+fn check_length_unit_literal() {
+    let types = check("param alt: Length = 400.0 km;").unwrap();
+    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    assert_eq!(types["alt"], DeclaredType::Scalar(length));
+}
+
+#[test]
+fn check_velocity_from_division() {
+    let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 hour;\nnode speed: Velocity = @dist / @time;";
+    let types = check(source).unwrap();
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    assert_eq!(types["speed"], DeclaredType::Scalar(velocity));
+}
+
+#[test]
+fn check_add_dimension_mismatch() {
+    let source = "param x: Length = 1.0 m;\nparam y: Time = 1.0 s;\nnode z: Length = @x + @y;";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn check_annotation_mismatch() {
+    let source = "param x: Length = 1.0 m;\nnode y: Time = @x;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_conversion_same_dimension() {
+    let source =
+        "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / hour;";
+    let types = check(source).unwrap();
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    assert_eq!(types["speed_kmh"], DeclaredType::Scalar(velocity));
+}
+
+#[test]
+fn check_conversion_wrong_dimension() {
+    let source = "param x: Length = 1.0 m;\nnode y: Length = @x -> s;";
+    let err = check(source).unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::ConversionDimensionMismatch { .. }
+    ));
+}
+
+#[test]
+fn check_sqrt_dimension() {
+    let source = "param area: Area = 100.0 m;\nnode side: Length = sqrt(@area);";
+    // Note: area should be m^2, but we declared it with m (Length).
+    // sqrt(Length) = Length^(1/2) which doesn't match Length.
+    let err = check(source).unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DimensionMismatchInAnnotation { .. }
+    ));
+}
+
+#[test]
+fn check_builtin_sin_requires_angle() {
+    let source = "param x: Length = 1.0 m;\nnode y: Dimensionless = sin(@x);";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn check_if_branches_same_dim() {
+    let source =
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_if_branches_different_dim() {
+    let source = "param x: Length = 1.0 m;\nnode y: Length = if true { @x } else { 0.0 };";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn check_multiplication_creates_new_dim() {
+    let source = "param mass: Mass = 10.0 kg;\nparam accel: Acceleration = 9.8 m / s^2;\nnode force: Force = @mass * @accel;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_with_literal() {
+    let source = "param r: Length = 5.0 m;\nnode area: Area = @r ^ 2.0;";
+    // Area is Length^2, r^2 = Length^2
+    // But we need PI * r^2 for circle area — just testing r^2 = Area
+    check(source).unwrap();
+}
+
+// --- User-defined function tests ---
+
+#[test]
+fn check_non_generic_fn_call() {
+    let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam y: Length = 2.0 m;\nnode z: Length = add_lengths(@x, @y);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_non_generic_fn_dim_mismatch() {
+    let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam t: Time = 1.0 s;\nnode z: Length = add_lengths(@x, @t);";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn check_non_generic_fn_return_type() {
+    // Function returns Velocity but we annotate as Length
+    let source = "fn speed(d: Length, t: Time) -> Velocity = d / t;\nparam d: Length = 10.0 m;\nparam t: Time = 2.0 s;\nnode v: Length = speed(@d, @t);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_generic_fn_call() {
+    let source = "fn double<D: Dim>(x: D) -> D = x + x;\nparam alt: Length = 100.0 km;\nnode doubled: Length = double(@alt);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_generic_fn_multi_param() {
+    let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100.0 km;\nparam y: Length = 200.0 km;\nnode mid: Length = lerp(@x, @y, 0.5);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_generic_fn_consistency_error() {
+    // a: D binds D=Length, b: D expects Length but gets Time
+    let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100.0 km;\nparam t: Time = 1.0 s;\nnode bad: Length = lerp(@x, @t, 0.5);";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn check_generic_fn_infers_return_type() {
+    // Return type D should be inferred as Velocity
+    let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Velocity = identity(@v);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_generic_fn_wrong_annotation() {
+    // identity returns Velocity (D=Velocity) but annotation says Length
+    let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Length = identity(@v);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_fn_wrong_arity() {
+    let source =
+        "fn f(a: Length) -> Length = a;\nparam x: Length = 1.0 m;\nnode y: Length = f(@x, @x);";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::WrongArity { .. }));
+}
+
+#[test]
+fn check_fn_unknown_function() {
+    let source = "param x: Length = 1.0 m;\nnode y: Length = no_such_fn(@x);";
+    let err = check(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
+}
+
+// --- Indexed type tests ---
+
+#[test]
+fn check_indexed_param_map_literal() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};";
+    let types = check(source).unwrap();
+    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    assert_eq!(
+        types["dv"],
+        DeclaredType::Indexed {
+            element: Box::new(DeclaredType::Scalar(velocity)),
+            index: IndexName::new("Maneuver"),
+        }
+    );
+}
+
+#[test]
+fn check_for_comprehension() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node doubled: Velocity[Maneuver] = for m: Maneuver { @dv[m] + @dv[m] };";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_for_comprehension_type_mismatch() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_index_access_with_variant() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+param first: Velocity = @dv[Maneuver::Departure];";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_map_literal_missing_variant() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::MissingVariants { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_map_literal_extra_variant() {
+    let source = "\
+cat Maneuver { Departure, Correction }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExtraVariants { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_index_mismatch_in_for() {
+    let source = "\
+cat Phase { Coast, Burn }
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Phase] = for p: Phase { @dv[p] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IndexMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_sum_aggregation() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node total_dv: Velocity = sum(@dv);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_count_aggregation() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node n: Dimensionless = count(@dv);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_mean_aggregation() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node avg_dv: Velocity = mean(@dv);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_scan() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_scan_type_mismatch() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Maneuver] = scan(@dv, 0.0 m, |acc, val| acc + val);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_unknown_index_in_type_annotation() {
+    let source = "param x: Velocity[NoSuchIndex] = 1.0 m / s;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownIndex { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_generic_index_fn() {
+    // fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node total_dv: Velocity = total(@dv);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_generic_index_fn_wrong_return() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Length = total(@dv);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_for_with_sum() {
+    // sum over a for comprehension
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node total: Velocity = sum(for m: Maneuver { @dv[m] });";
+    check(source).unwrap();
+}
+
+// --- Comparison dimension mismatch ---
+
+#[test]
+fn check_comparison_dimension_mismatch() {
+    let source = "\
+param x: Length = 1.0 m;
+param t: Time = 1.0 s;
+node bad: Dimensionless = if @x > @t { 1.0 } else { 0.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Boolean operator dimension errors ---
+
+#[test]
+fn check_boolean_and_lhs_dimensioned() {
+    let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = @x && true;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_boolean_or_rhs_dimensioned() {
+    let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = true || @x;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Power / exponent edge cases ---
+
+#[test]
+fn check_power_half_exponent() {
+    // x ^ 0.5 on dimensionless should work
+    let source = "param x: Dimensionless = 4.0;\nnode y: Dimensionless = @x ^ 0.5;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_non_literal_exponent_dimensioned_base() {
+    // dimensioned ^ non-literal → NonLiteralExponent
+    let source = "\
+param x: Length = 1.0 m;
+param n: Dimensionless = 2.0;
+node bad: Area = @x ^ @n;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_power_dimensionless_base_non_literal_exponent() {
+    // dimensionless ^ dimensionless (non-literal) → ok
+    let source = "\
+param x: Dimensionless = 2.0;
+param n: Dimensionless = 3.0;
+node y: Dimensionless = @x ^ @n;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_bad_fractional_exponent() {
+    // x ^ 0.3 → NonLiteralExponent (not 0.5 and not integer)
+    let source = "param x: Length = 1.0 m;\nnode bad: Length = @x ^ 0.3;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_power_dimensioned_exponent() {
+    // anything ^ dimensioned → NonLiteralExponent
+    let source = "\
+param x: Dimensionless = 2.0;
+param n: Length = 1.0 m;
+node bad: Dimensionless = @x ^ @n;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- If condition must be dimensionless ---
+
+#[test]
+fn check_if_condition_dimensioned() {
+    let source = "\
+param x: Length = 1.0 m;
+node bad: Dimensionless = if @x { 1.0 } else { 0.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Unknown dimension in type annotation ---
+
+#[test]
+fn check_unknown_dimension_in_type() {
+    let source = "param x: NoSuchDimension = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownDimension { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- expect_scalar error: struct used where scalar expected ---
+
+#[test]
+fn check_struct_in_arithmetic() {
+    let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+param o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s };
+node bad: Length = @o + 1.0 m;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- FieldAccess on non-struct ---
+
+#[test]
+fn check_field_access_on_scalar() {
+    let source = "\
+param x: Length = 1.0 m;
+node bad: Length = @x.foo;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NotAStruct { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Struct extra fields ---
+
+#[test]
+fn check_struct_extra_fields() {
+    let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExtraFields { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Block let-binding type annotation mismatch ---
+
+#[test]
+fn check_block_let_type_mismatch() {
+    let source = "\
+param x: Length = 1.0 m;
+node y: Dimensionless = {
+let a: Time = @x;
+1.0
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- types_match wildcard: mismatched kinds ---
+
+#[test]
+fn check_types_match_struct_vs_scalar() {
+    // Declared as a struct type but expression evaluates to scalar → mismatch
+    let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+param x: Dimensionless = 1.0;
+node o: Orbit = @x;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- ForComp with unknown index ---
+
+#[test]
+fn check_for_comp_unknown_index() {
+    let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = for m: NoSuchIndex { @x };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownIndex { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Scan body type mismatch ---
+
+#[test]
+fn check_scan_body_type_mismatch() {
+    let source = "\
+cat Maneuver { Departure, Correction, Insertion }
+param dv: Velocity[Maneuver] = {
+Maneuver::Departure: 2.46 km / s,
+Maneuver::Correction: 0.5 km / s,
+Maneuver::Insertion: 1.8 km / s,
+};
+node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Scan on non-indexed value ---
+
+#[test]
+fn check_scan_on_scalar() {
+    let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Map literal dimension inconsistency ---
+
+#[test]
+fn check_map_literal_inconsistent_element_dims() {
+    let source = "\
+cat Phase { Coast, Burn }
+param x: Dimensionless[Phase] = {
+Phase::Coast: 1.0,
+Phase::Burn: 2.0 m,
+};";
+    let err = check(source).unwrap_err();
+    // The map entries have different dimensions: first is Dimensionless, second is Length
+    assert!(
+        matches!(
+            err,
+            GraphcalError::DimensionMismatchInAnnotation { .. }
+                | GraphcalError::DimensionMismatch { .. }
+        ),
+        "got: {err:?}"
+    );
+}
+
+// --- Index access with unknown variant ---
+
+#[test]
+fn check_index_access_unknown_variant() {
+    let source = "\
+cat Phase { Coast, Burn }
+param x: Dimensionless[Phase] = {
+Phase::Coast: 1.0,
+Phase::Burn: 2.0,
+};
+param bad: Dimensionless = @x[Phase::NoSuch];";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownVariant { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Indexing a non-indexed value ---
+
+#[test]
+fn check_index_access_on_scalar() {
+    let source = "\
+cat Phase { Coast, Burn }
+param x: Dimensionless = 1.0;
+param bad: Dimensionless = @x[Phase::Coast];";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Index access with wrong index name ---
+
+#[test]
+fn check_index_access_wrong_index() {
+    let source = "\
+cat Phase { Coast, Burn }
+cat Stage { First, Second }
+param x: Dimensionless[Phase] = {
+Phase::Coast: 1.0,
+Phase::Burn: 2.0,
+};
+param bad: Dimensionless = @x[Stage::First];";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IndexMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through if/else sub-expressions ---
+
+#[test]
+fn check_if_error_in_condition() {
+    // Error inside condition sub-expression (unknown unit)
+    let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if (1.0 foobar > 0.0) { 1.0 } else { 0.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_if_error_in_then_branch() {
+    // Error in then-branch sub-expression
+    let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if true { 1.0 foobar } else { 0.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_if_error_in_else_branch() {
+    // Error in else-branch sub-expression
+    let source = "\
+param x: Dimensionless = 1.0;
+node bad: Dimensionless = if true { 0.0 } else { 1.0 foobar };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through convert sub-expression ---
+
+#[test]
+fn check_convert_error_in_inner() {
+    // Error inside the inner expression of a convert
+    let source = "\
+node bad: Length = (1.0 foobar) -> m;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through block binding ---
+
+#[test]
+fn check_block_error_in_binding() {
+    // Error inside a let-binding value
+    let source = "\
+node bad: Dimensionless = {
+let a = 1.0 foobar;
+1.0
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through field access inner expression ---
+
+#[test]
+fn check_field_access_error_in_inner() {
+    let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node bad: Length = (1.0 foobar).altitude;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through struct construction field value ---
+
+#[test]
+fn check_struct_construction_error_in_field_value() {
+    let source = "\
+type Orbit { altitude: Length, speed: Velocity }
+node o: Orbit = Orbit { altitude: 1.0 foobar, speed: 7.6 km / s };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through for comprehension body ---
+
+#[test]
+fn check_for_comp_error_in_body() {
+    let source = "\
+cat Phase { Coast, Burn }
+node bad: Dimensionless[Phase] = for p: Phase { 1.0 foobar };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through aggregation arg ---
+
+#[test]
+fn check_aggregation_error_in_arg() {
+    let source = "\
+node bad: Dimensionless = sum(1.0 foobar);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through generic fn args ---
+
+#[test]
+fn check_generic_fn_error_in_arg() {
+    let source = "\
+fn identity<D: Dim>(x: D) -> D = x;
+node bad: Dimensionless = identity(1.0 foobar);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through scan source/init ---
+
+#[test]
+fn check_scan_error_in_source() {
+    let source = "\
+cat Phase { Coast, Burn }
+node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Error propagation through map literal entry ---
+
+#[test]
+fn check_map_literal_error_in_entry() {
+    let source = "\
+cat Phase { Coast, Burn }
+param bad: Dimensionless[Phase] = {
+Phase::Coast: 1.0 foobar,
+Phase::Burn: 2.0,
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Map literal with mixed index names ---
+
+#[test]
+fn check_map_literal_mixed_index_names() {
+    let source = "\
+cat Phase { Coast, Burn }
+cat Stage { First, Second }
+param x: Dimensionless[Phase] = {
+Phase::Coast: 1.0,
+Stage::Second: 2.0,
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IndexMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+// --- Block let-binding with valid type annotation ---
+
+#[test]
+fn check_block_let_type_annotation_ok() {
+    let source = "\
+param x: Length = 1.0 m;
+node y: Length = {
+let a: Length = @x;
+a
+};";
+    check(source).unwrap();
+}
