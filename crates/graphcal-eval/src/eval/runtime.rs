@@ -24,10 +24,6 @@ use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "single match over all RuntimeValue variants"
-)]
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
