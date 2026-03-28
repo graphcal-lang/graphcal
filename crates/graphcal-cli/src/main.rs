@@ -585,24 +585,15 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                 entries.push(FlatEntry::Value(prefix.to_string(), value));
             }
             Value::Struct {
-                variant,
-                type_name,
+                type_name: _,
                 fields,
             } => {
-                if variant.as_str() == type_name.as_str() {
-                    for (field_name, field_val) in fields {
-                        flatten_value(
-                            &format!("{prefix}.{}", field_name.as_str()),
-                            field_val,
-                            entries,
-                        );
-                    }
-                } else if fields.is_empty() {
+                if fields.is_empty() {
                     entries.push(FlatEntry::Value(prefix.to_string(), value));
                 } else {
                     for (field_name, field_val) in fields {
                         flatten_value(
-                            &format!("{prefix}::{}.{}", variant.as_str(), field_name.as_str()),
+                            &format!("{prefix}.{}", field_name.as_str()),
                             field_val,
                             entries,
                         );
@@ -679,8 +670,8 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                             } => {
                                 println!("{name:width$} = {index_name}::{variant}");
                             }
-                            Value::Struct { variant, .. } => {
-                                println!("{name:width$} = {}", variant.as_str());
+                            Value::Struct { type_name, .. } => {
+                                println!("{name:width$} = {}", type_name.as_str());
                             }
                             Value::Datetime { .. } => {
                                 let formatted = value.format_datetime().unwrap_or_default();
@@ -820,17 +811,9 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                     "variant": variant.as_str()
                 })
             }
-            Value::Struct {
-                type_name,
-                variant,
-                fields,
-            } => {
+            Value::Struct { type_name, fields } => {
                 let mut map = serde_json::Map::new();
                 map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
-                // Include variant name only for multi-variant types (where variant != type name)
-                if variant.as_str() != type_name.as_str() {
-                    map.insert("variant".to_string(), serde_json::json!(variant.as_str()));
-                }
                 let fields_map: serde_json::Map<String, serde_json::Value> = fields
                     .iter()
                     .map(|(name, val)| (name.as_str().to_string(), value_to_json(val, symbols)))

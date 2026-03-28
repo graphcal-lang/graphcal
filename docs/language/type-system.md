@@ -16,7 +16,7 @@ Graphcal's type system is organized into three levels:
 Level 1: Primitive  = Scalar(Dim) | Int | Bool | Datetime(TimeScale)
 Level 2: ValueType  = Primitive
                     | Struct(name, fields: [ValueType])
-                    | TaggedUnion(name, variants: [Variant(fields: [ValueType])])
+                    | Union(name, members: [Type])
 Level 3: DeclType   = ValueType
                     | Indexed(ValueType, [Index])   -- written T[I] or T[I, J, ...]
 
@@ -25,7 +25,7 @@ Expression-level:
 ```
 
 - **Primitive** — An indivisible atomic datum.
-- **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, tagged unions). This is the type of one value: you can pass it to a function, return it, store it.
+- **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, union types). This is the type of one value: you can pass it to a function, return it, store it.
 - **DeclType** — What can appear in type annotations of `param`, `node`, and `const` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
 - **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver::Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies, function parameters, and `let` bindings.
 
@@ -120,7 +120,7 @@ See [Built-in Reference](built-ins.md#datetime-functions) for the full list of d
 
 ### Value Types (Level 2)
 
-A ValueType is a single logical value: a primitive, a struct instance, or a tagged union variant. All struct fields and tagged union variant fields must themselves be ValueTypes.
+A ValueType is a single logical value: a primitive, a struct instance, or a union type member. All struct fields and union type member fields must themselves be ValueTypes.
 
 #### Structs
 
@@ -141,15 +141,14 @@ type Vec3<D: Dim, Frame: Type> {
 }
 ```
 
-#### Tagged Unions
+#### Union Types
 
-A tagged union is a sum type with named variants. Each variant can carry fields (which must be ValueTypes) or be fieldless.
+A union type is a sum type that combines multiple existing types. Each member is defined as its own type first, then combined with the `=` and `|` syntax. Members can be unit types (no fields) or struct types.
 
 ```
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    LowThrust { thrust: Force, duration: Time }
-}
+type Impulsive { delta_v: Velocity }
+type LowThrust { thrust: Force, duration: Time }
+type ManeuverKind = Impulsive | LowThrust;
 ```
 
 ### Declaration Types (Level 3)
@@ -196,7 +195,7 @@ Domain constraints are valid on:
 - **`Dimensionless`**: `Dimensionless(min: 0.0, max: 1.0)`
 - **`Int`**: `Int(min: 1, max: 100)`
 
-Domain constraints are **not** valid on `Bool`, `Datetime`, struct types, or tagged union types. Attempting to use constraints on these types is a compile error.
+Domain constraints are **not** valid on `Bool`, `Datetime`, struct types, or union types. Attempting to use constraints on these types is a compile error.
 
 ### Indexed Types
 
@@ -244,14 +243,14 @@ An index declares a finite, ordered set of labels usable as collection axes in `
 
 A named index declares a finite set of labels usable as a collection axis. The `cat` keyword declares:
 
-1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from tagged unions. Labels exist only within expressions, not in declaration type annotations.
+1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from union types. Labels exist only within expressions, not in declaration type annotations.
 2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
 
 ```
 cat Maneuver { Departure, Correction, Insertion }
 ```
 
-Named index labels use qualified syntax (`Maneuver::Departure`), distinguishing them from tagged union variants which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while tagged union variants are constructors of a sum type.
+Named index labels use qualified syntax (`Maneuver::Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
 
 Named index labels are proper runtime values within expressions:
 
@@ -264,7 +263,7 @@ Named index labels are proper runtime values within expressions:
 
 However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
 
-A regular fieldless tagged union (`type Foo { A, B }`) is NOT automatically an index. The `cat` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
+A regular fieldless union type (`type Foo = A | B;`) is NOT automatically an index. The `cat` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
 ### Range Index
 
@@ -274,7 +273,7 @@ A range index is a finite sequence of scalar values in a specific dimension:
 range TimeStep(0.0 s, 100.0 s, step: 0.1 s);
 ```
 
-Range index labels are scalar values, not tagged union variants. The loop variable in `for t: TimeStep { ... }` acts as a `Scalar(Time)` -- it can be used in arithmetic and for indexing.
+Range index labels are scalar values, not union type members. The loop variable in `for t: TimeStep { ... }` acts as a `Scalar(Time)` -- it can be used in arithmetic and for indexing.
 
 ### Named vs Range Index Capabilities
 
@@ -568,7 +567,7 @@ expr[Index1::V1, Index2::V2] // multi-dimensional access
 ```
 TypeName { field1: expr1, field2 }
 TypeName<Arg1, Arg2> { field1: expr1, field2 }
-VariantName                                       // bare variant (no fields)
+MemberName                                        // unit type (no fields)
 ```
 
 - Each field expression must match the declared type of that field.
@@ -594,9 +593,9 @@ match scrutinee {
 }
 ```
 
-- `scrutinee` must be a tagged union type or a `Label` type.
-- All variants/labels must be covered (exhaustiveness check).
-- For tagged union scrutinees, arms use bare variant names and can bind fields.
+- `scrutinee` must be a union type or a `Label` type.
+- All members/labels must be covered (exhaustiveness check).
+- For union type scrutinees, arms use bare member names and can bind fields.
 - For `Label` scrutinees, arms use qualified names (`Index::Label`) and cannot bind fields (labels are fieldless).
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
@@ -756,7 +755,7 @@ Two types are equivalent if:
 - **Datetime**: Same time scale. `Datetime<UTC>` and `Datetime<TT>` are different types.
 - **Labels**: Same index name. `Label(Maneuver)` and `Label(Phase)` are different types.
 - **Structs**: Same struct name and all type arguments are equivalent.
-- **Tagged unions**: Same type name and same variants.
+- **Union types**: Same type name and same members.
 - **Indexed**: Same element type, same indexes in the same order. `T[I, J]` and `T[J, I]` are different types.
 
 There is no subtyping. `Length` is not assignable to `Dimensionless`, and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if both have the same fields.
@@ -772,7 +771,7 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Bool value | ValueType | Yes | Yes | Yes | Yes |
 | Datetime value | ValueType | Yes | Yes | Yes | Yes |
 | Struct instance | ValueType | Yes | Yes | Yes | Yes |
-| Tagged union variant | ValueType | Yes | Yes | Yes | Yes |
+| Union type member | ValueType | Yes | Yes | Yes | Yes |
 | Named index label | Label(IndexName) (expression-level) | Yes | Yes | Yes | Yes |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
 | Range index label | Scalar(Dim) | Yes | Yes (as scalar) | Yes (as scalar) | Indexing, arithmetic |
@@ -781,7 +780,7 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Unit | No (compile-time) | No | No | No | In literals only |
 | Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
 
-Named index labels have a dedicated `Label(IndexName)` type kind, distinct from tagged union variants. Labels use qualified syntax (`Maneuver::Departure`) while tagged union variants use bare syntax (`Nominal`).
+Named index labels have a dedicated `Label(IndexName)` type kind, distinct from union type members. Labels use qualified syntax (`Maneuver::Departure`) while union type members use bare syntax (`Nominal`).
 
 ## Derived Operations
 

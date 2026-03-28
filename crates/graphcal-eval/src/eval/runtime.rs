@@ -24,10 +24,6 @@ use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "single match over all RuntimeValue variants"
-)]
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
@@ -54,13 +50,8 @@ pub(super) fn runtime_to_value(
             index_name: index_name.clone(),
             variant: variant.clone(),
         },
-        RuntimeValue::Struct {
-            type_name,
-            variant,
-            fields,
-        } => {
+        RuntimeValue::Struct { type_name, fields } => {
             let type_def = registry.types.get_type(type_name.as_str());
-            let variant_def = type_def.and_then(|td| td.get_variant(variant.as_str()));
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
             // when we have concrete type args from the declared type.
@@ -80,8 +71,8 @@ pub(super) fn runtime_to_value(
             let converted_fields = fields
                 .iter()
                 .map(|(field_name, field_rv)| {
-                    let field_declared = variant_def.and_then(|vd| {
-                        vd.fields
+                    let field_declared = type_def.and_then(|td| {
+                        td.fields()
                             .iter()
                             .find(|f| f.name == *field_name)
                             .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
@@ -92,7 +83,6 @@ pub(super) fn runtime_to_value(
                 .collect();
             Value::Struct {
                 type_name: type_name.clone(),
-                variant: variant.clone(),
                 fields: converted_fields,
             }
         }

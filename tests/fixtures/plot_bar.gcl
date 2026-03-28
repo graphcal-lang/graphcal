@@ -2,7 +2,6 @@
 //
 // Demonstrates a bar chart comparing power consumption across
 // operating modes, using sum aggregation over subsystems.
-
 cat Subsystem { Comms, Thermal, Payload, Attitude }
 cat OpMode { Safe, Nominal, Science }
 
@@ -14,9 +13,7 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
     Attitude: 0.0 W,  12.0 W,  12.0 W;
 };
 
-node total_power: Power[OpMode] = for m: OpMode {
-    sum(for s: Subsystem { @power_draw[s, m] })
-};
+node total_power: Power[OpMode] = for m: OpMode { sum(for s: Subsystem { @power_draw[s, m] }) };
 
 plot power_by_mode = {
     mark: bar,

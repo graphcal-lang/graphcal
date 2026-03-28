@@ -4,7 +4,7 @@ icon: material/shape
 
 # Algebraic Data Types
 
-Graphcal uses a unified `type` declaration (inspired by Gleam) for both structs and tagged unions.
+Graphcal uses `type` declarations for structs, unit types, and union types.
 
 ## Structs (Single-Variant Types)
 
@@ -46,33 +46,41 @@ node total: Velocity = @result.total_dv;
 node time_hours: Time = @result.tof -> hour;
 ```
 
-## Tagged Unions (Multi-Variant Types)
+## Unit Types
 
-A `type` with multiple variant blocks defines a tagged union:
+A `type` with no fields is declared with a semicolon (no braces):
+
+```
+type Eci;
+type Body;
+type Coasting;
+```
+
+Unit types are useful as marker types for phantom type parameters (e.g., reference frames).
+
+## Union Types
+
+Union types combine multiple existing types into a sum type. First, define each member as its own type, then combine them with the `=` and `|` syntax:
 
 ```
 dimension Force = Mass * Length / Time^2;
 
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    LowThrust { thrust: Force, duration: Time }
-}
+type Impulsive { delta_v: Velocity }
+type LowThrust { thrust: Force, duration: Time }
+type ManeuverKind = Impulsive | LowThrust;
 ```
 
-### Bare Variants
-
-Variants without fields are declared without braces:
+Members can be unit types (no fields) or struct types:
 
 ```
-type Status {
-    Nominal
-    Warning { code: Dimensionless }
-}
+type Nominal;
+type Warning { code: Dimensionless }
+type Status = Nominal | Warning;
 ```
 
-### Constructing Variants
+### Constructing Union Values
 
-Construct a variant by name:
+Construct a value by its member type name:
 
 ```
 node maneuver: ManeuverKind = LowThrust {
@@ -85,7 +93,7 @@ node status: Status = Nominal;
 
 ## Match Expressions
 
-Use `match` to destructure tagged unions:
+Use `match` to destructure union types:
 
 ```
 node fuel_proxy: Force = match @maneuver {
@@ -94,13 +102,13 @@ node fuel_proxy: Force = match @maneuver {
 };
 ```
 
-- Each arm matches a variant and binds its fields
+- Each arm matches a member and binds its fields
 - `_` discards a field value
 - Field shorthand: `thrust` binds the field to a local variable of the same name
 
 ### Exhaustiveness Checking
 
-The compiler requires that all variants are covered:
+The compiler requires that all members are covered:
 
 ```
 // ERROR: non-exhaustive -- missing `Warning` arm
@@ -126,8 +134,8 @@ node bad: Force = match @maneuver {
 Types can have generic parameters for type-safe phantom typing:
 
 ```
-type Eci {}
-type Body {}
+type Eci;
+type Body;
 
 #[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type> {
@@ -155,7 +163,7 @@ The `as` operator only changes the phantom type parameter; the underlying data i
 ### Default Type Parameters
 
 ```
-type Unframed {}
+type Unframed;
 
 #[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type = Unframed> {

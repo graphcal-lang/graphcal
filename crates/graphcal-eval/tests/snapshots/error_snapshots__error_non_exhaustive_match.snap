@@ -2,15 +2,15 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-non-exhaustive match: variant `Critical` not covered
+non-exhaustive match: member `Critical` not covered
     Diagnostic severity: error
-Begin snippet for non_exhaustive_match.gcl starting at line 9, column 1
+Begin snippet for non_exhaustive_match.gcl starting at line 12, column 1
 
-snippet line 9: 
-snippet line 10: node result: Dimensionless = match @s {
-    label starting at line 10, column 30: error here
-snippet line 11:     Nominal => 0.0,
-snippet line 12:     Warning { code } => code,
-snippet line 13: };
-    label ending at line 13, column 1: error here
+snippet line 12: 
+snippet line 13: node result: Dimensionless = match @s {
+    label starting at line 13, column 30: error here
+snippet line 14:     Nominal => 0.0,
+snippet line 15:     Warning { code } => code,
+snippet line 16: };
+    label ending at line 16, column 1: error here
 diagnostic code: graphcal::E001

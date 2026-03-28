@@ -21,19 +21,31 @@ pub(super) fn is_bool_type(ty: &InferredType) -> bool {
 }
 
 /// Check if a declared type matches an inferred type.
-pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
+///
+/// Supports union subtyping: if the declared type is a union and the inferred
+/// type is a member of that union, this returns true (implicit widening).
+pub(super) fn types_match(
+    declared: &DeclaredType,
+    inferred: &InferredType,
+    registry: &Registry,
+) -> bool {
     match (declared, inferred) {
         (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
         (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
         (DeclaredType::Label(d), InferredType::Label(i)) => d == i,
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
-            d == i
+            if d == i
                 && d_args.len() == i_args.len()
                 && d_args
                     .iter()
                     .zip(i_args)
-                    .all(|(da, ia)| types_match(da, ia))
+                    .all(|(da, ia)| types_match(da, ia, registry))
+            {
+                return true;
+            }
+            // Union subtyping: if declared is a union type and inferred is a member
+            registry.types.is_member_of_union(i.as_str(), d.as_str())
         }
         (
             DeclaredType::Indexed {
@@ -44,7 +56,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 element: i_elem,
                 index: i_idx,
             },
-        ) => d_idx == i_idx && types_match(d_elem, i_elem),
+        ) => d_idx == i_idx && types_match(d_elem, i_elem, registry),
         _ => false,
     }
 }

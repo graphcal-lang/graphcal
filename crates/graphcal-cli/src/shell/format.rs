@@ -19,10 +19,9 @@ pub fn format_value_line(
     match value {
         // Recursive cases: expand structs and indexed values into multiple lines.
         Value::Struct {
-            variant,
-            type_name,
+            type_name: _,
             fields,
-        } if !fields.is_empty() && variant.as_str() == type_name.as_str() => fields
+        } if !fields.is_empty() => fields
             .iter()
             .map(|(field_name, field_val)| {
                 format_value_line(

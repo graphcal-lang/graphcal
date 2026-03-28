@@ -2,7 +2,7 @@ use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
     FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
     IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnitDecl, UnitDef, VariantDecl,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
@@ -23,6 +23,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Dimension(d) => format_dim_decl(fmt, d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
+        DeclKind::UnionType(d) => format_union_type_decl(fmt, d),
         DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
@@ -163,7 +164,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `#[derive(...)] type Name<...> { ... }`
+/// `type Name { ... }` or `type Name;` or `#[derive(...)] type Name<...> { ... }`
 fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
@@ -171,54 +172,52 @@ fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         header = header.append(format_generic_params(&d.generic_params));
     }
 
-    if d.variants.is_empty() {
-        return header.append(RcDoc::text(" {}"));
+    if d.fields.is_empty() {
+        // Unit type or empty record type — format as `type Name;`
+        return header.append(RcDoc::text(";"));
     }
 
-    // Check if this is struct sugar (single variant with same name as type)
-    let is_struct_sugar =
-        d.variants.len() == 1 && d.variants[0].name.value.as_str() == d.name.value.as_str();
-
-    if is_struct_sugar {
-        let variant = &d.variants[0];
-        let fields = format_field_decls(&variant.fields);
-        header
-            .append(RcDoc::text(" {"))
-            .append(RcDoc::hardline().append(fields).nest(INDENT))
-            .append(RcDoc::hardline())
-            .append(RcDoc::text("}"))
-    } else {
-        // Multi-variant (tagged union)
-        let mut variant_docs: Vec<RcDoc<'static>> = Vec::new();
-        for variant in &d.variants {
-            variant_docs.push(format_variant_decl(variant));
-        }
-        header
-            .append(RcDoc::text(" {"))
-            .append(
-                RcDoc::hardline()
-                    .append(RcDoc::intersperse(variant_docs, RcDoc::hardline()))
-                    .nest(INDENT),
-            )
-            .append(RcDoc::hardline())
-            .append(RcDoc::text("}"))
-    }
+    // Record type with fields
+    let fields = format_field_decls(&d.fields);
+    header
+        .append(RcDoc::text(" {"))
+        .append(RcDoc::hardline().append(fields).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
 }
 
-fn format_variant_decl(v: &VariantDecl) -> RcDoc<'static> {
-    let name = RcDoc::text(v.name.value.as_str().to_string());
-    if v.fields.is_empty() {
-        name
-    } else {
-        let fields: Vec<RcDoc<'static>> = v
-            .fields
-            .iter()
-            .map(|f| format_single_field_decl(f))
-            .collect();
-        name.append(RcDoc::text(" { "))
-            .append(RcDoc::intersperse(fields, RcDoc::text(", ")))
-            .append(RcDoc::text(" }"))
+/// `type Name = A | B | C;` or `type Name<D: Dim> = Ok<D> | Err;`
+fn format_union_type_decl(_fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'static> {
+    let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
+
+    if !d.generic_params.is_empty() {
+        header = header.append(format_generic_params(&d.generic_params));
     }
+
+    let member_docs: Vec<RcDoc<'static>> = d
+        .members
+        .iter()
+        .map(|m| {
+            let mut doc = RcDoc::text(m.name.value.as_str().to_string());
+            if !m.type_args.is_empty() {
+                let args: Vec<RcDoc<'static>> = m
+                    .type_args
+                    .iter()
+                    .map(|a| format_type_expr_inline(a))
+                    .collect();
+                doc = doc
+                    .append(RcDoc::text("<"))
+                    .append(RcDoc::intersperse(args, RcDoc::text(", ")))
+                    .append(RcDoc::text(">"));
+            }
+            doc
+        })
+        .collect();
+
+    header
+        .append(RcDoc::text(" = "))
+        .append(RcDoc::intersperse(member_docs, RcDoc::text(" | ")))
+        .append(RcDoc::text(";"))
 }
 
 fn format_field_decls(fields: &[FieldDecl]) -> RcDoc<'static> {

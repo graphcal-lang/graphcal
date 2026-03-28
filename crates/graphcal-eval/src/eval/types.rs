@@ -44,10 +44,8 @@ pub enum Value {
         variant: VariantName,
     },
     Struct {
-        /// The struct type name.
+        /// The concrete type name (e.g., `Impulsive`, `TransferResult`).
         type_name: StructTypeName,
-        /// The variant name (= type name for single-variant struct sugar).
-        variant: VariantName,
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
@@ -188,7 +186,7 @@ impl Value {
                 index_name,
                 variant,
             } => format!("{index_name}::{variant}"),
-            Self::Struct { variant, .. } => variant.as_str().to_string(),
+            Self::Struct { type_name, .. } => type_name.as_str().to_string(),
             Self::Datetime { .. } => self.format_datetime().unwrap_or_default(),
             Self::Scalar { .. } => {
                 let formatted = graphcal_registry::format::format_number(

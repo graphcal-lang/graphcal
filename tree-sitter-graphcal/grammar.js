@@ -145,28 +145,32 @@ module.exports = grammar({
     ),
 
     // #[derive(Add, Sub, Neg)]
-    // type TransferResult { dv1: Velocity, dv2: Velocity }       -- struct sugar
-    // type ManeuverKind { Impulsive { dv: Velocity } Coasting }  -- multi-variant
-    // type Eci {}                                                 -- empty marker type
+    // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type
+    // type Eci {}                                            -- empty record type
+    // type Coasting;                                         -- unit type
+    // type ManeuverKind = Impulsive | Coasting;              -- union type
+    // type Result<D: Dim> = Ok<D> | Err;                     -- generic union type
     type_declaration: $ => seq(
       repeat($.attribute),
       "type",
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
-      "{",
       choice(
-        // Empty type: type Eci {}
-        seq(),
-        // Struct sugar: field declarations separated by commas
+        // Record type: type Foo { field: Type, ... } or type Foo {}
         seq(
-          $.field_declaration,
-          repeat(seq(",", $.field_declaration)),
-          optional(","),
+          "{",
+          optional(seq(
+            $.field_declaration,
+            repeat(seq(",", $.field_declaration)),
+            optional(","),
+          )),
+          "}",
         ),
-        // Multi-variant: one or more variant declarations (no separators)
-        repeat1($.variant_declaration),
+        // Unit type: type Foo;
+        ";",
+        // Union type: type Foo = A | B | C;
+        seq("=", $.union_members, ";"),
       ),
-      "}",
     ),
 
     field_declaration: $ => seq(
@@ -175,17 +179,21 @@ module.exports = grammar({
       field("type", $.type_expr),
     ),
 
-    // Variant in a tagged union: Impulsive { delta_v: Velocity } or Coasting
-    variant_declaration: $ => seq(
+    // Union members: A | B or A<D> | B
+    union_members: $ => seq(
+      $.union_member,
+      repeat1(seq("|", $.union_member)),
+    ),
+
+    // A single union member, optionally with type arguments: Ok<D>
+    union_member: $ => seq(
       field("name", $.identifier),
       optional(seq(
-        "{",
-        optional(seq(
-          $.field_declaration,
-          repeat(seq(",", $.field_declaration)),
-          optional(","),
-        )),
-        "}",
+        "<",
+        field("type_arg", $.type_expr),
+        repeat(seq(",", field("type_arg", $.type_expr))),
+        optional(","),
+        ">",
       )),
     ),
 

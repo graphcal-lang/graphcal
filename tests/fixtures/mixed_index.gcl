@@ -14,9 +14,7 @@ param accel: Acceleration[Maneuver] = {
 };
 
 // Mixed-index via for comprehension (label x range)
-node v_for: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
-    @accel[m] * t
-};
+node v_for: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep { @accel[m] * t };
 
 // Mixed-index via map literal with for-comprehension values
 param v_map: Velocity[Maneuver, TimeStep] = {
@@ -26,19 +24,13 @@ param v_map: Velocity[Maneuver, TimeStep] = {
 };
 
 // Index access with qualified variant and loop variable
-param departure_v: Velocity[TimeStep] = for t: TimeStep {
-    @v_for[Maneuver::Departure, t]
-};
+param departure_v: Velocity[TimeStep] = for t: TimeStep { @v_for[Maneuver::Departure, t] };
 
 // Aggregation: sum over label axis for each time step
-node total_v: Velocity[TimeStep] = for t: TimeStep {
-    sum(for m: Maneuver { @v_for[m, t] })
-};
+node total_v: Velocity[TimeStep] = for t: TimeStep { sum(for m: Maneuver { @v_for[m, t] }) };
 
 // Aggregation: max over time axis for each maneuver
-node max_v: Velocity[Maneuver] = for m: Maneuver {
-    max(for t: TimeStep { @v_for[m, t] })
-};
+node max_v: Velocity[Maneuver] = for m: Maneuver { max(for t: TimeStep { @v_for[m, t] }) };
 
 // Scan over the outermost (label) axis
 node cumulative_max: Velocity[Maneuver] = scan(@max_v, 0.0 m/s, |acc, val| {

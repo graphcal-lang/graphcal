@@ -75,16 +75,15 @@ pub(super) fn eval_match(
             eval_expr(&matched_arm.body, values, local_values, ctx)
         }
         RuntimeValue::Struct {
-            variant,
+            type_name,
             fields: scrutinee_fields,
-            ..
         } => {
-            // Tagged union match
+            // Tagged union match — type_name is the concrete variant type name
             let matched_arm = arms
                 .iter()
-                .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                .find(|arm| arm.pattern.variant_name.value.as_str() == type_name.as_str())
                 .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("no match arm for variant `{variant}`"),
+                    message: format!("no match arm for variant `{type_name}`"),
                     src: ctx.src.clone(),
                     span: expr.span.into(),
                 })?;
@@ -98,7 +97,7 @@ pub(super) fn eval_match(
                             scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
                                 GraphcalError::EvalError {
                                     message: format!(
-                                        "no field `{}` on variant `{variant}`",
+                                        "no field `{}` on type `{type_name}`",
                                         field.value
                                     ),
                                     src: ctx.src.clone(),

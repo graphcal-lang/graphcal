@@ -2,15 +2,14 @@
 //
 // Demonstrates a rect mark chart visualizing power draw across
 // subsystems and operating modes as a 2D grid.
-
 cat Subsystem { Comms, Thermal, Payload }
 cat OpMode { Safe, Nominal, Science }
 
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
-               Safe, Nominal, Science;
-    Comms:    2.0 W,   5.0 W,   3.0 W;
-    Thermal:  8.0 W,   5.0 W,   5.0 W;
-    Payload:  0.0 W,   0.0 W,  35.0 W;
+              Safe, Nominal, Science;
+    Comms:   2.0 W,   5.0 W,   3.0 W;
+    Thermal: 8.0 W,   5.0 W,   5.0 W;
+    Payload: 0.0 W,   0.0 W,  35.0 W;
 };
 
 param comms_power: Power[OpMode] = for m: OpMode { @power_draw[Subsystem::Comms, m] };

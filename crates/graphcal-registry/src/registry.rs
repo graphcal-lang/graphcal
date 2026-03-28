@@ -63,18 +63,29 @@ pub struct UnitInfo {
     pub scale: UnitScale,
 }
 
-/// A field in a type variant definition.
+/// A field in a record type definition.
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub name: FieldName,
     pub type_ann: TypeExpr,
 }
 
-/// A variant within a type definition.
+/// A member of a union type, with optional type arguments for generic members.
 #[derive(Debug, Clone)]
-pub struct VariantDef {
-    pub name: VariantName,
-    pub fields: Vec<StructField>,
+pub struct UnionMemberDef {
+    pub name: StructTypeName,
+    pub type_args: Vec<TypeExpr>,
+}
+
+/// The kind of a type definition.
+#[derive(Debug, Clone)]
+pub enum TypeDefKind {
+    /// A unit type with no fields: `type Coasting;`
+    Unit,
+    /// A record type with fields: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+    Record { fields: Vec<StructField> },
+    /// A union type: `type ManeuverKind = Impulsive | Coasting;`
+    Union { members: Vec<UnionMemberDef> },
 }
 
 /// The constraint on a generic parameter of a type definition.
@@ -107,27 +118,50 @@ pub struct TypeGenericParam {
     pub default: Option<graphcal_syntax::ast::TypeExpr>,
 }
 
-/// A type definition: may have zero variants (empty/marker type),
-/// one variant (struct sugar), or multiple variants (tagged union).
+/// A type definition: unit type, record type, or union type.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
     pub name: StructTypeName,
     pub generic_params: Vec<TypeGenericParam>,
     pub derives: Vec<graphcal_syntax::ast::DeriveOp>,
-    pub variants: Vec<VariantDef>,
+    pub kind: TypeDefKind,
 }
 
 impl TypeDef {
-    /// Returns true if this is a single-variant type (struct sugar).
+    /// Returns the fields if this is a record type.
     #[must_use]
-    pub const fn is_single_variant(&self) -> bool {
-        self.variants.len() == 1
+    pub fn fields(&self) -> &[StructField] {
+        match &self.kind {
+            TypeDefKind::Record { fields } => fields,
+            TypeDefKind::Unit | TypeDefKind::Union { .. } => &[],
+        }
     }
 
-    /// Look up a variant by name.
+    /// Returns the union members if this is a union type.
     #[must_use]
-    pub fn get_variant(&self, name: &str) -> Option<&VariantDef> {
-        self.variants.iter().find(|v| v.name.as_str() == name)
+    pub fn union_members(&self) -> Option<&[UnionMemberDef]> {
+        match &self.kind {
+            TypeDefKind::Union { members } => Some(members),
+            TypeDefKind::Unit | TypeDefKind::Record { .. } => None,
+        }
+    }
+
+    /// Returns true if this is a union type.
+    #[must_use]
+    pub const fn is_union(&self) -> bool {
+        matches!(self.kind, TypeDefKind::Union { .. })
+    }
+
+    /// Returns true if this is a record type (has fields).
+    #[must_use]
+    pub const fn is_record(&self) -> bool {
+        matches!(self.kind, TypeDefKind::Record { .. })
+    }
+
+    /// Returns true if this is a unit type (no fields, no members).
+    #[must_use]
+    pub const fn is_unit(&self) -> bool {
+        matches!(self.kind, TypeDefKind::Unit)
     }
 }
 
@@ -465,12 +499,12 @@ impl UnitRegistry {
     }
 }
 
-/// Type registry: maps type names to `TypeDef` and provides variant reverse lookup.
+/// Type registry: maps type names to `TypeDef` and provides union membership lookup.
 #[derive(Debug)]
 pub struct TypeRegistry {
     types: HashMap<StructTypeName, TypeDef>,
-    /// Reverse lookup: variant name → owning type name.
-    variant_to_type: HashMap<VariantName, StructTypeName>,
+    /// Reverse lookup: member type name → union type names it belongs to.
+    type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
 }
 
 impl TypeRegistry {
@@ -480,13 +514,20 @@ impl TypeRegistry {
         self.types.get(name)
     }
 
-    /// Look up a type definition and specific variant by variant name.
+    /// Check if `member_name` is a member of the union type `union_name`.
     #[must_use]
-    pub fn get_type_by_variant(&self, variant_name: &str) -> Option<(&TypeDef, &VariantDef)> {
-        let type_name = self.variant_to_type.get(variant_name)?;
-        let type_def = self.types.get(type_name.as_str())?;
-        let variant_def = type_def.get_variant(variant_name)?;
-        Some((type_def, variant_def))
+    pub fn is_member_of_union(&self, member_name: &str, union_name: &str) -> bool {
+        self.type_to_unions
+            .get(member_name)
+            .is_some_and(|unions| unions.iter().any(|u| u.as_str() == union_name))
+    }
+
+    /// Get the union types that `member_name` belongs to.
+    #[must_use]
+    pub fn get_unions_for_type(&self, member_name: &str) -> &[StructTypeName] {
+        self.type_to_unions
+            .get(member_name)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Iterate over all registered type definitions.
@@ -566,7 +607,7 @@ pub struct RegistryBuilder {
     dimensions: HashMap<DimName, Dimension>,
     units: HashMap<UnitName, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
-    variant_to_type: HashMap<VariantName, StructTypeName>,
+    type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
     functions: HashMap<FnName, FnDef>,
     indexes: HashMap<IndexName, IndexDef>,
 }
@@ -589,7 +630,7 @@ impl RegistryBuilder {
             units: UnitRegistry { units: self.units },
             types: TypeRegistry {
                 types: self.types,
-                variant_to_type: self.variant_to_type,
+                type_to_unions: self.type_to_unions,
             },
             functions: FunctionRegistry {
                 functions: self.functions,
@@ -664,9 +705,13 @@ impl RegistryBuilder {
 
     /// Register a type definition (single-variant struct sugar or multi-variant tagged union).
     pub fn register_type(&mut self, def: TypeDef) {
-        for variant in &def.variants {
-            self.variant_to_type
-                .insert(variant.name.clone(), def.name.clone());
+        if let TypeDefKind::Union { ref members } = def.kind {
+            for member in members {
+                self.type_to_unions
+                    .entry(member.name.clone())
+                    .or_default()
+                    .push(def.name.clone());
+            }
         }
         self.types.insert(def.name.clone(), def);
     }
@@ -959,8 +1004,7 @@ mod tests {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
-            variants: vec![VariantDef {
-                name: VariantName::new("TransferResult"),
+            kind: TypeDefKind::Record {
                 fields: vec![
                     StructField {
                         name: FieldName::new("dv1"),
@@ -971,26 +1015,21 @@ mod tests {
                         type_ann: make_dim_type_expr("Velocity"),
                     },
                 ],
-            }],
+            },
         });
         let r = b.build();
         let velocity_dim = Dimension::base(length_id()) / Dimension::base(time_id());
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
-        assert!(def.is_single_variant());
-        let variant = def.get_variant("TransferResult").unwrap();
-        assert_eq!(variant.fields.len(), 2);
-        assert_eq!(variant.fields[0].name.as_str(), "dv1");
+        assert!(def.is_record());
+        let fields = def.fields();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name.as_str(), "dv1");
         assert_eq!(
-            r.dimensions.resolve_type_expr(&variant.fields[0].type_ann),
+            r.dimensions.resolve_type_expr(&fields[0].type_ann),
             Some(velocity_dim)
         );
         assert!(r.types.get_type("NonExistent").is_none());
-
-        // variant_to_type reverse lookup
-        let (type_def, variant_def) = r.types.get_type_by_variant("TransferResult").unwrap();
-        assert_eq!(type_def.name.as_str(), "TransferResult");
-        assert_eq!(variant_def.name.as_str(), "TransferResult");
     }
 
     #[test]

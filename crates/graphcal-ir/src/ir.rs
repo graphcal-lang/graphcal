@@ -1454,6 +1454,9 @@ fn register_declarations_impl(
             DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
                 register_type_decl(t, &decl.attributes, registry);
             }
+            DeclKind::UnionType(t) if should_register(t.name.value.as_str()) => {
+                register_union_type_decl(t, registry);
+            }
             _ => {}
         }
     }
@@ -1774,20 +1777,20 @@ fn register_type_decl(
             default: g.default.clone(),
         })
         .collect();
-    let mut variants = Vec::new();
-    for variant in &t.variants {
-        let mut fields = Vec::new();
-        for field in &variant.fields {
-            fields.push(registry::StructField {
-                name: field.name.value.clone(),
-                type_ann: field.type_ann.clone(),
-            });
-        }
-        variants.push(registry::VariantDef {
-            name: variant.name.value.clone(),
-            fields,
-        });
-    }
+
+    let kind = if t.fields.is_empty() {
+        registry::TypeDefKind::Unit
+    } else {
+        let fields = t
+            .fields
+            .iter()
+            .map(|f| registry::StructField {
+                name: f.name.value.clone(),
+                type_ann: f.type_ann.clone(),
+            })
+            .collect();
+        registry::TypeDefKind::Record { fields }
+    };
 
     // Extract derives from attributes (validated by resolver)
     let derives: Vec<graphcal_syntax::ast::DeriveOp> = attributes
@@ -1809,7 +1812,38 @@ fn register_type_decl(
         name: t.name.value.clone(),
         generic_params,
         derives,
-        variants,
+        kind,
+    });
+}
+
+fn register_union_type_decl(
+    t: &graphcal_syntax::ast::UnionTypeDecl,
+    registry: &mut RegistryBuilder,
+) {
+    let generic_params: Vec<registry::TypeGenericParam> = t
+        .generic_params
+        .iter()
+        .map(|g| registry::TypeGenericParam {
+            name: g.name.value.clone(),
+            constraint: g.constraint.into(),
+            default: g.default.clone(),
+        })
+        .collect();
+
+    let members = t
+        .members
+        .iter()
+        .map(|m| registry::UnionMemberDef {
+            name: m.name.value.clone(),
+            type_args: m.type_args.clone(),
+        })
+        .collect();
+
+    registry.register_type(registry::TypeDef {
+        name: t.name.value.clone(),
+        generic_params,
+        derives: vec![],
+        kind: registry::TypeDefKind::Union { members },
     });
 }
 

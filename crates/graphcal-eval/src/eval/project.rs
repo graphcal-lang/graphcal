@@ -2126,6 +2126,7 @@ pub(super) fn file_has_declaration(file: &graphcal_syntax::ast::File, name: &str
         DeclKind::Unit(u) => u.name.value.as_str() == name,
         DeclKind::Index(idx) => idx.name.value.as_str() == name,
         DeclKind::Type(t) => t.name.value.as_str() == name,
+        DeclKind::UnionType(u) => u.name.value.as_str() == name,
         DeclKind::Plot(p) => p.name.value.as_str() == name,
         DeclKind::Figure(f) => f.name.value.as_str() == name,
         DeclKind::Layer(l) => l.name.value.as_str() == name,

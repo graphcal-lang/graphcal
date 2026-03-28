@@ -3,8 +3,8 @@ dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
 dimension GravParam = Length^3 / Time^2;
 
-type Eci {}
-type Body {}
+type Eci;
+type Body;
 
 type Vec3<D: Dim, F: Type> {
     x: D,

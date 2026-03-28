@@ -412,13 +412,13 @@ fn format_value_inline_with_budget(
             variant,
         } => format!("{index_name}::{variant}"),
         Value::Struct {
-            variant, fields, ..
+            type_name, fields, ..
         } => {
             if fields.is_empty() {
-                return format!("{variant} {{}}");
+                return format!("{type_name} {{}}");
             }
             format_braced_entries(
-                &format!("{variant} "),
+                &format!("{type_name} "),
                 fields
                     .iter()
                     .map(|(k, v)| (k.as_str(), v))
@@ -917,7 +917,6 @@ mod tests {
         fields.insert(FieldName::new("dv2"), scalar(200.0));
         let val = Value::Struct {
             type_name: StructTypeName::new("TransferResult"),
-            variant: VariantName::new("TransferResult"),
             fields,
         };
         assert_eq!(
@@ -931,7 +930,6 @@ mod tests {
         let symbols = empty_symbols();
         let val = Value::Struct {
             type_name: StructTypeName::new("Nominal"),
-            variant: VariantName::new("Nominal"),
             fields: IndexMap::new(),
         };
         assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
@@ -945,12 +943,11 @@ mod tests {
         fields.insert(FieldName::new("duration"), scalar(3600.0));
         let val = Value::Struct {
             type_name: StructTypeName::new("ManeuverKind"),
-            variant: VariantName::new("LowThrust"),
             fields,
         };
         assert_eq!(
             format_value_inline(&val, &symbols),
-            "LowThrust { thrust: 0.5, duration: 3600 }"
+            "ManeuverKind { thrust: 0.5, duration: 3600 }"
         );
     }
 
@@ -1006,7 +1003,6 @@ mod tests {
         fields.insert(FieldName::new("x"), scalar(1.0));
         let struct_val = Value::Struct {
             type_name: StructTypeName::new("Point"),
-            variant: VariantName::new("Point"),
             fields,
         };
         let mut entries = IndexMap::new();

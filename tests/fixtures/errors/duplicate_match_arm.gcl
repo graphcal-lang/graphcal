@@ -1,8 +1,9 @@
 // Error: duplicate match arm
-type Status {
-    Nominal
-    Warning { code: Dimensionless }
+type Nominal;
+type Warning {
+    code: Dimensionless,
 }
+type Status = Nominal | Warning;
 
 param s: Status = Nominal { };
 

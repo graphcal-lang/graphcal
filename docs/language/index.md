@@ -17,7 +17,7 @@ The language has a layered type system:
 | 1 | [Primitives](type-system.md) | `Float`, `Int`, `Bool` base types |
 | 2 | [Dimensions](dimensions-and-units.md) | Physical dimension algebra (compile-time types) |
 | 3 | [Units](dimensions-and-units.md) | Value-level scaling factors attached to dimensions |
-| 4 | [Algebraic Data Types](algebraic-data-types.md) | Structs, tagged unions, pattern matching |
+| 4 | [Algebraic Data Types](algebraic-data-types.md) | Structs, union types, pattern matching |
 | 5 | [Indexes](indexes.md) | Finite label sets for collections |
 | 6 | [Functions](functions.md) | Pure functions with dimension and index generics |
 
@@ -53,7 +53,7 @@ The language has a layered type system:
 
     ---
 
-    Structs, tagged unions, `match` expressions, generics.
+    Structs, union types, `match` expressions, generics.
 
     [:octicons-arrow-right-24: ADTs](algebraic-data-types.md)
 
