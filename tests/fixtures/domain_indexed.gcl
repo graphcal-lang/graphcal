@@ -3,7 +3,7 @@ dimension Velocity = Length / Time;
 
 cat Maneuver { Departure, Arrival }
 
-param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
+param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 3200.0 m/s,
     Maneuver::Arrival: 1800.0 m/s,
 };

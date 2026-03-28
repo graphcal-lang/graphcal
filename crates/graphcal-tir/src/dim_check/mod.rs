@@ -99,7 +99,7 @@ pub fn check_dimensions_tir(
             src,
         )?;
 
-        if !types_match(declared, &inferred) {
+        if !types_match(declared, &inferred, &tir.registry) {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: format_declared_type(declared, &tir.registry),
                 inferred: format_inferred_type(&inferred, &tir.registry),
@@ -124,7 +124,7 @@ pub fn check_dimensions_tir(
             src,
         )?;
 
-        if !types_match(declared, &inferred) {
+        if !types_match(declared, &inferred, &tir.registry) {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: format_declared_type(declared, &tir.registry),
                 inferred: format_inferred_type(&inferred, &tir.registry),
@@ -152,7 +152,7 @@ pub fn check_dimensions_tir(
             src,
         )?;
 
-        if !types_match(declared, &inferred) {
+        if !types_match(declared, &inferred, &tir.registry) {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: format_declared_type(declared, &tir.registry),
                 inferred: format_inferred_type(&inferred, &tir.registry),
@@ -304,7 +304,7 @@ pub fn check_override_dimension(
         src,
     )?;
 
-    if !types_match(declared, &inferred) {
+    if !types_match(declared, &inferred, registry) {
         return Err(GraphcalError::DimensionMismatch {
             expected: format_declared_type(declared, registry),
             found: format_inferred_type(&inferred, registry),

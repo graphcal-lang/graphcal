@@ -2,10 +2,14 @@
 dimension Velocity = Length / Time;
 dimension Force = Mass * Length / Time^2;
 
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    LowThrust { thrust: Force, duration: Time }
+type Impulsive {
+    delta_v: Velocity,
 }
+type LowThrust {
+    thrust: Force,
+    duration: Time,
+}
+type ManeuverKind = Impulsive | LowThrust;
 
 param maneuver: ManeuverKind = LowThrust { thrust: 0.5 N, duration: 3600.0 s};
 

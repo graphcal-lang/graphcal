@@ -305,20 +305,37 @@ pub(super) fn infer_match(
                     });
                 }
 
-                // Check variant belongs to this type
-                let variant = type_def.get_variant(variant_name_str).ok_or_else(|| {
-                    GraphcalError::UnknownField {
-                        type_name: type_name.clone(),
-                        field_name: FieldName::new(variant_name_str),
-                        src: src.clone(),
-                        span: arm.pattern.variant_name.span.into(),
+                // Check variant/member belongs to this type
+                let member_type_def = if type_def.is_union() {
+                    // Union type: look up the member type
+                    if !registry
+                        .types
+                        .is_member_of_union(variant_name_str, type_name.as_str())
+                    {
+                        return Err(GraphcalError::UnknownField {
+                            type_name: type_name.clone(),
+                            field_name: FieldName::new(variant_name_str),
+                            src: src.clone(),
+                            span: arm.pattern.variant_name.span.into(),
+                        });
                     }
-                })?;
+                    registry
+                        .types
+                        .get_type(variant_name_str)
+                        .ok_or_else(|| GraphcalError::UnknownStructType {
+                            name: StructTypeName::new(variant_name_str),
+                            src: src.clone(),
+                            span: arm.pattern.variant_name.span.into(),
+                        })?
+                } else {
+                    // Non-union struct: the only valid pattern is the type itself
+                    type_def
+                };
 
                 // Check for duplicate arms
                 if !covered.insert(variant_name_str.to_string()) {
                     return Err(GraphcalError::EvalError {
-                        message: format!("duplicate match arm for variant `{variant_name_str}`"),
+                        message: format!("duplicate match arm for `{variant_name_str}`"),
                         src: src.clone(),
                         span: arm.pattern.span.into(),
                     });
@@ -329,8 +346,8 @@ pub(super) fn infer_match(
                 for binding in &arm.pattern.bindings {
                     match binding {
                         graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
-                            let field_def = variant
-                                .fields
+                            let field_def = member_type_def
+                                .fields()
                                 .iter()
                                 .find(|f| f.name.as_str() == field.value.as_str())
                                 .ok_or_else(|| GraphcalError::UnknownField {
@@ -367,13 +384,26 @@ pub(super) fn infer_match(
                 arm_types.push(arm_type);
             }
 
-            // Check exhaustiveness: all variants must be covered
-            for variant in &type_def.variants {
-                if !covered.contains(variant.name.as_str()) {
+            // Check exhaustiveness: all members/variants must be covered
+            if let Some(members) = type_def.union_members() {
+                for member in members {
+                    if !covered.contains(member.name.as_str()) {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "non-exhaustive match: member `{}` not covered",
+                                member.name.as_str()
+                            ),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        });
+                    }
+                }
+            } else {
+                // Non-union struct: single arm matching the type itself
+                if !covered.contains(type_name.as_str()) {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "non-exhaustive match: variant `{}` not covered",
-                            variant.name.as_str()
+                            "non-exhaustive match: type `{type_name}` not covered"
                         ),
                         src: src.clone(),
                         span: expr.span.into(),

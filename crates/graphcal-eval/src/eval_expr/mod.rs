@@ -14,7 +14,6 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
-use graphcal_syntax::names::VariantName;
 
 use crate::builtins::BuiltinFunction;
 use crate::declared_type::DeclaredType;
@@ -221,37 +220,8 @@ pub fn eval_expr(
                 };
                 field_map.insert(field_init.name.value.clone(), val);
             }
-            // Resolve owning type and variant names
-            let (owning_type, variant_name) = if ctx
-                .registry
-                .types
-                .get_type(type_name.value.as_str())
-                .is_some()
-            {
-                // Single-variant: type_name == variant_name
-                (
-                    type_name.value.clone(),
-                    VariantName::new(type_name.value.as_str()),
-                )
-            } else if let Some((type_def, _)) = ctx
-                .registry
-                .types
-                .get_type_by_variant(type_name.value.as_str())
-            {
-                (
-                    type_def.name.clone(),
-                    VariantName::new(type_name.value.as_str()),
-                )
-            } else {
-                return Err(GraphcalError::EvalError {
-                    message: format!("unknown type or variant `{}`", type_name.value),
-                    src: ctx.src.clone(),
-                    span: type_name.span.into(),
-                });
-            };
             Ok(RuntimeValue::Struct {
-                type_name: owning_type,
-                variant: variant_name,
+                type_name: type_name.value.clone(),
                 fields: field_map,
             })
         }

@@ -1,6 +1,5 @@
 // Required index declarations — must be bound via parameterized import.
 // This file cannot be evaluated standalone.
-
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
 

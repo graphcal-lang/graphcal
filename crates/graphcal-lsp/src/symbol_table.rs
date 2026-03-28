@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use graphcal_syntax::ast::{
     AssertDecl, ConstDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody,
     FnDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PatternBinding,
-    PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnitDecl, UnitExpr,
+    PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
 };
 use graphcal_syntax::span::Span;
 
@@ -237,6 +237,7 @@ pub fn build_from_ast(ast: &graphcal_syntax::ast::File) -> SymbolTable {
             DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, &mut table),
             DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
             DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
+            DeclKind::UnionType(u) => collect_union_type_decl(u, decl.span, &mut table),
             DeclKind::Fn(f) => collect_fn_decl(f, decl.span, &mut table, &mut scopes),
             DeclKind::Index(idx) => collect_index_decl(idx, decl.span, &mut table),
             DeclKind::Assert(a) => collect_assert_decl(a, decl.span, &mut table, &mut scopes),
@@ -413,7 +414,7 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
     table.definitions.insert(
         SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
-            name: name.clone(),
+            name,
             category: SymbolCategory::StructType,
             name_span: t.name.span,
             decl_span,
@@ -421,31 +422,34 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
             detail: None,
         },
     );
-    // Add variants (only if more than one, i.e., tagged union, not struct sugar).
-    if t.variants.len() > 1 {
-        for variant in &t.variants {
-            let vname = variant.name.value.to_string();
-            let key = SymbolKey::Variant {
-                parent: name.clone(),
-                variant: vname.clone(),
-            };
-            table.definitions.insert(
-                key,
-                DefinitionInfo {
-                    name: vname,
-                    category: SymbolCategory::IndexVariant,
-                    name_span: variant.name.span,
-                    decl_span: variant.span,
-                    type_description: None,
-                    detail: Some(format!("variant of {name}")),
-                },
-            );
-        }
-    }
     // Walk field type annotations.
-    for variant in &t.variants {
-        for field in &variant.fields {
-            collect_type_expr_refs(&field.type_ann, table);
+    for field in &t.fields {
+        collect_type_expr_refs(&field.type_ann, table);
+    }
+}
+
+fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut SymbolTable) {
+    let name = u.name.value.to_string();
+    table.definitions.insert(
+        SymbolKey::TopLevel(name.clone()),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::StructType,
+            name_span: u.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    // Register each union member as a reference to the member type.
+    for member in &u.members {
+        table.references.push(ReferenceInfo {
+            span: member.name.span,
+            target: SymbolKey::TopLevel(member.name.value.to_string()),
+        });
+        // Walk type arguments in the member.
+        for type_arg in &member.type_args {
+            collect_type_expr_refs(type_arg, table);
         }
     }
 }
@@ -1403,20 +1407,26 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                 if let Some(type_def) = registry.types.get_type(name)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
-                    let variants_desc: Vec<String> = type_def
-                        .variants
-                        .iter()
-                        .map(|v| {
-                            if v.fields.is_empty() {
-                                v.name.to_string()
+                    let desc = type_def.union_members().map_or_else(
+                        || {
+                            // Record or unit type: show fields
+                            let fields = type_def.fields();
+                            if fields.is_empty() {
+                                type_def.name.to_string()
                             } else {
-                                let fields: Vec<String> =
-                                    v.fields.iter().map(|f| f.name.to_string()).collect();
-                                format!("{} {{ {} }}", v.name, fields.join(", "))
+                                let field_descs: Vec<String> =
+                                    fields.iter().map(|f| f.name.to_string()).collect();
+                                format!("{} {{ {} }}", type_def.name, field_descs.join(", "))
                             }
-                        })
-                        .collect();
-                    def_mut.type_description = Some(variants_desc.join(" | "));
+                        },
+                        |members| {
+                            // Union type: show members separated by |
+                            let member_descs: Vec<String> =
+                                members.iter().map(|m| m.name.to_string()).collect();
+                            member_descs.join(" | ")
+                        },
+                    );
+                    def_mut.type_description = Some(desc);
                 }
             }
             _ => {}
@@ -1426,21 +1436,19 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     // Register field definitions from struct types so that `field::name`
     // references resolve to a definition with hover info.
     for type_def in registry.types.all_types() {
-        for variant in &type_def.variants {
-            for field in &variant.fields {
-                let field_key = SymbolKey::Field(field.name.to_string());
-                table
-                    .definitions
-                    .entry(field_key)
-                    .or_insert_with(|| DefinitionInfo {
-                        name: field.name.to_string(),
-                        category: SymbolCategory::Field,
-                        name_span: Span::new(0, 0),
-                        decl_span: Span::new(0, 0),
-                        type_description: None,
-                        detail: Some(format!("field of {}", type_def.name)),
-                    });
-            }
+        for field in type_def.fields() {
+            let field_key = SymbolKey::Field(field.name.to_string());
+            table
+                .definitions
+                .entry(field_key)
+                .or_insert_with(|| DefinitionInfo {
+                    name: field.name.to_string(),
+                    category: SymbolCategory::Field,
+                    name_span: Span::new(0, 0),
+                    decl_span: Span::new(0, 0),
+                    type_description: None,
+                    detail: Some(format!("field of {}", type_def.name)),
+                });
         }
     }
 }

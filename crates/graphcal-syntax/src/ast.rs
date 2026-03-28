@@ -67,6 +67,7 @@ pub enum DeclKind {
     Dimension(DimDecl),
     Unit(UnitDecl),
     Type(TypeDecl),
+    UnionType(UnionTypeDecl),
     Fn(FnDecl),
     Index(IndexDecl),
     Import(ImportDecl),
@@ -378,19 +379,39 @@ pub struct UnitDef {
     pub span: Span,
 }
 
-/// Type declaration: structs, tagged unions, and empty marker types.
+/// Type declaration: record types and unit types.
 ///
-/// Struct sugar: `type TransferResult { dv1: Velocity, dv2: Velocity }`
-///   → desugars to a single variant named `TransferResult`.
+/// Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
 ///
-/// Tagged union: `type Status { Nominal  Warning { message: Str } }`
+/// Empty record type: `type ECI {}`
 ///
-/// Empty marker type: `type ECI {}`
+/// Unit type: `type Coasting;`
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam>,
-    pub variants: Vec<VariantDecl>,
+    /// Fields of the type. Empty for unit types and empty record types.
+    pub fields: Vec<FieldDecl>,
+}
+
+/// Union type declaration: `type ManeuverKind = Impulsive | Coasting;`
+///
+/// Members must reference previously defined record or unit types.
+#[derive(Debug, Clone)]
+pub struct UnionTypeDecl {
+    pub name: Spanned<StructTypeName>,
+    pub generic_params: Vec<GenericParam>,
+    pub members: Vec<UnionMember>,
+}
+
+/// A member of a union type, optionally with type arguments.
+///
+/// E.g., `Ok<D>` in `type Result<D: Dim> = Ok<D> | Err;`
+#[derive(Debug, Clone)]
+pub struct UnionMember {
+    pub name: Spanned<StructTypeName>,
+    pub type_args: Vec<TypeExpr>,
+    pub span: Span,
 }
 
 /// An operator that can be derived for a struct type.
@@ -399,14 +420,6 @@ pub enum DeriveOp {
     Add,
     Sub,
     Neg,
-}
-
-/// A variant in a type declaration: `Impulsive { delta_v: Velocity }` or bare `Nominal`.
-#[derive(Debug, Clone)]
-pub struct VariantDecl {
-    pub name: Spanned<VariantName>,
-    pub fields: Vec<FieldDecl>,
-    pub span: Span,
 }
 
 /// A field in a variant or struct type declaration.
@@ -1029,6 +1042,7 @@ pub fn desugar_tuple_matches(file: &mut File) {
             DeclKind::Dimension(_)
             | DeclKind::Index(_)
             | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
             | DeclKind::Import(_) => {}
         }
     }

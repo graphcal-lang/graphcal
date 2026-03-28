@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_syntax::ast::{BinOp, Expr, UnaryOp};
-use graphcal_syntax::names::{FieldName, StructTypeName, VariantName};
+use graphcal_syntax::names::{FieldName, StructTypeName};
 use graphcal_syntax::span::Span;
 
 use crate::error::GraphcalError;
@@ -186,7 +186,6 @@ pub(super) fn eval_binop_expr(
             if let (
                 RuntimeValue::Struct {
                     type_name,
-                    variant,
                     fields: lhs_fields,
                 },
                 RuntimeValue::Struct {
@@ -195,7 +194,7 @@ pub(super) fn eval_binop_expr(
             ) = (&l, &r)
             {
                 return eval_struct_binop(
-                    *op, type_name, variant, lhs_fields, rhs_fields, ctx.src, expr.span,
+                    *op, type_name, lhs_fields, rhs_fields, ctx.src, expr.span,
                 );
             }
             // Datetime point-vs-vector arithmetic
@@ -282,9 +281,8 @@ pub(super) fn eval_unaryop_expr(
                 }
                 RuntimeValue::Struct {
                     type_name,
-                    variant,
                     fields,
-                } => eval_struct_neg(&type_name, &variant, &fields, ctx.src, expr.span),
+                } => eval_struct_neg(&type_name, &fields, ctx.src, expr.span),
                 _ => Ok(RuntimeValue::Scalar(
                     -v.expect_scalar("unary negation")
                         .map_err(|msg| GraphcalError::EvalError {
@@ -317,17 +315,14 @@ pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bo
         (
             RuntimeValue::Struct {
                 type_name: lt,
-                variant: lv,
                 fields: lf,
             },
             RuntimeValue::Struct {
                 type_name: rt,
-                variant: rv,
                 fields: rf,
             },
         ) => {
             lt == rt
-                && lv == rv
                 && lf.len() == rf.len()
                 && lf
                     .iter()
@@ -505,7 +500,6 @@ fn eval_scalar_binop(
 fn eval_struct_binop(
     op: BinOp,
     type_name: &StructTypeName,
-    variant: &VariantName,
     lhs_fields: &IndexMap<FieldName, RuntimeValue>,
     rhs_fields: &IndexMap<FieldName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
@@ -535,7 +529,6 @@ fn eval_struct_binop(
     }
     Ok(RuntimeValue::Struct {
         type_name: type_name.clone(),
-        variant: variant.clone(),
         fields: result_fields,
     })
 }
@@ -543,7 +536,6 @@ fn eval_struct_binop(
 /// Component-wise negation of a struct value (for derive(Neg)).
 fn eval_struct_neg(
     type_name: &StructTypeName,
-    variant: &VariantName,
     fields: &IndexMap<FieldName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -573,7 +565,6 @@ fn eval_struct_neg(
     }
     Ok(RuntimeValue::Struct {
         type_name: type_name.clone(),
-        variant: variant.clone(),
         fields: result_fields,
     })
 }

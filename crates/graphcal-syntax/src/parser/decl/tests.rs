@@ -296,6 +296,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Plot(p) => p.name.value.as_str(),
             DeclKind::Figure(f) => f.name.value.as_str(),
             DeclKind::Layer(l) => l.name.value.as_str(),
+            DeclKind::UnionType(u) => u.name.value.as_str(),
         })
         .collect();
     assert_eq!(
@@ -320,10 +321,8 @@ fn parse_type_decl_single_field() {
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Orbit");
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].name.value.as_str(), "Orbit");
-            assert_eq!(t.variants[0].fields.len(), 1);
-            assert_eq!(t.variants[0].fields[0].name.value.as_str(), "sma");
+            assert_eq!(t.fields.len(), 1);
+            assert_eq!(t.fields[0].name.value.as_str(), "sma");
         }
         _ => panic!("expected type declaration"),
     }
@@ -337,10 +336,9 @@ fn parse_type_decl_multiple_fields() {
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "TransferResult");
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].fields.len(), 2);
-            assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv1");
-            assert_eq!(t.variants[0].fields[1].name.value.as_str(), "dv2");
+            assert_eq!(t.fields.len(), 2);
+            assert_eq!(t.fields[0].name.value.as_str(), "dv1");
+            assert_eq!(t.fields[1].name.value.as_str(), "dv2");
         }
         _ => panic!("expected type declaration"),
     }
@@ -352,8 +350,7 @@ fn parse_type_decl_trailing_comma() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].fields.len(), 2);
+            assert_eq!(t.fields.len(), 2);
         }
         _ => panic!("expected type declaration"),
     }
@@ -366,7 +363,7 @@ fn parse_type_decl_empty_type() {
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Eci");
-            assert_eq!(t.variants.len(), 0);
+            assert_eq!(t.fields.len(), 0);
         }
         _ => panic!("expected type declaration"),
     }
@@ -392,10 +389,9 @@ fn parse_type_decl_with_dim_expr_field() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].fields.len(), 1);
-            assert_eq!(t.variants[0].fields[0].name.value.as_str(), "dv");
-            match &t.variants[0].fields[0].type_ann.kind {
+            assert_eq!(t.fields.len(), 1);
+            assert_eq!(t.fields[0].name.value.as_str(), "dv");
+            match &t.fields[0].type_ann.kind {
                 TypeExprKind::DimExpr(_) => {}
                 other => {
                     panic!("expected DimExpr, got {other:?}")
@@ -432,8 +428,7 @@ fn parse_type_decl_generic_params() {
             assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
             assert_eq!(t.generic_params[1].name.value.as_str(), "F");
             assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].fields.len(), 3);
+            assert_eq!(t.fields.len(), 3);
         }
         _ => panic!("expected type declaration"),
     }
@@ -447,7 +442,7 @@ fn parse_type_decl_no_generics_empty() {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Eci");
             assert!(t.generic_params.is_empty());
-            assert_eq!(t.variants.len(), 0);
+            assert_eq!(t.fields.len(), 0);
         }
         _ => panic!("expected type declaration"),
     }
@@ -463,28 +458,22 @@ fn parse_type_decl_generic_single_type_param() {
             assert_eq!(t.generic_params.len(), 1);
             assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
             assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
-            assert_eq!(t.variants.len(), 1);
-            assert_eq!(t.variants[0].fields.len(), 1);
+            assert_eq!(t.fields.len(), 1);
         }
         _ => panic!("expected type declaration"),
     }
 }
 
 #[test]
-fn parse_type_decl_generic_tagged_union() {
-    let source = "type Result<D: Dim, E: Type> { Ok { value: D } Err }";
+fn parse_union_type_decl() {
+    let source = "type ManeuverKind = Impulsive | Coasting;";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Result");
-            assert_eq!(t.generic_params.len(), 2);
-            assert_eq!(t.variants.len(), 2);
-            assert_eq!(t.variants[0].name.value.as_str(), "Ok");
-            assert_eq!(t.variants[0].fields.len(), 1);
-            assert_eq!(t.variants[1].name.value.as_str(), "Err");
-            assert_eq!(t.variants[1].fields.len(), 0);
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "ManeuverKind");
+            assert_eq!(u.members.len(), 2);
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected union type declaration"),
     }
 }
 
@@ -539,7 +528,7 @@ fn parse_type_decl_derive_attribute() {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Vec3");
             assert_eq!(t.generic_params.len(), 2);
-            assert_eq!(t.variants.len(), 1);
+            assert_eq!(t.fields.len(), 3);
         }
         _ => panic!("expected type declaration"),
     }
@@ -560,7 +549,7 @@ fn parse_type_decl_no_derive() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert!(t.variants.is_empty());
+            assert!(t.fields.is_empty());
         }
         _ => panic!("expected type declaration"),
     }

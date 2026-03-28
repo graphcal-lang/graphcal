@@ -170,6 +170,7 @@ fn collect_local_declarations(
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_) => {
                 continue;
@@ -207,6 +208,7 @@ fn collect_local_declarations(
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
             | DeclKind::Fn(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_) => {
@@ -247,6 +249,7 @@ fn collect_local_declarations(
             DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_) => {}
             DeclKind::Assert(a) => {
@@ -556,7 +559,7 @@ fn validate_attributes(
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) => "type",
+                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                     };
@@ -579,7 +582,7 @@ fn validate_attributes(
                         DeclKind::Fn(_) => Some("fn"),
                         DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
-                        DeclKind::Type(_) => Some("type"),
+                        DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
                         DeclKind::Import(_) => Some("import"),
                     };
@@ -650,7 +653,7 @@ fn validate_attributes(
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) => "type",
+                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                     };
@@ -677,7 +680,7 @@ fn validate_attributes(
                         DeclKind::Fn(_) => "fn",
                         DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) => "type",
+                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
@@ -718,6 +721,7 @@ fn validate_attributes(
                             }
                             continue;
                         }
+                        DeclKind::UnionType(_) => "union type",
                         DeclKind::Param(_) => "param",
                         DeclKind::Node(_) => "node",
                         DeclKind::Const(_) => "const",

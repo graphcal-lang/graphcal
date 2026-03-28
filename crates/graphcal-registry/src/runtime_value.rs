@@ -17,7 +17,6 @@ pub enum RuntimeValue {
     },
     Struct {
         type_name: StructTypeName,
-        variant: VariantName,
         fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection: maps variant names to values, preserving declaration order.

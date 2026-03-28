@@ -15,9 +15,7 @@ param scale_factor: Dimensionless[Maneuver] = {
     Maneuver::Correction: 1.0,
     Maneuver::Insertion: 1.0,
 };
-node selective: Velocity[Maneuver] = for m: Maneuver {
-    @delta_v[m] * @scale_factor[m]
-};
+node selective: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
 
 // Pattern 2: variant-specific scaling (different variant)
 param scale_factor2: Dimensionless[Maneuver] = {
@@ -25,9 +23,7 @@ param scale_factor2: Dimensionless[Maneuver] = {
     Maneuver::Correction: 1.0,
     Maneuver::Insertion: 3.0,
 };
-node selective2: Velocity[Maneuver] = for m: Maneuver {
-    @delta_v[m] * @scale_factor2[m]
-};
+node selective2: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor2[m] };
 
 // Pattern 3: zeroing specific variant via param
 param correction_mask: Dimensionless[Maneuver] = {
@@ -35,6 +31,4 @@ param correction_mask: Dimensionless[Maneuver] = {
     Maneuver::Correction: 0.0,
     Maneuver::Insertion: 1.0,
 };
-node not_correction: Velocity[Maneuver] = for m: Maneuver {
-    @delta_v[m] * @correction_mask[m]
-};
+node not_correction: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @correction_mask[m] };

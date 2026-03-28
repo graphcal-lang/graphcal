@@ -1,10 +1,11 @@
 // Error: match arms return different types
 dimension Velocity = Length / Time;
 
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    Coasting
+type Impulsive {
+    delta_v: Velocity,
 }
+type Coasting;
+type ManeuverKind = Impulsive | Coasting;
 
 param m: ManeuverKind = Coasting { };
 

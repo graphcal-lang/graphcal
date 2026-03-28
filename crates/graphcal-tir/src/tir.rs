@@ -1225,8 +1225,7 @@ mod tests {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
-            variants: vec![graphcal_registry::registry::VariantDef {
-                name: graphcal_syntax::names::VariantName::new("TransferResult"),
+            kind: graphcal_registry::registry::TypeDefKind::Record {
                 fields: vec![
                     graphcal_registry::registry::StructField {
                         name: graphcal_syntax::names::FieldName::new("dv1"),
@@ -1237,7 +1236,7 @@ mod tests {
                         type_ann: make_dim_type_expr("Velocity"),
                     },
                 ],
-            }],
+            },
         });
         b.build()
     }

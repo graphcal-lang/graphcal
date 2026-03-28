@@ -446,18 +446,18 @@ fn eval_tagged_union_text_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
-    // Multi-variant struct shows variant name: maneuver::LowThrust.thrust
+    // Union type value shows fields directly: maneuver.thrust, maneuver.duration
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("maneuver::LowThrust.thrust")),
-        "expected maneuver::LowThrust.thrust in output: {stdout}"
+            .any(|l| l.contains("maneuver.thrust")),
+        "expected maneuver.thrust in output: {stdout}"
     );
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("maneuver::LowThrust.duration")),
-        "expected maneuver::LowThrust.duration in output: {stdout}"
+            .any(|l| l.contains("maneuver.duration")),
+        "expected maneuver.duration in output: {stdout}"
     );
 
     // Single-variant (struct sugar) shows flat fields: transfer.dv1
@@ -494,24 +494,18 @@ fn eval_tagged_union_json_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
-    // Multi-variant type includes "variant" field
+    // Union type value shows concrete type name
     let maneuver = &json["node"]["maneuver"];
-    assert_eq!(maneuver["type"].as_str(), Some("ManeuverKind"));
-    assert_eq!(maneuver["variant"].as_str(), Some("LowThrust"));
+    assert_eq!(maneuver["type"].as_str(), Some("LowThrust"));
     assert!(maneuver["fields"]["thrust"]["si_value"].as_f64().is_some());
 
-    // Single-variant (struct sugar) has no "variant" field
+    // Record type (struct sugar)
     let transfer = &json["node"]["transfer"];
     assert_eq!(transfer["type"].as_str(), Some("TransferResult"));
-    assert!(
-        transfer["variant"].is_null(),
-        "single-variant should not have variant field"
-    );
 
-    // Bare variant
+    // Unit type value shows concrete type name
     let status = &json["node"]["current_status"];
-    assert_eq!(status["type"].as_str(), Some("Status"));
-    assert_eq!(status["variant"].as_str(), Some("Nominal"));
+    assert_eq!(status["type"].as_str(), Some("Nominal"));
 }
 
 #[test]
@@ -651,12 +645,12 @@ fn eval_input_json_tagged_union() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // maneuver should now be Impulsive variant (from JSON), not LowThrust (default)
+    // maneuver should now be Impulsive (from JSON), not LowThrust (default)
     assert!(
         stdout
             .lines()
-            .any(|l| l.contains("maneuver::Impulsive.delta_v")),
-        "expected maneuver::Impulsive.delta_v in output: {stdout}"
+            .any(|l| l.contains("maneuver.delta_v")),
+        "expected maneuver.delta_v in output: {stdout}"
     );
     // fuel_proxy should be 0 N (Impulsive branch returns 0)
     assert!(

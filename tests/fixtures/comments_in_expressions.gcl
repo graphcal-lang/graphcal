@@ -7,29 +7,29 @@ cat Phase { Launch, Cruise, Arrival }
 
 // 1D table with trailing comments on rows
 param delta_v: Velocity[Maneuver] = table[Maneuver] {
-    Departure:  2.46 km/s; // departure burn
-    Correction: 0.12 km/s; // midcourse correction is small
-    Insertion:  1.83 km/s; // orbital insertion
+    Departure:   2.46 km/s; // departure burn
+    Correction:  0.12 km/s; // midcourse correction is small
+    Insertion:   1.83 km/s; // orbital insertion
 };
 
 // 1D table with leading comments between rows
 param mass: Mass[Maneuver] = table[Maneuver] {
     // first maneuver
-    Departure:  5000.0 kg;
+    Departure:   5000.0 kg;
     // second maneuver
-    Correction: 4500.0 kg;
+    Correction:  4500.0 kg;
     // final maneuver
-    Insertion:  4000.0 kg;
+    Insertion:   4000.0 kg;
 };
 
 // 1D table with both leading and trailing comments
 param fuel: Mass[Maneuver] = table[Maneuver] {
     // departure fuel
-    Departure:  500.0 kg; // most fuel
+    Departure:   500.0 kg; // most fuel
     // correction fuel
-    Correction:  50.0 kg; // least fuel
+    Correction:   50.0 kg; // least fuel
     // insertion fuel
-    Insertion:  200.0 kg; // moderate fuel
+    Insertion:   200.0 kg; // moderate fuel
 };
 
 // 2D table with trailing comments on rows

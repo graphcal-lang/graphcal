@@ -2,7 +2,6 @@
 //
 // Demonstrates a line chart using a range index for time-series data,
 // showing exponential decay over discrete time steps.
-
 dimension Frequency = Time^-1;
 
 range TimeStep(0.0 s, 2.0 s, step: 0.5 s);
