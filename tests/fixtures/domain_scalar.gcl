@@ -3,15 +3,15 @@ dimension Velocity = Length / Time;
 dimension Force = Mass * Length / Time^2;
 
 // Two-sided constraint
-param bus_mass: Mass = 500.0 kg;
+param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
 
 // One-sided (min only)
-param thrust: Force = 0.5 N;
+param thrust: Force(min: 0.01 N) = 0.5 N;
 
 // One-sided (max only)
-param efficiency: Dimensionless = 0.85;
+param efficiency: Dimensionless(max: 1.0) = 0.85;
 
 // Int constraint
-param count: Int = 10;
+param count: Int(min: 1, max: 100) = 10;
 
 node double_thrust: Force = @thrust * 2.0;
