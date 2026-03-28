@@ -304,17 +304,19 @@ unit_scale
 (* The parenthesized form is evaluated at compile time. Only constant
    expressions are allowed: numbers, PI, E, and arithmetic operators. *)
 (* --- type --- *)
+(* Three forms of type declaration:
+   1. Unit type (no fields):       type Eci;
+   2. Struct type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
+   3. Union type (sum of types):   type ManeuverKind = Impulsive | LowThrust;
+*)
 type_decl
-   = "type", pascal_case_ident, [ generic_params ], [ derive_clause ], "{", [ type_body ], "}";
+   = "type", pascal_case_ident, [ generic_params ], [ derive_clause ], type_decl_body;
 
-type_body
-   = field_list (* struct sugar *)
-   | variant_list;
+type_decl_body
+   = ";"                                              (* unit type *)
+   | "{", [ field_list ], "}"                         (* struct type *)
+   | "=", union_member_list, ";";                     (* union type *)
 
-(* tagged union *)
-(* Disambiguation: if the first token inside braces is a
-   lower_snake_case identifier, it is struct sugar (field list).
-   If it is a PascalCase identifier, it is a variant list. *)
 field_list
    = field_decl, { ",", field_decl }, [ "," ];
 
@@ -326,11 +328,8 @@ field_decl
    Velocity[Maneuver] inside a struct field. To index structured
    data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
 
-variant_list
-   = variant_decl, { variant_decl };
-
-variant_decl
-   = pascal_case_ident, [ "{", [ field_list ], "}" ];
+union_member_list
+   = pascal_case_ident, { "|", pascal_case_ident };
 
 generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";
@@ -375,8 +374,8 @@ fn_body
 (* block form *)
 (* --- cat and range --- *)
 (* An index declares a finite, ordered set of labels usable as
-   collection axes in T[I]. A cat (categorical) index is a fieldless
-   tagged union additionally registered as a collection axis — its
+   collection axes in T[I]. A cat (categorical) index declares a
+   finite set of named labels registered as a collection axis — its
    labels are ValueTypes that can be passed to functions, stored in
    variables, and pattern-matched. A range index generates scalar
    labels from a range; its loop variable acts as a Scalar(Dim). Both
@@ -461,7 +460,7 @@ assert_body
 (* The type system has three levels (see design/20-type-system-
    stratification.md):
    Level 1 — Primitive:  Scalar(Dim) | Int | Bool
-   Level 2 — ValueType:  Primitive | Struct | TaggedUnion
+   Level 2 — ValueType:  Primitive | Struct | Union
    Level 3 — DeclType:   ValueType | Indexed(ValueType, [Index])
 
    type_expr corresponds to DeclType: a value_type optionally indexed.
@@ -653,8 +652,8 @@ variant_literal
 struct_construction
    = pascal_case_ident, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ], "{", [ field_init, { ",", field_init }, [ "," ] ], "}";
 
-(* A bare PascalCase identifier without braces is also a valid struct
-   construction (a unit variant with no fields). *)
+(* A bare PascalCase identifier without braces is also a valid
+   construction (a unit type with no fields). *)
 field_init
    = lower_snake_case_ident, [ ":", expr ];
 

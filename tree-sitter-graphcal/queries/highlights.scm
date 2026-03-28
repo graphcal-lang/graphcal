@@ -210,8 +210,8 @@
 ; Qualified variant: Maneuver::Departure
 (qualified_variant index: (identifier) @type variant: (identifier) @constant)
 
-; Variant declarations in tagged unions: Impulsive { delta_v: Velocity }
-(variant_declaration name: (identifier) @type)
+; Union member names: type Foo = A | B;
+(union_member name: (identifier) @type)
 
 ; Index declaration variants: { Departure, Correction, Insertion }
 (variant (identifier) @constant)

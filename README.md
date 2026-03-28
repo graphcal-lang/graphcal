@@ -110,7 +110,7 @@ Graphcal has three primitive types:
 | `Int` | 64-bit signed integer | `42`, `1_000` |
 | `Bool` | Boolean | `true`, `false` |
 
-Every `Float` carries a dimension -- `Length`, `Velocity`, `Dimensionless`, etc. -- and the compiler ensures dimensional consistency across all operations. On top of these primitives, algebraic types (`type` declarations) compose them into structs and tagged unions, and index sets (`cat`/`range` declarations) create indexed collections.
+Every `Float` carries a dimension -- `Length`, `Velocity`, `Dimensionless`, etc. -- and the compiler ensures dimensional consistency across all operations. On top of these primitives, algebraic types (`type` declarations) compose them into structs and union types, and index sets (`cat`/`range` declarations) create indexed collections.
 
 Integer arithmetic uses checked overflow detection. Convert between types explicitly:
 
@@ -120,12 +120,12 @@ node a_float: Dimensionless = to_float(@a);
 node back_to_int: Int = to_int(3.7);  // truncating
 ```
 
-### Structs and tagged unions
+### Structs and union types
 
-Group related values into typed structs. Define tagged unions with multiple variants, and use `match` expressions to destructure them.
+Group related values into typed structs. Define union types that combine multiple types, and use `match` expressions to destructure them.
 
 ```gcl
-// Single-variant struct
+// Struct
 type TransferResult {
     dv1: Velocity,
     dv2: Velocity,
@@ -133,17 +133,15 @@ type TransferResult {
     tof: Time,
 }
 
-// Tagged union with multiple variants
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    LowThrust { thrust: Force, duration: Time }
-}
+// Unit types (no fields) and struct types as union members
+type Impulsive { delta_v: Velocity }
+type LowThrust { thrust: Force, duration: Time }
+type ManeuverKind = Impulsive | LowThrust;
 
-// Bare variants (no fields)
-type Status {
-    Nominal
-    Warning { code: Dimensionless }
-}
+// Unit types (no fields)
+type Nominal;
+type Warning { code: Dimensionless }
+type Status = Nominal | Warning;
 ```
 
 Match expressions support field binding, renaming, and wildcards:
@@ -204,8 +202,8 @@ Recursive functions are detected and rejected at compile time.
 Type declarations support generic parameters with three constraint kinds: `D: Dim` (dimension), `I: Index` (index set), and `F: Type` (unconstrained/phantom). Default type parameters are supported.
 
 ```gcl
-type Eci {}    // marker type for ECI reference frame
-type Body {}   // marker type for body frame
+type Eci;      // marker type for ECI reference frame
+type Body;     // marker type for body frame
 
 type Vec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
@@ -346,7 +344,7 @@ figure combined = {
 
 ### JSON input for parameter overrides
 
-Override params from a JSON file with `--input`. Supports scalars with units (as strings), booleans, integers, floats, structs, tagged unions, and indexed params.
+Override params from a JSON file with `--input`. Supports scalars with units (as strings), booleans, integers, floats, structs, union types, and indexed params.
 
 ```json
 {
@@ -354,7 +352,7 @@ Override params from a JSON file with `--input`. Supports scalars with units (as
   "isp": "450.0 s",
   "enabled": true,
   "count": 42,
-  "maneuver": { "variant": "LowThrust", "fields": { "thrust": "0.5 N", "duration": "3600.0 s" } },
+  "maneuver": { "member": "LowThrust", "fields": { "thrust": "0.5 N", "duration": "3600.0 s" } },
   "delta_v": { "Departure": "3.0 km/s", "Correction": "0.2 km/s", "Insertion": "2.0 km/s" }
 }
 ```
@@ -533,17 +531,16 @@ total_dv          = 3934.582972 m/s
 tof_hours         = 5.256557 hour
 ```
 
-### Tagged unions and match expressions
+### Union types and match expressions
 
 ```gcl
 // maneuver.gcl
 dimension Velocity = Length / Time;
 dimension Force = Mass * Length / Time^2;
 
-type ManeuverKind {
-    Impulsive { delta_v: Velocity }
-    LowThrust { thrust: Force, duration: Time }
-}
+type Impulsive { delta_v: Velocity }
+type LowThrust { thrust: Force, duration: Time }
+type ManeuverKind = Impulsive | LowThrust;
 
 param thrust_level: Force = 0.5 N;
 param burn_duration: Time = 3600.0 s;
@@ -565,8 +562,8 @@ node fuel_proxy: Force = match @maneuver {
 // frames.gcl
 dimension Velocity = Length / Time;
 
-type Eci {}
-type Body {}
+type Eci;
+type Body;
 
 #[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type> {
@@ -839,7 +836,7 @@ graphcal/
 
 - [Numbat](https://numbat.dev) -- dimensions as types, units as values
 - [Sguaba](https://github.com/helsing-ai/sguaba) -- phantom-typed coordinate frames
-- [Gleam](https://gleam.run) -- unified `type` for structs and enums
+- [Gleam](https://gleam.run) -- `type` declarations for structs and union types
 - [marimo](https://marimo.io) -- reactive DAG on cells, pure text files
 
 ## License
