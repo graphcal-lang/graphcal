@@ -54,10 +54,7 @@ pub(super) fn runtime_to_value(
             index_name: index_name.clone(),
             variant: variant.clone(),
         },
-        RuntimeValue::Struct {
-            type_name,
-            fields,
-        } => {
+        RuntimeValue::Struct { type_name, fields } => {
             let type_def = registry.types.get_type(type_name.as_str());
 
             // Build a substitution map from generic param names to concrete DeclaredTypes

@@ -2,7 +2,7 @@ use graphcal_syntax::ast::{
     AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
     FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
     IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnitDecl, UnitDef, UnionTypeDecl,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 

@@ -2,12 +2,12 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-cannot access field of non-struct value `multi-variant type `ManeuverKind` (use `match` to access fields)`
+cannot access field of non-struct value `union type `ManeuverKind` (use `match` to access fields)`
     Diagnostic severity: error
-Begin snippet for field_access_multi_variant.gcl starting at line 10, column 1
+Begin snippet for field_access_multi_variant.gcl starting at line 11, column 1
 
-snippet line 10: 
-snippet line 11: node v: Velocity = @m.delta_v;
-    label at line 11, columns 20 to 21: not a struct
+snippet line 11: 
+snippet line 12: node v: Velocity = @m.delta_v;
+    label at line 12, columns 20 to 21: not a struct
 diagnostic help: field access `.field` is only valid on struct values
 diagnostic code: graphcal::S007

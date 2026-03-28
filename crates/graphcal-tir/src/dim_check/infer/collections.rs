@@ -682,9 +682,7 @@ pub(super) fn infer_field_access(
             // Field access is only allowed on record types (not union or unit types)
             if type_def.is_union() {
                 return Err(GraphcalError::NotAStruct {
-                    name: format!(
-                        "union type `{type_name}` (use `match` to access fields)"
-                    ),
+                    name: format!("union type `{type_name}` (use `match` to access fields)"),
                     src: src.clone(),
                     span: inner.span.into(),
                 });

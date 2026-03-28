@@ -63,9 +63,7 @@ pub(super) fn eval_index_access(
                         })?;
                 match var_val {
                     RuntimeValue::Label { variant, .. } => variant.clone(),
-                    RuntimeValue::Struct { type_name, .. } => {
-                        VariantName::new(type_name.as_str())
-                    }
+                    RuntimeValue::Struct { type_name, .. } => VariantName::new(type_name.as_str()),
                     RuntimeValue::RangeLabel { step_index, .. } => {
                         VariantName::new(format!("#{step_index}"))
                     }

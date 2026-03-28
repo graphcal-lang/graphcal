@@ -319,14 +319,13 @@ pub(super) fn infer_match(
                             span: arm.pattern.variant_name.span.into(),
                         });
                     }
-                    registry
-                        .types
-                        .get_type(variant_name_str)
-                        .ok_or_else(|| GraphcalError::UnknownStructType {
+                    registry.types.get_type(variant_name_str).ok_or_else(|| {
+                        GraphcalError::UnknownStructType {
                             name: StructTypeName::new(variant_name_str),
                             src: src.clone(),
                             span: arm.pattern.variant_name.span.into(),
-                        })?
+                        }
+                    })?
                 } else {
                     // Non-union struct: the only valid pattern is the type itself
                     type_def
@@ -402,9 +401,7 @@ pub(super) fn infer_match(
                 // Non-union struct: single arm matching the type itself
                 if !covered.contains(type_name.as_str()) {
                     return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "non-exhaustive match: type `{type_name}` not covered"
-                        ),
+                        message: format!("non-exhaustive match: type `{type_name}` not covered"),
                         src: src.clone(),
                         span: expr.span.into(),
                     });

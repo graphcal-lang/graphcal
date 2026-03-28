@@ -279,10 +279,9 @@ pub(super) fn eval_unaryop_expr(
                     })?;
                     Ok(RuntimeValue::Int(negated))
                 }
-                RuntimeValue::Struct {
-                    type_name,
-                    fields,
-                } => eval_struct_neg(&type_name, &fields, ctx.src, expr.span),
+                RuntimeValue::Struct { type_name, fields } => {
+                    eval_struct_neg(&type_name, &fields, ctx.src, expr.span)
+                }
                 _ => Ok(RuntimeValue::Scalar(
                     -v.expect_scalar("unary negation")
                         .map_err(|msg| GraphcalError::EvalError {

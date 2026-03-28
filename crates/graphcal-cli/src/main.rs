@@ -811,10 +811,7 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                     "variant": variant.as_str()
                 })
             }
-            Value::Struct {
-                type_name,
-                fields,
-            } => {
+            Value::Struct { type_name, fields } => {
                 let mut map = serde_json::Map::new();
                 map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
                 let fields_map: serde_json::Map<String, serde_json::Value> = fields

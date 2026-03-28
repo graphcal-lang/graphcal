@@ -448,15 +448,11 @@ fn eval_tagged_union_text_output() {
 
     // Union type value shows fields directly: maneuver.thrust, maneuver.duration
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("maneuver.thrust")),
+        lines.iter().any(|l| l.contains("maneuver.thrust")),
         "expected maneuver.thrust in output: {stdout}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("maneuver.duration")),
+        lines.iter().any(|l| l.contains("maneuver.duration")),
         "expected maneuver.duration in output: {stdout}"
     );
 
@@ -647,9 +643,7 @@ fn eval_input_json_tagged_union() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     // maneuver should now be Impulsive (from JSON), not LowThrust (default)
     assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("maneuver.delta_v")),
+        stdout.lines().any(|l| l.contains("maneuver.delta_v")),
         "expected maneuver.delta_v in output: {stdout}"
     );
     // fuel_proxy should be 0 N (Impulsive branch returns 0)

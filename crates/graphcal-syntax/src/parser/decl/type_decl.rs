@@ -119,11 +119,7 @@ impl Parser<'_> {
         }
         if members.len() < 2 {
             let span = members[0].span;
-            return Err(self.unexpected_token(
-                "'|' followed by another union member",
-                ";",
-                span,
-            ));
+            return Err(self.unexpected_token("'|' followed by another union member", ";", span));
         }
         Ok(members)
     }
