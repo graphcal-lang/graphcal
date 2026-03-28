@@ -15,6 +15,9 @@ use indexmap::IndexMap;
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 
+use graphcal_compiler::syntax::ast::DeclKind;
+use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::parser::Parser;
 use graphcal_eval::builtins::builtin_constants;
 use graphcal_eval::eval::{
     AssertResult, CompileError, EvalResult, NodeError, Value, compile_and_eval_from_project,
@@ -24,9 +27,6 @@ use graphcal_eval::io::FileSystemReader as _;
 use graphcal_eval::loader::LoadedProject;
 use graphcal_eval::registry::UnitScale;
 use graphcal_eval::tir::TIR;
-use graphcal_compiler::syntax::ast::DeclKind;
-use graphcal_compiler::syntax::names::DeclName;
-use graphcal_compiler::syntax::parser::Parser;
 
 use commands::{Command, HELP_TEXT, parse_command};
 use format::{format_value_changed, format_value_line};
@@ -118,7 +118,10 @@ impl ShellState {
 /// If `file` is provided, it is loaded as the base project (like `python -i`).
 /// `set_overrides` and `input_overrides` are applied to the loaded file.
 #[expect(clippy::print_stderr, reason = "interactive shell error output")]
-pub fn run_shell(file: Option<&Path>, overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>) {
+pub fn run_shell(
+    file: Option<&Path>,
+    overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+) {
     let mut state = ShellState::new();
     state.overrides = overrides;
 
@@ -263,7 +266,10 @@ fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
     let (ast, source) = match graphcal_compiler::syntax::parser::Parser::new(input).parse_file() {
         Ok(ast) => (ast, input.to_string()),
         Err(e) => {
-            if matches!(e, graphcal_compiler::syntax::parser::ParseError::UnexpectedEof { .. }) {
+            if matches!(
+                e,
+                graphcal_compiler::syntax::parser::ParseError::UnexpectedEof { .. }
+            ) {
                 // Auto-append `;` and retry — makes semicolons optional in the REPL.
                 if input.trim_end().ends_with(';') {
                     return DeclResult::Incomplete;

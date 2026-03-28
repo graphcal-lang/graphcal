@@ -185,8 +185,13 @@ pub(super) fn resolve_field_type(
     }
 
     // Resolve using TIR type resolution with generic params in scope, then substitute
-    let resolved =
-        crate::tir::tir::resolve_type_expr(field_type_ann, registry, &dim_params, &index_params, src)?;
+    let resolved = crate::tir::tir::resolve_type_expr(
+        field_type_ann,
+        registry,
+        &dim_params,
+        &index_params,
+        src,
+    )?;
     crate::tir::tir::substitute_resolved_type(&resolved, &dim_sub, &index_sub, src)
 }
 

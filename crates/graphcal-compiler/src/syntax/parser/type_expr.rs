@@ -142,7 +142,9 @@ impl Parser<'_> {
     ///
     /// Called when `(` is peeked after a base type expression.
     /// Each constraint is `name: expr` where `name` is an identifier like `min` or `max`.
-    fn parse_domain_constraints(&mut self) -> Result<Vec<crate::syntax::ast::DomainBound>, ParseError> {
+    fn parse_domain_constraints(
+        &mut self,
+    ) -> Result<Vec<crate::syntax::ast::DomainBound>, ParseError> {
         let (_, _lparen_span) = self.expect(Token::LParen)?;
         let mut constraints = Vec::new();
         loop {
@@ -691,8 +693,14 @@ mod tests {
                 TypeExprKind::Indexed { base, indexes } => {
                     // Constraints are on the base type, not the outer Indexed
                     assert_eq!(base.constraints.len(), 2);
-                    assert_eq!(base.constraints[0].kind, crate::syntax::ast::DomainBoundKind::Min);
-                    assert_eq!(base.constraints[1].kind, crate::syntax::ast::DomainBoundKind::Max);
+                    assert_eq!(
+                        base.constraints[0].kind,
+                        crate::syntax::ast::DomainBoundKind::Min
+                    );
+                    assert_eq!(
+                        base.constraints[1].kind,
+                        crate::syntax::ast::DomainBoundKind::Max
+                    );
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(indexes[0].name, "Maneuver");
                 }

@@ -283,7 +283,10 @@ fn register_builtins(table: &mut SymbolTable) {
     }
 }
 
-fn collect_attribute_refs(attributes: &[graphcal_compiler::syntax::ast::Attribute], table: &mut SymbolTable) {
+fn collect_attribute_refs(
+    attributes: &[graphcal_compiler::syntax::ast::Attribute],
+    table: &mut SymbolTable,
+) {
     for attr in attributes {
         if attr.name.name == "assumes" {
             for arg in &attr.args {
@@ -1117,7 +1120,10 @@ fn collect_expr_refs(
 }
 
 /// Collect references from a type expression.
-fn collect_type_expr_refs(type_expr: &graphcal_compiler::syntax::ast::TypeExpr, table: &mut SymbolTable) {
+fn collect_type_expr_refs(
+    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    table: &mut SymbolTable,
+) {
     match &type_expr.kind {
         TypeExprKind::Dimensionless
         | TypeExprKind::Bool
@@ -1152,7 +1158,10 @@ fn collect_type_expr_refs(type_expr: &graphcal_compiler::syntax::ast::TypeExpr, 
 }
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
-fn collect_constraint_expr_refs(expr: &graphcal_compiler::syntax::ast::Expr, table: &mut SymbolTable) {
+fn collect_constraint_expr_refs(
+    expr: &graphcal_compiler::syntax::ast::Expr,
+    table: &mut SymbolTable,
+) {
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => {
             collect_unit_expr_refs(unit, table);

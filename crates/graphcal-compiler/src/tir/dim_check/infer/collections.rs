@@ -10,9 +10,9 @@ use miette::NamedSource;
 use crate::syntax::ast::{Expr, ForBinding, IndexArg};
 use crate::syntax::names::{FieldName, FnName, GenericParamName, IndexName, StructTypeName};
 
-use crate::tir::tir::ResolvedFnSig;
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
+use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     cartesian_product, declared_to_inferred, format_inferred_type, resolve_field_type,
@@ -592,9 +592,7 @@ pub(super) fn infer_unfold(
     if let Some((_index_name, idx_def)) = &owner_range_index {
         let dimension = match &idx_def.kind {
             crate::registry::registry::IndexKind::Range { dimension, .. }
-            | crate::registry::registry::IndexKind::RequiredRange { dimension } => {
-                Some(dimension)
-            }
+            | crate::registry::registry::IndexKind::RequiredRange { dimension } => Some(dimension),
             _ => None,
         };
         if let Some(dimension) = dimension {
@@ -783,8 +781,13 @@ pub(super) fn infer_struct_construction(
         let no_index_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
         for arg in constructor_type_args {
-            let resolved =
-                crate::tir::tir::resolve_type_expr(arg, registry, no_dim_params, no_index_params, src)?;
+            let resolved = crate::tir::tir::resolve_type_expr(
+                arg,
+                registry,
+                no_dim_params,
+                no_index_params,
+                src,
+            )?;
             let dt = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
             args.push(declared_to_inferred(&dt));
         }

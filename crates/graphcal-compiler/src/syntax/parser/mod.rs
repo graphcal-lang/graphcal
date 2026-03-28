@@ -155,7 +155,9 @@ impl<'src> Parser<'src> {
     /// # Errors
     ///
     /// Returns a [`ParseError`] if the source is not a valid unit expression.
-    pub fn parse_standalone_unit_expr(&mut self) -> Result<crate::syntax::ast::UnitExpr, ParseError> {
+    pub fn parse_standalone_unit_expr(
+        &mut self,
+    ) -> Result<crate::syntax::ast::UnitExpr, ParseError> {
         let expr = self.parse_unit_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = tok.clone();

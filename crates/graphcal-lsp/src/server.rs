@@ -20,14 +20,14 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use graphcal_compiler::syntax::ast::DeclKind;
+use graphcal_compiler::syntax::names::VariantName;
 use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
     format_number,
 };
 use graphcal_eval::loader::LoadedProject;
-use graphcal_compiler::syntax::ast::DeclKind;
-use graphcal_compiler::syntax::names::VariantName;
 use indexmap::IndexMap;
 
 use crate::convert::position_to_byte_offset;
@@ -870,9 +870,9 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use graphcal_eval::eval::Value;
     use graphcal_compiler::syntax::dimension::Dimension;
     use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
+    use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
 
     use super::*;

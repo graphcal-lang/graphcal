@@ -390,7 +390,9 @@ pub(super) fn evaluate_plan(
             let (name, decl) = (&entry.name, &entry.decl);
             let mut fields = Vec::new();
             for field in &decl.fields {
-                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
+                    &field.value.kind
+                {
                     fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
                     continue;
                 }
@@ -414,7 +416,9 @@ pub(super) fn evaluate_plan(
             let (name, decl) = (&entry.name, &entry.decl);
             let mut fields = Vec::new();
             for field in &decl.fields {
-                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
+                    &field.value.kind
+                {
                     fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
                     continue;
                 }

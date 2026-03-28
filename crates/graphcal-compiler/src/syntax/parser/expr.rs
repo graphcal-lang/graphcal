@@ -1,5 +1,7 @@
 use crate::syntax::ast::{BinOp, Expr, ExprKind, IndexArg, UnaryOp};
-use crate::syntax::names::{DeclName, FieldName, FnName, IndexName, Spanned, StructTypeName, VariantName};
+use crate::syntax::names::{
+    DeclName, FieldName, FnName, IndexName, Spanned, StructTypeName, VariantName,
+};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case, is_upper_snake_case};

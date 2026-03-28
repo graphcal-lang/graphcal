@@ -4,9 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::{
-    classify_special_fn, is_aggregation_fn, is_time_scale_name,
-};
+use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
 use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::visitor::ExprVisitor;
 

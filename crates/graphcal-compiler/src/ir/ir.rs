@@ -1816,10 +1816,7 @@ fn register_type_decl(
     });
 }
 
-fn register_union_type_decl(
-    t: &crate::syntax::ast::UnionTypeDecl,
-    registry: &mut RegistryBuilder,
-) {
+fn register_union_type_decl(t: &crate::syntax::ast::UnionTypeDecl, registry: &mut RegistryBuilder) {
     let generic_params: Vec<registry::TypeGenericParam> = t
         .generic_params
         .iter()

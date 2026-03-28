@@ -5,8 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use graphcal_eval::eval::Value;
 use graphcal_compiler::syntax::dimension::BaseDimId;
+use graphcal_eval::eval::Value;
 
 /// Format a single named value as a display string.
 ///

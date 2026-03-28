@@ -9,6 +9,10 @@ impl Parser<'_> {
 
     /// Parse an import declaration:
     /// `import "./path/to/file.gcl" { name1, name2 };`
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential parser flow, splitting would add indirection without clarity"
+    )]
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
@@ -103,7 +107,10 @@ impl Parser<'_> {
             }
             Some(Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (crate::syntax::ast::ImportKind::Module { alias: None }, end_span)
+                (
+                    crate::syntax::ast::ImportKind::Module { alias: None },
+                    end_span,
+                )
             }
             Some(tok) => {
                 let tok_str = tok.to_string();
@@ -129,7 +136,9 @@ impl Parser<'_> {
     }
 
     /// Parse the `{ name1, name2 as alias, ... }` body of a selective import.
-    fn parse_import_selective_body(&mut self) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
+    fn parse_import_selective_body(
+        &mut self,
+    ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
         let mut names = Vec::new();
@@ -202,7 +211,9 @@ impl Parser<'_> {
     }
 
     /// Parse the `(name: expr, ...)` param bindings of an instantiated import.
-    fn parse_import_param_bindings(&mut self) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
+    fn parse_import_param_bindings(
+        &mut self,
+    ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;
 
         let mut bindings = Vec::new();

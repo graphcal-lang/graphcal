@@ -287,8 +287,7 @@ impl TIR {
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<HashMap<String, crate::registry::declared_type::DeclaredType>, GraphcalError>
-    {
+    ) -> Result<HashMap<String, crate::registry::declared_type::DeclaredType>, GraphcalError> {
         let mut declared_types = HashMap::new();
         for name in crate::registry::builtins::builtin_constants().keys() {
             declared_types.insert(

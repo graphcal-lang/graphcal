@@ -619,7 +619,10 @@ fn parse_import_no_alias() {
         panic!("expected Use");
     };
     assert_eq!(u.path.display_path(), "./helper.gcl");
-    assert!(matches!(&u.path, crate::syntax::ast::ImportPath::FilePath { .. }));
+    assert!(matches!(
+        &u.path,
+        crate::syntax::ast::ImportPath::FilePath { .. }
+    ));
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
@@ -759,7 +762,10 @@ fn parse_import_bare_path_with_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert!(matches!(&u.path, crate::syntax::ast::ImportPath::ModulePath { .. }));
+    assert!(matches!(
+        &u.path,
+        crate::syntax::ast::ImportPath::ModulePath { .. }
+    ));
     assert_eq!(u.path.display_path(), "nasa/rocket");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
@@ -775,7 +781,10 @@ fn parse_import_bare_path_with_param_bindings() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert!(matches!(&u.path, crate::syntax::ast::ImportPath::ModulePath { .. }));
+    assert!(matches!(
+        &u.path,
+        crate::syntax::ast::ImportPath::ModulePath { .. }
+    ));
     assert_eq!(u.path.display_path(), "nasa/rocket");
     assert_eq!(u.param_bindings.len(), 1);
     assert_eq!(u.param_bindings[0].name.name, "dry_mass");

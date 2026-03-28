@@ -8,9 +8,9 @@ use miette::NamedSource;
 use crate::syntax::ast::{Expr, LetBinding, MatchArm};
 use crate::syntax::names::{FieldName, FnName, IndexName, StructTypeName};
 
-use crate::tir::tir::ResolvedFnSig;
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
+use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     check_arm_types_match, declared_to_inferred, format_inferred_type, resolve_field_type,

@@ -9,9 +9,9 @@ use crate::syntax::ast::{BinOp, Expr, ExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{FnName, GenericParamName, UnitName};
 
-use crate::tir::tir::ResolvedFnSig;
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
+use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     check_derived_binop, check_derived_neg, declared_to_inferred, expect_scalar,
@@ -510,8 +510,13 @@ pub(super) fn infer_as_cast(
     // Resolve the target type
     let no_dim_params: &[GenericParamName] = &[];
     let no_index_params: &[GenericParamName] = &[];
-    let resolved_target =
-        crate::tir::tir::resolve_type_expr(target_type, registry, no_dim_params, no_index_params, src)?;
+    let resolved_target = crate::tir::tir::resolve_type_expr(
+        target_type,
+        registry,
+        no_dim_params,
+        no_index_params,
+        src,
+    )?;
     let target_declared = crate::tir::tir::resolved_to_declared_type(&resolved_target, src)?;
     let target_inferred = declared_to_inferred(&target_declared);
 

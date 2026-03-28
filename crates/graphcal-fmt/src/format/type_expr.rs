@@ -1,4 +1,6 @@
-use graphcal_compiler::syntax::ast::{DimExpr, DimTerm, MulDivOp, TypeExpr, TypeExprKind, UnitExpr};
+use graphcal_compiler::syntax::ast::{
+    DimExpr, DimTerm, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+};
 use pretty::RcDoc;
 
 // ---------------------------------------------------------------------------

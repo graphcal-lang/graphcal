@@ -16,8 +16,8 @@
     reason = "test code"
 )]
 
-use graphcal_eval::eval::{EvalResult, compile_and_eval};
 use graphcal_compiler::syntax::parser::Parser;
+use graphcal_eval::eval::{EvalResult, compile_and_eval};
 use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;

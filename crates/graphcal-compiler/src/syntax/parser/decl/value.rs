@@ -1,4 +1,6 @@
-use crate::syntax::ast::{AssertBody, AssertDecl, ConstDecl, DeclKind, Declaration, NodeDecl, ParamDecl};
+use crate::syntax::ast::{
+    AssertBody, AssertDecl, ConstDecl, DeclKind, Declaration, NodeDecl, ParamDecl,
+};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 

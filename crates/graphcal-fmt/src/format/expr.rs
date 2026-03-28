@@ -302,7 +302,9 @@ pub fn format_let_binding(fmt: &mut Formatter<'_>, lb: &LetBinding) -> RcDoc<'st
 
 pub fn format_struct_construction(
     fmt: &mut Formatter<'_>,
-    type_name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::StructTypeName>,
+    type_name: &graphcal_compiler::syntax::names::Spanned<
+        graphcal_compiler::syntax::names::StructTypeName,
+    >,
     type_args: &[TypeExpr],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {

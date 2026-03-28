@@ -69,7 +69,10 @@ impl Parser<'_> {
     }
 
     /// Parse a mark specification: `point`, `line { stroke_width: 2.0 }`, etc.
-    fn parse_mark_spec(&mut self, start_span: crate::syntax::span::Span) -> Result<MarkSpec, ParseError> {
+    fn parse_mark_spec(
+        &mut self,
+        start_span: crate::syntax::span::Span,
+    ) -> Result<MarkSpec, ParseError> {
         let mark_ident = self.parse_any_ident()?;
         let mark_type_span = mark_ident.span;
         let mark_type = match mark_ident.name.as_str() {

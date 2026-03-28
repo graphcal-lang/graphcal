@@ -18,9 +18,9 @@ use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{FnName, UnitName};
 
-use crate::tir::tir::ResolvedFnSig;
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
+use crate::tir::tir::ResolvedFnSig;
 
 use super::helpers::declared_to_inferred;
 use super::{DeclaredType, InferredType};

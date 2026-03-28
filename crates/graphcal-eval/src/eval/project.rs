@@ -514,7 +514,10 @@ fn process_instantiated_import<'a>(
                     | graphcal_compiler::syntax::ast::IndexDeclKind::RequiredNamed
             );
             let imp_is_named = importer_idx_ast.map_or_else(
-                || importer_idx_from_registry.map(graphcal_compiler::registry::registry::IndexDef::is_named),
+                || {
+                    importer_idx_from_registry
+                        .map(graphcal_compiler::registry::registry::IndexDef::is_named)
+                },
                 |imp_idx| {
                     Some(matches!(
                         imp_idx.kind,
@@ -572,8 +575,10 @@ fn process_instantiated_import<'a>(
 
     // Register the dependency's declaration names in the importer's scope
     // so that the resolver recognizes references to them.
-    let mut import_item_attributes: HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>> =
-        HashMap::new();
+    let mut import_item_attributes: HashMap<
+        String,
+        Vec<graphcal_compiler::syntax::ast::Attribute>,
+    > = HashMap::new();
     let selective_names = match &import_decl.kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
@@ -1102,7 +1107,10 @@ fn add_selective_aliases(
         };
 
         // Substitute index names in the type annotation.
-        graphcal_compiler::ir::ir::substitute_type_expr_index_names(&mut type_ann, &deferred.index_bindings);
+        graphcal_compiler::ir::ir::substitute_type_expr_index_names(
+            &mut type_ann,
+            &deferred.index_bindings,
+        );
 
         // Determine if this is a const or runtime declaration.
         let is_const =
@@ -1212,13 +1220,13 @@ fn import_selective_item(
         .iter()
         .find(|entry| entry.name.member() == orig_name)
     {
-        imported_names
-            .functions
-            .push(graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
+        imported_names.functions.push(
+            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
                 name: local_name.to_string(),
                 decl: fn_entry.decl.clone(),
                 span: fn_entry.span,
-            });
+            },
+        );
         SelectiveImportResult::Function
     } else if dep.has_assert(orig_name) {
         SelectiveImportResult::Assert
@@ -1281,13 +1289,13 @@ fn import_module_values(
     }
     for fn_entry in &dep.functions {
         let flat = format!("{module_name}::{}", fn_entry.name);
-        imported_names
-            .functions
-            .push(graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
+        imported_names.functions.push(
+            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
                 name: flat,
                 decl: fn_entry.decl.clone(),
                 span: fn_entry.span,
-            });
+            },
+        );
     }
 }
 
@@ -1464,7 +1472,9 @@ fn evaluate_project_perfile(
                 if !import_decl.param_bindings.is_empty() {
                     continue;
                 }
-                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) =
+                    &import_decl.kind
+                {
                     let import_canonical = resolve_import_to_canonical(
                         &import_decl.path,
                         root_dir,
@@ -1799,7 +1809,9 @@ fn route_overrides_to_files(
         let mut found = false;
         for decl in &root_file.ast.declarations {
             if let DeclKind::Import(import_decl) = &decl.kind {
-                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &import_decl.kind {
+                if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) =
+                    &import_decl.kind
+                {
                     for item in names {
                         let local_name = item.local_name().to_string();
                         if local_name == name_str {
@@ -1903,7 +1915,10 @@ fn merge_registry_into_builder(
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
-        builder.register_base_dimension(graphcal_compiler::syntax::names::DimName::new(name), id.clone());
+        builder.register_base_dimension(
+            graphcal_compiler::syntax::names::DimName::new(name),
+            id.clone(),
+        );
     }
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
@@ -2115,7 +2130,10 @@ fn extract_index_name_from_binding_expr(
 /// index, or struct type) with that name. This is used as a fallback when a
 /// selective import name is not found among the dependency's evaluated values
 /// or functions.
-pub(super) fn file_has_declaration(file: &graphcal_compiler::syntax::ast::File, name: &str) -> bool {
+pub(super) fn file_has_declaration(
+    file: &graphcal_compiler::syntax::ast::File,
+    name: &str,
+) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
         DeclKind::Const(c) => c.name.value.as_str() == name,
         DeclKind::Param(p) => p.name.value.as_str() == name,

@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
 use graphcal_io::RealFileSystem;
-use graphcal_compiler::syntax::names::DeclName;
 
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
@@ -777,7 +777,10 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
 
     fn value_to_json(
         v: &Value,
-        symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+        symbols: &std::collections::BTreeMap<
+            graphcal_compiler::syntax::dimension::BaseDimId,
+            String,
+        >,
     ) -> serde_json::Value {
         match v {
             Value::Scalar {
@@ -883,7 +886,10 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
 
     fn result_to_json(
         r: &Result<Value, NodeError>,
-        symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+        symbols: &std::collections::BTreeMap<
+            graphcal_compiler::syntax::dimension::BaseDimId,
+            String,
+        >,
     ) -> serde_json::Value {
         match r {
             Ok(v) => value_to_json(v, symbols),

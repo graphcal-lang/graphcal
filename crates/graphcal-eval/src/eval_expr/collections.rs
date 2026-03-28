@@ -51,7 +51,9 @@ pub(super) fn eval_index_access(
             });
         };
         let variant_name: VariantName = match arg {
-            graphcal_compiler::syntax::ast::IndexArg::Variant { variant, .. } => variant.value.clone(),
+            graphcal_compiler::syntax::ast::IndexArg::Variant { variant, .. } => {
+                variant.value.clone()
+            }
             graphcal_compiler::syntax::ast::IndexArg::Var(ident) => {
                 let var_val =
                     local_values
