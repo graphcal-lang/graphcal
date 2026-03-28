@@ -107,6 +107,22 @@ unit kB: Information = 1000.0 byte;
 
 A base unit declaration (`unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension.
 
+### Dynamic Units
+
+A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
+
+```
+dimension Money;
+unit USD: Money;
+
+param usd_per_eur: Dimensionless = 1.08;
+unit EUR: Money = (@usd_per_eur) USD;
+```
+
+Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so overriding `usd_per_eur` (e.g., via `--set usd_per_eur=1.20`) changes all EUR-denominated values accordingly.
+
+Dynamic units behave identically to static units for dimension checking (compile-time). The scale is only resolved at evaluation time, after the referenced params have been computed.
+
 ### Using Units
 
 Attach a unit to a numeric literal:

@@ -22,6 +22,7 @@ use graphcal_eval::eval::{
 };
 use graphcal_eval::io::FileSystemReader as _;
 use graphcal_eval::loader::LoadedProject;
+use graphcal_eval::registry::UnitScale;
 use graphcal_eval::tir::TIR;
 use graphcal_syntax::ast::DeclKind;
 use graphcal_syntax::names::DeclName;
@@ -691,7 +692,14 @@ fn handle_name_query(name: &str, state: &ShellState) {
         && let Some(info) = tir.registry.units.get_unit(name)
     {
         let dim_str = tir.registry.dimensions.format_dimension(&info.dimension);
-        println!("  {name}: unit of {dim_str} (scale: {})", info.scale);
+        match &info.scale {
+            UnitScale::Static(s) => {
+                println!("  {name}: unit of {dim_str} (scale: {s})");
+            }
+            UnitScale::Dynamic { .. } => {
+                println!("  {name}: unit of {dim_str} (dynamic scale)");
+            }
+        }
         return;
     }
 
@@ -739,10 +747,15 @@ fn handle_compound_query(input: &str, state: &ShellState) {
 
     // Try as a unit expression (e.g., `m/s`, `kg * m / s^2`).
     if let Ok(unit_expr) = Parser::new(input).parse_standalone_unit_expr()
-        && let Some((dim, scale)) = tir.registry.units.resolve_unit_expr(&unit_expr)
+        && let Some(dim) = tir.registry.units.resolve_unit_dimension(&unit_expr)
     {
         let dim_str = tir.registry.dimensions.format_dimension(&dim);
-        println!("  {input}: unit of {dim_str} (scale: {scale})");
+        // Try to get a static scale; if any unit is dynamic, show "dynamic"
+        if let Some((_dim, scale)) = tir.registry.units.resolve_unit_expr(&unit_expr) {
+            println!("  {input}: unit of {dim_str} (scale: {scale})");
+        } else {
+            println!("  {input}: unit of {dim_str} (scale: dynamic)");
+        }
         return;
     }
 

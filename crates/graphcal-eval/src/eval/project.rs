@@ -1918,7 +1918,7 @@ fn merge_registry_into_builder(
 
     // Import units.
     for (name, dim, scale) in dep_registry.units.all_units() {
-        builder.register_unit((*name).clone(), dim.clone(), *scale);
+        builder.register_unit_dynamic((*name).clone(), dim.clone(), scale.clone());
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).

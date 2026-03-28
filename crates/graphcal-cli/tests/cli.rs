@@ -2552,3 +2552,58 @@ fn format_check_figure_fixtures() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// --- Dynamic units ---
+
+#[test]
+fn eval_dynamic_units() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("dynamic_units.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // price_eur = 100 EUR (100 * 1.08 = 108 USD in SI)
+    assert!(stdout.contains("price_eur"), "missing price_eur");
+    assert!(stdout.contains("EUR"), "missing EUR unit");
+
+    // price_usd = 108 USD
+    assert!(stdout.contains("price_usd"), "missing price_usd");
+    assert!(stdout.contains("108"), "expected 108 USD");
+
+    // total = 158 USD (108 + 50)
+    assert!(stdout.contains("total"), "missing total");
+    assert!(stdout.contains("158"), "expected 158 USD");
+}
+
+#[test]
+fn eval_dynamic_units_with_override() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("dynamic_units.gcl"),
+            "--set",
+            "usd_per_eur=1.20",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // With usd_per_eur=1.20: price_eur = 100 * 1.20 = 120 USD
+    assert!(stdout.contains("120"), "expected 120 USD for price_usd");
+
+    // total = 120 + 50 = 170 USD
+    assert!(stdout.contains("170"), "expected 170 USD for total");
+}

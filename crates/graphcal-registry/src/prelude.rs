@@ -251,7 +251,7 @@ mod tests {
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r.units.get_unit("N").unwrap();
         assert_eq!(newton.dimension, force_dim);
-        assert!((newton.scale - 1.0).abs() < f64::EPSILON);
+        assert!((newton.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -260,7 +260,7 @@ mod tests {
         load_prelude(&mut b);
         let r = b.build();
         let km = r.units.get_unit("km").unwrap();
-        assert!((km.scale - 1000.0).abs() < f64::EPSILON);
+        assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
         load_prelude(&mut b);
         let r = b.build();
         let deg = r.units.get_unit("deg").unwrap();
-        assert!((deg.scale - std::f64::consts::PI / 180.0).abs() < 1e-15);
+        assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);
     }
 
     #[test]
