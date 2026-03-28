@@ -24,9 +24,9 @@ use graphcal_eval::io::FileSystemReader as _;
 use graphcal_eval::loader::LoadedProject;
 use graphcal_eval::registry::UnitScale;
 use graphcal_eval::tir::TIR;
-use graphcal_syntax::ast::DeclKind;
-use graphcal_syntax::names::DeclName;
-use graphcal_syntax::parser::Parser;
+use graphcal_compiler::syntax::ast::DeclKind;
+use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::parser::Parser;
 
 use commands::{Command, HELP_TEXT, parse_command};
 use format::{format_value_changed, format_value_line};
@@ -40,7 +40,7 @@ struct ShellState {
     /// Base file source (original content before user additions).
     base_source: Option<String>,
     /// Parameter overrides via `:set`.
-    overrides: HashMap<DeclName, graphcal_syntax::ast::Expr>,
+    overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     /// Previous successful `EvalResult` (for propagation diff).
     prev_result: Option<EvalResult>,
     /// Previous successful TIR (for dependency info, `:graph`, `:type`).
@@ -118,7 +118,7 @@ impl ShellState {
 /// If `file` is provided, it is loaded as the base project (like `python -i`).
 /// `set_overrides` and `input_overrides` are applied to the loaded file.
 #[expect(clippy::print_stderr, reason = "interactive shell error output")]
-pub fn run_shell(file: Option<&Path>, overrides: HashMap<DeclName, graphcal_syntax::ast::Expr>) {
+pub fn run_shell(file: Option<&Path>, overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>) {
     let mut state = ShellState::new();
     state.overrides = overrides;
 
@@ -260,16 +260,16 @@ enum DeclResult {
 fn try_add_declaration(input: &str, state: &mut ShellState) -> DeclResult {
     // Parse as a file to validate syntax.
     // If the input is missing a trailing `;`, auto-append one and retry.
-    let (ast, source) = match graphcal_syntax::parser::Parser::new(input).parse_file() {
+    let (ast, source) = match graphcal_compiler::syntax::parser::Parser::new(input).parse_file() {
         Ok(ast) => (ast, input.to_string()),
         Err(e) => {
-            if matches!(e, graphcal_syntax::parser::ParseError::UnexpectedEof { .. }) {
+            if matches!(e, graphcal_compiler::syntax::parser::ParseError::UnexpectedEof { .. }) {
                 // Auto-append `;` and retry — makes semicolons optional in the REPL.
                 if input.trim_end().ends_with(';') {
                     return DeclResult::Incomplete;
                 }
                 let with_semi = format!("{input};");
-                match graphcal_syntax::parser::Parser::new(&with_semi).parse_file() {
+                match graphcal_compiler::syntax::parser::Parser::new(&with_semi).parse_file() {
                     Ok(ast) => (ast, with_semi),
                     Err(_) => return DeclResult::Incomplete,
                 }
@@ -521,7 +521,7 @@ fn handle_list(state: &ShellState) {
 #[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_set(name: &str, expr_str: &str, state: &mut ShellState) {
     // Parse the expression.
-    let expr = match graphcal_syntax::parser::Parser::new(expr_str).parse_single_expr() {
+    let expr = match graphcal_compiler::syntax::parser::Parser::new(expr_str).parse_single_expr() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("  error: failed to parse expression: {e}");

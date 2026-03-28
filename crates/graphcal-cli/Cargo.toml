@@ -17,7 +17,7 @@ graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-lsp = { workspace = true }
-graphcal-syntax = { workspace = true }
+graphcal-compiler = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 rustyline = { workspace = true }
 indexmap = { workspace = true }

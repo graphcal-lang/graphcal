@@ -4,9 +4,9 @@
 //! the user is mid-keystroke. This module tokenizes raw source text and scans
 //! backward from the cursor to determine context.
 
-use graphcal_syntax::lexer::Lexer;
-use graphcal_syntax::span::Span;
-use graphcal_syntax::token::Token;
+use graphcal_compiler::syntax::lexer::Lexer;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::token::Token;
 
 /// Context for a cursor inside a function call's argument list.
 pub struct FnCallContext {

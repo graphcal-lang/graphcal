@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-graphcal-syntax = { workspace = true }
+graphcal-compiler = { workspace = true }
 pretty = { workspace = true }
 
 [dev-dependencies]

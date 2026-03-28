@@ -1,6 +1,6 @@
 //! Conversion utilities between byte offsets/spans and LSP positions/ranges.
 
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Position, Range};
 
 /// Convert a byte offset in `source` to an LSP `Position` (0-based line and character).

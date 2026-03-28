@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use graphcal_syntax::span::Span;
+use graphcal_compiler::syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
@@ -356,7 +356,7 @@ fn resolve_domain_constraints(
         let expected_dim = base_resolved.and_then(|r| match r {
             crate::tir::ResolvedTypeExpr::Scalar(dim) => Some(dim.clone()),
             crate::tir::ResolvedTypeExpr::Dimensionless => {
-                Some(graphcal_syntax::dimension::Dimension::dimensionless())
+                Some(graphcal_compiler::syntax::dimension::Dimension::dimensionless())
             }
             _ => None,
         });
@@ -414,11 +414,11 @@ fn resolve_domain_constraints(
             constraint_span = constraint_span.merge(bound.span);
 
             match bound.kind {
-                graphcal_syntax::ast::DomainBoundKind::Min => {
+                graphcal_compiler::syntax::ast::DomainBoundKind::Min => {
                     min_val = Some(si_value);
                     min_display = Some(display_text);
                 }
-                graphcal_syntax::ast::DomainBoundKind::Max => {
+                graphcal_compiler::syntax::ast::DomainBoundKind::Max => {
                     max_val = Some(si_value);
                     max_display = Some(display_text);
                 }
@@ -458,13 +458,13 @@ fn resolve_domain_constraints(
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
 /// not on the outer `Indexed` wrapper.
 fn extract_domain_bounds(
-    type_ann: &graphcal_syntax::ast::TypeExpr,
-) -> &[graphcal_syntax::ast::DomainBound] {
+    type_ann: &graphcal_compiler::syntax::ast::TypeExpr,
+) -> &[graphcal_compiler::syntax::ast::DomainBound] {
     if !type_ann.constraints.is_empty() {
         return &type_ann.constraints;
     }
     // For indexed types, check the base type's constraints.
-    if let graphcal_syntax::ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
+    if let graphcal_compiler::syntax::ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
         return &base.constraints;
     }
     &[]
@@ -532,10 +532,10 @@ fn validate_constraint_target(
 /// Only handles simple cases: unit literals and negated unit literals.
 /// For bare numbers (no unit), returns `None` (dimensionless is assumed).
 fn infer_bound_dimension(
-    expr: &graphcal_syntax::ast::Expr,
+    expr: &graphcal_compiler::syntax::ast::Expr,
     registry: &crate::registry::Registry,
-) -> Option<graphcal_syntax::dimension::Dimension> {
-    use graphcal_syntax::ast::ExprKind;
+) -> Option<graphcal_compiler::syntax::dimension::Dimension> {
+    use graphcal_compiler::syntax::ast::ExprKind;
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => registry.units.resolve_unit_dimension(unit),
         ExprKind::UnaryOp { operand, .. } => infer_bound_dimension(operand, registry),
@@ -552,8 +552,8 @@ fn infer_bound_dimension(
 /// For simple expressions (numbers, unit literals, unary negation), the
 /// original syntactic form is preserved. For complex expressions, the
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
-fn format_bound_display(expr: &graphcal_syntax::ast::Expr, si_value: f64) -> String {
-    use graphcal_syntax::ast::ExprKind;
+fn format_bound_display(expr: &graphcal_compiler::syntax::ast::Expr, si_value: f64) -> String {
+    use graphcal_compiler::syntax::ast::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => crate::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
@@ -563,7 +563,7 @@ fn format_bound_display(expr: &graphcal_syntax::ast::Expr, si_value: f64) -> Str
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_syntax::ast::UnaryOp::Neg,
+            op: graphcal_compiler::syntax::ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_display(operand, -si_value))
@@ -585,7 +585,7 @@ mod tests {
     use super::*;
     use crate::ir::lower;
     use crate::tir::type_resolve;
-    use graphcal_syntax::parser::Parser;
+    use graphcal_compiler::syntax::parser::Parser;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test", Arc::new(source.to_string()))

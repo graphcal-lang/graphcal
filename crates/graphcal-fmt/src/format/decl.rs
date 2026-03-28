@@ -1,4 +1,4 @@
-use graphcal_syntax::ast::{
+use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
     FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
     IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
@@ -62,16 +62,16 @@ fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
     doc.append(RcDoc::text("]"))
 }
 
-fn format_attribute_arg(arg: &graphcal_syntax::ast::AttributeArg) -> RcDoc<'static> {
+fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> RcDoc<'static> {
     match arg {
-        graphcal_syntax::ast::AttributeArg::Path { segments, .. } => {
+        graphcal_compiler::syntax::ast::AttributeArg::Path { segments, .. } => {
             let parts: Vec<RcDoc<'static>> = segments
                 .iter()
                 .map(|s| RcDoc::text(s.name.clone()))
                 .collect();
             RcDoc::intersperse(parts, RcDoc::text("::"))
         }
-        graphcal_syntax::ast::AttributeArg::Group { elements, .. } => {
+        graphcal_compiler::syntax::ast::AttributeArg::Group { elements, .. } => {
             let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
             RcDoc::text("(")
                 .append(RcDoc::intersperse(inner, RcDoc::text(", ")))
@@ -109,9 +109,9 @@ fn format_const_decl(fmt: &mut Formatter<'_>, d: &ConstDecl) -> RcDoc<'static> {
 fn format_value_decl(
     fmt: &mut Formatter<'_>,
     keyword: &str,
-    name: &graphcal_syntax::names::DeclName,
+    name: &graphcal_compiler::syntax::names::DeclName,
     type_ann: &TypeExpr,
-    value: &graphcal_syntax::ast::Expr,
+    value: &graphcal_compiler::syntax::ast::Expr,
 ) -> RcDoc<'static> {
     let header = RcDoc::text(keyword.to_string())
         .append(RcDoc::text(" "))
@@ -150,7 +150,7 @@ fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
 }
 
 fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
-    use graphcal_syntax::ast::ExprKind;
+    use graphcal_compiler::syntax::ast::ExprKind;
     // Simple numeric literals are formatted directly (preserving original text);
     // complex expressions are wrapped in parentheses.
     let scale_doc = match &def.scale_expr.kind {
@@ -376,10 +376,10 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
     let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
 
     let path_doc = match &d.path {
-        graphcal_syntax::ast::ImportPath::FilePath { path, .. } => {
+        graphcal_compiler::syntax::ast::ImportPath::FilePath { path, .. } => {
             RcDoc::text(format!("import \"{path}\""))
         }
-        graphcal_syntax::ast::ImportPath::ModulePath { segments, .. } => {
+        graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. } => {
             let path_str = segments
                 .iter()
                 .map(|s| s.name.as_str())
@@ -390,7 +390,7 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
     };
 
     match &d.kind {
-        graphcal_syntax::ast::ImportKind::Selective(names) => {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             let name_docs: Vec<RcDoc<'static>> = names
                 .iter()
                 .map(|item| {
@@ -413,10 +413,10 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
                 .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(" };"))
         }
-        graphcal_syntax::ast::ImportKind::Module { alias: None } => {
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias: None } => {
             path_doc.append(bindings_doc).append(RcDoc::text(";"))
         }
-        graphcal_syntax::ast::ImportKind::Module { alias: Some(a) } => path_doc
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias: Some(a) } => path_doc
             .append(bindings_doc)
             .append(RcDoc::text(format!(" as {};", a.name))),
     }
@@ -485,7 +485,7 @@ fn format_plot_decl(fmt: &mut Formatter<'_>, d: &PlotDecl) -> RcDoc<'static> {
 /// Format a mark specification: `mark: point,` or `mark: line { stroke_width: 2.0, },`
 fn format_mark_spec(
     fmt: &mut Formatter<'_>,
-    mark: &graphcal_syntax::ast::MarkSpec,
+    mark: &graphcal_compiler::syntax::ast::MarkSpec,
 ) -> RcDoc<'static> {
     if mark.properties.is_empty() {
         RcDoc::text(format!("mark: {},", mark.mark_type))

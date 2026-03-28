@@ -11,11 +11,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-graphcal-ir = { workspace = true }
-graphcal-registry = { workspace = true }
-graphcal-tir = { workspace = true }
+graphcal-compiler = { workspace = true }
 indexmap.workspace = true
-graphcal-syntax = { workspace = true }
 miette.workspace = true
 petgraph = { workspace = true }
 thiserror.workspace = true

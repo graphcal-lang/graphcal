@@ -17,7 +17,7 @@
 )]
 
 use graphcal_eval::eval::{EvalResult, compile_and_eval};
-use graphcal_syntax::parser::Parser;
+use graphcal_compiler::syntax::parser::Parser;
 use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_syntax::ast::{Expr, LetBinding, MatchArm};
+use graphcal_compiler::syntax::ast::{Expr, LetBinding, MatchArm};
 
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;
@@ -92,7 +92,7 @@ pub(super) fn eval_match(
             let mut arm_locals = local_values.clone();
             for binding in &matched_arm.pattern.bindings {
                 match binding {
-                    graphcal_syntax::ast::PatternBinding::Bind { field, var } => {
+                    graphcal_compiler::syntax::ast::PatternBinding::Bind { field, var } => {
                         let field_val =
                             scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
                                 GraphcalError::EvalError {
@@ -106,7 +106,7 @@ pub(super) fn eval_match(
                             })?;
                         arm_locals.insert(var.name.clone(), field_val.clone());
                     }
-                    graphcal_syntax::ast::PatternBinding::Wildcard { .. } => {}
+                    graphcal_compiler::syntax::ast::PatternBinding::Wildcard { .. } => {}
                 }
             }
 

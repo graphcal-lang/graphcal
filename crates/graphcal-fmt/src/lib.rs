@@ -1,7 +1,7 @@
 mod format;
 
-use graphcal_syntax::comments::extract_source_metadata;
-use graphcal_syntax::parser::Parser;
+use graphcal_compiler::syntax::comments::extract_source_metadata;
+use graphcal_compiler::syntax::parser::Parser;
 
 /// Default line width for formatting.
 const LINE_WIDTH: usize = 100;

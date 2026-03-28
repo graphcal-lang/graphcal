@@ -8,8 +8,8 @@ use std::borrow::Cow;
 use rustyline::highlight::{CmdKind, Highlighter};
 use rustyline::{Completer, Helper, Hinter, Validator};
 
-use graphcal_syntax::lexer::Lexer;
-use graphcal_syntax::token::Token;
+use graphcal_compiler::syntax::lexer::Lexer;
+use graphcal_compiler::syntax::token::Token;
 
 // ANSI color codes.
 const BOLD_BLUE: &str = "\x1b[1;34m";

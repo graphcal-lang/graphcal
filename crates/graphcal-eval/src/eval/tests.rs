@@ -609,8 +609,8 @@ fn eval_unary_neg_dimensioned() {
 
 // --- Override tests ---
 
-fn parse_expr(s: &str) -> graphcal_syntax::ast::Expr {
-    graphcal_syntax::parser::Parser::new(s)
+fn parse_expr(s: &str) -> graphcal_compiler::syntax::ast::Expr {
+    graphcal_compiler::syntax::parser::Parser::new(s)
         .parse_single_expr()
         .unwrap()
 }

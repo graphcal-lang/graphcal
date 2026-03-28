@@ -504,12 +504,12 @@ name = "graphcal"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "graphcal-compiler",
  "graphcal-dag",
  "graphcal-eval",
  "graphcal-fmt",
  "graphcal-io",
  "graphcal-lsp",
- "graphcal-syntax",
  "indexmap",
  "insta",
  "miette",
@@ -519,6 +519,22 @@ dependencies = [
  "serde_json",
  "tabled",
  "tokio",
+]
+
+[[package]]
+name = "graphcal-compiler"
+version = "0.1.0"
+dependencies = [
+ "hifitime",
+ "indexmap",
+ "insta",
+ "jiff",
+ "logos",
+ "miette",
+ "petgraph",
+ "proptest",
+ "thiserror",
+ "toml-spanner",
 ]
 
 [[package]]
@@ -533,10 +549,7 @@ dependencies = [
 name = "graphcal-eval"
 version = "0.1.0"
 dependencies = [
- "graphcal-ir",
- "graphcal-registry",
- "graphcal-syntax",
- "graphcal-tir",
+ "graphcal-compiler",
  "hifitime",
  "indexmap",
  "insta",
@@ -553,7 +566,7 @@ dependencies = [
 name = "graphcal-fmt"
 version = "0.1.0"
 dependencies = [
- "graphcal-syntax",
+ "graphcal-compiler",
  "insta",
  "pretty",
 ]
@@ -566,67 +579,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "graphcal-ir"
-version = "0.1.0"
-dependencies = [
- "graphcal-registry",
- "graphcal-syntax",
- "indexmap",
- "insta",
- "miette",
- "petgraph",
-]
-
-[[package]]
 name = "graphcal-lsp"
 version = "0.1.0"
 dependencies = [
+ "graphcal-compiler",
  "graphcal-eval",
  "graphcal-fmt",
  "graphcal-io",
- "graphcal-syntax",
  "indexmap",
  "miette",
  "tokio",
  "tower-lsp",
-]
-
-[[package]]
-name = "graphcal-registry"
-version = "0.1.0"
-dependencies = [
- "graphcal-syntax",
- "hifitime",
- "indexmap",
- "insta",
- "jiff",
- "miette",
- "proptest",
- "thiserror",
- "toml-spanner",
-]
-
-[[package]]
-name = "graphcal-syntax"
-version = "0.1.0"
-dependencies = [
- "logos",
- "miette",
- "proptest",
- "thiserror",
-]
-
-[[package]]
-name = "graphcal-tir"
-version = "0.1.0"
-dependencies = [
- "graphcal-ir",
- "graphcal-registry",
- "graphcal-syntax",
- "indexmap",
- "insta",
- "jiff",
- "miette",
 ]
 
 [[package]]

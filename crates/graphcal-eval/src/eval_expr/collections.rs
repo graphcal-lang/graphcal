@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use graphcal_syntax::ast::{Expr, MapEntry};
-use graphcal_syntax::names::VariantName;
+use graphcal_compiler::syntax::ast::{Expr, MapEntry};
+use graphcal_compiler::syntax::names::VariantName;
 
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;
@@ -23,7 +23,7 @@ pub(super) fn eval_map_or_table(
 
 /// Evaluate a `for` comprehension expression.
 pub(super) fn eval_for_comp_expr(
-    bindings: &[graphcal_syntax::ast::ForBinding],
+    bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -36,7 +36,7 @@ pub(super) fn eval_for_comp_expr(
 pub(super) fn eval_index_access(
     expr: &Expr,
     inner: &Expr,
-    args: &[graphcal_syntax::ast::IndexArg],
+    args: &[graphcal_compiler::syntax::ast::IndexArg],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -51,8 +51,8 @@ pub(super) fn eval_index_access(
             });
         };
         let variant_name: VariantName = match arg {
-            graphcal_syntax::ast::IndexArg::Variant { variant, .. } => variant.value.clone(),
-            graphcal_syntax::ast::IndexArg::Var(ident) => {
+            graphcal_compiler::syntax::ast::IndexArg::Variant { variant, .. } => variant.value.clone(),
+            graphcal_compiler::syntax::ast::IndexArg::Var(ident) => {
                 let var_val =
                     local_values
                         .get(&ident.name)
@@ -96,8 +96,8 @@ pub(super) fn eval_index_access(
 pub(super) fn eval_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &graphcal_syntax::ast::Ident,
-    val_name: &graphcal_syntax::ast::Ident,
+    acc_name: &graphcal_compiler::syntax::ast::Ident,
+    val_name: &graphcal_compiler::syntax::ast::Ident,
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -150,8 +150,8 @@ pub(super) fn eval_scan(
 pub(super) fn eval_unfold(
     expr: &Expr,
     init: &Expr,
-    prev_name: &graphcal_syntax::ast::Ident,
-    curr_name: &graphcal_syntax::ast::Ident,
+    prev_name: &graphcal_compiler::syntax::ast::Ident,
+    curr_name: &graphcal_compiler::syntax::ast::Ident,
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -334,7 +334,7 @@ fn eval_map_literal(
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
 fn eval_for_comp(
-    bindings: &[graphcal_syntax::ast::ForBinding],
+    bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,

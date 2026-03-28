@@ -1,0 +1,28 @@
+[package]
+name = "graphcal-compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+hifitime.workspace = true
+indexmap.workspace = true
+jiff.workspace = true
+logos.workspace = true
+miette.workspace = true
+petgraph.workspace = true
+thiserror.workspace = true
+toml-spanner.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
