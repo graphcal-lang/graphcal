@@ -1807,9 +1807,9 @@ dependencies = [
 
 [[package]]
 name = "toml-spanner"
-version = "0.4.1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6ffcbdc2979d59d05e89386a96b5aa1a59395081680a15d1129c5d16d1e985e"
+checksum = "aab23a2db1381fd3dd429ee321ff91457d323390d9dc8274239883016929ac8d"
 dependencies = [
  "foldhash 0.2.0",
 ]
