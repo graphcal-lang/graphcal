@@ -48,6 +48,12 @@ node doubled: Velocity[Maneuver] = for m: Maneuver {
 };
 ```
 
+For nat range indexes, you can also use integer expressions as index arguments:
+
+```
+node shifted: Dimensionless[3] = for i: range(3) { @v[i + 1] };
+```
+
 ## `for` Comprehensions
 
 Transform each element of an indexed value:
@@ -304,6 +310,33 @@ fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
 ```
 
 `Nat` expressions are normalized to a canonical linear form (`c + a₁·x₁ + a₂·x₂ + …`) and compared structurally. Subtraction is not supported — instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+
+### Expression-Based Indexing
+
+Index arguments can be arbitrary integer expressions, not just loop variables. This enables patterns like finite differences where you need to access adjacent elements:
+
+```
+// Finite differences: values[i + 1] - values[i]
+fn diff<N: Nat, D: Dim>(values: D[N + 1], dt: Time) -> (D / Time)[N] =
+    for i: range(N) { (values[i + 1] - values[i]) / dt };
+```
+
+The compiler statically verifies bounds when possible. In the example above, `i` has type `Fin(N)` (values in `[0, N)`), so `i + 1` is guaranteed to be less than `N + 1` — matching the size of `values`.
+
+Expression-based indexing supports:
+
+- **Addition with literals**: `v[i + 1]`, `v[i + 2]` — bounds are checked at compile time
+- **Arbitrary integer expressions**: `v[some_expr]` — evaluated at runtime
+
+```
+// Shift left by k positions
+fn shift_left<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
+    for i: range(N) { v[i + 1] };
+
+// Shift left by 2 positions
+fn shift_left_by2<N: Nat, D: Dim>(v: D[N + 2]) -> D[N] =
+    for i: range(N) { v[i + 2] };
+```
 
 ### Composing Nat Ranges with Named Indexes
 

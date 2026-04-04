@@ -141,6 +141,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                         variant.value.as_str()
                     )),
                     IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
+                    IndexArg::Expr(e) => format_expr(fmt, e),
                 })
                 .collect();
             format_expr(fmt, inner)

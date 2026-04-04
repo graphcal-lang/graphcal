@@ -4786,17 +4786,8 @@
       }
     },
     "index_arg": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "qualified_variant"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "identifier"
-        }
-      ]
+      "type": "SYMBOL",
+      "name": "_expr"
     },
     "qualified_variant": {
       "type": "SEQ",

@@ -667,29 +667,44 @@ impl Parser<'_> {
 
     // --- Index access ---
 
-    /// Parse an index argument: either `Index::Variant` or a loop variable `m`.
+    /// Parse an index argument: `Index::Variant`, a loop variable `m`, or an expression `i + 1`.
+    ///
+    /// Strategy:
+    /// 1. Peek for `PascalCase` identifier followed by `::` → parse as qualified variant.
+    /// 2. Otherwise, parse a full expression:
+    ///    - If it's a bare `LocalRef(ident)` → convert to `IndexArg::Var` (backward compat).
+    ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
-        let (_, span) = self
-            .lexer
-            .next_token()
-            .ok_or_else(|| self.unexpected_eof("index argument"))?;
-        let name = self.lexer.slice_at(span).to_string();
+        // Check for qualified variant: PascalCase::Variant
+        if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
+            let name = self.lexer.slice_at(span).to_string();
+            if is_pascal_case(&name) {
+                // Consume the identifier to peek at what follows
+                self.lexer.next_token();
+                if self.lexer.peek() == Some(&Token::ColonColon) {
+                    // Qualified variant: Index::Variant
+                    self.lexer.next_token(); // consume '::'
+                    let variant = self
+                        .parse_ident_with_casing("PascalCase", is_pascal_case)?
+                        .into_spanned::<VariantName>();
+                    return Ok(IndexArg::Variant {
+                        index: Spanned::new(IndexName::new(name), span),
+                        variant,
+                    });
+                }
+                // Not a qualified variant — put the token back and fall through to expression
+                self.lexer.put_back(Token::Ident, span);
+            }
+        }
 
-        if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
-            // Qualified variant: Index::Variant
-            self.lexer.next_token(); // consume '::'
-            let variant = self
-                .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                .into_spanned::<VariantName>();
-            Ok(IndexArg::Variant {
-                index: Spanned::new(IndexName::new(name), span),
-                variant,
-            })
-        } else if is_lower_snake_case(&name) {
-            // Loop variable
-            Ok(IndexArg::Var(crate::syntax::ast::Ident { name, span }))
+        // Parse a full expression
+        let expr = self.parse_expr()?;
+
+        // If it's a bare local variable reference, use IndexArg::Var for backward compatibility
+        if let ExprKind::LocalRef(ident) = expr.kind {
+            Ok(IndexArg::Var(ident))
         } else {
-            Err(self.unexpected_token("loop variable or `Index::Variant`", &name, span))
+            Ok(IndexArg::Expr(Box::new(expr)))
         }
     }
 
@@ -725,6 +740,60 @@ impl Parser<'_> {
             pos += 1;
         }
         false
+    }
+
+    /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
+    ///
+    /// Scans the raw source string from the current position without consuming tokens.
+    /// Returns `true` only if the `(...)` contains only identifiers and commas,
+    /// followed by `)` then `=>`.
+    pub(super) fn is_tuple_key_sugar(&mut self) -> bool {
+        let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
+            return false;
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = lp_span.offset() + lp_span.len(); // byte after `(`
+
+        // Scan for matching `)`: expect only identifiers, commas, and whitespace inside.
+        loop {
+            // Skip whitespace
+            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= bytes.len() {
+                return false;
+            }
+            if bytes[pos] == b')' {
+                // Found `)`, now check for `=>`
+                pos += 1;
+                while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+                    pos += 1;
+                }
+                return pos + 1 < bytes.len() && bytes[pos] == b'=' && bytes[pos + 1] == b'>';
+            }
+            // Expect an identifier (ASCII alphanumeric or underscore, starting with letter/underscore)
+            if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+                return false;
+            }
+            while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
+                pos += 1;
+            }
+            // Skip whitespace after identifier
+            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos >= bytes.len() {
+                return false;
+            }
+            // After identifier, expect `,` or `)` (`)` handled by loop top)
+            if bytes[pos] == b',' {
+                pos += 1; // consume `,`
+            } else if bytes[pos] != b')' {
+                return false;
+            } else {
+                // It's `)`, will be handled at the start of the next iteration
+            }
+        }
     }
 
     /// Look ahead to check if `<...>` is followed by `(`.

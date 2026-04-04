@@ -2782,11 +2782,99 @@
       "required": true,
       "types": [
         {
+          "type": "as_cast_expr",
+          "named": true
+        },
+        {
+          "type": "binary_expr",
+          "named": true
+        },
+        {
+          "type": "block_expr",
+          "named": true
+        },
+        {
+          "type": "boolean",
+          "named": true
+        },
+        {
+          "type": "convert_expr",
+          "named": true
+        },
+        {
+          "type": "field_access",
+          "named": true
+        },
+        {
+          "type": "fn_call",
+          "named": true
+        },
+        {
+          "type": "for_expr",
+          "named": true
+        },
+        {
+          "type": "graph_ref",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
         {
+          "type": "if_expr",
+          "named": true
+        },
+        {
+          "type": "index_access",
+          "named": true
+        },
+        {
+          "type": "map_literal",
+          "named": true
+        },
+        {
+          "type": "match_expr",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expr",
+          "named": true
+        },
+        {
+          "type": "qualified_fn_call",
+          "named": true
+        },
+        {
           "type": "qualified_variant",
+          "named": true
+        },
+        {
+          "type": "scan_expr",
+          "named": true
+        },
+        {
+          "type": "struct_construction",
+          "named": true
+        },
+        {
+          "type": "table_expr",
+          "named": true
+        },
+        {
+          "type": "unary_expr",
+          "named": true
+        },
+        {
+          "type": "unfold_expr",
+          "named": true
+        },
+        {
+          "type": "unit_literal",
           "named": true
         }
       ]

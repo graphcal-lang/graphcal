@@ -83,6 +83,7 @@ idempotency_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 idempotency_test!(idempotent_required_indexes, "required_indexes.gcl");
+idempotency_test!(idempotent_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -157,6 +158,7 @@ roundtrip_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 roundtrip_test!(roundtrip_required_indexes, "required_indexes.gcl");
+roundtrip_test!(roundtrip_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -508,6 +510,7 @@ snapshot_test!(
     "comments_in_expressions.gcl"
 );
 snapshot_test!(snapshot_required_indexes, "required_indexes.gcl");
+snapshot_test!(snapshot_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Fixture: comments_in_expressions.gcl

@@ -1156,10 +1156,16 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
             }
             ExprKind::IndexAccess { expr: inner, args } => {
                 for arg in args.iter_mut() {
-                    if let IndexArg::Variant { index, .. } = arg
-                        && let Some(new) = self.bindings.get(index.value.as_str())
-                    {
-                        index.value = IndexName::new(new);
+                    match arg {
+                        IndexArg::Variant { index, .. } => {
+                            if let Some(new) = self.bindings.get(index.value.as_str()) {
+                                index.value = IndexName::new(new);
+                            }
+                        }
+                        IndexArg::Expr(e) => {
+                            self.visit_expr_mut(e)?;
+                        }
+                        IndexArg::Var(_) => {}
                     }
                 }
                 self.visit_expr_mut(inner)

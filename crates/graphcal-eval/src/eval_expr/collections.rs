@@ -126,6 +126,30 @@ pub(super) fn eval_index_access(
                     }
                 }
             }
+            graphcal_compiler::syntax::ast::IndexArg::Expr(index_expr) => {
+                let val = eval_expr(index_expr, values, local_values, ctx)?;
+                match val {
+                    RuntimeValue::Int(n) => {
+                        if n < 0 {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "index expression evaluated to negative value: {n}"
+                                ),
+                                src: ctx.src.clone(),
+                                span: index_expr.span.into(),
+                            });
+                        }
+                        VariantName::new(format!("#{n}"))
+                    }
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: "index expression must evaluate to an integer".to_string(),
+                            src: ctx.src.clone(),
+                            span: index_expr.span.into(),
+                        });
+                    }
+                }
+            }
         };
         current = entries.get(variant_name.as_str()).cloned().ok_or_else(|| {
             GraphcalError::EvalError {
