@@ -8,6 +8,7 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{FnName, IndexName, StructTypeName};
 
 use crate::registry::time_scale::TimeScale;
+use crate::tir::tir::NatLinearForm;
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -40,6 +41,14 @@ pub enum InferredType {
     Scalar(Dimension),
     Bool,
     Int,
+    /// A bounded natural number `Fin(N)`: the type of loop variables over `range(N)`.
+    ///
+    /// A value of type `Fin(N)` satisfies `0 <= value < N`. This enables compile-time
+    /// bounds checking: `v[i]` is valid when `i : Fin(N)` and `v : T[M]` with `N <= M`.
+    ///
+    /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
+    /// variables in `for i: range(N) { ... }`.
+    Fin(NatLinearForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
@@ -50,6 +59,14 @@ pub enum InferredType {
         element: Box<Self>,
         index: IndexName,
     },
+}
+
+impl InferredType {
+    /// Returns `true` if this type is `Int` or `Fin(N)` (integer-like).
+    #[must_use]
+    pub const fn is_int_like(&self) -> bool {
+        matches!(self, Self::Int | Self::Fin(_))
+    }
 }
 
 /// Check dimensions for all declarations in a file.
@@ -236,8 +253,8 @@ pub fn check_dimensions_tir(
 
                 // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
                 let tolerance_ok = if *is_relative {
-                    // Relative tolerance: accept Int or Dimensionless scalar
-                    matches!(tolerance_type, InferredType::Int)
+                    // Relative tolerance: accept Int/Fin or Dimensionless scalar
+                    tolerance_type.is_int_like()
                         || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
                 } else {
                     let tolerance_dim =

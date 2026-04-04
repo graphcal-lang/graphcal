@@ -262,6 +262,69 @@ impl NatLinearForm {
             format!("__nat_range_{}", self.format())
         }
     }
+
+    /// Check if `self <= other` for all non-negative variable assignments.
+    ///
+    /// Returns `true` iff `self.constant <= other.constant` and for every variable,
+    /// `self.coeff(var) <= other.coeff(var)`. This is sound because all `Nat`
+    /// variables are non-negative: if any coefficient in `self` exceeds the
+    /// corresponding coefficient in `other`, we can make the variable arbitrarily
+    /// large to violate the inequality.
+    #[must_use]
+    pub fn is_leq(&self, other: &Self) -> bool {
+        if self.constant > other.constant {
+            return false;
+        }
+        // Check that every variable in `self` has coefficient <= in `other`
+        for (var, &coeff) in &self.terms {
+            let other_coeff = other.terms.get(var).copied().unwrap_or(0);
+            if coeff > other_coeff {
+                return false;
+            }
+        }
+        // Variables only in `other` (not in `self`) have coefficient 0 in self,
+        // which is always <= other's coefficient. No check needed.
+        true
+    }
+
+    /// Parse a `NatLinearForm` from a nat-range index name suffix.
+    ///
+    /// Given an index name like `__nat_range_3` or `__nat_range_N + 1`,
+    /// strips the prefix and parses the suffix into a `NatLinearForm`.
+    /// Returns `None` if the name doesn't have the expected prefix or
+    /// the suffix cannot be parsed.
+    #[must_use]
+    pub fn from_index_name(name: &str) -> Option<Self> {
+        let suffix = name.strip_prefix("__nat_range_")?;
+        Self::parse_linear_form(suffix)
+    }
+
+    /// Parse a string like `"3"`, `"N"`, or `"N + 1"` into a `NatLinearForm`.
+    #[must_use]
+    fn parse_linear_form(s: &str) -> Option<Self> {
+        let mut constant: u64 = 0;
+        let mut terms = BTreeMap::new();
+        for part in s.split(" + ") {
+            let part = part.trim();
+            if part.is_empty() {
+                return None;
+            }
+            if let Ok(n) = part.parse::<u64>() {
+                constant += n;
+            } else {
+                // Check for "k * Var" format
+                if let Some((coeff_str, var_str)) = part.split_once(" * ") {
+                    let coeff: u64 = coeff_str.trim().parse().ok()?;
+                    let var = var_str.trim();
+                    *terms.entry(GenericParamName::new(var)).or_insert(0) += coeff;
+                } else {
+                    // Plain variable name
+                    *terms.entry(GenericParamName::new(part)).or_insert(0) += 1;
+                }
+            }
+        }
+        Some(Self { constant, terms })
+    }
 }
 
 impl std::fmt::Display for NatLinearForm {
@@ -905,7 +968,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Int => {
-            if *actual != InferredType::Int {
+            if !actual.is_int_like() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
@@ -2146,5 +2209,110 @@ mod tests {
         let dt = resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::TT), &make_src())
             .unwrap();
         assert_eq!(dt, DeclaredType::Datetime(TimeScale::TT));
+    }
+
+    // -----------------------------------------------------------------------
+    // NatLinearForm::is_leq tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nat_leq_constant_equal() {
+        let a = NatLinearForm::from_constant(3);
+        let b = NatLinearForm::from_constant(3);
+        assert!(a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_constant_less() {
+        let a = NatLinearForm::from_constant(2);
+        let b = NatLinearForm::from_constant(5);
+        assert!(a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_constant_greater() {
+        let a = NatLinearForm::from_constant(5);
+        let b = NatLinearForm::from_constant(3);
+        assert!(!a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_same_var() {
+        // N <= N
+        let a = NatLinearForm::from_var(GenericParamName::new("N"));
+        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        assert!(a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_var_plus_constant() {
+        // N <= N + 1
+        let a = NatLinearForm::from_var(GenericParamName::new("N"));
+        let b = NatLinearForm::from_var(GenericParamName::new("N"))
+            .add(&NatLinearForm::from_constant(1));
+        assert!(a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_var_plus_constant_reverse() {
+        // N + 1 <= N → false
+        let a = NatLinearForm::from_var(GenericParamName::new("N"))
+            .add(&NatLinearForm::from_constant(1));
+        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        assert!(!a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_different_vars() {
+        // N <= M → false (N could be larger)
+        let a = NatLinearForm::from_var(GenericParamName::new("N"));
+        let b = NatLinearForm::from_var(GenericParamName::new("M"));
+        assert!(!a.is_leq(&b));
+    }
+
+    #[test]
+    fn nat_leq_zero_leq_anything() {
+        // 0 <= N
+        let a = NatLinearForm::from_constant(0);
+        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        assert!(a.is_leq(&b));
+    }
+
+    // -----------------------------------------------------------------------
+    // NatLinearForm::from_index_name tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_index_name_constant() {
+        let form = NatLinearForm::from_index_name("__nat_range_3").unwrap();
+        assert_eq!(form, NatLinearForm::from_constant(3));
+    }
+
+    #[test]
+    fn parse_index_name_variable() {
+        let form = NatLinearForm::from_index_name("__nat_range_N").unwrap();
+        assert_eq!(form, NatLinearForm::from_var(GenericParamName::new("N")));
+    }
+
+    #[test]
+    fn parse_index_name_var_plus_constant() {
+        let form = NatLinearForm::from_index_name("__nat_range_N + 1").unwrap();
+        let expected = NatLinearForm::from_var(GenericParamName::new("N"))
+            .add(&NatLinearForm::from_constant(1));
+        assert_eq!(form, expected);
+    }
+
+    #[test]
+    fn parse_index_name_two_vars() {
+        let form = NatLinearForm::from_index_name("__nat_range_M + N + 2").unwrap();
+        let expected = NatLinearForm::from_var(GenericParamName::new("M"))
+            .add(&NatLinearForm::from_var(GenericParamName::new("N")))
+            .add(&NatLinearForm::from_constant(2));
+        assert_eq!(form, expected);
+    }
+
+    #[test]
+    fn parse_index_name_no_prefix() {
+        assert!(NatLinearForm::from_index_name("Phase").is_none());
     }
 }

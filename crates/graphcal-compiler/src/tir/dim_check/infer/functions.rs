@@ -90,7 +90,7 @@ impl InferCtx<'_> {
                     });
                 }
                 let arg_type = self.infer_arg(&self.args[0])?;
-                if arg_type != InferredType::Int {
+                if !arg_type.is_int_like() {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
                         found: format_inferred_type(&arg_type, self.registry),
@@ -311,7 +311,7 @@ impl InferCtx<'_> {
         let arg_type = self.infer_arg(&self.args[0])?;
         match &arg_type {
             InferredType::Scalar(dim) if dim.is_dimensionless() => {}
-            InferredType::Int => {}
+            t if t.is_int_like() => {}
             _ => {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless or Int".to_string(),
