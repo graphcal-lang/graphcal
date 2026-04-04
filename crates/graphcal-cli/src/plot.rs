@@ -1,5 +1,7 @@
-use graphcal_compiler::syntax::ast::MarkType;
-use graphcal_eval::eval::{AxisMeta, FigureSpec, LayerSpec, PlotFieldValue, PlotSpec};
+use graphcal_compiler::syntax::ast::{EncodingChannel, MarkType};
+use graphcal_eval::eval::{
+    AxisMeta, CompositionProperty, FigureSpec, LayerSpec, PlotFieldValue, PlotProperty, PlotSpec,
+};
 use serde_json::{Value as JsonValue, json};
 
 /// A rendered figure ready for output.
@@ -69,15 +71,15 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     vl["encoding"] = build_encoding(spec);
 
     // Title
-    if let Some(title) = get_string_field(spec, "title") {
+    if let Some(title) = get_plot_string_property(spec, PlotProperty::Title) {
         vl["title"] = json!(title);
     }
 
     // Width/height
-    if let Some(w) = get_number_field_single(spec, "width") {
+    if let Some(w) = get_plot_number_property(spec, PlotProperty::Width) {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_number_field_single(spec, "height") {
+    if let Some(h) = get_plot_number_property(spec, PlotProperty::Height) {
         vl["height"] = json!(h);
     }
 
@@ -102,7 +104,7 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "hconcat": sub_specs,
     });
 
-    if let Some(title) = get_string_field_from_fields(&fig.fields, "title") {
+    if let Some(title) = get_composition_string_property(&fig.properties, CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
@@ -134,40 +136,35 @@ fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "layer": sub_specs,
     });
 
-    if let Some(title) = get_string_field_from_fields(&layer.fields, "title") {
+    if let Some(title) = get_composition_string_property(&layer.properties, CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
-    // Width/height from layer fields
-    if let Some(w) = get_number_field_from_fields(&layer.fields, "width") {
+    // Width/height from layer properties
+    if let Some(w) = get_composition_number_property(&layer.properties, CompositionProperty::Width) {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_number_field_from_fields(&layer.fields, "height") {
+    if let Some(h) = get_composition_number_property(&layer.properties, CompositionProperty::Height) {
         vl["height"] = json!(h);
     }
 
     vl
 }
 
-/// Build the `"data": { "values": [...] }` array from a plot spec's encoding fields.
+/// Build the `"data": { "values": [...] }` array from a plot spec's encoding channels.
 ///
 /// Converts column-oriented encoding data (`x: [1,2,3], y: [4,5,6]`) into
 /// row-oriented records (`[{x:1, y:4}, {x:2, y:5}, {x:3, y:6}]`).
 fn build_data_values(spec: &PlotSpec) -> Vec<JsonValue> {
-    // Collect encoding channel data (x, y, color, size, etc.)
-    let encoding_channels = [
-        "x", "y", "color", "size", "shape", "opacity", "detail", "text", "tooltip",
-    ];
     let mut channel_data: Vec<(&str, Vec<JsonValue>)> = Vec::new();
     let mut max_len = 0;
 
-    for &ch in &encoding_channels {
-        if let Some(values) = get_field_as_json_array(spec, ch) {
-            if values.len() > max_len {
-                max_len = values.len();
-            }
-            channel_data.push((ch, values));
+    for (channel, value) in &spec.encodings {
+        let json_values = field_value_to_json_array(value);
+        if json_values.len() > max_len {
+            max_len = json_values.len();
         }
+        channel_data.push((channel_vega_name(*channel), json_values));
     }
 
     // Build row-oriented records
@@ -195,86 +192,86 @@ fn build_mark(spec: &PlotSpec) -> JsonValue {
         MarkType::Tick => "tick",
     };
 
-    // Check for mark properties (e.g., stroke_width, opacity)
-    let mark_props = [
-        "stroke_width",
-        "opacity",
-        "size",
-        "color",
-        "filled",
-        "interpolate",
-    ];
-    let mut has_props = false;
+    if spec.mark_properties.is_empty() {
+        return json!(mark_type_str);
+    }
+
     let mut mark_obj = serde_json::Map::new();
     mark_obj.insert("type".to_string(), json!(mark_type_str));
 
-    for &prop in &mark_props {
-        let value = get_number_field_single(spec, prop)
-            .map(|v| json!(v))
-            .or_else(|| get_string_field(spec, prop).map(|v| json!(v)));
-        if let Some(val) = value {
-            mark_obj.insert(to_camel_case(prop), val);
-            has_props = true;
-        }
+    for (prop, value) in &spec.mark_properties {
+        let json_val = match value {
+            PlotFieldValue::Number(n) => json!(n),
+            PlotFieldValue::String(s) => json!(s),
+            PlotFieldValue::Numbers(nums) if nums.len() == 1 => json!(nums[0]),
+            _ => continue,
+        };
+        mark_obj.insert(prop.vega_name().to_string(), json_val);
     }
 
-    if has_props {
-        JsonValue::Object(mark_obj)
-    } else {
-        json!(mark_type_str)
-    }
+    JsonValue::Object(mark_obj)
 }
 
 /// Build the Vega-Lite `"encoding"` field.
 fn build_encoding(spec: &PlotSpec) -> JsonValue {
     let mut encoding = serde_json::Map::new();
 
-    let channels = [
-        "x", "y", "color", "size", "shape", "opacity", "detail", "text", "tooltip",
-    ];
+    for (channel, value) in &spec.encodings {
+        let ch_name = channel_vega_name(*channel);
+        let vega_type = infer_vega_type(value);
+        let mut ch_spec = serde_json::Map::new();
+        ch_spec.insert("field".to_string(), json!(ch_name));
+        ch_spec.insert("type".to_string(), json!(vega_type));
 
-    for &ch in &channels {
-        if has_field(spec, ch) {
-            let vega_type = infer_vega_type(spec, ch);
-            let mut ch_spec = serde_json::Map::new();
-            ch_spec.insert("field".to_string(), json!(ch));
-            ch_spec.insert("type".to_string(), json!(vega_type));
-
-            // Axis title: explicit x_label/y_label overrides auto-generated titles
-            let explicit_label = match ch {
-                "x" => get_string_field(spec, "x_label"),
-                "y" => get_string_field(spec, "y_label"),
-                _ => None,
-            };
-            let axis_title = explicit_label.or_else(|| {
-                let meta = get_encoding_meta(spec, ch)?;
-                format_axis_title(meta)
-            });
-            if let Some(title) = axis_title {
-                ch_spec.insert("axis".to_string(), json!({ "title": title }));
-            }
-
-            encoding.insert(ch.to_string(), JsonValue::Object(ch_spec));
+        // Axis title: explicit x_label/y_label overrides auto-generated titles
+        let explicit_label = match channel {
+            EncodingChannel::X => get_plot_string_property(spec, PlotProperty::XLabel),
+            EncodingChannel::Y => get_plot_string_property(spec, PlotProperty::YLabel),
+            _ => None,
+        };
+        let axis_title = explicit_label.or_else(|| {
+            let meta = get_encoding_meta(spec, *channel)?;
+            format_axis_title(meta)
+        });
+        if let Some(title) = axis_title {
+            ch_spec.insert("axis".to_string(), json!({ "title": title }));
         }
+
+        encoding.insert(ch_name.to_string(), JsonValue::Object(ch_spec));
     }
 
     JsonValue::Object(encoding)
 }
 
+/// The Vega-Lite field name for an encoding channel.
+const fn channel_vega_name(channel: EncodingChannel) -> &'static str {
+    match channel {
+        EncodingChannel::X => "x",
+        EncodingChannel::Y => "y",
+        EncodingChannel::Color => "color",
+        EncodingChannel::Size => "size",
+        EncodingChannel::Shape => "shape",
+        EncodingChannel::Opacity => "opacity",
+        EncodingChannel::Detail => "detail",
+        EncodingChannel::Text => "text",
+        EncodingChannel::Tooltip => "tooltip",
+    }
+}
+
 /// Look up axis metadata for an encoding channel.
-fn get_encoding_meta<'a>(spec: &'a PlotSpec, channel: &str) -> Option<&'a AxisMeta> {
+fn get_encoding_meta(spec: &PlotSpec, channel: EncodingChannel) -> Option<&AxisMeta> {
     spec.encoding_meta
         .iter()
-        .find(|(name, _)| name == channel)
+        .find(|(ch, _)| *ch == channel)
         .map(|(_, meta)| meta)
 }
 
 /// Format an axis title from dimension and unit metadata.
 ///
-/// - Dimension "Velocity" + unit "km/s" → "Velocity (km/s)"
-/// - Dimension "Velocity" alone → "Velocity"
-/// - Unit "km/s" alone → None (unit without dimension isn't meaningful as title)
-/// - Neither → None
+/// - Dimension "Velocity" + unit "km/s" -> "Velocity (km/s)"
+/// - Dimension "Velocity" alone -> "Velocity"
+/// - Unit "km/s" alone -> None (unit without dimension isn't meaningful as title)
+/// - Neither -> None
 fn format_axis_title(meta: &AxisMeta) -> Option<String> {
     match (&meta.dimension_label, &meta.unit_label) {
         (Some(dim), Some(unit)) => Some(format!("{dim} ({unit})")),
@@ -283,37 +280,22 @@ fn format_axis_title(meta: &AxisMeta) -> Option<String> {
     }
 }
 
-/// Infer Vega-Lite data type from field values.
-fn infer_vega_type(spec: &PlotSpec, field_name: &str) -> &'static str {
-    for (name, value) in &spec.fields {
-        if name == field_name {
-            return match value {
-                PlotFieldValue::Numbers(_) | PlotFieldValue::Number(_) => "quantitative",
-                PlotFieldValue::Labels(_) | PlotFieldValue::String(_) => "nominal",
-            };
-        }
+/// Infer Vega-Lite data type from a field value.
+const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
+    match value {
+        PlotFieldValue::Numbers(_) | PlotFieldValue::Number(_) => "quantitative",
+        PlotFieldValue::Labels(_) | PlotFieldValue::String(_) => "nominal",
     }
-    "quantitative"
 }
 
-/// Check if a field exists in the plot spec.
-fn has_field(spec: &PlotSpec, field_name: &str) -> bool {
-    spec.fields.iter().any(|(name, _)| name == field_name)
-}
-
-/// Get field data as a JSON array (for data values).
-fn get_field_as_json_array(spec: &PlotSpec, field_name: &str) -> Option<Vec<JsonValue>> {
-    for (name, value) in &spec.fields {
-        if name == field_name {
-            return Some(match value {
-                PlotFieldValue::Numbers(nums) => nums.iter().copied().map(json_number).collect(),
-                PlotFieldValue::Labels(labels) => labels.iter().map(|s| json!(s)).collect(),
-                PlotFieldValue::Number(n) => vec![json_number(*n)],
-                PlotFieldValue::String(s) => vec![json!(s)],
-            });
-        }
+/// Convert a `PlotFieldValue` to a JSON array for data values.
+fn field_value_to_json_array(value: &PlotFieldValue) -> Vec<JsonValue> {
+    match value {
+        PlotFieldValue::Numbers(nums) => nums.iter().copied().map(json_number).collect(),
+        PlotFieldValue::Labels(labels) => labels.iter().map(|s| json!(s)).collect(),
+        PlotFieldValue::Number(n) => vec![json_number(*n)],
+        PlotFieldValue::String(s) => vec![json!(s)],
     }
-    None
 }
 
 /// Convert an f64 to a JSON number, using integer representation when possible.
@@ -326,73 +308,56 @@ fn json_number(n: f64) -> JsonValue {
     }
 }
 
-/// Get a string field from a plot spec.
-fn get_string_field(spec: &PlotSpec, field_name: &str) -> Option<String> {
-    get_string_field_from_fields(&spec.fields, field_name)
+/// Get a string value from a plot property.
+fn get_plot_string_property(spec: &PlotSpec, prop: PlotProperty) -> Option<String> {
+    spec.properties
+        .iter()
+        .find(|(p, _)| *p == prop)
+        .and_then(|(_, v)| match v {
+            PlotFieldValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
 }
 
-/// Get a single numeric value from a plot spec.
-fn get_number_field_single(spec: &PlotSpec, field_name: &str) -> Option<f64> {
-    for (name, value) in &spec.fields {
-        if name == field_name {
-            return match value {
-                PlotFieldValue::Number(n) => Some(*n),
-                PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
-                _ => None,
-            };
-        }
-    }
-    None
+/// Get a single numeric value from a plot property.
+fn get_plot_number_property(spec: &PlotSpec, prop: PlotProperty) -> Option<f64> {
+    spec.properties
+        .iter()
+        .find(|(p, _)| *p == prop)
+        .and_then(|(_, v)| match v {
+            PlotFieldValue::Number(n) => Some(*n),
+            PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
+            _ => None,
+        })
 }
 
-/// Get a string field from a list of (name, value) pairs.
-fn get_string_field_from_fields(
-    fields: &[(String, PlotFieldValue)],
-    field_name: &str,
+/// Get a string value from a composition property list.
+fn get_composition_string_property(
+    properties: &[(CompositionProperty, PlotFieldValue)],
+    prop: CompositionProperty,
 ) -> Option<String> {
-    for (name, value) in fields {
-        if name == field_name {
-            return match value {
-                PlotFieldValue::String(s) => Some(s.clone()),
-                _ => None,
-            };
-        }
-    }
-    None
+    properties
+        .iter()
+        .find(|(p, _)| *p == prop)
+        .and_then(|(_, v)| match v {
+            PlotFieldValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
 }
 
-/// Get a single numeric value from a list of (name, value) pairs.
-fn get_number_field_from_fields(
-    fields: &[(String, PlotFieldValue)],
-    field_name: &str,
+/// Get a single numeric value from a composition property list.
+fn get_composition_number_property(
+    properties: &[(CompositionProperty, PlotFieldValue)],
+    prop: CompositionProperty,
 ) -> Option<f64> {
-    for (name, value) in fields {
-        if name == field_name {
-            return match value {
-                PlotFieldValue::Number(n) => Some(*n),
-                PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
-                _ => None,
-            };
-        }
-    }
-    None
-}
-
-/// Convert `snake_case` to `camelCase`.
-fn to_camel_case(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
+    properties
+        .iter()
+        .find(|(p, _)| *p == prop)
+        .and_then(|(_, v)| match v {
+            PlotFieldValue::Number(n) => Some(*n),
+            PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
+            _ => None,
+        })
 }
 
 /// Render all figures as a single HTML page using Vega-Embed.
