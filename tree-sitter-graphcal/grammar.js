@@ -608,11 +608,19 @@ module.exports = grammar({
       "]",
     ),
 
-    // An expression in index position: either a name or an integer literal
+    // An expression in index position: a name, integer literal, or nat addition
     _index_expr: $ => choice(
+      $.nat_add_expr,
       $.identifier,
       $.nat_literal,
     ),
+
+    // Nat addition expression in index position: N + 1, M + N + 2
+    nat_add_expr: $ => prec.left(PREC.ADD, seq(
+      field("left", choice($.identifier, $.nat_literal, $.nat_add_expr)),
+      "+",
+      field("right", choice($.identifier, $.nat_literal)),
+    )),
 
     // Integer literal in type/index position (e.g., 3 in D[3])
     nat_literal: $ => /[0-9]+/,
@@ -846,7 +854,7 @@ module.exports = grammar({
     range_expr: $ => seq(
       "range",
       "(",
-      field("arg", choice($.identifier, $.nat_literal)),
+      field("arg", choice($.nat_add_expr, $.identifier, $.nat_literal)),
       ")",
     ),
 

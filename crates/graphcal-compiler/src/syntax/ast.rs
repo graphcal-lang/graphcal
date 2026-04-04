@@ -623,12 +623,15 @@ pub struct DomainBound {
 ///
 /// In `Velocity[Maneuver]`, the `Maneuver` is an `IndexExpr::Name`.
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatLiteral`.
+/// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
 pub enum IndexExpr {
     /// A named index or generic parameter: `Maneuver`, `I`, `N`
     Name(Ident),
     /// An integer literal in index position: `3` (desugars to `range(3)` internally)
     NatLiteral(u64, Span),
+    /// A compound Nat expression in index position: `N + 1`, `M + N`
+    NatExpr(NatExpr),
 }
 
 impl IndexExpr {
@@ -638,6 +641,7 @@ impl IndexExpr {
         match self {
             Self::Name(ident) => ident.span,
             Self::NatLiteral(_, span) => *span,
+            Self::NatExpr(nat_expr) => nat_expr.span(),
         }
     }
 }
@@ -926,13 +930,15 @@ pub enum ForBindingIndex {
 
 /// A Nat expression (type-level natural number).
 ///
-/// At Level 0, only literals and variables are supported.
+/// Supports literals, variables, and addition (Level 1 arithmetic).
 #[derive(Debug, Clone)]
 pub enum NatExpr {
     /// An integer literal, e.g., `3`
     Literal(u64, Span),
     /// A variable (generic Nat parameter), e.g., `N`
     Var(Ident),
+    /// Addition of two nat expressions, e.g., `N + 1`, `M + N`
+    Add(Box<Self>, Box<Self>, Span),
 }
 
 impl NatExpr {
@@ -940,7 +946,7 @@ impl NatExpr {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Literal(_, span) => *span,
+            Self::Literal(_, span) | Self::Add(_, _, span) => *span,
             Self::Var(ident) => ident.span,
         }
     }

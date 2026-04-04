@@ -3153,6 +3153,10 @@
           "named": true
         },
         {
+          "type": "nat_add_expr",
+          "named": true
+        },
+        {
           "type": "nat_literal",
           "named": true
         }
@@ -4028,6 +4032,44 @@
     }
   },
   {
+    "type": "nat_add_expr",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "nat_add_expr",
+            "named": true
+          },
+          {
+            "type": "nat_literal",
+            "named": true
+          }
+        ]
+      },
+      "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "nat_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "node_declaration",
     "named": true,
     "fields": {
@@ -4766,6 +4808,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "nat_add_expr",
             "named": true
           },
           {

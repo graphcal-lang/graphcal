@@ -25,6 +25,9 @@ pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
                     graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(n, _) => {
                         RcDoc::text(n.to_string())
                     }
+                    graphcal_compiler::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
+                        RcDoc::text(super::expr::format_nat_expr_str_pub(nat_expr))
+                    }
                 })
                 .collect();
             format_type_expr_inline(base)

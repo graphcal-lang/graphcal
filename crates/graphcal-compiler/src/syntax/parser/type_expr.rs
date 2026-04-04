@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, IndexExpr, MulDivOp, TypeExpr, TypeExprKind,
-    UnitDef, UnitExpr, UnitExprItem,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, IndexExpr, MulDivOp, NatExpr, TypeExpr,
+    TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::names::UnitName;
 use crate::syntax::span::Span;
@@ -511,10 +511,11 @@ impl Parser<'_> {
         Ok(args)
     }
 
-    /// Parse an index expression in type position: either an identifier or an integer literal.
+    /// Parse an index expression in type position.
     ///
     /// - `Phase` → `IndexExpr::Name` (named index or generic param)
     /// - `3` → `IndexExpr::NatLiteral` (desugars to `range(3)`)
+    /// - `N + 1` → `IndexExpr::NatExpr` (compound Nat expression)
     fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
@@ -525,7 +526,19 @@ impl Parser<'_> {
                     src: self.named_source(),
                     span: span.into(),
                 })?;
-                Ok(IndexExpr::NatLiteral(value, span))
+                // Check for addition: `3 + N`, `3 + M + 1`, etc.
+                if self.lexer.peek() == Some(&Token::Plus) {
+                    let mut lhs = NatExpr::Literal(value, span);
+                    while self.lexer.peek() == Some(&Token::Plus) {
+                        self.lexer.next_token(); // consume '+'
+                        let rhs = self.parse_nat_atom_in_index()?;
+                        let full_span = span.merge(rhs.span());
+                        lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
+                    }
+                    Ok(IndexExpr::NatExpr(lhs))
+                } else {
+                    Ok(IndexExpr::NatLiteral(value, span))
+                }
             }
             Some(
                 Token::Ident
@@ -537,11 +550,59 @@ impl Parser<'_> {
             ) => {
                 let ident =
                     self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
-                Ok(IndexExpr::Name(ident))
+                // Check for addition: `N + 1`, `N + M`, etc.
+                if self.lexer.peek() == Some(&Token::Plus) {
+                    let mut lhs = NatExpr::Var(ident);
+                    while self.lexer.peek() == Some(&Token::Plus) {
+                        self.lexer.next_token(); // consume '+'
+                        let rhs = self.parse_nat_atom_in_index()?;
+                        let full_span = lhs.span().merge(rhs.span());
+                        lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
+                    }
+                    Ok(IndexExpr::NatExpr(lhs))
+                } else {
+                    Ok(IndexExpr::Name(ident))
+                }
             }
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
+            }
+        }
+    }
+
+    /// Parse a single nat atom in index position (for the RHS of `+` in index expressions).
+    fn parse_nat_atom_in_index(&mut self) -> Result<NatExpr, ParseError> {
+        match self.lexer.peek() {
+            Some(Token::Number) => {
+                let (_, span) = self.advance()?;
+                let text = self.lexer.slice_at(span).replace('_', "");
+                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
+                    reason: "expected non-negative integer in index position".to_string(),
+                    src: self.named_source(),
+                    span: span.into(),
+                })?;
+                Ok(NatExpr::Literal(value, span))
+            }
+            Some(
+                Token::Ident
+                | Token::Linspace
+                | Token::Step
+                | Token::Scan
+                | Token::Unfold
+                | Token::Index,
+            ) => {
+                let ident =
+                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                Ok(NatExpr::Var(ident))
+            }
+            _ => {
+                let (tok, span) = self.advance()?;
+                Err(self.unexpected_token(
+                    "integer literal or Nat parameter name",
+                    &tok.to_string(),
+                    span,
+                ))
             }
         }
     }

@@ -220,6 +220,18 @@ impl ScopeStack {
     }
 }
 
+/// Format a `NatExpr` as a human-readable string.
+fn format_nat_expr(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => n.to_string(),
+        NatExpr::Var(ident) => ident.name.clone(),
+        NatExpr::Add(lhs, rhs, _) => {
+            format!("{} + {}", format_nat_expr(lhs), format_nat_expr(rhs))
+        }
+    }
+}
+
 /// Build a symbol table from a parsed AST file.
 pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable {
     let mut table = SymbolTable::default();
@@ -878,14 +890,7 @@ fn collect_expr_refs(
                         (detail, ref_info)
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
-                        let detail = match arg {
-                            graphcal_compiler::syntax::ast::NatExpr::Literal(n, _) => {
-                                format!("loop variable over range({n})")
-                            }
-                            graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
-                                format!("loop variable over range({})", ident.name)
-                            }
-                        };
+                        let detail = format!("loop variable over range({})", format_nat_expr(arg));
                         (detail, None)
                     }
                 };
@@ -1162,8 +1167,9 @@ fn collect_type_expr_refs(
                             target: SymbolKey::TopLevel(ident.name.clone()),
                         });
                     }
-                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(_, _) => {
-                        // No reference to resolve for literal integers
+                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(_, _)
+                    | graphcal_compiler::syntax::ast::IndexExpr::NatExpr(_) => {
+                        // No reference to resolve for literal integers or nat expressions
                     }
                 }
             }
@@ -1273,12 +1279,8 @@ fn format_type_with_constraints(
             .iter()
             .map(|i| match i {
                 ResolvedIndex::Concrete(name, _) => name.to_string(),
-                // GenericParam and GenericNatParam have different inner types
-                // (IndexName vs GenericParamName) but both format via Display.
-                ResolvedIndex::GenericParam(name, _) | ResolvedIndex::GenericNatParam(name, _) => {
-                    name.to_string()
-                }
-                ResolvedIndex::NatLiteral(n, _) => n.to_string(),
+                ResolvedIndex::GenericParam(name, _) => name.to_string(),
+                ResolvedIndex::NatExpr(form, _) => form.format(),
             })
             .collect();
         format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))

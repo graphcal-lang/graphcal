@@ -559,10 +559,11 @@ fn eval_builtin_or_user_fn(
                 // (it may not exist yet if the concrete size wasn't known at compile time)
                 // Note: we can't mutate the registry here, but the index should have been
                 // registered by the caller's type annotations.
-                fn_locals.insert(
-                    format!("__nat_param_{nat_name}"),
-                    RuntimeValue::Int(i64::try_from(size).unwrap_or(0)),
-                );
+                let nat_int = RuntimeValue::Int(i64::try_from(size).unwrap_or(0));
+                fn_locals.insert(format!("__nat_param_{nat_name}"), nat_int.clone());
+                // Also make the nat param available under its original name
+                // so it can be used in runtime expressions (e.g., `if i < N`).
+                fn_locals.insert(nat_name.to_string(), nat_int);
             }
         }
     }
@@ -624,14 +625,25 @@ fn extract_nat_from_type_and_value(
             else {
                 return None;
             };
-            if let IndexExpr::Name(ident) = idx
-                && ident.name == nat_name
-            {
-                // This index position has the nat param we're looking for.
-                // Extract the size from the actual index name.
-                return graphcal_compiler::registry::registry::parse_nat_range_index_name(
-                    index_name.as_str(),
-                );
+            match idx {
+                IndexExpr::Name(ident) if ident.name == nat_name => {
+                    // This index position has the nat param we're looking for.
+                    // Extract the size from the actual index name.
+                    return graphcal_compiler::registry::registry::parse_nat_range_index_name(
+                        index_name.as_str(),
+                    );
+                }
+                IndexExpr::NatExpr(nat_expr) => {
+                    // Compound nat expression (e.g., N + 1): try to solve for the param.
+                    if nat_expr_contains_var(nat_expr, nat_name) {
+                        let actual_size =
+                            graphcal_compiler::registry::registry::parse_nat_range_index_name(
+                                index_name.as_str(),
+                            )?;
+                        return solve_nat_expr_for_var(nat_expr, nat_name, actual_size);
+                    }
+                }
+                _ => {}
             }
             // Move to the first element to descend
             current = entries.values().next()?;
@@ -640,6 +652,62 @@ fn extract_nat_from_type_and_value(
         return extract_nat_from_type_and_value(nat_name, base, current);
     }
     None
+}
+
+/// Check if a `NatExpr` references a given variable.
+fn nat_expr_contains_var(expr: &graphcal_compiler::syntax::ast::NatExpr, var_name: &str) -> bool {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(_, _) => false,
+        NatExpr::Var(ident) => ident.name == var_name,
+        NatExpr::Add(lhs, rhs, _) => {
+            nat_expr_contains_var(lhs, var_name) || nat_expr_contains_var(rhs, var_name)
+        }
+    }
+}
+
+/// Solve a `NatExpr` for a single variable, given the target value.
+///
+/// Computes the constant part and the coefficient of the target variable,
+/// then solves `coefficient * var + constant_sum = target`.
+fn solve_nat_expr_for_var(
+    expr: &graphcal_compiler::syntax::ast::NatExpr,
+    var_name: &str,
+    target: u64,
+) -> Option<u64> {
+    let (constant_sum, var_coeff) = nat_expr_linear_parts(expr, var_name);
+    if var_coeff == 0 {
+        return None;
+    }
+    let remainder = target.checked_sub(constant_sum)?;
+    if remainder % var_coeff != 0 {
+        return None;
+    }
+    Some(remainder / var_coeff)
+}
+
+/// Decompose a `NatExpr` into `(constant_sum, coefficient_of_var)` for a given variable.
+fn nat_expr_linear_parts(
+    expr: &graphcal_compiler::syntax::ast::NatExpr,
+    var_name: &str,
+) -> (u64, u64) {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => (*n, 0),
+        NatExpr::Var(ident) => {
+            if ident.name == var_name {
+                (0, 1)
+            } else {
+                // Other variables are treated as constants (they should already be resolved)
+                (0, 0)
+            }
+        }
+        NatExpr::Add(lhs, rhs, _) => {
+            let (lc, lv) = nat_expr_linear_parts(lhs, var_name);
+            let (rc, rv) = nat_expr_linear_parts(rhs, var_name);
+            (lc + rc, lv + rv)
+        }
+    }
 }
 
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.

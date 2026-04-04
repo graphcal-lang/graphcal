@@ -24,16 +24,36 @@ use super::infer_type;
 fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
     match index {
         ForBindingIndex::Named(spanned) => spanned.value.clone(),
-        ForBindingIndex::Range { arg, .. } => match arg {
-            NatExpr::Literal(n, _) => {
-                IndexName::new(crate::registry::registry::nat_range_index_name(*n))
-            }
-            NatExpr::Var(ident) => {
-                // During type inference of generic function bodies, we don't know
-                // the concrete nat value. Use a placeholder name.
-                IndexName::new(format!("__nat_range_{}", ident.name))
-            }
-        },
+        ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
+    }
+}
+
+/// Convert a `NatExpr` to a canonical synthetic index name string.
+///
+/// For literals, produces `__nat_range_3`.
+/// For variables and compound expressions, produces symbolic names like
+/// `__nat_range_N` or `__nat_range_N + 1`.
+fn nat_expr_to_index_name_str(expr: &NatExpr) -> String {
+    match expr {
+        NatExpr::Literal(n, _) => crate::registry::registry::nat_range_index_name(*n),
+        NatExpr::Var(ident) => format!("__nat_range_{}", ident.name),
+        NatExpr::Add(_, _, _) => {
+            // Normalize to linear form for a canonical representation.
+            // During generic function body checking, we use symbolic names.
+            let formatted = format_nat_expr(expr);
+            format!("__nat_range_{formatted}")
+        }
+    }
+}
+
+/// Format a `NatExpr` as a string (for symbolic index names).
+fn format_nat_expr(expr: &NatExpr) -> String {
+    match expr {
+        NatExpr::Literal(n, _) => n.to_string(),
+        NatExpr::Var(ident) => ident.name.clone(),
+        NatExpr::Add(lhs, rhs, _) => {
+            format!("{} + {}", format_nat_expr(lhs), format_nat_expr(rhs))
+        }
     }
 }
 

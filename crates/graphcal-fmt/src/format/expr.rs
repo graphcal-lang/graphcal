@@ -11,6 +11,31 @@ use super::{
 };
 
 // ---------------------------------------------------------------------------
+// Nat expression formatting
+// ---------------------------------------------------------------------------
+
+/// Format a `NatExpr` to a string (public for use by `type_expr` formatter).
+pub(super) fn format_nat_expr_str_pub(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
+    format_nat_expr_str(expr)
+}
+
+/// Format a `NatExpr` to a string.
+fn format_nat_expr_str(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => n.to_string(),
+        NatExpr::Var(ident) => ident.name.clone(),
+        NatExpr::Add(lhs, rhs, _) => {
+            format!(
+                "{} + {}",
+                format_nat_expr_str(lhs),
+                format_nat_expr_str(rhs)
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
 
@@ -681,12 +706,7 @@ pub fn format_for_comp(
                         RcDoc::text(spanned.value.as_str().to_string())
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
-                        let arg_str = match arg {
-                            graphcal_compiler::syntax::ast::NatExpr::Literal(n, _) => n.to_string(),
-                            graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
-                                ident.name.clone()
-                            }
-                        };
+                        let arg_str = format_nat_expr_str(arg);
                         RcDoc::text(format!("range({arg_str})"))
                     }
                 })
