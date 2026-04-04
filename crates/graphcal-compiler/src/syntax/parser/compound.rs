@@ -399,8 +399,22 @@ impl Parser<'_> {
         Ok(ForBindingIndex::Named(index))
     }
 
-    /// Parse a nat expression: either an integer literal or an identifier (generic Nat param).
+    /// Parse a nat expression: supports literals, identifiers, and addition.
+    ///
+    /// Grammar: `nat_expr := nat_atom ('+' nat_atom)*`
     fn parse_nat_expr(&mut self) -> Result<NatExpr, ParseError> {
+        let mut lhs = self.parse_nat_atom()?;
+        while self.lexer.peek() == Some(&Token::Plus) {
+            self.lexer.next_token(); // consume '+'
+            let rhs = self.parse_nat_atom()?;
+            let span = lhs.span().merge(rhs.span());
+            lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), span);
+        }
+        Ok(lhs)
+    }
+
+    /// Parse a single nat atom: an integer literal or an identifier (generic Nat param).
+    fn parse_nat_atom(&mut self) -> Result<NatExpr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;

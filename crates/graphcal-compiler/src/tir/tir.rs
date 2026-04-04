@@ -4,7 +4,7 @@
 //! `TypeExprKind::Indexed::indexes`) into concrete dimensions, struct types,
 //! generic dimension parameters, or generic index parameters.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -68,10 +68,6 @@ pub enum ResolvedTypeExpr {
 impl ResolvedTypeExpr {
     /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
     #[must_use]
-    #[expect(
-        clippy::match_same_arms,
-        reason = "ResolvedIndex arms have distinct semantic types (IndexName vs GenericParamName) even though the bodies are identical"
-    )]
     pub fn format(&self, registry: &Registry) -> String {
         match self {
             Self::Dimensionless => "Dimensionless".to_string(),
@@ -112,8 +108,7 @@ impl ResolvedTypeExpr {
                     .map(|i| match i {
                         ResolvedIndex::Concrete(name, _) => name.to_string(),
                         ResolvedIndex::GenericParam(name, _) => name.to_string(),
-                        ResolvedIndex::NatLiteral(n, _) => n.to_string(),
-                        ResolvedIndex::GenericNatParam(name, _) => name.to_string(),
+                        ResolvedIndex::NatExpr(form, _) => form.format(),
                     })
                     .collect();
                 format!("{base_str}[{}]", idx_strs.join(", "))
@@ -172,6 +167,140 @@ impl ResolvedDimTerm {
     }
 }
 
+/// A normalized linear form for Nat expressions: `constant + Σ(coefficient * variable)`.
+///
+/// This is the canonical representation for Level 1 Nat arithmetic (addition only).
+/// Two `NatLinearForm`s are equal iff their constant and all coefficients match.
+///
+/// Examples:
+/// - `3` → `{ constant: 3, terms: {} }`
+/// - `N` → `{ constant: 0, terms: { N: 1 } }`
+/// - `N + 1` → `{ constant: 1, terms: { N: 1 } }`
+/// - `M + N + 2` → `{ constant: 2, terms: { M: 1, N: 1 } }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NatLinearForm {
+    /// The constant term.
+    pub constant: u64,
+    /// Variable → coefficient mapping (only non-zero coefficients).
+    pub terms: BTreeMap<GenericParamName, u64>,
+}
+
+impl NatLinearForm {
+    /// Create a linear form from a constant.
+    #[must_use]
+    pub const fn from_constant(c: u64) -> Self {
+        Self {
+            constant: c,
+            terms: BTreeMap::new(),
+        }
+    }
+
+    /// Create a linear form from a single variable with coefficient 1.
+    #[must_use]
+    pub fn from_var(name: GenericParamName) -> Self {
+        let mut terms = BTreeMap::new();
+        terms.insert(name, 1);
+        Self { constant: 0, terms }
+    }
+
+    /// Add two linear forms: `(c1 + terms1) + (c2 + terms2)`.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        let mut terms = self.terms.clone();
+        for (var, coeff) in &other.terms {
+            *terms.entry(var.clone()).or_insert(0) += coeff;
+        }
+        Self {
+            constant: self.constant + other.constant,
+            terms,
+        }
+    }
+
+    /// Returns `true` if this form has no variables (is a constant).
+    #[must_use]
+    pub fn is_constant(&self) -> bool {
+        self.terms.is_empty()
+    }
+
+    /// Evaluate to a concrete value given variable bindings.
+    /// Returns `None` if any variable is unbound.
+    #[must_use]
+    pub fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
+        let mut result = self.constant;
+        for (var, coeff) in &self.terms {
+            result += coeff * bindings.get(var)?;
+        }
+        Some(result)
+    }
+
+    /// Format as a human-readable string, e.g. `"3"`, `"N"`, `"N + 1"`, `"M + N + 2"`.
+    #[must_use]
+    pub fn format(&self) -> String {
+        let mut parts = Vec::new();
+        for (var, coeff) in &self.terms {
+            if *coeff == 1 {
+                parts.push(var.to_string());
+            } else {
+                parts.push(format!("{coeff} * {var}"));
+            }
+        }
+        if self.constant > 0 || parts.is_empty() {
+            parts.push(self.constant.to_string());
+        }
+        parts.join(" + ")
+    }
+
+    /// Generate a canonical synthetic index name for this nat form.
+    ///
+    /// For constants, produces `__nat_range_3`.
+    /// For symbolic forms, produces `__nat_range_N+1` etc.
+    #[must_use]
+    pub fn to_index_name_str(&self) -> String {
+        if self.is_constant() {
+            crate::registry::registry::nat_range_index_name(self.constant)
+        } else {
+            format!("__nat_range_{}", self.format())
+        }
+    }
+}
+
+impl std::fmt::Display for NatLinearForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.format())
+    }
+}
+
+/// Normalize an AST `NatExpr` into a `NatLinearForm`.
+///
+/// All variables referenced must be Nat generic parameters in scope.
+/// Returns an error if a variable is not a known Nat param.
+pub fn normalize_nat_expr(
+    expr: &crate::syntax::ast::NatExpr,
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+) -> Result<NatLinearForm, GraphcalError> {
+    use crate::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
+        NatExpr::Var(ident) => {
+            let gp = nat_params
+                .iter()
+                .find(|p| p.as_str() == ident.name)
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: IndexName::new(&ident.name),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })?;
+            Ok(NatLinearForm::from_var(gp.clone()))
+        }
+        NatExpr::Add(lhs, rhs, _) => {
+            let l = normalize_nat_expr(lhs, nat_params, src)?;
+            let r = normalize_nat_expr(rhs, nat_params, src)?;
+            Ok(l.add(&r))
+        }
+    }
+}
+
 /// A resolved index in an indexed type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedIndex {
@@ -179,10 +308,10 @@ pub enum ResolvedIndex {
     Concrete(IndexName, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
-    /// A nat literal in index position, e.g. `3` (desugars to `range(3)`)
-    NatLiteral(u64, Span),
-    /// A generic nat parameter in index position, e.g. `N` where `N: Nat`
-    GenericNatParam(GenericParamName, Span),
+    /// A Nat expression in index position (covers literals, variables, and additions).
+    ///
+    /// Examples: `3` → constant form, `N` → single-variable form, `N + 1` → linear form.
+    NatExpr(NatLinearForm, Span),
 }
 
 // ---------------------------------------------------------------------------
@@ -511,9 +640,20 @@ pub fn resolved_to_declared_type(
                             index: name.clone(),
                         };
                     }
-                    ResolvedIndex::NatLiteral(n, _) => {
-                        let idx_name =
-                            IndexName::new(crate::registry::registry::nat_range_index_name(*n));
+                    ResolvedIndex::NatExpr(form, span) => {
+                        if !form.is_constant() {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "cannot use generic nat expression `{}` as a concrete type",
+                                    form.format()
+                                ),
+                                src: src.clone(),
+                                span: (*span).into(),
+                            });
+                        }
+                        let idx_name = IndexName::new(
+                            crate::registry::registry::nat_range_index_name(form.constant),
+                        );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
                             index: idx_name,
@@ -528,20 +668,121 @@ pub fn resolved_to_declared_type(
                             span: (*span).into(),
                         });
                     }
-                    ResolvedIndex::GenericNatParam(name, span) => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "cannot use generic nat parameter `{name}` as a concrete type"
-                            ),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        });
-                    }
                 }
             }
             Ok(result)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Nat linear form unification
+// ---------------------------------------------------------------------------
+
+/// Solve a linear equation `form = target` for Nat generic params.
+///
+/// Substitutes already-bound variables, then:
+/// - If no unbound vars remain: checks `constant == target`.
+/// - If exactly one unbound var with coefficient `a`: solves `target - constant = a * var`.
+/// - If multiple unbound vars: returns an error (ambiguous).
+fn unify_nat_linear_form(
+    form: &NatLinearForm,
+    target: u64,
+    nat_sub: &mut HashMap<GenericParamName, u64>,
+    actual_idx: &IndexName,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    // Substitute already-bound variables
+    let mut remaining_target = target;
+    let mut unbound: Vec<(&GenericParamName, u64)> = Vec::new();
+
+    for (var, coeff) in &form.terms {
+        if let Some(bound_val) = nat_sub.get(var) {
+            let contribution = coeff * bound_val;
+            if remaining_target < form.constant + contribution {
+                // Would underflow — mismatch
+                return Err(GraphcalError::IndexMismatch {
+                    expected: IndexName::new(format!("range({})", form.format())),
+                    found: actual_idx.clone(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            remaining_target -= contribution;
+        } else {
+            unbound.push((var, *coeff));
+        }
+    }
+
+    // Check constant part
+    if remaining_target < form.constant {
+        return Err(GraphcalError::IndexMismatch {
+            expected: IndexName::new(format!("range({})", form.format())),
+            found: actual_idx.clone(),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+    let remainder = remaining_target - form.constant;
+
+    match unbound.len() {
+        0 => {
+            // All variables bound — check equality
+            if remainder != 0 {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                        form.evaluate(nat_sub).unwrap_or(0),
+                    )),
+                    found: actual_idx.clone(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+        }
+        1 => {
+            // One unbound variable — solve
+            let (var, coeff) = unbound[0];
+            if !remainder.is_multiple_of(coeff) {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: IndexName::new(format!("range({})", form.format())),
+                    found: actual_idx.clone(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            let value = remainder / coeff;
+            if let Some(prev) = nat_sub.get(var) {
+                if *prev != value {
+                    return Err(GraphcalError::IndexMismatch {
+                        expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                            *prev,
+                        )),
+                        found: actual_idx.clone(),
+                        src: src.clone(),
+                        span: span.into(),
+                    });
+                }
+            } else {
+                nat_sub.insert(var.clone(), value);
+            }
+        }
+        _ => {
+            // Multiple unbound variables — ambiguous
+            let var_names: Vec<&str> = unbound.iter().map(|(v, _)| v.as_str()).collect();
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "cannot infer Nat parameters [{}] from a single index — \
+                     provide more arguments or use explicit type annotations",
+                    var_names.join(", ")
+                ),
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -625,43 +866,19 @@ pub fn unify_resolved_type(
                             });
                         }
                     }
-                    ResolvedIndex::NatLiteral(n, _) => {
-                        // Check that the actual index is the matching nat range
-                        let expected_name = crate::registry::registry::nat_range_index_name(*n);
-                        if actual_idx.as_str() != expected_name {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: IndexName::new(expected_name),
-                                found: actual_idx.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
-                        }
-                    }
-                    ResolvedIndex::GenericNatParam(gp, _) => {
-                        // Extract the nat value from the actual index name
+                    ResolvedIndex::NatExpr(form, _) => {
+                        // Extract the concrete nat value from the actual index name
                         let actual_nat = crate::registry::registry::parse_nat_range_index_name(
                             actual_idx.as_str(),
                         )
                         .ok_or_else(|| GraphcalError::IndexMismatch {
-                            expected: IndexName::new(format!("range({gp})")),
+                            expected: IndexName::new(format!("range({})", form.format())),
                             found: actual_idx.clone(),
                             src: src.clone(),
                             span: span.into(),
                         })?;
-                        if let Some(prev) = nat_sub.get(gp) {
-                            if *prev != actual_nat {
-                                return Err(GraphcalError::IndexMismatch {
-                                    expected: IndexName::new(
-                                        crate::registry::registry::nat_range_index_name(*prev),
-                                    ),
-                                    found: actual_idx.clone(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                });
-                            }
-                        } else {
-                            nat_sub.insert(gp.clone(), actual_nat);
-                        }
+                        // Solve the linear equation: form = actual_nat
+                        unify_nat_linear_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }
                 }
                 current = element;
@@ -986,16 +1203,24 @@ pub fn substitute_resolved_type(
                             src: src.clone(),
                             span: (*span).into(),
                         })?,
-                    ResolvedIndex::NatLiteral(n, _) => {
-                        IndexName::new(crate::registry::registry::nat_range_index_name(*n))
-                    }
-                    ResolvedIndex::GenericNatParam(gp, span) => {
-                        let n = nat_sub.get(gp).ok_or_else(|| GraphcalError::EvalError {
-                            message: format!("generic nat `{gp}` not bound during substitution"),
-                            src: src.clone(),
-                            span: (*span).into(),
+                    ResolvedIndex::NatExpr(form, span) => {
+                        let n = form.evaluate(nat_sub).ok_or_else(|| {
+                            let unbound: Vec<&str> = form
+                                .terms
+                                .keys()
+                                .filter(|k| !nat_sub.contains_key(*k))
+                                .map(GenericParamName::as_str)
+                                .collect();
+                            GraphcalError::EvalError {
+                                message: format!(
+                                    "generic nat parameter(s) [{}] not bound during substitution",
+                                    unbound.join(", ")
+                                ),
+                                src: src.clone(),
+                                span: (*span).into(),
+                            }
                         })?;
-                        IndexName::new(crate::registry::registry::nat_range_index_name(*n))
+                        IndexName::new(crate::registry::registry::nat_range_index_name(n))
                     }
                 };
                 result = InferredType::Indexed {
@@ -1069,14 +1294,23 @@ pub fn resolve_type_expr(
             for idx in indexes {
                 match idx {
                     crate::syntax::ast::IndexExpr::NatLiteral(n, span) => {
-                        resolved_indexes.push(ResolvedIndex::NatLiteral(*n, *span));
+                        resolved_indexes.push(ResolvedIndex::NatExpr(
+                            NatLinearForm::from_constant(*n),
+                            *span,
+                        ));
+                    }
+                    crate::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
+                        let form = normalize_nat_expr(nat_expr, nat_params, src)?;
+                        resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
                     crate::syntax::ast::IndexExpr::Name(ident) => {
                         let idx_name = &ident.name;
                         if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
                             // Generic nat param in index position: `D[N]` where `N: Nat`
-                            resolved_indexes
-                                .push(ResolvedIndex::GenericNatParam(gp.clone(), ident.span));
+                            resolved_indexes.push(ResolvedIndex::NatExpr(
+                                NatLinearForm::from_var(gp.clone()),
+                                ident.span,
+                            ));
                         } else if let Some(gp) =
                             index_params.iter().find(|p| p.as_str() == idx_name)
                         {

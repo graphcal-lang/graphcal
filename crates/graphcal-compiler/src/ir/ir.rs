@@ -1945,8 +1945,14 @@ fn collect_nat_ranges_from_type_expr(
     if let crate::syntax::ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
         collect_nat_ranges_from_type_expr(base, registry);
         for idx in indexes {
-            if let crate::syntax::ast::IndexExpr::NatLiteral(n, _) = idx {
-                registry.ensure_nat_range_index(*n);
+            match idx {
+                crate::syntax::ast::IndexExpr::NatLiteral(n, _) => {
+                    registry.ensure_nat_range_index(*n);
+                }
+                crate::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
+                    collect_nat_range_literals_from_nat_expr(nat_expr, registry);
+                }
+                crate::syntax::ast::IndexExpr::Name(_) => {}
             }
         }
     }
@@ -1957,10 +1963,31 @@ fn collect_nat_ranges_from_type_expr(
     }
 }
 
+/// Collect nat range literal values from a `NatExpr` tree.
+///
+/// Only literal-only expressions can be registered at compile time;
+/// expressions containing variables are resolved at call sites.
+fn collect_nat_range_literals_from_nat_expr(
+    expr: &crate::syntax::ast::NatExpr,
+    registry: &mut RegistryBuilder,
+) {
+    use crate::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => {
+            registry.ensure_nat_range_index(*n);
+        }
+        NatExpr::Var(_) => {}
+        NatExpr::Add(lhs, rhs, _) => {
+            collect_nat_range_literals_from_nat_expr(lhs, registry);
+            collect_nat_range_literals_from_nat_expr(rhs, registry);
+        }
+    }
+}
+
 /// Recursively scan an expression for `for i: range(N)` and register
 /// nat range indexes for concrete nat literals.
 fn collect_nat_ranges_from_expr(expr: &crate::syntax::ast::Expr, registry: &mut RegistryBuilder) {
-    use crate::syntax::ast::{ExprKind, ForBindingIndex, NatExpr};
+    use crate::syntax::ast::{ExprKind, ForBindingIndex};
 
     // Use the visitor trait to walk all sub-expressions
     struct NatRangeCollector<'a> {
@@ -1973,12 +2000,8 @@ fn collect_nat_ranges_from_expr(expr: &crate::syntax::ast::Expr, registry: &mut 
         fn visit_expr(&mut self, expr: &crate::syntax::ast::Expr) -> Result<(), GraphcalError> {
             if let ExprKind::ForComp { bindings, .. } = &expr.kind {
                 for binding in bindings {
-                    if let ForBindingIndex::Range {
-                        arg: NatExpr::Literal(n, _),
-                        ..
-                    } = &binding.index
-                    {
-                        self.registry.ensure_nat_range_index(*n);
+                    if let ForBindingIndex::Range { arg, .. } = &binding.index {
+                        collect_nat_range_literals_from_nat_expr(arg, self.registry);
                     }
                 }
             }

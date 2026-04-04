@@ -11,6 +11,50 @@ use crate::runtime_value::RuntimeValue;
 use super::EvalContext;
 use super::eval_expr;
 
+/// Evaluate a `NatExpr` to a concrete `u64` during runtime.
+///
+/// Looks up nat parameter values from `local_values` (stored as `__nat_param_X`).
+fn eval_nat_expr(
+    expr: &graphcal_compiler::syntax::ast::NatExpr,
+    local_values: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<u64, GraphcalError> {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match expr {
+        NatExpr::Literal(n, _) => Ok(*n),
+        NatExpr::Var(ident) => {
+            let key = format!("__nat_param_{}", ident.name);
+            let nat_val = local_values
+                .get(&key)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "unresolved nat parameter `{}` in for-range binding",
+                        ident.name
+                    ),
+                    src: ctx.src.clone(),
+                    span: ident.span.into(),
+                })?;
+            let RuntimeValue::Int(n) = nat_val else {
+                return Err(GraphcalError::InternalError {
+                    message: format!("nat parameter `{}` has non-integer value", ident.name),
+                    src: ctx.src.clone(),
+                    span: ident.span.into(),
+                });
+            };
+            u64::try_from(*n).map_err(|_| GraphcalError::InternalError {
+                message: format!("nat parameter `{}` has negative value {}", ident.name, n),
+                src: ctx.src.clone(),
+                span: ident.span.into(),
+            })
+        }
+        NatExpr::Add(lhs, rhs, _) => {
+            let l = eval_nat_expr(lhs, local_values, ctx)?;
+            let r = eval_nat_expr(rhs, local_values, ctx)?;
+            Ok(l + r)
+        }
+    }
+}
+
 /// Evaluate a map/table literal expression.
 pub(super) fn eval_map_or_table(
     entries: &[MapEntry],
@@ -339,10 +383,6 @@ fn eval_map_literal(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
-#[expect(
-    clippy::too_many_lines,
-    reason = "handles named, range, and nat-range index kinds with error reporting"
-)]
 fn eval_for_comp(
     bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
@@ -350,7 +390,7 @@ fn eval_for_comp(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::syntax::ast::{ForBindingIndex, NatExpr};
+    use graphcal_compiler::syntax::ast::ForBindingIndex;
 
     let binding = &bindings[0];
 
@@ -358,40 +398,7 @@ fn eval_for_comp(
     let (idx_name, error_span) = match &binding.index {
         ForBindingIndex::Named(spanned) => (spanned.value.clone(), spanned.span),
         ForBindingIndex::Range { arg, span } => {
-            let size = match arg {
-                NatExpr::Literal(n, _) => *n,
-                NatExpr::Var(ident) => {
-                    // Look up the resolved nat param value from local_values.
-                    // It was stored as __nat_param_N by resolve_nat_params_for_fn.
-                    let key = format!("__nat_param_{}", ident.name);
-                    let nat_val =
-                        local_values
-                            .get(&key)
-                            .ok_or_else(|| GraphcalError::InternalError {
-                                message: format!(
-                                    "unresolved nat parameter `{}` in for-range binding",
-                                    ident.name
-                                ),
-                                src: ctx.src.clone(),
-                                span: ident.span.into(),
-                            })?;
-                    let RuntimeValue::Int(n) = nat_val else {
-                        return Err(GraphcalError::InternalError {
-                            message: format!(
-                                "nat parameter `{}` has non-integer value",
-                                ident.name
-                            ),
-                            src: ctx.src.clone(),
-                            span: ident.span.into(),
-                        });
-                    };
-                    u64::try_from(*n).map_err(|_| GraphcalError::InternalError {
-                        message: format!("nat parameter `{}` has negative value {}", ident.name, n),
-                        src: ctx.src.clone(),
-                        span: ident.span.into(),
-                    })?
-                }
-            };
+            let size = eval_nat_expr(arg, local_values, ctx)?;
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::registry::nat_range_index_name(size),
             );
@@ -399,15 +406,27 @@ fn eval_for_comp(
         }
     };
 
-    let idx_def = ctx
-        .registry
-        .indexes
-        .get_index(idx_name.as_str())
-        .ok_or_else(|| GraphcalError::InternalError {
+    // For nat range indexes from generic Nat arithmetic (e.g., range(N + 1)),
+    // the concrete size may not have been registered at compile time.
+    // Create a temporary IndexDef for the computed size if not in the registry.
+    let dynamic_nat_def;
+    let idx_def = if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
+        def
+    } else if let Some(size) =
+        graphcal_compiler::registry::registry::parse_nat_range_index_name(idx_name.as_str())
+    {
+        dynamic_nat_def = graphcal_compiler::registry::registry::IndexDef {
+            name: idx_name.clone(),
+            kind: graphcal_compiler::registry::registry::IndexKind::NatRange { size },
+        };
+        &dynamic_nat_def
+    } else {
+        return Err(GraphcalError::InternalError {
             message: format!("unknown index `{idx_name}`"),
             src: ctx.src.clone(),
             span: error_span.into(),
-        })?;
+        });
+    };
     let remaining = &bindings[1..];
 
     let variants = idx_def.variants();

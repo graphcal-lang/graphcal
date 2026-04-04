@@ -93,6 +93,11 @@ pub fn eval_expr(
                     .get(ident.value.as_str())
                     .map(|v| RuntimeValue::Scalar(*v))
             })
+            .or_else(|| {
+                // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+                // and may be referenced in expression position as ConstRef (uppercase).
+                local_values.get(ident.value.as_str()).cloned()
+            })
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!("undefined constant `{}`", ident.value),
                 src: ctx.src.clone(),
