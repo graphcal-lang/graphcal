@@ -104,7 +104,9 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "hconcat": sub_specs,
     });
 
-    if let Some(title) = get_composition_string_property(&fig.properties, CompositionProperty::Title) {
+    if let Some(title) =
+        get_composition_string_property(&fig.properties, CompositionProperty::Title)
+    {
         vl["title"] = json!(title);
     }
 
@@ -136,15 +138,19 @@ fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "layer": sub_specs,
     });
 
-    if let Some(title) = get_composition_string_property(&layer.properties, CompositionProperty::Title) {
+    if let Some(title) =
+        get_composition_string_property(&layer.properties, CompositionProperty::Title)
+    {
         vl["title"] = json!(title);
     }
 
     // Width/height from layer properties
-    if let Some(w) = get_composition_number_property(&layer.properties, CompositionProperty::Width) {
+    if let Some(w) = get_composition_number_property(&layer.properties, CompositionProperty::Width)
+    {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_composition_number_property(&layer.properties, CompositionProperty::Height) {
+    if let Some(h) = get_composition_number_property(&layer.properties, CompositionProperty::Height)
+    {
         vl["height"] = json!(h);
     }
 
