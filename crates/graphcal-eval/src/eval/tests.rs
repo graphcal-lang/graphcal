@@ -1626,3 +1626,38 @@ fn eval_turbofish() {
         panic!("scaled should be Indexed, got {scaled:?}");
     }
 }
+
+#[test]
+fn eval_expr_index() {
+    let source = include_str!("../../../../tests/fixtures/expr_index.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // velocities: diff([10,10,10,10] m, 1 s) → [0,0,0] m/s
+    let vel = find_entry(&result, "velocities");
+    assert_indexed_len(&vel, 3, "velocities");
+
+    // w4: shift_left([1,1,1,1,1] m) → [1,1,1,1] m
+    let w4 = find_entry(&result, "w4");
+    assert_indexed_len(&w4, 4, "w4");
+
+    // x4: shift_left_by2([2,2,2,2,2,2]) → [2,2,2,2]
+    let x4 = find_entry(&result, "x4");
+    assert_indexed_len(&x4, 4, "x4");
+
+    // diffs: finite_diff_3([1,1,1,1]) → [0,0,0]
+    let diffs = find_entry(&result, "diffs");
+    assert_indexed_len(&diffs, 3, "diffs");
+}
+
+fn assert_indexed_len(val: &crate::eval::types::Value, expected_len: usize, name: &str) {
+    if let crate::eval::types::Value::Indexed { entries, .. } = val {
+        assert_eq!(
+            entries.len(),
+            expected_len,
+            "{name} should have {expected_len} entries, got {}",
+            entries.len()
+        );
+    } else {
+        panic!("{name} should be Indexed, got {val:?}");
+    }
+}

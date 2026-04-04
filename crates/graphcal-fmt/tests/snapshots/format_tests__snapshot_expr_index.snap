@@ -1,0 +1,32 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
+// expr_index.gcl -- Expression-based indexing (v[i + 1])
+// --- Finite differences: values[i + 1] - values[i] ---
+fn diff<N: Nat, D: Dim>(values: D[N + 1], dt: Time) -> D / Time[N] = for i: range(N) {
+    (values[i + 1] - values[i]) / dt
+};
+
+param positions: Length[4] = for i: range(4) { 10.0 m };
+node velocities: Velocity[3] = diff(@positions, 1.0 s);
+
+// --- Generic shift: access element at i + 1 ---
+fn shift_left<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] = for i: range(N) { v[i + 1] };
+
+param w5: Length[5] = for i: range(5) { 1.0 m };
+node w4: Length[4] = shift_left(@w5);
+
+// --- Offset by 2: v[i + 2] ---
+fn shift_left_by2<N: Nat, D: Dim>(v: D[N + 2]) -> D[N] = for i: range(N) { v[i + 2] };
+
+param x6: Dimensionless[6] = for i: range(6) { 2.0 };
+node x4: Dimensionless[4] = shift_left_by2(@x6);
+
+// --- Parenthesized expression with index expressions ---
+fn finite_diff_3(values: Dimensionless[4]) -> Dimensionless[3] = for i: range(3) {
+    values[i + 1] - values[i]
+};
+
+param vals: Dimensionless[4] = for i: range(4) { 1.0 };
+node diffs: Dimensionless[3] = finite_diff_3(@vals);

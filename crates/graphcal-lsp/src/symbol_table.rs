@@ -946,6 +946,9 @@ fn collect_expr_refs(
                             target,
                         });
                     }
+                    graphcal_compiler::syntax::ast::IndexArg::Expr(e) => {
+                        collect_expr_refs(e, table, scopes);
+                    }
                 }
             }
         }

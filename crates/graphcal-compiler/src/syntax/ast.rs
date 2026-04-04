@@ -977,7 +977,7 @@ impl GenericArg {
     }
 }
 
-/// An argument in an index access: either a qualified variant or a loop variable.
+/// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
 pub enum IndexArg {
     /// Qualified variant: `Maneuver::Departure`
@@ -987,6 +987,8 @@ pub enum IndexArg {
     },
     /// Loop variable: `m`
     Var(Ident),
+    /// Arbitrary expression: `i + 1`, `i - M`
+    Expr(Box<Expr>),
 }
 
 /// A field initializer in struct construction.

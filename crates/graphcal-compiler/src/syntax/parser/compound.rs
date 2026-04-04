@@ -348,7 +348,8 @@ impl Parser<'_> {
         self.expect(Token::LBrace)?;
         // Optional tuple-key sugar:
         // `for p: Phase, m: Maneuver { (p, m) => expr }`
-        if self.lexer.peek() == Some(&Token::LParen) {
+        // Use raw-byte lookahead to disambiguate from `(expr)` grouping.
+        if self.is_tuple_key_sugar() {
             self.lexer.next_token(); // consume '('
             loop {
                 self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
@@ -852,7 +853,8 @@ mod tests {
                             assert_eq!(index.value.as_str(), "Maneuver");
                             assert_eq!(variant.value.as_str(), "Departure");
                         }
-                        other @ crate::syntax::ast::IndexArg::Var(_) => {
+                        other @ (crate::syntax::ast::IndexArg::Var(_)
+                        | crate::syntax::ast::IndexArg::Expr(_)) => {
                             panic!("expected Variant, got {other:?}")
                         }
                     }
@@ -874,7 +876,8 @@ mod tests {
                         assert_eq!(args.len(), 1);
                         match &args[0] {
                             crate::syntax::ast::IndexArg::Var(ident) => assert_eq!(ident.name, "m"),
-                            other @ crate::syntax::ast::IndexArg::Variant { .. } => {
+                            other @ (crate::syntax::ast::IndexArg::Variant { .. }
+                            | crate::syntax::ast::IndexArg::Expr(_)) => {
                                 panic!("expected Var, got {other:?}")
                             }
                         }

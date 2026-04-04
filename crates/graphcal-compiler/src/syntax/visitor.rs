@@ -9,7 +9,7 @@
 //! Default implementations recurse into child expressions. Implementors override
 //! only the leaf methods they care about.
 
-use crate::syntax::ast::{Expr, ExprKind};
+use crate::syntax::ast::{Expr, ExprKind, IndexArg};
 
 /// Read-only visitor for [`Expr`] trees.
 ///
@@ -55,8 +55,19 @@ pub(crate) trait ExprVisitor {
             ExprKind::Convert { expr: inner, .. }
             | ExprKind::DisplayTimezone { expr: inner, .. }
             | ExprKind::AsCast { expr: inner, .. }
-            | ExprKind::FieldAccess { expr: inner, .. }
-            | ExprKind::IndexAccess { expr: inner, .. } => self.visit_single_child(expr, inner),
+            | ExprKind::FieldAccess { expr: inner, .. } => self.visit_single_child(expr, inner),
+
+            ExprKind::IndexAccess {
+                expr: inner, args, ..
+            } => {
+                self.visit_single_child(expr, inner)?;
+                for arg in args {
+                    if let IndexArg::Expr(e) = arg {
+                        self.visit_expr(e)?;
+                    }
+                }
+                Ok(())
+            }
 
             ExprKind::Block { stmts, expr: body } => self.visit_block(expr, stmts, body),
 
@@ -281,8 +292,18 @@ pub trait ExprVisitorMut {
             ExprKind::Convert { expr: inner, .. }
             | ExprKind::DisplayTimezone { expr: inner, .. }
             | ExprKind::AsCast { expr: inner, .. }
-            | ExprKind::FieldAccess { expr: inner, .. }
-            | ExprKind::IndexAccess { expr: inner, .. } => self.visit_expr_mut(inner),
+            | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
+            ExprKind::IndexAccess {
+                expr: inner, args, ..
+            } => {
+                self.visit_expr_mut(inner)?;
+                for arg in args {
+                    if let IndexArg::Expr(e) = arg {
+                        self.visit_expr_mut(e)?;
+                    }
+                }
+                Ok(())
+            }
             ExprKind::Block { stmts, expr: body } => {
                 for stmt in stmts {
                     self.visit_expr_mut(&mut stmt.value)?;

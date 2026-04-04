@@ -971,10 +971,7 @@ module.exports = grammar({
       "]",
     )),
 
-    index_arg: $ => choice(
-      $.qualified_variant,
-      $.identifier,
-    ),
+    index_arg: $ => $._expr,
 
     // Maneuver::Departure
     qualified_variant: $ => seq(

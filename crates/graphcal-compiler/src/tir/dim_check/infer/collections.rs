@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{Expr, ForBinding, ForBindingIndex, IndexArg, NatExpr};
+use crate::syntax::ast::{BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr};
 use crate::syntax::names::{FieldName, FnName, GenericParamName, IndexName, StructTypeName};
 use crate::tir::tir::NatLinearForm;
 
@@ -582,10 +582,120 @@ pub(super) fn infer_index_access(
                     }
                 }
             }
+            IndexArg::Expr(index_expr) => {
+                // Infer the type of the expression; must be int-like.
+                let expr_type = infer_type(
+                    index_expr,
+                    declared_types,
+                    local_types,
+                    registry,
+                    builtin_fns,
+                    resolved_fn_sigs,
+                    src,
+                )?;
+                if !expr_type.is_int_like() {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "index expression must be an integer type, got {}",
+                            format_inferred_type(&expr_type, registry),
+                        ),
+                        src: src.clone(),
+                        span: index_expr.span.into(),
+                    });
+                }
+                // Check that the indexed type is a nat-range index.
+                if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                    && !idx_def.is_nat_range()
+                {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "expression index cannot be used with non-nat-range index `{idx_name}`",
+                        ),
+                        src: src.clone(),
+                        span: index_expr.span.into(),
+                    });
+                }
+                // Try to compute a static Fin bound for bounds checking.
+                if let Some(fin_bound) = compute_index_fin_bound(index_expr, local_types) {
+                    let index_form = registry.indexes.get_index(idx_name.as_str()).map_or_else(
+                        // Symbolic nat range from generic param.
+                        || NatLinearForm::from_index_name(idx_name.as_str()),
+                        |idx_def| idx_def.nat_range_size().map(NatLinearForm::from_constant),
+                    );
+                    if let Some(index_form) = &index_form
+                        && !fin_bound.is_leq(index_form)
+                    {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "index out of bounds: expression has type Fin({}) but array has size {}",
+                                fin_bound.format(),
+                                index_form.format(),
+                            ),
+                            src: src.clone(),
+                            span: index_expr.span.into(),
+                        });
+                    }
+                }
+            }
         }
         current = *element;
     }
     Ok(current)
+}
+
+/// Try to compute a `Fin(N)` upper bound for an expression used as an index.
+///
+/// Returns `Some(bound)` where `bound` is a `NatLinearForm` such that the expression
+/// value is guaranteed to be `< bound` (i.e., the expression has type `Fin(bound)`).
+///
+/// Supports:
+/// - `Fin(N)` variables → bound `N`
+/// - `Fin(N) + literal(k)` → bound `N + k`
+/// - `literal(k) + Fin(N)` → bound `N + k`
+///
+/// Returns `None` for expressions whose bounds cannot be statically determined
+/// (e.g., subtraction, multiplication, arbitrary `Int` values).
+fn compute_index_fin_bound(
+    expr: &Expr,
+    local_types: &HashMap<String, InferredType>,
+) -> Option<NatLinearForm> {
+    match &expr.kind {
+        ExprKind::LocalRef(ident) => match local_types.get(&ident.name)? {
+            InferredType::Fin(bound) => Some(bound.clone()),
+            _ => None,
+        },
+        ExprKind::BinOp {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => {
+            // Fin(N) + literal(k) → Fin(N + k)
+            // literal(k) + Fin(N) → Fin(N + k)
+            fin_plus_literal(lhs, rhs, local_types)
+                .or_else(|| fin_plus_literal(rhs, lhs, local_types))
+        }
+        _ => None,
+    }
+}
+
+/// Helper: if `fin_expr` has type `Fin(N)` and `lit_expr` is an integer literal `k`,
+/// return `N + k` as the combined bound.
+///
+/// `Fin(N) + k` has max value `(N-1) + k = N + k - 1`, so it fits in `Fin(N + k)`.
+fn fin_plus_literal(
+    fin_expr: &Expr,
+    lit_expr: &Expr,
+    local_types: &HashMap<String, InferredType>,
+) -> Option<NatLinearForm> {
+    let fin_bound = compute_index_fin_bound(fin_expr, local_types)?;
+    let ExprKind::Integer(k) = &lit_expr.kind else {
+        return None;
+    };
+    if *k < 0 {
+        return None; // Negative offsets can't be statically bounded
+    }
+    #[expect(clippy::cast_sign_loss, reason = "checked non-negative above")]
+    Some(fin_bound.add(&NatLinearForm::from_constant(*k as u64)))
 }
 
 /// Infer the type of a scan expression.
