@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 use miette::Diagnostic;
 use thiserror::Error;
 
+use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::syntax::names::{
     DeclName, FieldName, IndexName, StructTypeName, VariantName,
@@ -350,6 +351,92 @@ impl EvalResult {
     }
 }
 
+/// A mark-level property (style applied to the mark in a plot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MarkProperty {
+    StrokeWidth,
+    Opacity,
+    Size,
+    Color,
+    Filled,
+    Interpolate,
+}
+
+impl MarkProperty {
+    /// Parse a mark property from its source-level name.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "stroke_width" => Some(Self::StrokeWidth),
+            "opacity" => Some(Self::Opacity),
+            "size" => Some(Self::Size),
+            "color" => Some(Self::Color),
+            "filled" => Some(Self::Filled),
+            "interpolate" => Some(Self::Interpolate),
+            _ => None,
+        }
+    }
+
+    /// The Vega-Lite camelCase property name.
+    #[must_use]
+    pub const fn vega_name(&self) -> &'static str {
+        match self {
+            Self::StrokeWidth => "strokeWidth",
+            Self::Opacity => "opacity",
+            Self::Size => "size",
+            Self::Color => "color",
+            Self::Filled => "filled",
+            Self::Interpolate => "interpolate",
+        }
+    }
+}
+
+/// A plot-level property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlotProperty {
+    Title,
+    Width,
+    Height,
+    XLabel,
+    YLabel,
+}
+
+impl PlotProperty {
+    /// Parse a plot property from its source-level name.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "title" => Some(Self::Title),
+            "width" => Some(Self::Width),
+            "height" => Some(Self::Height),
+            "x_label" => Some(Self::XLabel),
+            "y_label" => Some(Self::YLabel),
+            _ => None,
+        }
+    }
+}
+
+/// A figure/layer-level property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompositionProperty {
+    Title,
+    Width,
+    Height,
+}
+
+impl CompositionProperty {
+    /// Parse a composition property from its source-level name.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "title" => Some(Self::Title),
+            "width" => Some(Self::Width),
+            "height" => Some(Self::Height),
+            _ => None,
+        }
+    }
+}
+
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]
 pub struct PlotSpec {
@@ -357,12 +444,15 @@ pub struct PlotSpec {
     pub name: DeclName,
     /// The mark type (point, line, bar, area, rect, tick).
     pub mark_type: graphcal_compiler::syntax::ast::MarkType,
-    /// Evaluated plot fields as (`field_name`, values).
-    /// Encoding channels and properties are flattened into this list.
-    pub fields: Vec<(String, PlotFieldValue)>,
-    /// Axis metadata per encoding channel (`channel_name` → `AxisMeta`).
+    /// Evaluated encoding channels (x, y, color, etc.) with their data.
+    pub encodings: Vec<(EncodingChannel, PlotFieldValue)>,
+    /// Axis metadata per encoding channel.
     /// Used by the CLI to auto-generate axis titles like "Velocity (km/s)".
-    pub encoding_meta: Vec<(String, AxisMeta)>,
+    pub encoding_meta: Vec<(EncodingChannel, AxisMeta)>,
+    /// Evaluated mark properties (`stroke_width`, `opacity`, etc.).
+    pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
+    /// Evaluated plot-level properties (title, width, height, etc.).
+    pub properties: Vec<(PlotProperty, PlotFieldValue)>,
     /// Whether this plot is hidden from standalone output (`#[hidden]`).
     pub hidden: bool,
 }
@@ -374,8 +464,8 @@ pub struct FigureSpec {
     pub name: DeclName,
     /// The plot names referenced by this figure.
     pub plot_names: Vec<DeclName>,
-    /// Additional evaluated fields (e.g., `title`).
-    pub fields: Vec<(String, PlotFieldValue)>,
+    /// Additional evaluated properties (e.g., title).
+    pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
 }
 
 /// A single evaluated layer specification.
@@ -385,8 +475,8 @@ pub struct LayerSpec {
     pub name: DeclName,
     /// The plot names to overlay in this layer.
     pub plot_names: Vec<DeclName>,
-    /// Additional evaluated fields (e.g., `title`).
-    pub fields: Vec<(String, PlotFieldValue)>,
+    /// Additional evaluated properties (e.g., title, width, height).
+    pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
 }
 
 /// Axis metadata for auto-generating axis titles from dimension/unit info.

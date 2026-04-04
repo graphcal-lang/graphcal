@@ -388,22 +388,27 @@ pub(super) fn evaluate_plan(
         .iter()
         .map(|entry| {
             let (name, decl) = (&entry.name, &entry.decl);
-            let mut fields = Vec::new();
+            let mut properties = Vec::new();
             for field in &decl.fields {
+                let Some(comp_prop) =
+                    super::types::CompositionProperty::from_name(&field.name.name)
+                else {
+                    continue;
+                };
                 if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
                     &field.value.kind
                 {
-                    fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+                    properties.push((comp_prop, PlotFieldValue::String(s.clone())));
                     continue;
                 }
                 if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
-                    fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
+                    properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
                 }
             }
             super::types::FigureSpec {
                 name: DeclName::new(name),
                 plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
-                fields,
+                properties,
             }
         })
         .collect();
@@ -414,22 +419,27 @@ pub(super) fn evaluate_plan(
         .iter()
         .map(|entry| {
             let (name, decl) = (&entry.name, &entry.decl);
-            let mut fields = Vec::new();
+            let mut properties = Vec::new();
             for field in &decl.fields {
+                let Some(comp_prop) =
+                    super::types::CompositionProperty::from_name(&field.name.name)
+                else {
+                    continue;
+                };
                 if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
                     &field.value.kind
                 {
-                    fields.push((field.name.name.clone(), PlotFieldValue::String(s.clone())));
+                    properties.push((comp_prop, PlotFieldValue::String(s.clone())));
                     continue;
                 }
                 if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
-                    fields.push((field.name.name.clone(), runtime_to_plot_field_value(&rv)));
+                    properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
                 }
             }
             super::types::LayerSpec {
                 name: DeclName::new(name),
                 plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
-                fields,
+                properties,
             }
         })
         .collect();
@@ -921,14 +931,14 @@ fn evaluate_plot(
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
 ) -> Option<PlotSpec> {
-    let mut fields = Vec::new();
+    let mut encodings = Vec::new();
     let mut encoding_meta = Vec::new();
 
     // Evaluate encoding channels
     for encoding in &decl.encodings {
-        let channel_name = encoding.channel.to_string();
+        let channel = encoding.channel;
         if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &encoding.value.kind {
-            fields.push((channel_name, PlotFieldValue::String(s.clone())));
+            encodings.push((channel, PlotFieldValue::String(s.clone())));
             continue;
         }
         let rv = eval_expr(&encoding.value, values, local_values, ctx).ok()?;
@@ -937,38 +947,50 @@ fn evaluate_plot(
         // Extract axis metadata: dimension from graph refs, display unit from expression
         let meta =
             extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry, values);
-        encoding_meta.push((channel_name.clone(), meta));
+        encoding_meta.push((channel, meta));
 
-        fields.push((channel_name, field_value));
+        encodings.push((channel, field_value));
     }
 
     // Evaluate mark properties (e.g., stroke_width, opacity)
+    let mut mark_properties = Vec::new();
     for prop in &decl.mark.properties {
+        let Some(mark_prop) = super::types::MarkProperty::from_name(&prop.name.name) else {
+            // Unknown mark property — skip (could be reported as a warning in the future)
+            continue;
+        };
         if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
-            fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
+            mark_properties.push((mark_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
         let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
         let field_value = runtime_to_plot_field_value(&rv);
-        fields.push((prop.name.name.clone(), field_value));
+        mark_properties.push((mark_prop, field_value));
     }
 
     // Evaluate top-level properties (e.g., title, width, height)
+    let mut properties = Vec::new();
     for prop in &decl.properties {
+        let Some(plot_prop) = super::types::PlotProperty::from_name(&prop.name.name) else {
+            // Unknown plot property — skip
+            continue;
+        };
         if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
-            fields.push((prop.name.name.clone(), PlotFieldValue::String(s.clone())));
+            properties.push((plot_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
         let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
         let field_value = runtime_to_plot_field_value(&rv);
-        fields.push((prop.name.name.clone(), field_value));
+        properties.push((plot_prop, field_value));
     }
 
     Some(PlotSpec {
         name: DeclName::new(name),
         mark_type: decl.mark.mark_type,
-        fields,
+        encodings,
         encoding_meta,
+        mark_properties,
+        properties,
         hidden,
     })
 }
