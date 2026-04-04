@@ -134,11 +134,11 @@ The current lexer regex `[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?` accept
 
 **Verdict: Removed from the candidate list.**
 
-The primary use cases for strings in engineering calculations are categorical/choice data: mission phase names, fuel types, statuses, region labels. These are better modeled by **fieldless `type` declarations** (simple enums), which already fit within the planned Phase 10 (tagged unions) and are partially available today via `cat`:
+The primary use cases for strings in engineering calculations are categorical/choice data: mission phase names, fuel types, statuses, region labels. These are better modeled by **fieldless `type` declarations** (simple enums), which already fit within the planned Phase 10 (tagged unions) and are partially available today via `index`:
 
 ```gcl
 // Today (cat — already works for table axes):
-cat Phase { Design, Build, Test, Launch }
+index Phase = { Design, Build, Test, Launch };
 
 // Phase 10 (fieldless type — proper enum):
 type FuelKind { LH2, RP1, Methane, Solid }

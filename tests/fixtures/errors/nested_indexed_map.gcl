@@ -4,8 +4,8 @@
 //   { Maneuver::Departure: for t: TimeStep { ... }, ... }
 dimension Velocity = Length / Time;
 
-cat Maneuver { Departure, Correction, Insertion }
-cat Phase { Coast, Burn }
+index Maneuver = { Departure, Correction, Insertion };
+index Phase = { Coast, Burn };
 
 // This should be rejected: inner map literal produces an Indexed type
 // with a label (named) index. Use tuple keys instead:

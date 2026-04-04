@@ -24,7 +24,7 @@ not required.
 
 ### Index Declaration
 
-- [x] **`cat` keyword:** `cat Name { Variant1, Variant2, ... }` declares a
+- [x] **`index` keyword:** `index Name = { Variant1, Variant2, ... };` declares a
       finite label set. Variants are PascalCase identifiers.
 - [x] **Variant access:** `Index::Variant` using `::` path separator, consistent
       with module paths (Phase 4). Importable with `use Index::*` in Phase 4.
@@ -173,7 +173,7 @@ STRING        = '"' <characters> '"'
 ## Milestone Test
 
 ```graphcal
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
 dimension Velocity = Length / Time;
 dimension SpecificImpulse = Time;
@@ -250,8 +250,8 @@ max_dv     = 2.46 km/s
 ### Multi-axis example
 
 ```graphcal
-cat Row { R1, R2 }
-cat Col { C1, C2, C3 }
+index Row = { R1, R2 };
+index Col = { C1, C2, C3 };
 
 param P: Dimensionless[Row, Col] = {
     Row::R1: { Col::C1: 1.0, Col::C2: 2.0, Col::C3: 3.0 },
@@ -272,9 +272,9 @@ node P_T: Dimensionless[Col, Row] = for c: Col, r: Row {
 ### Matrix multiplication example
 
 ```graphcal
-cat I { I1, I2 }
-cat J { J1, J2, J3 }
-cat K { K1, K2 }
+index I = { I1, I2 };
+index J = { J1, J2, J3 };
+index K = { K1, K2 };
 
 param A: Dimensionless[I, J] = { ... }
 param B: Dimensionless[J, K] = { ... }

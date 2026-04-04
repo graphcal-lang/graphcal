@@ -6,7 +6,7 @@ missing variant(s) ["Insertion"] in map literal for index `Maneuver`
     Diagnostic severity: error
 Begin snippet for missing_variants.gcl starting at line 1, column 1
 
-snippet line 1: cat Maneuver { Departure, Correction, Insertion }
+snippet line 1: index Maneuver = { Departure, Correction, Insertion };
 snippet line 2: param dv: Velocity[Maneuver] = {
     label starting at line 2, column 32: incomplete map literal
 snippet line 3:     Maneuver::Departure: 2.46 km/s,

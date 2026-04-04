@@ -99,7 +99,7 @@ You can import any top-level declaration:
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
-| `cat`/`range` | `import "..." { IndexName }` | `IndexName` |
+| `index` | `import "..." { IndexName }` | `IndexName` |
 | `fn` | `import "..." { fn_name }` | `fn_name(...)` |
 
 ## Circular Import Detection

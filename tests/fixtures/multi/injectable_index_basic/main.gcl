@@ -1,5 +1,5 @@
 // main.gcl -- imports lib with a concrete index binding
-cat MyPhase { Design, Build }
+index MyPhase = { Design, Build };
 
 import "./lib.gcl"(
     Phase: MyPhase,

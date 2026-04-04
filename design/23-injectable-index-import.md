@@ -14,7 +14,7 @@ Consider a power budget library:
 
 ```gcl
 // power_budget.gcl — NOT reusable: Subsystem is hardcoded
-cat Subsystem { ADCS, Propulsion, Comms, Payload }
+index Subsystem = { ADCS, Propulsion, Comms, Payload };
 
 param power_draw: Power[Subsystem];
 node total_power: Power = sum(for s: Subsystem { @power_draw[s] });
@@ -28,10 +28,10 @@ A different mission may have different subsystems. Without injectable indexes, t
 
 ### Principle: Indexes Follow the Same Required/Default Pattern as Params
 
-| Concept | Param | Named Index (`cat`) | Range Index (`range`) |
+| Concept | Param | Named Index (`index`) | Range Index |
 | --- | --- | --- | --- |
-| Has default | `param x: Length = 5.0 m;` | `cat Phase { Design, Build, Test }` | `range TimeStep(0.0 s, 1.0 s, step: 0.1 s)` |
-| Required (no default) | `param x: Length;` | `cat Subsystem;` | `range TimeStep: Time;` |
+| Has default | `param x: Length = 5.0 m;` | `index Phase = { Design, Build, Test };` | `range TimeStep(0.0 s, 1.0 s, step: 0.1 s)` |
+| Required (no default) | `param x: Length;` | `index Subsystem;` | `index TimeStep: Time;` |
 | Bound via import | `(x = 5.0 m)` | `(Subsystem = MySubsystems)` | `(TimeStep = MyTimeStep)` |
 
 ### Required Index Declaration
@@ -40,21 +40,21 @@ A required index declaration has no variants but must declare its **kind** — n
 
 | Kind | Loop variable type | Semantics |
 | --- | --- | --- |
-| Named (`cat`) | `Label(IndexName)` | Categorical labels — identity, not arithmetic |
-| Range (`range`) | `Scalar(Dimension)` | Numeric steps — supports arithmetic, has physical dimension |
+| Named (`index`) | `Label(IndexName)` | Categorical labels — identity, not arithmetic |
+| Range | `Scalar(Dimension)` | Numeric steps — supports arithmetic, has physical dimension |
 
 Code written for a named index (comparing labels, matching on variants) cannot work with a range index (doing arithmetic on scalar values), and vice versa. Therefore, a required index must commit to a kind so the compiler can type-check the library in isolation.
 
 **Named required index:**
 
 ```gcl
-cat Subsystem;  // required named index — variants provided by importer
+index Subsystem;  // required named index — variants provided by importer
 ```
 
 **Range required index:**
 
 ```gcl
-range TimeStep: Time;  // required range index over the Time dimension
+index TimeStep: Time;  // required range index over the Time dimension
 ```
 
 The dimension constraint (e.g., `Time`) is mandatory — range index loop variables are `Scalar(Dimension)`, so the compiler needs the dimension to type-check expressions like `@velocity[t] * dt` inside the library.
@@ -66,7 +66,7 @@ Both forms are analogous to `param x: Length;` (required param with no default v
 Index bindings and param bindings coexist in the same `(...)` list of a parameterized import:
 
 ```gcl
-cat MySubsystems { ADCS, Propulsion, Comms }
+index MySubsystems = { ADCS, Propulsion, Comms };
 
 import "./power_budget.gcl"(
     Subsystem = MySubsystems,
@@ -79,7 +79,7 @@ The two kinds of bindings are visually distinguishable by Graphcal's existing na
 - **PascalCase = PascalCase** → index binding (`Subsystem = MySubsystems`)
 - **snake_case = expr** → param binding (`power_draw = @my_power`)
 
-No new syntax beyond what parameterized imports already support. The parser distinguishes the two by checking whether the LHS name refers to a `cat`/`range` declaration or a `param` declaration in the dependency.
+No new syntax beyond what parameterized imports already support. The parser distinguishes the two by checking whether the LHS name refers to a `index` declaration or a `param` declaration in the dependency.
 
 ### Semantics: Index Substitution
 
@@ -97,14 +97,14 @@ The dependency's index registry entry for the bound index is **not** registered 
 
 ### Variant Literal Restriction
 
-To ensure every `.gcl` file is reusable as a library, **variant literals are banned in non-rebindable contexts**. This rule applies to all `cat` indexes — both required and those with defaults.
+To ensure every `.gcl` file is reusable as a library, **variant literals are banned in non-rebindable contexts**. This rule applies to all `index` indexes — both required and those with defaults.
 
 #### The Problem
 
 If a `node` expression uses a variant literal like `Phase::Design`, and the importer overrides `Phase` with a different set of variants, the node is broken — and unlike `param` defaults, **nodes cannot be rebound by the importer**.
 
 ```gcl
-cat Phase { Design, Build, Test }
+index Phase = { Design, Build, Test };
 
 // This node is NOT reusable — hardcodes Phase::Design
 node design_cost: Money = @cost[Phase::Design];  // BANNED
@@ -133,7 +133,7 @@ This includes all forms of variant usage:
 Variant-specific behavior must be expressed through **params** (which the importer can rebind):
 
 ```gcl
-cat Phase { Design, Build, Test }
+index Phase = { Design, Build, Test };
 param cost: Money[Phase] = table[Phase] {
     Design: 1000.0 USD;
     Build: 5000.0 USD;
@@ -169,7 +169,7 @@ This constraint is a feature: it forces library code to be truly generic over th
 
 Since variant literals are banned in non-rebindable contexts for **all** indexes, the allowed operations are the same for required and default indexes in `node`/`const`/`assert`/`fn` contexts:
 
-| Operation | Named (`cat`) | Range (`range`) | Example |
+| Operation | Named (`index`) | Range | Example |
 | --- | --- | --- | --- |
 | Type annotation (axis) | Yes | Yes | `param x: Velocity[Subsystem]` |
 | `for` comprehension | Yes | Yes | `for s: Subsystem { @x[s] }` |
@@ -188,20 +188,20 @@ When binding an index, the bound index must match the declared kind:
 
 | Declaration | Can bind to | Cannot bind to |
 | --- | --- | --- |
-| `cat Subsystem;` (required named) | Named index | Range index |
-| `cat Phase { A, B }` (default named) | Named index | Range index |
-| `range TimeStep: Time;` (required range) | Range index with dimension `Time` | Named index, range with wrong dimension |
+| `index Subsystem;` (required named) | Named index | Range index |
+| `index Phase = { A, B };` (default named) | Named index | Range index |
+| `index TimeStep: Time;` (required range) | Range index with dimension `Time` | Named index, range with wrong dimension |
 | `range T(0.0 s, 1.0 s, step: 0.1 s)` (default range) | Range index with same dimension | Named index, range with wrong dimension |
 
 **Named → Named:** The bound index must be a named index (one with explicit label variants).
 
 ```gcl
 // OK: Color is a named index
-cat Color { Red, Green, Blue }
+index Color = { Red, Green, Blue };
 import "./lib.gcl"(I = Color) { ... };
 
 // ERROR: TimeStep is a range index, but I is a required named index
-range TimeStep(0.0 s, 1.0 s, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
 import "./lib.gcl"(I = TimeStep) { ... };
 //  error: index kind mismatch: `I` requires a named index, but `TimeStep` is a range index
 ```
@@ -210,11 +210,11 @@ import "./lib.gcl"(I = TimeStep) { ... };
 
 ```gcl
 // OK: MyTimeStep is a range index over Time
-range MyTimeStep(0.0 s, 10.0 s, step: 0.5 s);
+index MyTimeStep = linspace(0.0 s, 10.0 s, step: 0.5 s);
 import "./sim.gcl"(TimeStep = MyTimeStep) { ... };
 
 // ERROR: DistStep is a range index over Length, not Time
-range DistStep(0.0 m, 100.0 m, step: 1.0 m);
+index DistStep = linspace(0.0 m, 100.0 m, step: 1.0 m);
 import "./sim.gcl"(TimeStep = DistStep) { ... };
 //  error: dimension mismatch: `TimeStep` requires range(Time), but `DistStep` has dimension Length
 ```
@@ -246,7 +246,7 @@ An index with declared variants can be overridden by an import binding:
 
 ```gcl
 // lib.gcl
-cat Phase { Design, Build, Test }
+index Phase = { Design, Build, Test };
 param cost: Money[Phase] = {
     Phase::Design: 1000.0 USD,
     Phase::Build: 5000.0 USD,
@@ -255,7 +255,7 @@ param cost: Money[Phase] = {
 ```
 
 ```gcl
-cat MyPhases { Concept, Dev, Validation, Production }
+index MyPhases = { Concept, Dev, Validation, Production };
 
 import "./lib.gcl"(Phase = MyPhases, cost = @my_cost) { ... };
 ```
@@ -281,7 +281,7 @@ The importing file can attach `#[expected_fail]` to individual import items to d
 
 ```gcl
 // lib.gcl
-cat Mode { Normal, Boost, Emergency }
+index Mode = { Normal, Boost, Emergency };
 param limit: Power[Mode];
 param actual: Power[Mode];
 
@@ -291,7 +291,7 @@ assert within_limit = for m: Mode { @actual[m] <= @limit[m] };
 
 ```gcl
 // main.gcl
-cat MyModes { Idle, Active, Overdrive }
+index MyModes = { Idle, Active, Overdrive };
 
 import "./lib.gcl"(
     Mode = MyModes,
@@ -323,7 +323,7 @@ Only `#[expected_fail(...)]` is valid on import items initially; other attribute
 
 ```gcl
 // total.gcl — generic summation over any index
-cat I;
+index I;
 
 param values: Dimensionless[I];
 node total: Dimensionless = sum(for i: I { @values[i] });
@@ -331,7 +331,7 @@ node total: Dimensionless = sum(for i: I { @values[i] });
 
 ```gcl
 // main.gcl
-cat Color { Red, Green, Blue }
+index Color = { Red, Green, Blue };
 
 param color_weights: Dimensionless[Color] = {
     Color::Red: 0.3,
@@ -347,8 +347,8 @@ import "./total.gcl"(I = Color, values = @color_weights) { total };
 
 ```gcl
 // thermal_analysis.gcl — reusable thermal model
-cat Component;  // required
-cat OpMode;     // required
+index Component;  // required
+index OpMode;     // required
 
 param power_dissipation: Power[Component, OpMode];
 param thermal_conductance: Power[Component]; // simplified
@@ -364,8 +364,8 @@ node max_temp_rise: Temperature = max(
 
 ```gcl
 // mission.gcl
-cat Payload { Camera, Antenna, Computer, Battery }
-cat Mode { Idle, Science, Downlink }
+index Payload = { Camera, Antenna, Computer, Battery };
+index Mode = { Idle, Science, Downlink };
 
 // ... param definitions for payload_power and payload_conductance ...
 
@@ -382,8 +382,8 @@ import "./thermal_analysis.gcl"(
 ### Multiple Instantiations with Different Indexes
 
 ```gcl
-cat Avionics { IMU, StarTracker, GPS }
-cat Propulsion { Thruster, Valve, Tank }
+index Avionics = { IMU, StarTracker, GPS };
+index Propulsion = { Thruster, Valve, Tank };
 
 import "./thermal_analysis.gcl"(
     Component = Avionics,
@@ -408,7 +408,7 @@ import "./thermal_analysis.gcl"(
 
 ```gcl
 // integrator.gcl — generic time-stepping library
-range TimeStep: Time;  // required range index over Time
+index TimeStep: Time;  // required range index over Time
 
 param x0: Length;
 param velocity: Velocity[TimeStep];
@@ -421,7 +421,7 @@ node position: Length[TimeStep] = unfold(@x0, |prev_t, t| {
 
 ```gcl
 // mission.gcl
-range FlightTime(0.0 s, 100.0 s, step: 1.0 s);
+index FlightTime = linspace(0.0 s, 100.0 s, step: 1.0 s);
 
 param flight_velocity: Velocity[FlightTime] = for t: FlightTime { 100.0 m/s };
 
@@ -436,7 +436,7 @@ import "./integrator.gcl"(
 
 ```gcl
 // ERROR: cannot bind a named index to a range-required index
-cat Phases { Launch, Coast, Entry }
+index Phases = { Launch, Coast, Entry };
 import "./integrator.gcl"(TimeStep = Phases, ...) { position };
 //  error: index kind mismatch: `TimeStep` requires a range index (dimension: Time),
 //         but `Phases` is a named index
@@ -446,8 +446,8 @@ import "./integrator.gcl"(TimeStep = Phases, ...) { position };
 
 ```gcl
 // budget.gcl
-cat Phase { A, B, C, D }  // default set (mission phases are usually standard)
-cat LineItem;              // required (line items vary per project)
+index Phase = { A, B, C, D };  // default set (mission phases are usually standard)
+index LineItem;              // required (line items vary per project)
 
 param cost: Money[Phase, LineItem];
 
@@ -468,7 +468,7 @@ import "./budget.gcl"(
 
 ```gcl
 // lib.gcl — library with an assertion that has expected failures
-cat Mode { Normal, Boost, Emergency }
+index Mode = { Normal, Boost, Emergency };
 param limit: Power[Mode];
 param actual: Power[Mode];
 
@@ -478,7 +478,7 @@ assert within_limit = for m: Mode { @actual[m] <= @limit[m] };
 
 ```gcl
 // main.gcl — overrides Mode, provides new expected failures
-cat MyModes { Idle, Active, Overdrive }
+index MyModes = { Idle, Active, Overdrive };
 
 import "./lib.gcl"(
     Mode = MyModes,
@@ -512,14 +512,14 @@ Enforce the variant literal ban before implementing injectable indexes. This is 
     pub enum IndexDeclKind {
         Named { variants: Vec<Spanned<VariantName>> },
         Range { start: Box<Expr>, end: Box<Expr>, step: Box<Expr> },
-        RequiredNamed,                             // NEW: `cat Foo;`
-        RequiredRange { dimension: DimExpr },       // NEW: `range Foo: Time;`
+        RequiredNamed,                             // NEW: `index Foo;`
+        RequiredRange { dimension: DimExpr },       // NEW: `index Foo: Time;`
     }
     ```
 
-2. Parse `cat Foo;` as `IndexDeclKind::RequiredNamed`.
+2. Parse `index Foo;` as `IndexDeclKind::RequiredNamed`.
 
-3. Parse `range Foo: DimExpr;` as `IndexDeclKind::RequiredRange`.
+3. Parse `index Foo: DimExpr;` as `IndexDeclKind::RequiredRange`.
 
 4. Extend import item syntax to support attributes: `Attribute* IDENT ("as" IDENT)?`.
 
@@ -529,7 +529,7 @@ Enforce the variant literal ban before implementing injectable indexes. This is 
 
 ### Phase 2: Semantic Analysis (Import Processing)
 
-1. In `process_instantiated_import`, after parsing bindings, classify each binding as either a param binding or an index binding by checking whether the name refers to a `param` or `cat`/`range` declaration in the dependency.
+1. In `process_instantiated_import`, after parsing bindings, classify each binding as either a param binding or an index binding by checking whether the name refers to a `param` or `index` declaration in the dependency.
 
 2. Store index bindings separately in `DeferredInstantiatedImport`:
 
@@ -577,16 +577,16 @@ Enforce the variant literal ban before implementing injectable indexes. This is 
 
 1. LSP: hover on a required index shows "required named index (must be bound via import)" or "required range index (dimension: Time)".
 2. Diagnostics: clear error messages for unbound required indexes, kind mismatches, dimension mismatches, and the variant literal ban.
-3. Tree-sitter: update grammar, syntax highlighting for `cat Foo;`, `range Foo: Time;`, and attributed import items.
+3. Tree-sitter: update grammar, syntax highlighting for `index Foo;`, `index Foo: Time;`, and attributed import items.
 4. Editor extensions: update TextMate grammars for Zed and VS Code.
 5. Tests: add fixtures for required index imports, multi-index imports, strict mode interactions, `expected_fail` on import items, and variant literal ban enforcement.
 6. Documentation: update `docs/language/indexes.md`, `docs/language/multi-file.md`, and `README.md`.
 
 ## Resolved Questions
 
-- **Range index injection?** Named and range indexes have fundamentally different loop variable types (`Label` vs `Scalar`). **No mixing.** A required named index can only be bound to a named index. A required range index can only be bound to a range index with a matching dimension. The required index declaration must commit to a kind: `cat Foo;` (named) or `range Foo: Dim;` (range).
+- **Range index injection?** Named and range indexes have fundamentally different loop variable types (`Label` vs `Scalar`). **No mixing.** A required named index can only be bound to a named index. A required range index can only be bound to a range index with a matching dimension. The required index declaration must commit to a kind: `index Foo;` (named) or `index Foo: Dim;` (range).
 
-- **Required range syntax?** `range Foo: Dim;` — the dimension after the colon declares the constraint. This parallels `param x: Length;` (name, colon, type constraint). Examples: `range TimeStep: Time;`, `range Altitude: Length;`.
+- **Required range syntax?** `index Foo: Dim;` — the dimension after the colon declares the constraint. This parallels `param x: Length;` (name, colon, type constraint). Examples: `index TimeStep: Time;`, `index Altitude: Length;`.
 
 - **Variant literals in non-rebindable contexts?** Banned for all indexes (required and default) in `node`, `const`, `assert`, and `fn` contexts. Allowed in `param` defaults (rebindable) and `#[expected_fail]` attributes (handled via import-site override). This ensures every file is reusable as a library.
 

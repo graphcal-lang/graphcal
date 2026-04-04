@@ -6,7 +6,7 @@ extra variant(s) ["Insertion"] in map literal for index `Phase`
     Diagnostic severity: error
 Begin snippet for extra_variants.gcl starting at line 1, column 1
 
-snippet line 1: cat Phase { Coast, Burn }
+snippet line 1: index Phase = { Coast, Burn };
 snippet line 2: param dv: Velocity[Phase] = {
     label starting at line 2, column 29: unexpected variants
 snippet line 3:     Phase::Coast: 2.46 km/s,

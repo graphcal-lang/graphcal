@@ -1,2 +1,2 @@
 // Error: range index with start > end
-range TimeStep(100.0 s, 0.0 s, step: 0.1 s);
+index TimeStep = linspace(100.0 s, 0.0 s, step: 0.1 s);

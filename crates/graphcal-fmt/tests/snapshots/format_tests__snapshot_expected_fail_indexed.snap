@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // expected_fail_indexed.gcl -- Per-variant expected_fail on single-index assertion
-cat Mode { Normal, Eco, Boost }
+index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

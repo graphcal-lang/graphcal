@@ -587,20 +587,20 @@ fn long_name<D: Dim>(
 ) -> D = param_one + param_two * param_three;
 ```
 
-#### `cat`/`range` Declarations
+#### `index` Declarations
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 ```
 
 If variants don't fit on one line:
 
 ```gcl
-cat Maneuver {
+index Maneuver = {
     Departure,
     Correction,
     Insertion,
-}
+};
 ```
 
 #### `import` Declarations

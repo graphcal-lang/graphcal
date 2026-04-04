@@ -434,17 +434,17 @@ pub struct FieldDecl {
 pub enum IndexDeclKind {
     /// Named variants: `{ Departure, Correction, Insertion }`
     Named { variants: Vec<Spanned<VariantName>> },
-    /// Numeric range: `range(start, end, step: step)`
+    /// Numeric range: `linspace(start, end, step: step)`
     Range {
         start: Box<Expr>,
         end: Box<Expr>,
         step: Box<Expr>,
     },
-    /// Required named index (no variants): `cat Foo;`
+    /// Required named index (no variants): `index Foo;`
     ///
     /// Must be bound via parameterized import.
     RequiredNamed,
-    /// Required range index with dimension constraint: `range Foo: Time;`
+    /// Required range index with dimension constraint: `index Foo: Time;`
     ///
     /// Must be bound via parameterized import.
     RequiredRange { dimension: DimExpr },
@@ -458,8 +458,8 @@ impl IndexDeclKind {
     }
 }
 
-/// Index declaration: `cat Maneuver { Departure, Correction, Insertion }`
-/// or `range TimeStep(0.0 s, 100.0 s, step: 0.1 s);`
+/// Index declaration: `index Maneuver = { Departure, Correction, Insertion };`
+/// or `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl {
     pub name: Spanned<IndexName>,

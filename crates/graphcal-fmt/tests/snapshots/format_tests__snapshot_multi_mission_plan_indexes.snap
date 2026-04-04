@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // shared/indexes.gcl -- Mission phase and subsystem indexes
-cat MissionPhase {
+index MissionPhase = {
     Launch,
     LeoParking,
     TransLunarInjection,
@@ -13,9 +13,9 @@ cat MissionPhase {
     TransEarthInjection,
     TransEarthCoast,
     EarthReturn,
-}
+};
 
-cat Subsystem {
+index Subsystem = {
     Propulsion,
     AttitudeControl,
     CommandAndData,
@@ -24,4 +24,4 @@ cat Subsystem {
     Power,
     Structure,
     Payload,
-}
+};

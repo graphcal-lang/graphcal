@@ -2,7 +2,7 @@
 //
 // Demonstrates a figure that combines two plots into subplots.
 // Both plots also appear as standalone figures.
-cat Step { First, Second, Third, Fourth }
+index Step = { First, Second, Third, Fourth };
 
 param x0: Dimensionless = 1.0;
 

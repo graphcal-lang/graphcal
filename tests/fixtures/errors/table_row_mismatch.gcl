@@ -1,7 +1,7 @@
 dimension Mass = Mass;
 
-cat Phase { Launch, Cruise, Arrival }
-cat Maneuver { Departure, Correction, Insertion }
+index Phase = { Launch, Cruise, Arrival };
+index Maneuver = { Departure, Correction, Insertion };
 
 param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
     Departure, Correction, Insertion;

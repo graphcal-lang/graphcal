@@ -241,13 +241,13 @@ An index declares a finite, ordered set of labels usable as collection axes in `
 
 ### Named Index
 
-A named index declares a finite set of labels usable as a collection axis. The `cat` keyword declares:
+A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
 
 1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from union types. Labels exist only within expressions, not in declaration type annotations.
 2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
 
 ```
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 ```
 
 Named index labels use qualified syntax (`Maneuver::Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
@@ -263,14 +263,14 @@ Named index labels are proper runtime values within expressions:
 
 However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
 
-A regular fieldless union type (`type Foo = A | B;`) is NOT automatically an index. The `cat` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
+A regular fieldless union type (`type Foo = A | B;`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
 ### Range Index
 
 A range index is a finite sequence of scalar values in a specific dimension:
 
 ```
-range TimeStep(0.0 s, 100.0 s, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);
 ```
 
 Range index labels are scalar values, not union type members. The loop variable in `for t: TimeStep { ... }` acts as a `Scalar(Time)` -- it can be used in arithmetic and for indexing.

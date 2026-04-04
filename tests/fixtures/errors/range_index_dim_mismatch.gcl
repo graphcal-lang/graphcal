@@ -1,2 +1,2 @@
 // Error: range index with mismatched dimensions
-range TimeStep(0.0 s, 100.0 kg, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 100.0 kg, step: 0.1 s);

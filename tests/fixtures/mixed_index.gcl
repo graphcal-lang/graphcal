@@ -2,9 +2,9 @@
 dimension Velocity = Length / Time;
 dimension Acceleration = Velocity / Time;
 
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
-range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
+index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 // Label-indexed acceleration
 param accel: Acceleration[Maneuver] = {

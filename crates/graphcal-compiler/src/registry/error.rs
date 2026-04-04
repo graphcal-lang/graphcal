@@ -363,7 +363,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::I001),
         help(
-            "declare with `cat Name {{ Variant1, Variant2, ... }}` or `range Name(start, end, step: step);`"
+            "declare with `index Name = {{ Variant1, Variant2, ... }};` or `index Name = linspace(start, end, step: step);`"
         )
     )]
     UnknownIndex {
@@ -924,7 +924,7 @@ pub enum GraphcalError {
 
     /// A required index was not bound via parameterized import.
     ///
-    /// Required indexes (`cat Foo;`, `range Foo: Time;`) must be bound when the
+    /// Required indexes (`index Foo;`, `index Foo: Time;`) must be bound when the
     /// file is imported. They cannot be evaluated standalone.
     #[error("required index `{name}` must be bound via parameterized import")]
     #[diagnostic(

@@ -359,7 +359,7 @@ fn resolve_import_decl_skipped() {
 fn resolve_indexed_param() {
     let resolved = parse_and_resolve(
         r"
-        cat Color { Red, Green, Blue }
+        index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -375,7 +375,7 @@ fn resolve_indexed_param() {
 fn resolve_for_comprehension() {
     let resolved = parse_and_resolve(
         r"
-        cat Color { Red, Green, Blue }
+        index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -394,7 +394,7 @@ fn resolve_for_comprehension() {
 fn resolve_scan_expression() {
     let resolved = parse_and_resolve(
         r"
-        cat Step { First, Second, Third }
+        index Step = { First, Second, Third };
         param vals: Dimensionless[Step] = {
             Step::First: 1.0,
             Step::Second: 2.0,
@@ -442,7 +442,7 @@ fn resolve_unfold_self_edge_excluded() {
     // The unfold body references @x[prev_t], which creates a self-reference.
     // extract_all_refs should exclude this self-edge from runtime_deps.
     let source = r"
-        cat TimeStep { First, Second, Third }
+        index TimeStep = { First, Second, Third };
         node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });
     ";
     let resolved = parse_and_resolve(source).unwrap();

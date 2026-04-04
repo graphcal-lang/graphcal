@@ -11,7 +11,7 @@ Indexes are finite label sets used for collections of values. They enable typed,
 Declare a finite index with named labels:
 
 ```
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 ```
 
 Labels follow `PascalCase` convention and are namespaced by the index: `Maneuver::Departure`.
@@ -99,7 +99,7 @@ The result is an indexed value where each element is the accumulated result up t
 Values can be indexed by multiple label indexes using tuple keys:
 
 ```
-cat Phase { Launch, Cruise, Arrival }
+index Phase = { Launch, Cruise, Arrival };
 
 param spacecraft_mass: Mass[Phase, Maneuver] = {
     (Phase::Launch, Maneuver::Departure): 5000.0 kg,
@@ -129,8 +129,8 @@ Values can be indexed by a combination of label indexes and range indexes. This 
 The most common way to create a mixed-index value is with a multi-binding `for` comprehension:
 
 ```
-cat Maneuver { Departure, Correction, Insertion }
-range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
+index Maneuver = { Departure, Correction, Insertion };
+index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 param accel: Acceleration[Maneuver] = {
     Maneuver::Departure: 10.0 m/s^2,
@@ -239,19 +239,19 @@ The `table` expression is pure syntax sugar -- it desugars to a map literal at p
 Range indexes generate labels from numeric stepping:
 
 ```
-range TimeStep(0.0 s, 1.0 s, step: 0.5 s);
+index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 ```
 
 This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.
 
 ## Required Indexes
 
-A `cat` or `range` index can be declared **without** specifying its variants or range values. These are **required indexes** — they must be bound via a [parameterized import](multi-file.md#index-bindings) when the file is used as a library.
+An index can be declared **without** specifying its variants or range values. These are **required indexes** — they must be bound via a [parameterized import](multi-file.md#index-bindings) when the file is used as a library.
 
 ### Required Named Index
 
 ```
-cat Phase;
+index Phase;
 ```
 
 This declares a named index `Phase` with no variants. A file importing this library must bind it to a concrete named index.
@@ -259,7 +259,7 @@ This declares a named index `Phase` with no variants. A file importing this libr
 ### Required Range Index
 
 ```
-range Step: Time;
+index Step: Time;
 ```
 
 This declares a range index `Step` constrained to have dimension `Time`. The importer must bind it to a concrete range index with the same dimension.
@@ -269,7 +269,7 @@ This declares a range index `Step` constrained to have dimension `Time`. The imp
 Required indexes are used exactly like concrete indexes — in type annotations, `for` comprehensions, index access, `match`, and map/table literals:
 
 ```
-cat Phase;
+index Phase;
 
 param cost: Dimensionless[Phase];
 node total: Dimensionless = sum(for p: Phase { @cost[p] });
