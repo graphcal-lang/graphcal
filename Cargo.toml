@@ -5,7 +5,7 @@ exclude = ["editors/zed"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1-alpha.2"
 edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
@@ -19,14 +19,14 @@ categories = ["compilers", "science"]
 clap = { version = "4.5.58", features = ["derive"] }
 indexmap = "2.13.0"
 insta = "1.46.3"
-graphcal-dag = { path = "crates/graphcal-dag", version = "0.1.0" }
-graphcal-eval = { path = "crates/graphcal-eval", version = "0.1.0" }
+graphcal-dag = { path = "crates/graphcal-dag", version = "0.0.1-alpha.2" }
+graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.2" }
 hifitime = "4.2.4"
 jiff = "0.2.21"
-graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.1.0" }
-graphcal-io = { path = "crates/graphcal-io", version = "0.1.0" }
-graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.1.0" }
-graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.1.0" }
+graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.2" }
+graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.2" }
+graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.2" }
+graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.2" }
 logos = "0.16.1"
 miette = "7.6.0"
 open = "5.3.3"
@@ -51,23 +51,23 @@ allow_attributes = { level = "warn", priority = 1 }
 allow_attributes_without_reason = { level = "warn", priority = 1 }
 cargo = { level = "warn", priority = -1 }
 complexity = { level = "warn", priority = -1 }
-correctness = { level = "deny", priority = -1 }  # deny-by-default
+correctness = { level = "deny", priority = -1 } # deny-by-default
 dbg_macro = { level = "warn", priority = 1 }
 decimal_literal_representation = { level = "warn", priority = 1 }
-derive_partial_eq_without_eq = { level = "allow", priority = 1 }  # We implement `Eq` only when necessary
+derive_partial_eq_without_eq = { level = "allow", priority = 1 } # We implement `Eq` only when necessary
 else_if_without_else = { level = "warn", priority = 1 }
 expect_used = { level = "warn", priority = 1 }
-indexing_slicing = { level = "allow", priority = 1 }  # TODO: change to "warn" later
-missing_errors_doc = { level = "allow", priority = 1 }  # TODO: change to "warn" later
-missing_panics_doc = { level = "allow", priority = 1 }  # TODO: change to "warn" later
-multiple_crate_versions = { level = "allow", priority = 1 }  # There is nothing we can do about this
+indexing_slicing = { level = "allow", priority = 1 } # TODO: change to "warn" later
+missing_errors_doc = { level = "allow", priority = 1 } # TODO: change to "warn" later
+missing_panics_doc = { level = "allow", priority = 1 } # TODO: change to "warn" later
+multiple_crate_versions = { level = "allow", priority = 1 } # There is nothing we can do about this
 nursery = { level = "warn", priority = -1 }
 panic = { level = "warn", priority = 1 }
 pedantic = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 print_stderr = { level = "warn", priority = 1 }
 print_stdout = { level = "warn", priority = 1 }
-style = { level = "warn", priority = -1 }  # warn-by-default
+style = { level = "warn", priority = -1 } # warn-by-default
 suspicious = { level = "warn", priority = -1 }
 todo = { level = "warn", priority = 1 }
 undocumented_unsafe_blocks = { level = "warn", priority = 1 }
