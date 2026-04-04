@@ -9,9 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
+use petgraph::algo::toposort;
+use petgraph::graph::DiGraph;
 
 use crate::syntax::ast::{
-    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, LayerDecl, PlotDecl, TypeExpr,
+    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, IndexDeclKind, LayerDecl,
+    PlotDecl, TypeExpr,
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{DeclName, DimName, FnName};
@@ -1425,6 +1428,16 @@ pub fn register_selected_declarations(
 
 /// Shared implementation for registering type-system declarations.
 ///
+/// Registration is split into phases to allow forward references between
+/// declarations of the same kind (e.g., a derived dimension referencing another
+/// derived dimension declared later in the file). The phases are:
+///
+/// 1. Base dimensions, types, union types, named/required-named indexes
+/// 2. Derived dimensions (topologically sorted by inter-dependency)
+/// 3. Required-range indexes (depend only on dimensions)
+/// 4. Units (topologically sorted by inter-dependency)
+/// 5. Range indexes (depend on dimensions and units)
+///
 /// When `filter` is `None`, all declarations are registered.
 /// When `filter` is `Some(names)`, only declarations whose names are in `names` are registered.
 fn register_declarations_impl(
@@ -1434,19 +1447,41 @@ fn register_declarations_impl(
     filter: Option<&std::collections::HashSet<String>>,
     file_path: &std::path::Path,
 ) -> Result<(), GraphcalError> {
+    use crate::syntax::ast::{DimDecl, IndexDecl, UnitDecl};
+
     let should_register = |name: &str| filter.is_none_or(|names| names.contains(name));
 
+    // Collect declarations by kind for phased registration.
+    let mut derived_dims: Vec<&DimDecl> = Vec::new();
+    let mut units: Vec<&UnitDecl> = Vec::new();
+    let mut required_range_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
+    let mut range_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
+
+    // Phase 1: Register base dimensions, types, union types, named/required-named indexes.
+    // Also collect derived dims, units, and dependent indexes for later phases.
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
-                register_dimension_decl(d, registry, src, file_path)?;
+                if d.definition.is_some() {
+                    derived_dims.push(d);
+                } else {
+                    register_dimension_decl(d, registry, src, file_path)?;
+                }
             }
             DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
-                register_unit_decl(u, registry, src)?;
+                units.push(u);
             }
-            DeclKind::Index(idx) if should_register(idx.name.value.as_str()) => {
-                register_index_decl(idx, registry, src, decl.span)?;
-            }
+            DeclKind::Index(idx) if should_register(idx.name.value.as_str()) => match &idx.kind {
+                IndexDeclKind::RequiredRange { .. } => {
+                    required_range_indexes.push((idx, decl.span));
+                }
+                IndexDeclKind::Range { .. } => {
+                    range_indexes.push((idx, decl.span));
+                }
+                IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
+                    register_index_decl(idx, registry, src, decl.span)?;
+                }
+            },
             DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
                 register_type_decl(t, &decl.attributes, registry);
             }
@@ -1456,7 +1491,147 @@ fn register_declarations_impl(
             _ => {}
         }
     }
+
+    // Phase 2: Topologically sort and register derived dimensions.
+    if !derived_dims.is_empty() {
+        let sorted = topo_sort_derived_dims(&derived_dims, src)?;
+        for d in sorted {
+            register_dimension_decl(d, registry, src, file_path)?;
+        }
+    }
+
+    // Phase 3: Register required-range indexes (depend only on dimensions).
+    for (idx, span) in &required_range_indexes {
+        register_index_decl(idx, registry, src, *span)?;
+    }
+
+    // Phase 4: Topologically sort and register units.
+    if !units.is_empty() {
+        let sorted = topo_sort_units(&units, src)?;
+        for u in sorted {
+            register_unit_decl(u, registry, src)?;
+        }
+    }
+
+    // Phase 5: Register range indexes (depend on dimensions and units).
+    for (idx, span) in &range_indexes {
+        register_index_decl(idx, registry, src, *span)?;
+    }
+
     Ok(())
+}
+
+/// Topologically sort derived dimension declarations by their inter-dependencies.
+///
+/// Dependencies on dimensions already in the registry (e.g., from preludes or imports)
+/// are considered satisfied and do not create graph edges. Only dependencies between
+/// the file-local derived dimensions are edges.
+fn topo_sort_derived_dims<'a>(
+    dims: &[&'a crate::syntax::ast::DimDecl],
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<&'a crate::syntax::ast::DimDecl>, GraphcalError> {
+    let mut graph = DiGraph::<&str, ()>::new();
+    let mut name_to_idx: HashMap<&str, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut idx_to_pos: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
+
+    // Add a node for each derived dimension.
+    for (pos, d) in dims.iter().enumerate() {
+        let name = d.name.value.as_str();
+        let idx = graph.add_node(name);
+        name_to_idx.insert(name, idx);
+        idx_to_pos.insert(idx, pos);
+    }
+
+    // Add edges: if dim A references dim B (and B is a *different* file-local dim), add A → B.
+    // Self-references (e.g., `dimension Mass = Mass;` aliasing a prelude dimension) are
+    // excluded — they resolve against the existing registry during registration.
+    for d in dims {
+        let Some(def) = &d.definition else {
+            continue;
+        };
+        let self_name = d.name.value.as_str();
+        let from = name_to_idx[self_name];
+        for item in &def.terms {
+            let dep_name = item.term.name.name.as_str();
+            if dep_name != self_name
+                && let Some(&to) = name_to_idx.get(dep_name)
+            {
+                graph.add_edge(from, to, ());
+            }
+        }
+    }
+
+    // Topologically sort (reversed, since edges point from dependent → dependency).
+    let sorted_indices = toposort(&graph, None).map_err(|cycle| {
+        let cycle_name = graph[cycle.node_id()];
+        let pos = idx_to_pos[&cycle.node_id()];
+        GraphcalError::CyclicDimension {
+            name: DimName::new(cycle_name),
+            src: src.clone(),
+            span: dims[pos].name.span.into(),
+        }
+    })?;
+
+    // toposort returns dependencies-last order; reverse for dependencies-first.
+    Ok(sorted_indices
+        .into_iter()
+        .rev()
+        .map(|idx| dims[idx_to_pos[&idx]])
+        .collect())
+}
+
+/// Topologically sort unit declarations by their inter-dependencies.
+///
+/// A unit depends on other units through its `definition.unit_expr` (e.g., `unit km: Length = 1000 m;`
+/// depends on `m`). Dependencies on units already in the registry are satisfied and
+/// do not create graph edges.
+fn topo_sort_units<'a>(
+    units: &[&'a crate::syntax::ast::UnitDecl],
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<&'a crate::syntax::ast::UnitDecl>, GraphcalError> {
+    let mut graph = DiGraph::<&str, ()>::new();
+    let mut name_to_idx: HashMap<&str, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut idx_to_pos: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
+
+    // Add a node for each unit.
+    for (pos, u) in units.iter().enumerate() {
+        let name = u.name.value.as_str();
+        let idx = graph.add_node(name);
+        name_to_idx.insert(name, idx);
+        idx_to_pos.insert(idx, pos);
+    }
+
+    // Add edges: if unit A's definition references unit B (a *different* file-local unit), add A → B.
+    for u in units {
+        let self_name = u.name.value.as_str();
+        let from = name_to_idx[self_name];
+        if let Some(def) = &u.definition {
+            for item in &def.unit_expr.terms {
+                let dep_name = item.name.value.as_str();
+                if dep_name != self_name
+                    && let Some(&to) = name_to_idx.get(dep_name)
+                {
+                    graph.add_edge(from, to, ());
+                }
+            }
+        }
+    }
+
+    let sorted_indices = toposort(&graph, None).map_err(|cycle| {
+        let pos = idx_to_pos[&cycle.node_id()];
+        GraphcalError::CyclicUnit {
+            name: units[pos].name.value.clone(),
+            src: src.clone(),
+            span: units[pos].name.span.into(),
+        }
+    })?;
+
+    // toposort returns dependencies-last order; reverse for dependencies-first.
+    Ok(sorted_indices
+        .into_iter()
+        .rev()
+        .map(|idx| units[idx_to_pos[&idx]])
+        .collect())
 }
 
 fn register_dimension_decl(

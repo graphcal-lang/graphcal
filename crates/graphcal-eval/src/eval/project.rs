@@ -1130,7 +1130,11 @@ fn import_module_values(
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) {
-    for (name, rv) in &dep.const_values {
+    // Sort keys for deterministic ordering — HashMap iteration is arbitrary.
+    let mut const_keys: Vec<&String> = dep.const_values.keys().collect();
+    const_keys.sort();
+    for name in const_keys {
+        let rv = &dep.const_values[name];
         let scoped = ScopedName::Qualified {
             module: module_name.to_string(),
             member: name.clone(),
@@ -1150,7 +1154,10 @@ fn import_module_values(
         }
         imported_values.insert(scoped, (rv.clone(), dt));
     }
-    for (name, rv) in &dep.values {
+    let mut value_keys: Vec<&String> = dep.values.keys().collect();
+    value_keys.sort();
+    for name in value_keys {
+        let rv = &dep.values[name];
         let scoped = ScopedName::Qualified {
             module: module_name.to_string(),
             member: name.clone(),
@@ -1538,36 +1545,34 @@ fn evaluate_project_perfile(
 ///
 /// Direct imports get the span of their own `import` declaration in the root file.
 /// Transitive imports inherit the root-level import span of the direct import
-/// that started the chain.
+/// that started the chain. When a transitive dependency is reachable from multiple
+/// root imports, the first root import in source order wins.
 fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<PathBuf, Span> {
     let root_file = &project.files[&project.root];
     let mut spans: HashMap<PathBuf, Span> = HashMap::new();
 
-    // Map root's direct imports.
+    // Process root's direct imports in source order (as returned by imports_with_paths).
+    // For each, DFS into its transitive dependencies, propagating the root import span.
+    // `entry().or_insert()` ensures the first root import (in source order) to reach
+    // a transitive dep determines its attribution.
     for (decl, _import_decl, canonical) in root_file.imports_with_paths() {
-        spans.entry(canonical.to_path_buf()).or_insert(decl.span);
-    }
-
-    // For transitive deps: walk load_order (topological, deps first).
-    // If a dep is not yet mapped, find which already-mapped file imports it
-    // and inherit that file's root-level span.
-    for file_path in &project.load_order {
-        if *file_path == project.root || spans.contains_key(file_path) {
-            continue;
-        }
-        let mut found = false;
-        for (mapped_path, root_span) in &spans.clone() {
-            if let Some(mapped_file) = project.files.get(mapped_path) {
-                for (_decl, _imp, c) in mapped_file.imports_with_paths() {
-                    if c == *file_path {
-                        spans.insert(file_path.clone(), *root_span);
-                        found = true;
-                        break;
+        let root_span = decl.span;
+        let mut stack = vec![canonical.to_path_buf()];
+        while let Some(path) = stack.pop() {
+            if path == project.root {
+                continue;
+            }
+            // Only process if not already attributed.
+            if let std::collections::hash_map::Entry::Vacant(entry) = spans.entry(path.clone()) {
+                entry.insert(root_span);
+                // Push this file's own imports for transitive propagation.
+                if let Some(file) = project.files.get(&path) {
+                    for (_decl, _imp, c) in file.imports_with_paths() {
+                        if !spans.contains_key(c) {
+                            stack.push(c.to_path_buf());
+                        }
                     }
                 }
-            }
-            if found {
-                break;
             }
         }
     }
