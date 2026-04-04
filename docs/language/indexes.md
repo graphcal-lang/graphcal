@@ -282,6 +282,29 @@ fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
 
 When calling a generic function, `Nat` parameters are inferred from the argument shapes. Two nat ranges are equal if and only if their sizes are equal — `range(3)` and `range(4)` are different indexes.
 
+### Nat Arithmetic (Addition)
+
+`Nat` expressions support addition, enabling functions that relate input and output sizes:
+
+```
+// drop_last: takes a vector of size N + 1, returns a vector of size N
+fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
+    for i: range(N) { v[i] };
+
+param v4: Dimensionless[4] = for i: range(4) { 1.0 };
+node v3: Dimensionless[3] = drop_last(@v4);
+// The compiler solves N + 1 = 4 to deduce N = 3
+```
+
+Addition works in both type position (`D[N + 1]`) and for-range bindings (`range(N + 1)`):
+
+```
+fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
+    for i: range(N + 1) { if i < N { v[i] } else { 0.0 } };
+```
+
+`Nat` expressions are normalized to a canonical linear form (`c + a₁·x₁ + a₂·x₂ + …`) and compared structurally. Subtraction is not supported — instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+
 ### Composing Nat Ranges with Named Indexes
 
 Nat range indexes compose freely with named indexes:

@@ -96,6 +96,21 @@ fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
 - `<N: Nat>` declares a natural number type parameter
 - `N` can be used in index position (`D[N]`) and in `for i: range(N)` loops
 - The compiler infers `N` at each call site from the argument shapes
+- `Nat` parameters are available as runtime `Int` values in the function body
+
+### Nat Arithmetic
+
+`Nat` expressions support addition, enabling functions that relate input and output sizes:
+
+```
+fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
+    for i: range(N) { v[i] };
+
+fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
+    for i: range(N + 1) { if i < N { v[i] } else { 0.0 } };
+```
+
+The compiler solves linear equations during unification: calling `drop_last` on a `Dimensionless[4]` vector solves `N + 1 = 4` to deduce `N = 3`. Subtraction is not supported — express the larger side with addition instead.
 
 ## Function Composition
 
