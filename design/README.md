@@ -52,7 +52,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [10](./10-tables-and-autofill.md) | Tables & Autofill | Partially settled | N-dimensional labeled tables with map/scan/reduce |
 | [11](./11-system-dynamics.md) | System Dynamics | Mostly settled | Temporal simulation via `scan` pattern (Vensim replacement) |
 | [12](./12-pure-functions.md) | Pure Functions | Design complete | `fn` keyword, purity via `@` prohibition |
-| [24](./24-inline-modules.md) | **Inline Modules** | Draft | Replace `fn` with inline `module` blocks — unify functions and modules into DAG |
+| [24](./24-inline-modules.md) | **Inline Graphs** | Draft | Replace `fn` with inline `graph` blocks — everything is a graph |
 
 ### Tooling & Ecosystem
 
