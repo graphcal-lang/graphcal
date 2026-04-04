@@ -73,9 +73,11 @@ impl Parser<'_> {
 
                 if variants.is_empty() {
                     let (tok, span) = self.advance()?;
-                    return Err(
-                        self.unexpected_token("at least one variant", &tok.to_string(), span)
-                    );
+                    return Err(self.unexpected_token(
+                        "at least one variant",
+                        &tok.to_string(),
+                        span,
+                    ));
                 }
 
                 let (_, end_span) = self.expect(Token::RBrace)?;

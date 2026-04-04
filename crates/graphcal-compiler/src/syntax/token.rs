@@ -477,7 +477,12 @@ mod tests {
     fn lex_identifier_starting_with_new_keywords() {
         // "scanner" should be Ident, not Scan + "ner"
         for word in [
-            "scanner", "unfolder", "stepped", "indexed", "indexing", "linspaced",
+            "scanner",
+            "unfolder",
+            "stepped",
+            "indexed",
+            "indexing",
+            "linspaced",
         ] {
             let mut lexer = Token::lexer(word);
             assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
