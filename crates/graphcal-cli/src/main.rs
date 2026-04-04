@@ -661,23 +661,8 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                         FlatEntry::Error(name, err) => {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
-                        FlatEntry::Value(name, value) => match value {
-                            Value::Bool(b) => println!("{name:width$} = {b}"),
-                            Value::Int(i) => println!("{name:width$} = {i}"),
-                            Value::Label {
-                                index_name,
-                                variant,
-                            } => {
-                                println!("{name:width$} = {index_name}::{variant}");
-                            }
-                            Value::Struct { type_name, .. } => {
-                                println!("{name:width$} = {}", type_name.as_str());
-                            }
-                            Value::Datetime { .. } => {
-                                let formatted = value.format_datetime().unwrap_or_default();
-                                println!("{name:width$} = {formatted}");
-                            }
-                            _ => {
+                        FlatEntry::Value(name, value) => {
+                            if let Value::Scalar { .. } = value {
                                 let formatted =
                                     format_number(value.display_value().unwrap_or_default());
                                 if let Some(label) = value.display_label(&result.base_dim_symbols) {
@@ -685,8 +670,12 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                                 } else {
                                     println!("{name:width$} = {formatted}");
                                 }
+                            } else {
+                                let formatted =
+                                    value.format_display(Some(&result.base_dim_symbols));
+                                println!("{name:width$} = {formatted}");
                             }
-                        },
+                        }
                     }
                 }
             }

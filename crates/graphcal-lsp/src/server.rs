@@ -25,7 +25,6 @@ use graphcal_compiler::syntax::names::VariantName;
 use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
-    format_number,
 };
 use graphcal_eval::loader::LoadedProject;
 use indexmap::IndexMap;
@@ -397,19 +396,12 @@ fn format_value_inline_with_budget(
     max_len: usize,
 ) -> String {
     match value {
-        Value::Scalar { .. } => {
-            let formatted = format_number(value.display_value().unwrap_or_default());
-            value.display_label(symbols).map_or_else(
-                || formatted.clone(),
-                |label| format!("{formatted} [{label}]"),
-            )
-        }
-        Value::Bool(b) => format!("{b}"),
-        Value::Int(i) => format!("{i}"),
-        Value::Label {
-            index_name,
-            variant,
-        } => format!("{index_name}::{variant}"),
+        // Leaf types: delegate to the shared `format_display` on `Value`.
+        Value::Scalar { .. }
+        | Value::Bool(_)
+        | Value::Int(_)
+        | Value::Label { .. }
+        | Value::Datetime { .. } => value.format_display(Some(symbols)),
         Value::Struct {
             type_name, fields, ..
         } => {
@@ -450,7 +442,6 @@ fn format_value_inline_with_budget(
                 )
             }
         }
-        Value::Datetime { .. } => value.format_datetime().unwrap_or_default(),
     }
 }
 
