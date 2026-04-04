@@ -2,8 +2,8 @@
 //
 // Demonstrates a rect mark chart visualizing power draw across
 // subsystems and operating modes as a 2D grid.
-cat Subsystem { Comms, Thermal, Payload }
-cat OpMode { Safe, Nominal, Science }
+index Subsystem = { Comms, Thermal, Payload };
+index OpMode = { Safe, Nominal, Science };
 
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
               Safe, Nominal, Science;

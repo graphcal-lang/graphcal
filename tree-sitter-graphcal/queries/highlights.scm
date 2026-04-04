@@ -19,8 +19,8 @@
   "unit"
   "type"
   "fn"
-  "cat"
-  "range"
+  "index"
+  "linspace"
   "import"
   "as"
   "let"
@@ -101,11 +101,8 @@
 ; type TransferResult
 (type_declaration name: (identifier) @type)
 
-; cat Maneuver
-(cat_declaration name: (identifier) @type)
-
-; range TimeStep
-(range_declaration name: (identifier) @type)
+; index Maneuver, index TimeStep
+(index_declaration name: (identifier) @type)
 
 ; fn orbital_velocity
 (fn_declaration name: (identifier) @function)
@@ -312,10 +309,10 @@
 (layer_named_field name: (identifier) @property)
 
 ; ---------------------------------------------------------------
-; Range declaration — "step" keyword
+; Index declaration — "step" keyword in linspace
 ; ---------------------------------------------------------------
 
-(range_declaration "step" @keyword)
+(index_declaration "step" @keyword)
 
 ; ---------------------------------------------------------------
 ; Table expressions

@@ -556,8 +556,8 @@ fn parse_type_decl_no_derive() {
 }
 
 #[test]
-fn parse_cat_decl() {
-    let source = "cat Maneuver { Departure, Correction, Insertion }";
+fn parse_index_named_decl() {
+    let source = "index Maneuver = { Departure, Correction, Insertion };";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -573,13 +573,13 @@ fn parse_cat_decl() {
                 other => panic!("expected named index, got {other:?}"),
             }
         }
-        _ => panic!("expected cat declaration"),
+        _ => panic!("expected index declaration"),
     }
 }
 
 #[test]
-fn parse_cat_decl_trailing_comma() {
-    let source = "cat Phase { Boost, Coast, }";
+fn parse_index_named_trailing_comma() {
+    let source = "index Phase = { Boost, Coast, };";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Index(idx) => {
@@ -591,13 +591,13 @@ fn parse_cat_decl_trailing_comma() {
                 other => panic!("expected named index, got {other:?}"),
             }
         }
-        _ => panic!("expected cat declaration"),
+        _ => panic!("expected index declaration"),
     }
 }
 
 #[test]
-fn parse_range_decl() {
-    let source = "range TimeStep(0.0 s, 100.0 s, step: 0.1 s);";
+fn parse_index_linspace_decl() {
+    let source = "index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -605,7 +605,7 @@ fn parse_range_decl() {
             assert_eq!(idx.name.value.as_str(), "TimeStep");
             assert!(matches!(idx.kind, IndexDeclKind::Range { .. }));
         }
-        _ => panic!("expected range declaration"),
+        _ => panic!("expected index declaration"),
     }
 }
 
@@ -968,8 +968,8 @@ fn parse_attribute_multiple_groups() {
 }
 
 #[test]
-fn parse_required_cat() {
-    let source = "cat Foo;";
+fn parse_required_named_index() {
+    let source = "index Foo;";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -977,13 +977,13 @@ fn parse_required_cat() {
             assert_eq!(idx.name.value.as_str(), "Foo");
             assert!(matches!(idx.kind, IndexDeclKind::RequiredNamed));
         }
-        other => panic!("expected cat declaration, got {other:?}"),
+        other => panic!("expected index declaration, got {other:?}"),
     }
 }
 
 #[test]
 fn parse_required_range_simple() {
-    let source = "range Foo: Time;";
+    let source = "index Foo: Time;";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -997,7 +997,7 @@ fn parse_required_range_simple() {
                 other => panic!("expected required range, got {other:?}"),
             }
         }
-        other => panic!("expected range declaration, got {other:?}"),
+        other => panic!("expected index declaration, got {other:?}"),
     }
 }
 
@@ -1058,7 +1058,7 @@ fn parse_import_item_no_attributes() {
 
 #[test]
 fn parse_required_range_compound_dim() {
-    let source = "range Foo: Mass * Length / Time^2;";
+    let source = "index Foo: Mass * Length / Time^2;";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
@@ -1076,6 +1076,6 @@ fn parse_required_range_compound_dim() {
                 other => panic!("expected required range, got {other:?}"),
             }
         }
-        other => panic!("expected range declaration, got {other:?}"),
+        other => panic!("expected index declaration, got {other:?}"),
     }
 }

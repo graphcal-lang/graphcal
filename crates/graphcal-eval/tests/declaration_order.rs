@@ -162,7 +162,7 @@ fn forward_ref_derived_dimension_chain() {
 #[test]
 fn forward_ref_range_index_unit() {
     let source = r"
-        range Distances(0.0 custom_m, 100.0 custom_m, step: 10.0 custom_m);
+        index Distances = linspace(0.0 custom_m, 100.0 custom_m, step: 10.0 custom_m);
         unit custom_m: Length;
         node num_points: Dimensionless = count(for d: Distances { 1.0 });
     ";

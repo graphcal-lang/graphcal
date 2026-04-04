@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Mostly settled in concept. The "pattern, not keyword" approach is chosen. Integration quality and solver API need refinement. **Not yet implemented** — the core primitives (`cat`/`range`, `T[I]`, `for`, `scan`, aggregations) are implemented in Phase 5, but a numeric time axis (as opposed to a named label set) and the `integrate` function for higher-quality ODE solvers are not yet available.
+**Decision level:** Mostly settled in concept. The "pattern, not keyword" approach is chosen. Integration quality and solver API need refinement. **Not yet implemented** — the core primitives (`index`, `T[I]`, `for`, `scan`, aggregations) are implemented in Phase 5, but a numeric time axis (as opposed to a named label set) and the `integrate` function for higher-quality ODE solvers are not yet available.
 
 ## Summary
 
@@ -15,7 +15,7 @@ Rather than introducing first-class `stock` and `flow` keywords, system dynamics
 Phase 5 provides the building blocks:
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -30,15 +30,15 @@ node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc 
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 ```
 
-The `cat` keyword defines a finite set of named labels, `T[I]` gives an indexed value, `scan` accumulates over the index, and `for`/`sum`/`max`/`min`/`mean` provide comprehension and aggregation. These already enable discrete-step simulation over a fixed set of labels.
+The `index` keyword defines a finite set of named labels, `T[I]` gives an indexed value, `scan` accumulates over the index, and `for`/`sum`/`max`/`min`/`mean` provide comprehension and aggregation. These already enable discrete-step simulation over a fixed set of labels.
 
 ## What's Missing for System Dynamics
 
-System dynamics requires a **numeric time axis** — not a finite set of named labels, but a range of numeric values with a known step size. This is not yet implemented. The proposed syntax uses the `range` keyword:
+System dynamics requires a **numeric time axis** — not a finite set of named labels, but a range of numeric values with a known step size. This is not yet implemented. The syntax uses the `index` keyword with `linspace`:
 
 ```gcl
 // Proposed: numeric index with range (not yet implemented)
-range TimeStep(0.0 s, 200.0 s, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 200.0 s, step: 0.1 s);
 ```
 
 This would generate an index with numeric labels rather than named labels, and would make the step size (`dt`) available for integration calculations.
@@ -49,7 +49,7 @@ A "stock" is a `scan` (accumulation) over a time axis. A "flow" is an expression
 
 ```gcl
 // Proposed syntax (not yet implemented)
-range TimeStep(0.0 s, 200.0 s, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 200.0 s, step: 0.1 s);
 
 type SIRState { S: f64, I: f64, R: f64 }
 
@@ -157,7 +157,7 @@ To share a time index across files, use the standard `import` declaration:
 
 ```gcl
 // time.gcl
-range T(0.0 s, 100.0 s, step: 0.1 s);
+index T = linspace(0.0 s, 100.0 s, step: 0.1 s);
 ```
 
 ```gcl
@@ -191,8 +191,8 @@ fn evolve_sir(state: SIRState, dt: Time, beta: f64, gamma: f64, N: f64) -> SIRSt
 };
 
 // Apply with different time resolutions
-range T_coarse(0.0 s, 100.0 s, step: 0.1 s);
-range T_fine(0.0 s, 100.0 s, step: 0.01 s);
+index T_coarse = linspace(0.0 s, 100.0 s, step: 0.1 s);
+index T_fine = linspace(0.0 s, 100.0 s, step: 0.01 s);
 
 node sir_coarse: SIRState[T_coarse] = scan(
     @initial_state,
@@ -235,7 +235,7 @@ param dry_mass: Mass = 1200 kg;
 node fuel_mass: Mass = @dry_mass * (exp(@total_dv / @v_exhaust) - 1.0);
 
 // Dynamic section (proposed)
-range Year(0 yr, 10 yr, step: 0.25 yr);
+index Year = linspace(0 yr, 10 yr, step: 0.25 yr);
 node supply: SupplyState[Year] = scan(...);
 
 // Static references dynamic (proposed)
@@ -250,7 +250,7 @@ node supply_margin: Mass = min(for y: Year { @supply[y].on_hand });
 | Constant | `param` or `const` | Same |
 | Stock (Level) | `scan` field in struct | scan over time index |
 | Flow (Rate) | Expression in scan body | Math |
-| Subscript | `cat`/`range` | Indexed values `T[I]` |
+| Subscript | `index` | Indexed values `T[I]` |
 | Lookup table | Indexed value with interpolation | `lookup()` (proposed) |
 | TIME STEP | `range(0 s, 200 s, step: 0.1 s)` | Numeric index with units (proposed) |
 | SyntheSim | Live view + param sliders | Auto-rendered (proposed) |
@@ -276,7 +276,7 @@ This is an accepted limitation: graphcal's cycle detection operates at the `(nod
 
 ## Settled Design Decisions
 
-- **Numeric index syntax:** The `range` keyword declares a numeric index directly (e.g., `range TimeStep(...)`). Nodes indexed by different time indexes cannot interact directly (consistent with how indexes already work). This is mitigated by sharing time indexes via `import` declarations and factoring evolution logic into pure `fn` functions.
+- **Numeric index syntax:** The `index` keyword with `linspace` declares a numeric index directly (e.g., `range TimeStep(...)`). Nodes indexed by different time indexes cannot interact directly (consistent with how indexes already work). This is mitigated by sharing time indexes via `import` declarations and factoring evolution logic into pure `fn` functions.
 - **Step size access (`dt`):** The closure takes `(prev_t, t)`, so `dt = t - prev_t`. The previous state is accessed via `@node_name[prev_t]`. For fixed-step indexes `dt` is constant, but the formulation naturally supports variable step sizes.
 - **Units on time axis:** The time axis must carry a dimension (e.g., `range(0.0 s, 200.0 s, step: 0.1 s)`). This makes `dt = t - prev_t` dimensionally typed, ensuring that expressions like `rate * dt` are dimension-checked. Consistent with graphcal's "no implicit dimensionless" philosophy.
 - **`integrate` API:** The `integrate` function takes a closure that returns derivatives, not next state. This is the right abstraction — the solver handles the stepping.

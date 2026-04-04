@@ -118,10 +118,10 @@ An index declares a finite, ordered set of labels usable as collection axes in `
 ### Named Index
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 ```
 
-A named index declares a finite set of labels usable as a collection axis. The `cat` keyword declares:
+A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
 
 1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind distinct from tagged unions, existing only within expressions (not in declaration annotations). See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
 2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
@@ -139,12 +139,12 @@ Named index labels are proper runtime values within expressions:
 
 However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
 
-**Why not just use `type`?** A regular fieldless tagged union (`type Foo { A, B }`) is NOT automatically an index. The `cat` keyword explicitly marks it as usable in `T[I]`. This prevents accidentally using marker types (like `type ECI {}`) as collection axes. If you just need a fieldless enum without collection semantics, use `type`.
+**Why not just use `type`?** A regular fieldless tagged union (`type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`. This prevents accidentally using marker types (like `type ECI {}`) as collection axes. If you just need a fieldless enum without collection semantics, use `type`.
 
 ### Range Index
 
 ```gcl
-range TimeStep(0.0 s, 100.0 s, step: 0.1 s);
+index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);
 ```
 
 A range index is a finite sequence of scalar values in a specific dimension. Unlike named indexes, range index labels are **not** tagged union variants — they are scalar values generated from the range parameters.
@@ -372,7 +372,7 @@ This document unifies concepts spread across multiple existing docs:
 
 - **`LoopVar` hack eliminated:** In the current codebase, `InferredType::LoopVar(IndexName)` is a special type for `for` loop variables marked "not a real value type." With named index labels as ValueTypes, the loop variable `m: Maneuver` has inferred type `Label(Maneuver)` — a normal ValueType. No special case needed.
 - **Dedicated `Label` runtime value:** `RuntimeValue::Label { index_name, variant }` is a distinct runtime representation for index labels, separate from `RuntimeValue::Struct`. Labels carry no fields.
-- **Separate registries:** An `cat Maneuver { ... }` declaration creates an entry in the index registry only. It does NOT register a `TypeDef` in the type registry. Type resolution checks the index registry first and resolves index names to `Label(IndexName)`. See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
+- **Separate registries:** An `index Maneuver = { ... };` declaration creates an entry in the index registry only. It does NOT register a `TypeDef` in the type registry. Type resolution checks the index registry first and resolves index names to `Label(IndexName)`. See [doc 21](./21-separate-label-indexes-from-tagged-unions.md).
 
 ## Resolved Questions
 
@@ -380,9 +380,9 @@ This document unifies concepts spread across multiple existing docs:
 - **Exhaustiveness in `match`:** Yes, require exhaustive cases. Both tagged union matches and label matches require all variants/labels to be covered.
 - **Cross-index label equality:** Type error. `m == p` where `m: Maneuver` and `p: Phase` is a compile-time error. They are different `Label` types.
 - **Axis order significance:** `T[I, J]` and `T[J, I]` are different types. Axis order determines `for` binding order, `scan` direction, and display order. No transpose operation — use explicit `for` to construct the transposed value.
-- **`type` vs `cat` for fieldless tagged unions:** Require explicit `cat` declaration. A regular `type Foo { A, B }` is NOT usable as a collection axis. The `cat` keyword communicates intent and prevents accidental use of marker types as axes.
-- **Can `cat` types also carry fields?** No. Indexes are fieldless. If you need data-carrying variants as an axis, compose: use a `cat` for the axis and a separate `type` for the per-variant data. Too complex for too little value.
-- **Named index vs range index keyword:** Named indexes use `cat`, range indexes use `range`. The distinct keywords make the two flavors immediately recognizable, and both serve the same role as collection axes with an identical consumption interface (`for`, indexing, aggregation, `scan`).
+- **`type` vs `index` for fieldless tagged unions:** Require explicit `index` declaration. A regular `type Foo { A, B }` is NOT usable as a collection axis. The `index` keyword communicates intent and prevents accidental use of marker types as axes.
+- **Can `index` types also carry fields?** No. Indexes are fieldless. If you need data-carrying variants as an axis, compose: use a `index` for the axis and a separate `type` for the per-variant data. Too complex for too little value.
+- **Named index vs range index keyword:** Both named and range indexes use the unified `index` keyword, and both serve the same role as collection axes with an identical consumption interface (`for`, indexing, aggregation, `scan`).
 
 ## Dependencies
 

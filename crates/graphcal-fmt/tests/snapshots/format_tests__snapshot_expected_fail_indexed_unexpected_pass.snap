@@ -4,7 +4,7 @@ expression: formatted
 ---
 // expected_fail_indexed_unexpected_pass.gcl -- Per-variant expected_fail where
 // the expected-fail variant actually passes → "unexpected pass" error.
-cat Mode { Normal, Eco, Boost }
+index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

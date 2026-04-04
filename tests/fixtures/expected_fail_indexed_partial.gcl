@@ -4,7 +4,7 @@
 // Setup: Boost and Eco both fail, but only Boost is marked expected_fail.
 // Expected: Eco's failure should still be reported.
 // Actual (bug): The entire assertion passes because Variants falls back to All.
-cat Mode { Normal, Eco, Boost }
+index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

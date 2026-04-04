@@ -2,8 +2,8 @@
 dimension Velocity = Length / Time;
 dimension Mass = Mass;
 
-cat Maneuver { Departure, Correction, Insertion }
-cat Phase { Launch, Cruise, Arrival }
+index Maneuver = { Departure, Correction, Insertion };
+index Phase = { Launch, Cruise, Arrival };
 
 // 1D table with trailing comments on rows
 param delta_v: Velocity[Maneuver] = table[Maneuver] {

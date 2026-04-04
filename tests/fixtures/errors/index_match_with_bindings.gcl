@@ -1,5 +1,5 @@
 // Error: index variant patterns cannot have field bindings
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
 node result: Dimensionless[Maneuver] = for m: Maneuver {
     match m {

@@ -1,4 +1,4 @@
-cat Phase { Coast, Burn }
+index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
     Phase::Coast: 1.0,
     Phase::Burn: 2.0,

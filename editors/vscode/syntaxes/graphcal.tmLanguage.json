@@ -10,8 +10,8 @@
     { "include": "#type-declaration" },
     { "include": "#dimension-declaration" },
     { "include": "#unit-declaration" },
-    { "include": "#cat-declaration" },
-    { "include": "#range-declaration" },
+    { "include": "#index-declaration" },
+    { "include": "#linspace-keyword" },
     { "include": "#param-declaration" },
     { "include": "#node-declaration" },
     { "include": "#const-declaration" },
@@ -93,20 +93,17 @@
       }
     },
 
-    "cat-declaration": {
-      "match": "\\b(cat)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+    "index-declaration": {
+      "match": "\\b(index)\\s+([A-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.cat.graphcal" },
+        "1": { "name": "keyword.declaration.index.graphcal" },
         "2": { "name": "entity.name.type.graphcal" }
       }
     },
 
-    "range-declaration": {
-      "match": "\\b(range)\\s+([A-Z][a-zA-Z0-9_]*)",
-      "captures": {
-        "1": { "name": "keyword.declaration.range.graphcal" },
-        "2": { "name": "entity.name.type.graphcal" }
-      }
+    "linspace-keyword": {
+      "match": "\\b(linspace)\\b",
+      "name": "keyword.other.linspace.graphcal"
     },
 
     "param-declaration": {

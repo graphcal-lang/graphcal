@@ -46,7 +46,7 @@ The overwhelming usage is labels as collection keys. The "first-class tagged uni
 
 | Aspect | Tagged union | Label index |
 | --- | --- | --- |
-| Declaration | `type Status { Nominal, Warning { code: D } }` | `cat Maneuver { Departure, Correction, Insertion }` |
+| Declaration | `type Status { Nominal, Warning { code: D } }` | `index Maneuver = { Departure, Correction, Insertion };` |
 | Variant syntax | Bare: `Nominal`, `LowThrust { ... }` | Qualified: `Maneuver::Departure` |
 | Match syntax | Bare: `Nominal => ...` | Qualified: `Maneuver::Departure => ...` |
 | Semantic role | Constructor of a sum type value | Identifier within a collection axis |
@@ -88,7 +88,7 @@ node code: Dimensionless = match @status {
 **Index labels** use qualified names — consistent with their role as namespaced identifiers:
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
 // Map literal keys
 param delta_v: Velocity[Maneuver] = {
@@ -158,10 +158,10 @@ Labels are proper values — they can be compared, matched, passed to functions,
 
 ### Separate Registries
 
-A `cat`/`range` declaration creates **only** an index registry entry. It does **not** register a `TypeDef` in the type registry.
+A `index` declaration creates **only** an index registry entry. It does **not** register a `TypeDef` in the type registry.
 
 ```
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
   → IndexDef in index registry          ✓
   → TypeDef in type registry            ✗ (removed)
 
@@ -299,7 +299,7 @@ This is no longer a code smell — the `Option` reflects a genuine semantic dist
 ### Mixed Usage
 
 ```gcl
-cat Phase { Coast, Burn }
+index Phase = { Coast, Burn };
 
 type BurnStrategy {
     Impulsive { delta_v: Velocity }
@@ -325,7 +325,7 @@ Note the natural reading: `Phase::Coast` is an index label (qualified), while `I
 ### Label in Function Parameter
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 
 fn maneuver_fuel(m: Maneuver, exhaust_vel: Velocity, dv: Velocity) -> Mass =
     1000.0 kg * (exp(dv / exhaust_vel) - 1.0);
@@ -340,7 +340,7 @@ Here `m: Maneuver` in the function signature means "a label of the `Maneuver` in
 **No.** Indexes and types are separate concepts. If you need both, declare both:
 
 ```gcl
-cat Maneuver { Departure, Correction, Insertion }
+index Maneuver = { Departure, Correction, Insertion };
 type ManeuverKind { Departure, Correction, Insertion }
 ```
 
@@ -348,7 +348,7 @@ In practice this need has not arisen.
 
 ### Can an index and a type share the same name?
 
-**No.** Index names and type names share a single namespace. Declaring both `cat Foo { A }` and `type Foo { A }` is a compile-time error.
+**No.** Index names and type names share a single namespace. Declaring both `index Foo = { A };` and `type Foo { A }` is a compile-time error.
 
 ### How does the parser know if a bare PascalCase name is a tagged union variant or something else?
 
@@ -389,7 +389,7 @@ fn f(m: Maneuver) -> Velocity { ... }
 ### LSP Features
 
 - **Inlay hints:** Show `Label(Maneuver)` or just `Maneuver` (as a label type) instead of `Struct(Maneuver)` for loop variables.
-- **Go to definition:** `Maneuver::Departure` goes to the `cat` declaration. `Nominal` goes to the variant in the `type` declaration.
+- **Go to definition:** `Maneuver::Departure` goes to the `index` declaration. `Nominal` goes to the variant in the `type` declaration.
 - **Hover:** Shows "label of index `Maneuver`" vs "variant of type `Status`."
 
 ### Tree-sitter Grammar
@@ -414,7 +414,7 @@ No changes needed for this design. The `{ }` appending issue is a separate conce
 
 ### Phase 2: Decouple Registries
 
-1. Remove `TypeDef` registration from `cat`/`range` declaration processing in `ir.rs`.
+1. Remove `TypeDef` registration from `index` declaration processing in `ir.rs`.
 2. Remove index label entries from `variant_to_type` reverse lookup in the type registry.
 3. Update type resolution to look up index names in the index registry (not type registry) when resolving type annotations like `m: Maneuver`.
 4. Update any code that assumes index labels are in the type registry.

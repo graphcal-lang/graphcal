@@ -7,6 +7,6 @@ range index `TimeStep`: start (100) must be <= end (0)
 Begin snippet for range_index_invalid.gcl starting at line 1, column 1
 
 snippet line 1: // Error: range index with start > end
-snippet line 2: range TimeStep(100.0 s, 0.0 s, step: 0.1 s);
-    label at line 2, columns 1 to 43: invalid range
+snippet line 2: index TimeStep = linspace(100.0 s, 0.0 s, step: 0.1 s);
+    label at line 2, columns 1 to 54: invalid range
 diagnostic code: graphcal::I007

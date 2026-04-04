@@ -8,8 +8,8 @@ dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
 
 // Required named index (no variants specified)
-cat Phase;
+index Phase;
 
 // Required range indexes with dimension constraints
-range Step: Time;
-range Accel: Length / Time^2;
+index Step: Time;
+index Accel: Length / Time^2;

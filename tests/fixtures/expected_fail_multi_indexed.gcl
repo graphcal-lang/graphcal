@@ -1,6 +1,6 @@
 // expected_fail_multi_indexed.gcl -- Per-tuple-key expected_fail on multi-index assertion
-cat Mode { Normal, Eco, Boost }
-cat Phase { Launch, Cruise }
+index Mode = { Normal, Eco, Boost };
+index Phase = { Launch, Cruise };
 
 param threshold: Dimensionless[Mode, Phase] = {
     (Mode::Normal, Phase::Launch): 10.0,

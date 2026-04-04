@@ -46,8 +46,7 @@ module.exports = grammar({
       $.unit_declaration,
       $.type_declaration,
       $.fn_declaration,
-      $.cat_declaration,
-      $.range_declaration,
+      $.index_declaration,
       $.import_declaration,
       $.assert_declaration,
       $.plot_declaration,
@@ -197,12 +196,16 @@ module.exports = grammar({
       )),
     ),
 
-    // cat Maneuver { Departure, Correction, Insertion }
-    cat_declaration: $ => choice(
-      // cat Maneuver { Departure, Correction, Insertion }
+    // index Maneuver = { Departure, Correction, Insertion };
+    // index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
+    // index Foo;  (required named)
+    // index Foo: Time;  (required range)
+    index_declaration: $ => choice(
+      // Named index: index Maneuver = { Departure, Correction, Insertion };
       seq(
-        "cat",
+        "index",
         field("name", $.identifier),
+        "=",
         "{",
         optional(seq(
           $.variant,
@@ -210,17 +213,14 @@ module.exports = grammar({
           optional(","),
         )),
         "}",
+        ";",
       ),
-      // cat Foo;  (required — must be bound via parameterized import)
-      seq("cat", field("name", $.identifier), ";"),
-    ),
-
-    // range TimeStep(0.0 s, 1.0 s, step: 0.1 s);
-    // range Foo: Time;  (required — must be bound via parameterized import)
-    range_declaration: $ => choice(
+      // Linspace index: index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
       seq(
-        "range",
+        "index",
         field("name", $.identifier),
+        "=",
+        "linspace",
         "(",
         field("start", $._expr),
         ",",
@@ -232,8 +232,11 @@ module.exports = grammar({
         ")",
         ";",
       ),
+      // Required named: index Foo;
+      seq("index", field("name", $.identifier), ";"),
+      // Required range: index Foo: Time;
       seq(
-        "range",
+        "index",
         field("name", $.identifier),
         ":",
         field("dimension", $.dim_expr),

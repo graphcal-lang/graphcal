@@ -29,8 +29,8 @@ pub enum Token {
     Let,
     #[token("fn")]
     Fn,
-    #[token("cat")]
-    Cat,
+    #[token("index")]
+    Index,
     #[token("for")]
     For,
     #[token("import")]
@@ -53,8 +53,8 @@ pub enum Token {
     Scan,
     #[token("unfold")]
     Unfold,
-    #[token("range")]
-    Range,
+    #[token("linspace")]
+    Linspace,
     #[token("step")]
     Step,
 
@@ -164,7 +164,7 @@ impl std::fmt::Display for Token {
             Self::Type => write!(f, "type"),
             Self::Let => write!(f, "let"),
             Self::Fn => write!(f, "fn"),
-            Self::Cat => write!(f, "cat"),
+            Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
             Self::Import => write!(f, "import"),
             Self::Match => write!(f, "match"),
@@ -176,7 +176,7 @@ impl std::fmt::Display for Token {
             Self::Layer => write!(f, "layer"),
             Self::Scan => write!(f, "scan"),
             Self::Unfold => write!(f, "unfold"),
-            Self::Range => write!(f, "range"),
+            Self::Linspace => write!(f, "linspace"),
             Self::Step => write!(f, "step"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
@@ -441,7 +441,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn cat for import match as assert table plot figure scan unfold range step",
+            "param node const if else dimension unit type let fn index for import match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -456,7 +456,7 @@ mod tests {
                 Token::Type,
                 Token::Let,
                 Token::Fn,
-                Token::Cat,
+                Token::Index,
                 Token::For,
                 Token::Import,
                 Token::Match,
@@ -467,7 +467,7 @@ mod tests {
                 Token::Figure,
                 Token::Scan,
                 Token::Unfold,
-                Token::Range,
+                Token::Linspace,
                 Token::Step,
             ]
         );
@@ -477,7 +477,7 @@ mod tests {
     fn lex_identifier_starting_with_new_keywords() {
         // "scanner" should be Ident, not Scan + "ner"
         for word in [
-            "scanner", "unfolder", "ranger", "stepped", "catalog", "category",
+            "scanner", "unfolder", "stepped", "indexed", "indexing", "linspaced",
         ] {
             let mut lexer = Token::lexer(word);
             assert_eq!(lexer.next(), Some(Ok(Token::Ident)));

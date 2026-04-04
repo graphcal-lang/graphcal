@@ -16,7 +16,7 @@ import "./path/to/file.gcl" { name1, name2 };
 
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
-- All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `cat`, `range`, `fn`
+- All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `index`, `fn`
 
 ## Module Imports
 
@@ -154,7 +154,7 @@ node diff: Velocity = @velocity_a - @velocity_b;
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
-| `cat`/`range` | `import "..." { IndexName }` | `IndexName` |
+| `index` | `import "..." { IndexName }` | `IndexName` |
 | `fn` | `import "..." { fn_name }` | `fn_name(...)` |
 
 Imported `param` and `node` declarations are referenced with `@` just like local ones.
@@ -232,7 +232,7 @@ A library declares a [required index](indexes.md#required-indexes):
 
 ```
 // lib/budget.gcl
-cat Phase;
+index Phase;
 
 param cost: Dimensionless[Phase];
 node total: Dimensionless = sum(for p: Phase { @cost[p] });
@@ -242,7 +242,7 @@ The importer binds it to a concrete index:
 
 ```
 // main.gcl
-cat MyPhase { Design, Build, Test }
+index MyPhase = { Design, Build, Test };
 
 import "./lib/budget.gcl"(
     Phase: MyPhase,
@@ -256,7 +256,7 @@ Index bindings use the same `Name: Value` syntax as param bindings, but the righ
 
 #### Kind matching
 
-Named indexes (`cat`) can only be bound to named indexes, and range indexes (`range`) can only be bound to range indexes. Binding a named index to a range or vice versa is a compile error.
+Named indexes can only be bound to named indexes, and range indexes can only be bound to range indexes. Binding a named index to a range or vice versa is a compile error.
 
 #### Dimension matching for range indexes
 
@@ -264,13 +264,13 @@ When binding a required range index, the concrete range index must have the **sa
 
 ```
 // lib.gcl
-range Step: Time;   // requires dimension Time
+index Step: Time;   // requires dimension Time
 
 // main.gcl
-range MyStep(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
+index MyStep = linspace(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
 import "./lib.gcl"(Step: MyStep) { ... };
 
-range DistStep(0.0 m, 100.0 m, step: 10.0 m);  // ERROR: dimension is Length
+index DistStep = linspace(0.0 m, 100.0 m, step: 10.0 m);  // ERROR: dimension is Length
 import "./lib.gcl"(Step: DistStep) { ... };     // dimension mismatch
 ```
 
@@ -337,7 +337,7 @@ Required params can also be satisfied from the command line with `--set` or `--i
 
 ### Validation
 
-- Binding names must be `param` or index (`cat`/`range`) declarations in the imported file
+- Binding names must be `param` or index (`index`) declarations in the imported file
 - Binding a `node`, `const`, or unknown name is a compile error
 - All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
 - All required indexes must be provided by bindings
@@ -429,7 +429,7 @@ project/
 
 ```
 // lib/budget.gcl
-cat Phase;
+index Phase;
 
 param cost: Dimensionless[Phase];
 node total: Dimensionless = sum(for p: Phase { @cost[p] });
@@ -437,7 +437,7 @@ node total: Dimensionless = sum(for p: Phase { @cost[p] });
 
 ```
 // main.gcl
-cat ProjectPhase { Design, Build, Test }
+index ProjectPhase = { Design, Build, Test };
 
 import "./lib/budget.gcl"(
     Phase: ProjectPhase,

@@ -1,5 +1,5 @@
 // main.gcl -- binds Mode, marks Overdrive as expected to fail
-cat MyModes { Idle, Active, Overdrive }
+index MyModes = { Idle, Active, Overdrive };
 
 import "./lib.gcl"(
     Mode: MyModes,

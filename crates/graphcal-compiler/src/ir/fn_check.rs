@@ -297,7 +297,7 @@ mod tests {
     fn recursion_through_index_access() {
         // collect_fn_calls_in_expr on IndexAccess traverses the inner expression
         let source = r"
-            cat Phase { Coast, Burn }
+            index Phase = { Coast, Burn };
             fn helper(v: Dimensionless) -> Dimensionless = v;
             fn bad(v: Dimensionless) -> Dimensionless = helper(bad(v));
         ";

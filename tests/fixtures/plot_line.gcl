@@ -4,7 +4,7 @@
 // showing exponential decay over discrete time steps.
 dimension Frequency = Time^-1;
 
-range TimeStep(0.0 s, 2.0 s, step: 0.5 s);
+index TimeStep = linspace(0.0 s, 2.0 s, step: 0.5 s);
 
 param decay_rate: Frequency = 1.0 Hz;
 param initial_value: Dimensionless = 10.0;

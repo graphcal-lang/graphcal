@@ -5,7 +5,7 @@
 unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
-cat Subsystem {
+index Subsystem = {
     CommandAndData,
     AttitudeControl,
     Propulsion,
@@ -18,10 +18,10 @@ cat Subsystem {
     Harness,
     Mechanisms,
     Software,
-}
+};
 
 // --- Operating modes (8 variants) ---
-cat OpMode {
+index OpMode = {
     Safe,
     Detumble,
     NominalSunlit,
@@ -30,7 +30,7 @@ cat OpMode {
     ScienceObs,
     OrbitManeuver,
     Standby,
-}
+};
 
 // --- Power draw per subsystem per mode (12x8 = 96 cells) ---
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
