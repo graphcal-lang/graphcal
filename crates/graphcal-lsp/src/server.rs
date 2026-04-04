@@ -202,8 +202,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let mut symbol_table = symbol_table::build_from_ast(root_ast);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
-            let imported_definitions =
-                collect_imported_definitions(uri, root_ast, &project, Some(&tir));
+            let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
             let fn_signatures = build_fn_signatures(Some(&tir));
             let import_decls = collect_import_decl_info(root_ast);
             let (diagnostics, eval_values) = run_eval_from_project(&project, text);
@@ -221,7 +220,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
         Err(e) => {
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
             let symbol_table = symbol_table::build_from_ast(root_ast);
-            let imported_definitions = collect_imported_definitions(uri, root_ast, &project, None);
+            let imported_definitions = collect_imported_definitions(uri, &project, None);
             let diagnostics = compile_error_to_diagnostics(&e, text);
             let import_decls = collect_import_decl_info(root_ast);
 
@@ -557,86 +556,45 @@ fn format_tuple_keyed_entries(
 
 /// Collect imported definitions from a loaded project.
 ///
-/// For each `import` declaration in the root file, resolves the import path,
-/// looks up the imported file in the project, and builds a symbol table
-/// from the imported file's AST to extract the definition info.
-#[expect(
-    clippy::print_stderr,
-    reason = "LSP server uses stderr for debug logging"
-)]
+/// For each `import` declaration in the root file, uses the loader-resolved
+/// canonical paths to look up the imported file in the project, and builds a
+/// symbol table from the imported file's AST to extract the definition info.
+///
+/// This uses `LoadedFile::imports_with_paths()` to consume the same canonical
+/// import paths that the loader established, avoiding re-resolution and
+/// supporting both file-path and module-path imports.
 fn collect_imported_definitions(
     root_uri: &Url,
-    root_ast: &graphcal_compiler::syntax::ast::File,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_eval::tir::TIR>,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
     let mut result = HashMap::new();
 
-    let Ok(root_path) = root_uri.to_file_path() else {
+    let Some(root_file) = project.files.get(&project.root) else {
         return result;
     };
-    let root_dir = root_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
 
-    for decl in &root_ast.declarations {
-        if let DeclKind::Import(import_decl) = &decl.kind {
-            // Resolve file-based imports only; module paths require manifest context
-            // which the LSP doesn't currently track.
-            let canonical = match &import_decl.path {
-                graphcal_compiler::syntax::ast::ImportPath::FilePath { path, .. } => {
-                    let import_path = root_dir.join(path);
-                    let Ok(c) = import_path.canonicalize() else {
-                        eprintln!(
-                            "LSP: failed to canonicalize import path: {}",
-                            import_path.display()
-                        );
-                        continue;
-                    };
-                    c
-                }
-                graphcal_compiler::syntax::ast::ImportPath::ModulePath { .. } => {
-                    // Module path resolution needs manifest; skip for now.
-                    continue;
-                }
-            };
-            let Some(loaded_file) = project.files.get(&canonical) else {
-                eprintln!(
-                    "LSP: imported file not found in project: {}",
-                    canonical.display()
-                );
-                continue;
-            };
+    for (_decl, import_decl, canonical) in root_file.imports_with_paths() {
+        let Some(loaded_file) = project.files.get(canonical) else {
+            continue;
+        };
 
-            let mut imported_table = symbol_table::build_from_ast(&loaded_file.ast);
-            if let Some(tir) = tir {
-                symbol_table::enrich_from_tir(&mut imported_table, tir);
-            }
+        let mut imported_table = symbol_table::build_from_ast(&loaded_file.ast);
+        if let Some(tir) = tir {
+            symbol_table::enrich_from_tir(&mut imported_table, tir);
+        }
 
-            let imported_uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
-                Url::parse(&format!("file://{}", loaded_file.path.display()))
-                    .unwrap_or_else(|_| root_uri.clone())
-            });
-            let source = loaded_file.source.to_string();
+        let imported_uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
+            Url::parse(&format!("file://{}", loaded_file.path.display()))
+                .unwrap_or_else(|_| root_uri.clone())
+        });
+        let source = loaded_file.source.to_string();
 
-            match &import_decl.kind {
-                graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
-                    for import_item in names {
-                        let key = SymbolKey::TopLevel(import_item.name.name.clone());
-                        if let Some(def) = imported_table.definitions.remove(&key) {
-                            result.insert(
-                                key,
-                                ImportedDefinition {
-                                    uri: imported_uri.clone(),
-                                    source: source.clone(),
-                                    definition: def,
-                                },
-                            );
-                        }
-                    }
-                }
-                graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
-                    for (key, def) in imported_table.definitions {
+        match &import_decl.kind {
+            graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
+                for import_item in names {
+                    let key = SymbolKey::TopLevel(import_item.name.name.clone());
+                    if let Some(def) = imported_table.definitions.remove(&key) {
                         result.insert(
                             key,
                             ImportedDefinition {
@@ -646,6 +604,18 @@ fn collect_imported_definitions(
                             },
                         );
                     }
+                }
+            }
+            graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
+                for (key, def) in imported_table.definitions {
+                    result.insert(
+                        key,
+                        ImportedDefinition {
+                            uri: imported_uri.clone(),
+                            source: source.clone(),
+                            definition: def,
+                        },
+                    );
                 }
             }
         }
