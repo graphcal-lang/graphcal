@@ -122,7 +122,8 @@ pub(super) fn infer_block(
 
         // If type annotation provided, check it matches
         if let Some(type_ann) = &binding.type_ann {
-            let resolved = crate::tir::tir::resolve_type_expr(type_ann, registry, &[], &[], src)?;
+            let resolved =
+                crate::tir::tir::resolve_type_expr(type_ann, registry, &[], &[], &[], src)?;
             let ann_type = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
             let ann_inferred = declared_to_inferred(&ann_type);
             if ann_inferred != rhs_type {

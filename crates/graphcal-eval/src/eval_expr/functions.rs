@@ -547,6 +547,26 @@ fn eval_builtin_or_user_fn(
         fn_locals.insert(param.name.clone(), val);
     }
 
+    // Resolve nat generic params by inspecting argument shapes.
+    // For each Nat generic param, find it in the parameter type annotations,
+    // then extract the corresponding nat range size from the actual argument value.
+    for gp in &fn_def.generic_params {
+        if gp.constraint == graphcal_compiler::registry::registry::FnGenericConstraint::Nat {
+            let nat_name = gp.name.as_str();
+            // Search through param types for occurrences of this nat param in index position
+            if let Some(size) = extract_nat_param_from_args(nat_name, fn_def, &fn_locals) {
+                // Register the nat range index in the registry if needed
+                // (it may not exist yet if the concrete size wasn't known at compile time)
+                // Note: we can't mutate the registry here, but the index should have been
+                // registered by the caller's type annotations.
+                fn_locals.insert(
+                    format!("__nat_param_{nat_name}"),
+                    RuntimeValue::Int(i64::try_from(size).unwrap_or(0)),
+                );
+            }
+        }
+    }
+
     // Evaluate body: pass `values` for ConstRef access (user consts like GM_EARTH).
     // Purity is enforced by the resolver's @ prohibition -- no GraphRef nodes
     // exist in function bodies, so passing values is safe.
@@ -562,6 +582,64 @@ fn eval_builtin_or_user_fn(
             eval_expr(expr, values, &block_locals, ctx)
         }
     }
+}
+
+/// Extract the value of a nat param by inspecting the function's argument values.
+///
+/// Walks the parameter type annotations looking for the nat param name in index position.
+/// When found, extracts the corresponding nat range size from the actual argument value.
+fn extract_nat_param_from_args(
+    nat_name: &str,
+    fn_def: &graphcal_compiler::registry::registry::FnDef,
+    fn_locals: &HashMap<String, RuntimeValue>,
+) -> Option<u64> {
+    for param_def in &fn_def.params {
+        if let Some(size) = extract_nat_from_type_and_value(
+            nat_name,
+            &param_def.type_expr,
+            fn_locals.get(&param_def.name)?,
+        ) {
+            return Some(size);
+        }
+    }
+    None
+}
+
+/// Recursively extract a nat param value from a type annotation and matching runtime value.
+fn extract_nat_from_type_and_value(
+    nat_name: &str,
+    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    value: &RuntimeValue,
+) -> Option<u64> {
+    use graphcal_compiler::syntax::ast::{IndexExpr, TypeExprKind};
+
+    if let TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
+        // Peel from outermost: first index is outermost
+        let mut current = value;
+        for idx in indexes {
+            let RuntimeValue::Indexed {
+                index_name,
+                entries,
+            } = current
+            else {
+                return None;
+            };
+            if let IndexExpr::Name(ident) = idx
+                && ident.name == nat_name
+            {
+                // This index position has the nat param we're looking for.
+                // Extract the size from the actual index name.
+                return graphcal_compiler::registry::registry::parse_nat_range_index_name(
+                    index_name.as_str(),
+                );
+            }
+            // Move to the first element to descend
+            current = entries.values().next()?;
+        }
+        // Also check the base type recursively
+        return extract_nat_from_type_and_value(nat_name, base, current);
+    }
+    None
 }
 
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.

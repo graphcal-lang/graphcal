@@ -69,6 +69,10 @@ pub(super) fn eval_index_access(
                     RuntimeValue::RangeLabel { step_index, .. } => {
                         VariantName::new(format!("#{step_index}"))
                     }
+                    RuntimeValue::Int(n) => {
+                        // Nat range loop variable: integer value maps to #N variant
+                        VariantName::new(format!("#{n}"))
+                    }
                     _ => {
                         return Err(GraphcalError::EvalError {
                             message: format!("`{}` is not a loop variable", ident.name),
@@ -335,6 +339,10 @@ fn eval_map_literal(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
+#[expect(
+    clippy::too_many_lines,
+    reason = "handles named, range, and nat-range index kinds with error reporting"
+)]
 fn eval_for_comp(
     bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
@@ -342,8 +350,55 @@ fn eval_for_comp(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::syntax::ast::{ForBindingIndex, NatExpr};
+
     let binding = &bindings[0];
-    let idx_name = binding.index.value.clone();
+
+    // Resolve the index name and get the index definition
+    let (idx_name, error_span) = match &binding.index {
+        ForBindingIndex::Named(spanned) => (spanned.value.clone(), spanned.span),
+        ForBindingIndex::Range { arg, span } => {
+            let size = match arg {
+                NatExpr::Literal(n, _) => *n,
+                NatExpr::Var(ident) => {
+                    // Look up the resolved nat param value from local_values.
+                    // It was stored as __nat_param_N by resolve_nat_params_for_fn.
+                    let key = format!("__nat_param_{}", ident.name);
+                    let nat_val =
+                        local_values
+                            .get(&key)
+                            .ok_or_else(|| GraphcalError::InternalError {
+                                message: format!(
+                                    "unresolved nat parameter `{}` in for-range binding",
+                                    ident.name
+                                ),
+                                src: ctx.src.clone(),
+                                span: ident.span.into(),
+                            })?;
+                    let RuntimeValue::Int(n) = nat_val else {
+                        return Err(GraphcalError::InternalError {
+                            message: format!(
+                                "nat parameter `{}` has non-integer value",
+                                ident.name
+                            ),
+                            src: ctx.src.clone(),
+                            span: ident.span.into(),
+                        });
+                    };
+                    u64::try_from(*n).map_err(|_| GraphcalError::InternalError {
+                        message: format!("nat parameter `{}` has negative value {}", ident.name, n),
+                        src: ctx.src.clone(),
+                        span: ident.span.into(),
+                    })?
+                }
+            };
+            let idx_name = graphcal_compiler::syntax::names::IndexName::new(
+                graphcal_compiler::registry::registry::nat_range_index_name(size),
+            );
+            (idx_name, *span)
+        }
+    };
+
     let idx_def = ctx
         .registry
         .indexes
@@ -351,7 +406,7 @@ fn eval_for_comp(
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("unknown index `{idx_name}`"),
             src: ctx.src.clone(),
-            span: binding.index.span.into(),
+            span: error_span.into(),
         })?;
     let remaining = &bindings[1..];
 
@@ -376,7 +431,7 @@ fn eval_for_comp(
                             "range variant `{variant}` has unexpected format (expected #N)"
                         ),
                         src: ctx.src.clone(),
-                        span: binding.index.span.into(),
+                        span: error_span.into(),
                     })?;
                 RuntimeValue::RangeLabel {
                     step_index,
@@ -384,10 +439,31 @@ fn eval_for_comp(
                         GraphcalError::InternalError {
                             message: format!("range index step {step_index} out of bounds: {e}"),
                             src: ctx.src.clone(),
-                            span: binding.index.span.into(),
+                            span: error_span.into(),
                         }
                     })?,
                 }
+            }
+            crate::registry::IndexKind::NatRange { .. } => {
+                // Nat range loop variable: integer value
+                let step_index = variant
+                    .as_str()
+                    .strip_prefix('#')
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "nat range variant `{variant}` has unexpected format (expected #N)"
+                        ),
+                        src: ctx.src.clone(),
+                        span: error_span.into(),
+                    })?;
+                RuntimeValue::Int(i64::try_from(step_index).map_err(|_| {
+                    GraphcalError::InternalError {
+                        message: format!("nat range step {step_index} too large for i64"),
+                        src: ctx.src.clone(),
+                        span: error_span.into(),
+                    }
+                })?)
             }
         };
         inner_locals.insert(binding.var.name.clone(), binding_value);

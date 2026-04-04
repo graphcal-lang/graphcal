@@ -153,6 +153,9 @@ pub(super) fn resolve_field_type(
                     index_sub.insert(param.name.clone(), IndexName::new(name.as_str()));
                 }
             }
+            TypeGenericConstraint::Nat => {
+                // Nat generics on type definitions are not yet used
+            }
             TypeGenericConstraint::Unconstrained => {
                 type_sub.insert(param.name.clone(), arg.clone());
             }
@@ -190,9 +193,11 @@ pub(super) fn resolve_field_type(
         registry,
         &dim_params,
         &index_params,
+        &[],
         src,
     )?;
-    crate::tir::tir::substitute_resolved_type(&resolved, &dim_sub, &index_sub, src)
+    let no_nat_sub = std::collections::HashMap::new();
+    crate::tir::tir::substitute_resolved_type(&resolved, &dim_sub, &index_sub, &no_nat_sub, src)
 }
 
 /// Helper: extract scalar dimension from `InferredType`, returning error if struct.

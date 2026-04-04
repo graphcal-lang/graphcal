@@ -1146,8 +1146,10 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
             }
             ExprKind::ForComp { bindings, body } => {
                 for b in bindings {
-                    if let Some(new) = self.bindings.get(b.index.value.as_str()) {
-                        b.index.value = IndexName::new(new);
+                    if let crate::syntax::ast::ForBindingIndex::Named(ref mut spanned_idx) = b.index
+                        && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
+                    {
+                        spanned_idx.value = IndexName::new(new);
                     }
                 }
                 self.visit_expr_mut(body)
@@ -1334,9 +1336,11 @@ pub fn substitute_type_expr_index_names(
     }
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
-            for idx_ident in indexes.iter_mut() {
-                if let Some(new_name) = bindings.get(&idx_ident.name) {
-                    idx_ident.name = new_name.clone();
+            for idx_expr in indexes.iter_mut() {
+                if let crate::syntax::ast::IndexExpr::Name(ident) = idx_expr
+                    && let Some(new_name) = bindings.get(&ident.name)
+                {
+                    ident.name = new_name.clone();
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1516,6 +1520,46 @@ fn register_declarations_impl(
     // Phase 5: Register range indexes (depend on dimensions and units).
     for (idx, span) in &range_indexes {
         register_index_decl(idx, registry, src, *span)?;
+    }
+
+    // Phase 6: Register synthetic nat range indexes for any integer literals
+    // appearing in type position (e.g., `param A: Length[3, 4]`) or
+    // for-range expressions (e.g., `for i: range(3) { ... }`).
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Const(d) => {
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
+                collect_nat_ranges_from_expr(&d.value, registry);
+            }
+            DeclKind::Param(d) => {
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
+                if let Some(ref value) = d.value {
+                    collect_nat_ranges_from_expr(value, registry);
+                }
+            }
+            DeclKind::Node(d) => {
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
+                collect_nat_ranges_from_expr(&d.value, registry);
+            }
+            DeclKind::Fn(d) => {
+                for p in &d.params {
+                    collect_nat_ranges_from_type_expr(&p.type_ann, registry);
+                }
+                collect_nat_ranges_from_type_expr(&d.return_type, registry);
+                match &d.body {
+                    crate::syntax::ast::FnBody::Short(expr) => {
+                        collect_nat_ranges_from_expr(expr, registry);
+                    }
+                    crate::syntax::ast::FnBody::Block { stmts, expr } => {
+                        for stmt in stmts {
+                            collect_nat_ranges_from_expr(&stmt.value, registry);
+                        }
+                        collect_nat_ranges_from_expr(expr, registry);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     Ok(())
@@ -1892,6 +1936,60 @@ fn collect_dynamic_unit_deps_from_expr(
     extra_deps
 }
 
+/// Recursively scan a type expression for nat literals in index position
+/// and register the corresponding synthetic nat range indexes in the registry.
+fn collect_nat_ranges_from_type_expr(
+    type_expr: &crate::syntax::ast::TypeExpr,
+    registry: &mut RegistryBuilder,
+) {
+    if let crate::syntax::ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
+        collect_nat_ranges_from_type_expr(base, registry);
+        for idx in indexes {
+            if let crate::syntax::ast::IndexExpr::NatLiteral(n, _) = idx {
+                registry.ensure_nat_range_index(*n);
+            }
+        }
+    }
+    if let crate::syntax::ast::TypeExprKind::TypeApplication { type_args, .. } = &type_expr.kind {
+        for arg in type_args {
+            collect_nat_ranges_from_type_expr(arg, registry);
+        }
+    }
+}
+
+/// Recursively scan an expression for `for i: range(N)` and register
+/// nat range indexes for concrete nat literals.
+fn collect_nat_ranges_from_expr(expr: &crate::syntax::ast::Expr, registry: &mut RegistryBuilder) {
+    use crate::syntax::ast::{ExprKind, ForBindingIndex, NatExpr};
+
+    // Use the visitor trait to walk all sub-expressions
+    struct NatRangeCollector<'a> {
+        registry: &'a mut RegistryBuilder,
+    }
+
+    impl crate::syntax::visitor::ExprVisitor for NatRangeCollector<'_> {
+        type Error = GraphcalError;
+
+        fn visit_expr(&mut self, expr: &crate::syntax::ast::Expr) -> Result<(), GraphcalError> {
+            if let ExprKind::ForComp { bindings, .. } = &expr.kind {
+                for binding in bindings {
+                    if let ForBindingIndex::Range {
+                        arg: NatExpr::Literal(n, _),
+                        ..
+                    } = &binding.index
+                    {
+                        self.registry.ensure_nat_range_index(*n);
+                    }
+                }
+            }
+            self.dispatch(expr)
+        }
+    }
+
+    let mut collector = NatRangeCollector { registry };
+    let _ = collector.visit_expr(expr);
+}
+
 fn register_index_decl(
     idx: &crate::syntax::ast::IndexDecl,
     registry: &mut RegistryBuilder,
@@ -2200,6 +2298,9 @@ fn register_functions(
                         }
                         crate::syntax::ast::GenericConstraint::Index => {
                             registry::FnGenericConstraint::Index
+                        }
+                        crate::syntax::ast::GenericConstraint::Nat => {
+                            registry::FnGenericConstraint::Nat
                         }
                         crate::syntax::ast::GenericConstraint::Type => {
                             return Err(GraphcalError::EvalError {

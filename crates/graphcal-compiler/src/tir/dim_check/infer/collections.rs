@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{Expr, ForBinding, IndexArg};
+use crate::syntax::ast::{Expr, ForBinding, ForBindingIndex, IndexArg, NatExpr};
 use crate::syntax::names::{FieldName, FnName, GenericParamName, IndexName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
@@ -19,6 +19,23 @@ use super::super::helpers::{
 };
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
+
+/// Get the index name for a for binding.
+fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
+    match index {
+        ForBindingIndex::Named(spanned) => spanned.value.clone(),
+        ForBindingIndex::Range { arg, .. } => match arg {
+            NatExpr::Literal(n, _) => {
+                IndexName::new(crate::registry::registry::nat_range_index_name(*n))
+            }
+            NatExpr::Var(ident) => {
+                // During type inference of generic function bodies, we don't know
+                // the concrete nat value. Use a placeholder name.
+                IndexName::new(format!("__nat_range_{}", ident.name))
+            }
+        },
+    }
+}
 
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(
@@ -34,29 +51,37 @@ pub(super) fn infer_for_comp(
     // Add loop variables to local_types, infer body type, wrap in Indexed layers
     let mut inner_locals = local_types.clone();
     for binding in bindings {
-        let idx_name = binding.index.value.as_str();
-        let idx_def =
-            registry
-                .indexes
-                .get_index(idx_name)
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: binding.index.value.clone(),
-                    src: src.clone(),
-                    span: binding.index.span.into(),
+        let var_type = match &binding.index {
+            ForBindingIndex::Named(spanned_idx) => {
+                let idx_name = spanned_idx.value.as_str();
+                let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
+                        name: spanned_idx.value.clone(),
+                        src: src.clone(),
+                        span: spanned_idx.span.into(),
+                    }
                 })?;
-        inner_locals.insert(
-            binding.var.name.clone(),
-            match &idx_def.kind {
-                crate::registry::registry::IndexKind::Named { .. }
-                | crate::registry::registry::IndexKind::RequiredNamed => {
-                    InferredType::Label(binding.index.value.clone())
+                match &idx_def.kind {
+                    crate::registry::registry::IndexKind::Named { .. }
+                    | crate::registry::registry::IndexKind::RequiredNamed => {
+                        InferredType::Label(spanned_idx.value.clone())
+                    }
+                    crate::registry::registry::IndexKind::Range { dimension, .. }
+                    | crate::registry::registry::IndexKind::RequiredRange { dimension } => {
+                        InferredType::Scalar(dimension.clone())
+                    }
+                    crate::registry::registry::IndexKind::NatRange { .. } => {
+                        // Nat range loop variables are Int (will be Fin(N) later)
+                        InferredType::Int
+                    }
                 }
-                crate::registry::registry::IndexKind::Range { dimension, .. }
-                | crate::registry::registry::IndexKind::RequiredRange { dimension } => {
-                    InferredType::Scalar(dimension.clone())
-                }
-            },
-        );
+            }
+            ForBindingIndex::Range { .. } => {
+                // `for i: range(N)` — loop variable is Int
+                InferredType::Int
+            }
+        };
+        inner_locals.insert(binding.var.name.clone(), var_type);
     }
     let body_type = infer_type(
         body,
@@ -70,9 +95,10 @@ pub(super) fn infer_for_comp(
     // Wrap body type with index layers (outermost binding first)
     let mut result = body_type;
     for binding in bindings.iter().rev() {
+        let idx_name = for_binding_index_name(&binding.index);
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: binding.index.value.clone(),
+            index: idx_name,
         };
     }
     Ok(result)
@@ -454,6 +480,24 @@ pub(super) fn infer_index_access(
                             });
                         }
                     }
+                    InferredType::Int => {
+                        // Allow Int locals to be used as index args for nat range indexes
+                        // (e.g. `for i: range(3) { v[i] }`)
+                        if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                            && !idx_def.is_nat_range()
+                        {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "`{}` (Int) cannot index into non-nat-range index `{}`",
+                                    ident.name, idx_name
+                                ),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        }
+                        // If the index is not in registry (generic nat param),
+                        // allow it — it will be checked at call site.
+                    }
                     _ => {
                         return Err(GraphcalError::EvalError {
                             message: format!("`{}` is not a loop variable", ident.name),
@@ -779,6 +823,7 @@ pub(super) fn infer_struct_construction(
         }
         let no_dim_params: &[GenericParamName] = &[];
         let no_index_params: &[GenericParamName] = &[];
+        let no_nat_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
         for arg in constructor_type_args {
             let resolved = crate::tir::tir::resolve_type_expr(
@@ -786,6 +831,7 @@ pub(super) fn infer_struct_construction(
                 registry,
                 no_dim_params,
                 no_index_params,
+                no_nat_params,
                 src,
             )?;
             let dt = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
@@ -813,6 +859,7 @@ pub(super) fn infer_struct_construction(
                 registry,
                 no_dim_params,
                 no_index_params,
+                no_nat_params,
                 src,
             )?;
             let dt = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;

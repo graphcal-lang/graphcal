@@ -1450,3 +1450,70 @@ fn project_injectable_index_expected_fail() {
         assert_result.1
     );
 }
+
+#[test]
+fn eval_nat_range() {
+    use crate::eval::types::Value;
+
+    let source = include_str!("../../../../tests/fixtures/nat_range.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // v_doubled: for i: range(3) { @v[i] * 2.0 }, v = [1,1,1] → [2,2,2]
+    let v_doubled = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "v_doubled")
+        .unwrap()
+        .1
+        .as_ref()
+        .unwrap();
+    if let Value::Indexed { entries, .. } = v_doubled {
+        assert_eq!(entries.len(), 3, "v_doubled should have 3 entries");
+        for (_k, v) in entries {
+            if let Value::Scalar { si_value, .. } = v {
+                assert!((*si_value - 2.0).abs() < 1e-10);
+            } else {
+                panic!("v_doubled entry should be Scalar");
+            }
+        }
+    } else {
+        panic!("v_doubled should be Indexed");
+    }
+
+    // mat32: transpose of 2x3 matrix → 3x2 matrix
+    let mat32 = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "mat32")
+        .unwrap()
+        .1
+        .as_ref()
+        .unwrap();
+    if let Value::Indexed { entries, .. } = mat32 {
+        assert_eq!(entries.len(), 3, "mat32 outer should have 3 entries (N=3)");
+        for (_k, inner) in entries {
+            if let Value::Indexed {
+                entries: inner_entries,
+                ..
+            } = inner
+            {
+                assert_eq!(
+                    inner_entries.len(),
+                    2,
+                    "mat32 inner should have 2 entries (M=2)"
+                );
+            } else {
+                panic!("mat32 inner should be Indexed");
+            }
+        }
+    } else {
+        panic!("mat32 should be Indexed");
+    }
+
+    // dot_result: sum(1m * 2 for 3) = 6m
+    let dot_result = find_value(&result, "dot_result");
+    assert!(
+        (dot_result - 6.0).abs() < 1e-10,
+        "dot_result = {dot_result}"
+    );
+}

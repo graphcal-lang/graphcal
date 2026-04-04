@@ -91,10 +91,11 @@ impl Parser<'_> {
             let constraint = match constraint_ident.name.as_str() {
                 "Dim" => GenericConstraint::Dim,
                 "Index" => GenericConstraint::Index,
+                "Nat" => GenericConstraint::Nat,
                 "Type" => GenericConstraint::Type,
                 _ => {
                     return Err(self.unexpected_token(
-                        "`Dim`, `Index`, or `Type`",
+                        "`Dim`, `Index`, `Nat`, or `Type`",
                         &constraint_ident.name,
                         constraint_ident.span,
                     ));

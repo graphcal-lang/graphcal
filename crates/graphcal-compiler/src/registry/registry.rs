@@ -95,6 +95,8 @@ pub enum TypeGenericConstraint {
     Dim,
     /// `I: Index` — the generic stands for an index.
     Index,
+    /// `N: Nat` — the generic stands for a natural number (type-level).
+    Nat,
     /// `F: Type` — unconstrained phantom type parameter.
     Unconstrained,
 }
@@ -104,6 +106,7 @@ impl From<GenericConstraint> for TypeGenericConstraint {
         match c {
             GenericConstraint::Dim => Self::Dim,
             GenericConstraint::Index => Self::Index,
+            GenericConstraint::Nat => Self::Nat,
             GenericConstraint::Type => Self::Unconstrained,
         }
     }
@@ -179,6 +182,8 @@ pub enum FnGenericConstraint {
     Dim,
     /// `I: Index` — the generic stands for an index.
     Index,
+    /// `N: Nat` — the generic stands for a natural number (type-level).
+    Nat,
 }
 
 /// A generic parameter with name and constraint.
@@ -219,6 +224,13 @@ pub enum IndexKind {
     RequiredNamed,
     /// Required range index with dimension constraint: must be bound via parameterized import.
     RequiredRange { dimension: Dimension },
+    /// A Nat-parameterized range: `range(N)` with elements `{0, 1, ..., N-1}`.
+    ///
+    /// Created synthetically for integer literals in index position (e.g., `D[3]`).
+    NatRange {
+        /// The size of the range (number of elements).
+        size: u64,
+    },
 }
 
 /// A declared index with its ordered variants.
@@ -233,6 +245,7 @@ impl IndexDef {
     ///
     /// For named indexes, returns the declared variants.
     /// For range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
+    /// For nat range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
     /// For required indexes, returns an empty vec (no variants until bound).
     #[must_use]
     pub fn variants(&self) -> Vec<VariantName> {
@@ -244,6 +257,9 @@ impl IndexDef {
                     .map(|i| VariantName::new(format!("#{i}")))
                     .collect()
             }
+            IndexKind::NatRange { size } => (0..*size)
+                .map(|i| VariantName::new(format!("#{i}")))
+                .collect(),
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
         }
     }
@@ -263,6 +279,7 @@ impl IndexDef {
             IndexKind::Range {
                 start, end, step, ..
             } => (((end - start) / step).round() as usize) + 1,
+            IndexKind::NatRange { size } => *size as usize,
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }
     }
@@ -271,7 +288,7 @@ impl IndexDef {
     ///
     /// # Errors
     ///
-    /// Returns an error message if this is a named or required index.
+    /// Returns an error message if this is a named, required, or nat range index.
     #[expect(
         clippy::cast_precision_loss,
         reason = "range step indices are small enough for exact f64 representation"
@@ -287,10 +304,14 @@ impl IndexDef {
                 "step_value() called on required range index `{}`",
                 self.name
             )),
+            IndexKind::NatRange { .. } => Err(format!(
+                "step_value() called on nat range index `{}`",
+                self.name
+            )),
         }
     }
 
-    /// Returns true if this is a range index (concrete or required).
+    /// Returns true if this is a range index (concrete or required, not nat range).
     #[must_use]
     pub const fn is_range(&self) -> bool {
         matches!(
@@ -308,6 +329,21 @@ impl IndexDef {
         )
     }
 
+    /// Returns true if this is a nat range index.
+    #[must_use]
+    pub const fn is_nat_range(&self) -> bool {
+        matches!(self.kind, IndexKind::NatRange { .. })
+    }
+
+    /// Returns the nat range size, if this is a nat range index.
+    #[must_use]
+    pub const fn nat_range_size(&self) -> Option<u64> {
+        match &self.kind {
+            IndexKind::NatRange { size } => Some(*size),
+            _ => None,
+        }
+    }
+
     /// Returns true if this is a required index (must be bound via parameterized import).
     #[must_use]
     pub const fn is_required(&self) -> bool {
@@ -316,6 +352,25 @@ impl IndexDef {
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. }
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Nat range helpers
+// ---------------------------------------------------------------------------
+
+/// Generate the synthetic index name for a nat range of given size.
+///
+/// E.g., `nat_range_index_name(3)` → `"__nat_range_3"`.
+#[must_use]
+pub fn nat_range_index_name(size: u64) -> String {
+    format!("__nat_range_{size}")
+}
+
+/// Check if an index name is a synthetic nat range index and extract its size.
+#[must_use]
+pub fn parse_nat_range_index_name(name: &str) -> Option<u64> {
+    name.strip_prefix("__nat_range_")
+        .and_then(|s| s.parse().ok())
 }
 
 // ---------------------------------------------------------------------------
@@ -724,6 +779,21 @@ impl RegistryBuilder {
     /// Register an index definition.
     pub fn register_index(&mut self, def: IndexDef) {
         self.indexes.insert(def.name.clone(), def);
+    }
+
+    /// Ensure a synthetic nat range index of the given size is registered.
+    ///
+    /// Returns the synthetic index name (e.g., `__nat_range_3`).
+    /// If the index already exists, this is a no-op.
+    pub fn ensure_nat_range_index(&mut self, size: u64) -> IndexName {
+        let name = IndexName::new(nat_range_index_name(size));
+        self.indexes
+            .entry(name.clone())
+            .or_insert_with(|| IndexDef {
+                name: name.clone(),
+                kind: IndexKind::NatRange { size },
+            });
+        name
     }
 
     // -- Read methods (needed during mid-build reads in ir.rs) --

@@ -161,6 +161,9 @@ mod tests {
                             crate::syntax::ast::GenericConstraint::Index => {
                                 crate::registry::registry::FnGenericConstraint::Index
                             }
+                            crate::syntax::ast::GenericConstraint::Nat => {
+                                crate::registry::registry::FnGenericConstraint::Nat
+                            }
                             crate::syntax::ast::GenericConstraint::Type => {
                                 unreachable!(
                                     "`Type` constraint is not valid on function generic parameters"
