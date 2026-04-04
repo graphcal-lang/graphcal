@@ -1517,3 +1517,60 @@ fn eval_nat_range() {
         "dot_result = {dot_result}"
     );
 }
+
+#[test]
+fn eval_nat_range_level1() {
+    use crate::eval::types::Value;
+
+    let source = include_str!("../../../../tests/fixtures/nat_range_level1.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // --- eye3: 3x3 identity matrix ---
+    let eye3 = find_entry(&result, "eye3");
+    if let Value::Indexed { entries, .. } = &eye3 {
+        assert_eq!(entries.len(), 3, "eye3 should have 3 rows");
+        for (row_idx, (_k, row)) in entries.iter().enumerate() {
+            if let Value::Indexed { entries: cols, .. } = row {
+                assert_eq!(cols.len(), 3, "eye3 row should have 3 columns");
+                for (col_idx, (_ck, val)) in cols.iter().enumerate() {
+                    let expected = if row_idx == col_idx { 1.0 } else { 0.0 };
+                    let actual = val.si_value().unwrap();
+                    assert!(
+                        (actual - expected).abs() < 1e-10,
+                        "eye3[{row_idx},{col_idx}] = {actual}, expected {expected}"
+                    );
+                }
+            } else {
+                panic!("eye3 row should be Indexed");
+            }
+        }
+    } else {
+        panic!("eye3 should be Indexed");
+    }
+
+    // --- mat_ab: matmul of 2x3 * 3x2 all-ones → 2x2 matrix with all entries = 3.0 ---
+    let mat_ab = find_entry(&result, "mat_ab");
+    if let Value::Indexed { entries, .. } = &mat_ab {
+        assert_eq!(entries.len(), 2, "mat_ab should have 2 rows");
+        for (_k, row) in entries {
+            if let Value::Indexed { entries: cols, .. } = row {
+                assert_eq!(cols.len(), 2, "mat_ab row should have 2 columns");
+                for (_ck, val) in cols {
+                    let v = val.si_value().unwrap();
+                    assert!((v - 3.0).abs() < 1e-10, "mat_ab entry = {v}, expected 3.0");
+                }
+            } else {
+                panic!("mat_ab row should be Indexed");
+            }
+        }
+    } else {
+        panic!("mat_ab should be Indexed");
+    }
+
+    // --- trace_eye3: trace of 3x3 identity = 3.0 ---
+    let trace_val = find_value(&result, "trace_eye3");
+    assert!(
+        (trace_val - 3.0).abs() < 1e-10,
+        "trace_eye3 = {trace_val}, expected 3.0"
+    );
+}

@@ -37,3 +37,28 @@ fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] = for i: range(
 
 param short: Dimensionless[3] = for i: range(3) { 5.0 };
 node padded: Dimensionless[4] = pad_zero(@short);
+
+// --- Identity matrix ---
+// eye takes a template vector to carry N until turbofish syntax is supported (#322).
+fn eye<N: Nat>(template: Dimensionless[N]) -> Dimensionless[N, N] =
+    for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
+
+param ones3: Dimensionless[3] = for i: range(3) { 1.0 };
+node eye3: Dimensionless[3, 3] = eye(@ones3);
+
+// --- Matrix multiplication ---
+fn matmul<M: Nat, N: Nat, P: Nat, D1: Dim, D2: Dim>(
+    a: D1[M, N], b: D2[N, P]
+) -> (D1 * D2)[M, P] = for i: range(M), k: range(P) {
+    sum(for j: range(N) { a[i, j] * b[j, k] })
+};
+
+param mat_a: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+param mat_b: Dimensionless[3, 2] = for i: range(3), j: range(2) { 1.0 };
+node mat_ab: Dimensionless[2, 2] = matmul(@mat_a, @mat_b);
+
+// --- Trace ---
+fn trace<N: Nat, D: Dim>(a: D[N, N]) -> D =
+    sum(for i: range(N) { a[i, i] });
+
+node trace_eye3: Dimensionless = trace(@eye3);
