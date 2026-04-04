@@ -779,6 +779,15 @@ Expressions are normalized to a canonical linear form (`c + a₁·x₁ + …`) a
 
 Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values. `Nat` parameters are also available as runtime `Int` values in function bodies (e.g., `if i < N`).
 
+When a `Nat` parameter appears only in the return type (not in any argument), it cannot be inferred. Use explicit generic arguments (turbofish syntax) to provide the value:
+
+```
+fn eye<N: Nat>() -> Dimensionless[N, N] =
+    for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
+
+node I3: Dimensionless[3, 3] = eye<3>();
+```
+
 ## Type Equivalence
 
 Two types are equivalent if:

@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{Expr, ExprKind};
+use crate::syntax::ast::{Expr, ExprKind, GenericArg};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{FnName, GenericParamName};
+use crate::syntax::names::{FnName, GenericParamName, IndexName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
@@ -24,6 +24,7 @@ use super::infer_type;
 /// This avoids repeating 8 arguments in every helper invocation inside `infer_fn_call`.
 struct InferCtx<'a> {
     name: &'a crate::syntax::names::Spanned<FnName>,
+    type_args: &'a [GenericArg],
     args: &'a [Expr],
     declared_types: &'a HashMap<String, DeclaredType>,
     local_types: &'a HashMap<String, InferredType>,
@@ -398,6 +399,17 @@ impl InferCtx<'_> {
             });
         }
 
+        // Validate turbofish generic arg count (must match total generic param count if provided)
+        if !self.type_args.is_empty() && self.type_args.len() != sig.generic_params_ordered.len() {
+            return Err(GraphcalError::WrongGenericArity {
+                name: self.name.value.clone(),
+                expected: sig.generic_params_ordered.len(),
+                got: self.type_args.len(),
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
+        }
+
         // Infer arg types
         let arg_types: Vec<InferredType> = self
             .args
@@ -428,11 +440,17 @@ impl InferCtx<'_> {
             let ret = crate::tir::tir::resolved_to_declared_type(&sig.return_type, self.src)?;
             Ok(declared_to_inferred(&ret))
         } else {
-            // Generic: unify generic params from arg types
+            // Generic: build substitution maps
             let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
-            let mut index_sub: HashMap<GenericParamName, crate::syntax::names::IndexName> =
-                HashMap::new();
+            let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
             let mut nat_sub: HashMap<GenericParamName, u64> = HashMap::new();
+
+            // Pre-populate from turbofish args (if provided)
+            if !self.type_args.is_empty() {
+                self.populate_subs_from_turbofish(sig, &mut dim_sub, &mut index_sub, &mut nat_sub)?;
+            }
+
+            // Unify generic params from argument types
             for (i, param) in sig.params.iter().enumerate() {
                 crate::tir::tir::unify_resolved_type(
                     &param.resolved_type,
@@ -456,11 +474,129 @@ impl InferCtx<'_> {
             Ok(ret_type)
         }
     }
+
+    /// Populate substitution maps from explicit turbofish generic arguments.
+    fn populate_subs_from_turbofish(
+        &self,
+        sig: &ResolvedFnSig,
+        dim_sub: &mut HashMap<GenericParamName, Dimension>,
+        index_sub: &mut HashMap<GenericParamName, IndexName>,
+        nat_sub: &mut HashMap<GenericParamName, u64>,
+    ) -> Result<(), GraphcalError> {
+        use crate::registry::registry::FnGenericConstraint;
+        use crate::syntax::ast::TypeExprKind;
+
+        for (i, (arg, param)) in self
+            .type_args
+            .iter()
+            .zip(sig.generic_params_ordered.iter())
+            .enumerate()
+        {
+            match (&param.constraint, arg) {
+                (FnGenericConstraint::Nat, GenericArg::Nat(nat_expr)) => {
+                    // Evaluate the nat expression to a concrete u64
+                    let value = eval_nat_expr_to_u64(nat_expr)?;
+                    nat_sub.insert(param.name.clone(), value);
+                }
+                (FnGenericConstraint::Dim, GenericArg::Type(type_expr)) => {
+                    // Resolve the type expression to a dimension
+                    let dim = self
+                        .registry
+                        .dimensions
+                        .resolve_type_expr(type_expr)
+                        .ok_or_else(|| GraphcalError::GenericArgMismatch {
+                            name: self.name.value.clone(),
+                            param: param.name.to_string(),
+                            expected: "Dim".to_string(),
+                            found: format!("{type_expr:?}"),
+                            src: self.src.clone(),
+                            span: self.type_args[i].span().into(),
+                        })?;
+                    dim_sub.insert(param.name.clone(), dim);
+                }
+                (FnGenericConstraint::Index, GenericArg::Type(type_expr)) => {
+                    // Extract index name from type expression.
+                    // A bare name like `Maneuver` is parsed as DimExpr with a single term.
+                    if let TypeExprKind::DimExpr(dim_expr) = &type_expr.kind {
+                        if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
+                            index_sub.insert(
+                                param.name.clone(),
+                                IndexName::new(&dim_expr.terms[0].term.name.name),
+                            );
+                        } else {
+                            return Err(GraphcalError::GenericArgMismatch {
+                                name: self.name.value.clone(),
+                                param: param.name.to_string(),
+                                expected: "Index (a single name)".to_string(),
+                                found: format!("{type_expr:?}"),
+                                src: self.src.clone(),
+                                span: self.type_args[i].span().into(),
+                            });
+                        }
+                    } else {
+                        return Err(GraphcalError::GenericArgMismatch {
+                            name: self.name.value.clone(),
+                            param: param.name.to_string(),
+                            expected: "Index".to_string(),
+                            found: format!("{type_expr:?}"),
+                            src: self.src.clone(),
+                            span: self.type_args[i].span().into(),
+                        });
+                    }
+                }
+                (FnGenericConstraint::Nat, GenericArg::Type(_)) => {
+                    return Err(GraphcalError::GenericArgMismatch {
+                        name: self.name.value.clone(),
+                        param: param.name.to_string(),
+                        expected: "Nat (integer)".to_string(),
+                        found: "type expression".to_string(),
+                        src: self.src.clone(),
+                        span: self.type_args[i].span().into(),
+                    });
+                }
+                (constraint, GenericArg::Nat(_)) => {
+                    return Err(GraphcalError::GenericArgMismatch {
+                        name: self.name.value.clone(),
+                        param: param.name.to_string(),
+                        expected: format!("{constraint:?}"),
+                        found: "Nat (integer)".to_string(),
+                        src: self.src.clone(),
+                        span: self.type_args[i].span().into(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Evaluate a `NatExpr` to a concrete `u64` value.
+///
+/// Only supports literals for now (turbofish context).
+fn eval_nat_expr_to_u64(nat_expr: &crate::syntax::ast::NatExpr) -> Result<u64, GraphcalError> {
+    use crate::syntax::ast::NatExpr;
+    match nat_expr {
+        NatExpr::Literal(v, _) => Ok(*v),
+        NatExpr::Var(ident) => Err(GraphcalError::GenericArgMismatch {
+            name: FnName::new(""),
+            param: String::new(),
+            expected: "a concrete integer".to_string(),
+            found: format!("variable `{}`", ident.name),
+            src: NamedSource::new("", Arc::new(String::new())),
+            span: ident.span.into(),
+        }),
+        NatExpr::Add(lhs, rhs, _) => {
+            let l = eval_nat_expr_to_u64(lhs)?;
+            let r = eval_nat_expr_to_u64(rhs)?;
+            Ok(l + r)
+        }
+    }
 }
 
 /// Infer the type of a function call (FnCall or QualifiedFnCall).
 pub(super) fn infer_fn_call(
     name: &crate::syntax::names::Spanned<FnName>,
+    type_args: &[GenericArg],
     args: &[Expr],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -471,6 +607,7 @@ pub(super) fn infer_fn_call(
 ) -> Result<InferredType, GraphcalError> {
     let ctx = InferCtx {
         name,
+        type_args,
         args,
         declared_types,
         local_types,

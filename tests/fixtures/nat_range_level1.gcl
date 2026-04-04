@@ -39,7 +39,7 @@ param short: Dimensionless[3] = for i: range(3) { 5.0 };
 node padded: Dimensionless[4] = pad_zero(@short);
 
 // --- Identity matrix ---
-// eye takes a template vector to carry N until turbofish syntax is supported (#322).
+// eye takes a template vector to carry N. See turbofish.gcl for the turbofish version.
 fn eye<N: Nat>(template: Dimensionless[N]) -> Dimensionless[N, N] =
     for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
 

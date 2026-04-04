@@ -112,6 +112,29 @@ fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
 
 The compiler solves linear equations during unification: calling `drop_last` on a `Dimensionless[4]` vector solves `N + 1 = 4` to deduce `N = 3`. Subtraction is not supported — express the larger side with addition instead.
 
+### Explicit Generic Arguments (Turbofish)
+
+When a generic parameter cannot be inferred from arguments (e.g., it only appears in the return type), you can provide it explicitly using turbofish syntax:
+
+```
+fn eye<N: Nat>() -> Dimensionless[N, N] =
+    for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
+
+node I3: Dimensionless[3, 3] = eye<3>();
+```
+
+Turbofish arguments are provided in declaration order:
+
+```
+fn zeros<N: Nat, D: Dim>(template: D) -> D[N] =
+    for i: range(N) { 0.0 * template };
+
+param one_m: Length = 1.0 m;
+node z: Length[3] = zeros<3, Length>(@one_m);
+```
+
+When all generic parameters can be inferred from arguments, turbofish is optional. If provided, the explicit arguments are checked for consistency with the inferred values.
+
 ## Function Composition
 
 Functions can call other functions:

@@ -324,6 +324,8 @@ pub struct ResolvedFnSig {
     pub generic_dim_params: Vec<GenericParamName>,
     pub generic_index_params: Vec<GenericParamName>,
     pub generic_nat_params: Vec<GenericParamName>,
+    /// Generic params in declaration order (for turbofish matching).
+    pub generic_params_ordered: Vec<crate::registry::registry::FnGenericParam>,
     pub params: Vec<ResolvedFnParam>,
     pub return_type: ResolvedTypeExpr,
 }
@@ -554,6 +556,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
                 generic_dim_params: dim_params,
                 generic_index_params: index_params,
                 generic_nat_params: nat_params,
+                generic_params_ordered: fn_def.generic_params.clone(),
                 params: resolved_params,
                 return_type,
             },

@@ -735,7 +735,7 @@ fn collect_expr_refs(
                 target: SymbolKey::TopLevel(name.value.to_string()),
             });
         }
-        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
+        ExprKind::FnCall { name, args, .. } | ExprKind::QualifiedFnCall { name, args, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: SymbolKey::TopLevel(name.value.to_string()),

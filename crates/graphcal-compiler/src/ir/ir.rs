@@ -1085,7 +1085,7 @@ impl ExprVisitorMut for RefPrefixer<'_> {
     }
 
     fn visit_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { name, args } = &mut expr.kind {
+        if let ExprKind::FnCall { name, args, .. } = &mut expr.kind {
             if self.dep_names.contains(name.value.as_str()) {
                 name.value = FnName::new(format!("{}::{}", self.prefix, name.value));
             }

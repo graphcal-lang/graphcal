@@ -470,6 +470,10 @@ impl Parser<'_> {
     }
 
     /// Parse an identifier-based expression (const ref, struct, variant, fn call, qualified ref, etc.).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "naturally long due to many identifier-based expression forms including turbofish"
+    )]
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
@@ -532,8 +536,17 @@ impl Parser<'_> {
                     },
                     span: full_span,
                 })
-            } else if is_lower_snake_case(&member) && self.lexer.peek() == Some(&Token::LParen) {
-                // module::fn_name(args...)
+            } else if is_lower_snake_case(&member)
+                && (self.lexer.peek() == Some(&Token::LParen)
+                    || (self.lexer.peek() == Some(&Token::Lt)
+                        && self.is_type_args_followed_by_paren()))
+            {
+                // module::fn_name(args...) or module::fn_name<TypeArgs>(args...)
+                let type_args = if self.lexer.peek() == Some(&Token::Lt) {
+                    self.parse_generic_arg_list()?
+                } else {
+                    vec![]
+                };
                 self.lexer.next_token(); // consume '('
                 let args = self.parse_arg_list()?;
                 let (_, rparen_span) = self.expect(Token::RParen)?;
@@ -542,6 +555,7 @@ impl Parser<'_> {
                     kind: ExprKind::QualifiedFnCall {
                         module: crate::syntax::ast::Ident { name, span },
                         name: Spanned::new(FnName::new(member), member_ident.span),
+                        type_args,
                         args,
                     },
                     span: call_span,
@@ -553,8 +567,15 @@ impl Parser<'_> {
                     member_ident.span,
                 ))
             }
-        } else if self.lexer.peek() == Some(&Token::LParen) {
-            // Function call: name(args...)
+        } else if self.lexer.peek() == Some(&Token::LParen)
+            || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
+        {
+            // Function call: name(args...) or name<TypeArgs>(args...)
+            let type_args = if self.lexer.peek() == Some(&Token::Lt) {
+                self.parse_generic_arg_list()?
+            } else {
+                vec![]
+            };
             self.lexer.next_token(); // consume '('
             let args = self.parse_arg_list()?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
@@ -562,6 +583,7 @@ impl Parser<'_> {
             Ok(Expr {
                 kind: ExprKind::FnCall {
                     name: Spanned::new(FnName::new(name), span),
+                    type_args,
                     args,
                 },
                 span: call_span,
@@ -703,6 +725,80 @@ impl Parser<'_> {
             pos += 1;
         }
         false
+    }
+
+    /// Look ahead to check if `<...>` is followed by `(`.
+    /// Used to disambiguate `eye<3>()` (turbofish fn call)
+    /// from `f < x` (comparison).
+    pub(super) fn is_type_args_followed_by_paren(&mut self) -> bool {
+        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
+            return false;
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = lt_span.offset() + lt_span.len();
+        let mut depth: usize = 1;
+        while pos < bytes.len() {
+            match bytes[pos] {
+                b'<' => depth += 1,
+                b'>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let mut p = pos + 1;
+                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+                            p += 1;
+                        }
+                        return p < bytes.len() && bytes[p] == b'(';
+                    }
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+        false
+    }
+
+    /// Parse a generic argument list: `<GenericArg, GenericArg, ...>`
+    ///
+    /// Each argument is either a nat expression (integer literal) or a type expression.
+    pub(super) fn parse_generic_arg_list(
+        &mut self,
+    ) -> Result<Vec<crate::syntax::ast::GenericArg>, ParseError> {
+        self.expect(Token::Lt)?;
+        let mut args = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&Token::Gt) {
+                break;
+            }
+            args.push(self.parse_generic_arg()?);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::Gt)?;
+        Ok(args)
+    }
+
+    /// Parse a single generic argument.
+    ///
+    /// If the next token is a number literal (and parses as a valid integer), parse as
+    /// `GenericArg::Nat`. Otherwise, parse as `GenericArg::Type`.
+    fn parse_generic_arg(&mut self) -> Result<crate::syntax::ast::GenericArg, ParseError> {
+        use crate::syntax::ast::{GenericArg, NatExpr};
+        // Check if it's a number literal (Nat argument)
+        if let Some((&Token::Number, _)) = self.lexer.peek_with_span() {
+            let (_, lit_span) = self.advance()?;
+            let text = self.lexer.slice_at(lit_span);
+            let value: u64 = text.parse().map_err(|_| {
+                self.unexpected_token("a valid non-negative integer", text, lit_span)
+            })?;
+            Ok(GenericArg::Nat(NatExpr::Literal(value, lit_span)))
+        } else {
+            // Parse as type expression
+            let te = self.parse_type_expr()?;
+            Ok(GenericArg::Type(te))
+        }
     }
 }
 
@@ -928,7 +1024,7 @@ mod tests {
     #[test]
     fn parse_function_call_one_arg() {
         let expr = parse_node_expr("sqrt(@x)");
-        if let ExprKind::FnCall { name, args } = &expr.kind {
+        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
             assert_eq!(name.value.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
             assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.as_str() == "x"));
@@ -940,7 +1036,7 @@ mod tests {
     #[test]
     fn parse_function_call_two_args() {
         let expr = parse_node_expr("atan2(@a, @b)");
-        if let ExprKind::FnCall { name, args } = &expr.kind {
+        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
             assert_eq!(name.value.as_str(), "atan2");
             assert_eq!(args.len(), 2);
         } else {
@@ -951,12 +1047,90 @@ mod tests {
     #[test]
     fn parse_function_call_zero_args() {
         let expr = parse_node_expr("foo()");
-        if let ExprKind::FnCall { name, args } = &expr.kind {
+        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
             assert_eq!(name.value.as_str(), "foo");
             assert_eq!(args.len(), 0);
         } else {
             panic!("expected FnCall");
         }
+    }
+
+    #[test]
+    fn parse_turbofish_nat_arg() {
+        let expr = parse_node_expr("eye<3>()");
+        if let ExprKind::FnCall {
+            name,
+            type_args,
+            args,
+        } = &expr.kind
+        {
+            assert_eq!(name.value.as_str(), "eye");
+            assert_eq!(type_args.len(), 1);
+            assert!(matches!(
+                &type_args[0],
+                crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
+            ));
+            assert_eq!(args.len(), 0);
+        } else {
+            panic!("expected FnCall, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn parse_turbofish_type_arg() {
+        let expr = parse_node_expr("make<Length>(@x)");
+        if let ExprKind::FnCall {
+            name,
+            type_args,
+            args,
+        } = &expr.kind
+        {
+            assert_eq!(name.value.as_str(), "make");
+            assert_eq!(type_args.len(), 1);
+            assert!(matches!(
+                &type_args[0],
+                crate::syntax::ast::GenericArg::Type(_)
+            ));
+            assert_eq!(args.len(), 1);
+        } else {
+            panic!("expected FnCall, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn parse_turbofish_multiple_args() {
+        let expr = parse_node_expr("foo<3, Length>(@x)");
+        if let ExprKind::FnCall {
+            name,
+            type_args,
+            args,
+        } = &expr.kind
+        {
+            assert_eq!(name.value.as_str(), "foo");
+            assert_eq!(type_args.len(), 2);
+            assert!(matches!(
+                &type_args[0],
+                crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
+            ));
+            assert!(matches!(
+                &type_args[1],
+                crate::syntax::ast::GenericArg::Type(_)
+            ));
+            assert_eq!(args.len(), 1);
+        } else {
+            panic!("expected FnCall, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn parse_comparison_not_turbofish() {
+        // `f < x` should NOT be parsed as turbofish since `x` is not followed by `>`+`(`
+        let expr = parse_node_expr("@a < @b");
+        assert!(
+            matches!(&expr.kind, ExprKind::BinOp { op: BinOp::Lt, .. }),
+            "expected comparison, got {:?}",
+            expr.kind
+        );
     }
 
     #[test]
@@ -1154,7 +1328,9 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::QualifiedFnCall { module, name, args } => {
+            ExprKind::QualifiedFnCall {
+                module, name, args, ..
+            } => {
                 assert_eq!(module.name, "lib");
                 assert_eq!(name.value.as_str(), "compute");
                 assert_eq!(args.len(), 2);
@@ -1173,7 +1349,9 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::QualifiedFnCall { module, name, args } => {
+            ExprKind::QualifiedFnCall {
+                module, name, args, ..
+            } => {
                 assert_eq!(module.name, "lib");
                 assert_eq!(name.value.as_str(), "get_value");
                 assert_eq!(args.len(), 0);

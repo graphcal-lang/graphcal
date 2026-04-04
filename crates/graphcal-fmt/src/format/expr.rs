@@ -67,10 +67,19 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             };
             RcDoc::text(op_str).append(format_expr(fmt, operand))
         }
-        ExprKind::FnCall { name, args } => format_fn_call_expr(fmt, name.value.as_str(), args),
-        ExprKind::QualifiedFnCall { module, name, args } => {
+        ExprKind::FnCall {
+            name,
+            type_args,
+            args,
+        } => format_fn_call_expr(fmt, name.value.as_str(), type_args, args),
+        ExprKind::QualifiedFnCall {
+            module,
+            name,
+            type_args,
+            args,
+        } => {
             let fn_name = format!("{}::{}", module.name.as_str(), name.value.as_str());
-            format_fn_call_expr(fmt, &fn_name, args)
+            format_fn_call_expr(fmt, &fn_name, type_args, args)
         }
         ExprKind::If {
             condition,
@@ -240,6 +249,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
     fn_name: &str,
+    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
 ) -> RcDoc<'static> {
     let mut arg_docs: Vec<RcDoc<'static>> = Vec::new();
@@ -254,10 +264,28 @@ pub fn format_fn_call_expr(
     }
     let sep = RcDoc::text(",").append(RcDoc::line());
     let inner = RcDoc::intersperse(arg_docs, sep);
-    RcDoc::text(fn_name.to_string())
-        .append(RcDoc::text("("))
+    let mut doc = RcDoc::text(fn_name.to_string());
+    if !type_args.is_empty() {
+        doc = doc.append(format_generic_args(type_args));
+    }
+    doc.append(RcDoc::text("("))
         .append(inner.nest(INDENT).group())
         .append(RcDoc::text(")"))
+}
+
+fn format_generic_args(type_args: &[graphcal_compiler::syntax::ast::GenericArg]) -> RcDoc<'static> {
+    use graphcal_compiler::syntax::ast::GenericArg;
+    let docs: Vec<RcDoc<'static>> = type_args
+        .iter()
+        .map(|arg| match arg {
+            GenericArg::Type(te) => super::type_expr::format_type_expr_inline(te),
+            GenericArg::Nat(ne) => RcDoc::text(format_nat_expr_str(ne)),
+        })
+        .collect();
+    let sep = RcDoc::text(", ");
+    RcDoc::text("<")
+        .append(RcDoc::intersperse(docs, sep))
+        .append(RcDoc::text(">"))
 }
 
 pub fn format_if(
