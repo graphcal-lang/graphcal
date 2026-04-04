@@ -149,10 +149,12 @@ fn eval_aggregation_fn(
     expr: &Expr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let type_err = |msg: String| GraphcalError::EvalError {
-        message: msg,
-        src: src.clone(),
-        span: expr.span.into(),
+    let type_err = |e: graphcal_compiler::registry::runtime_value::RuntimeValueError| {
+        GraphcalError::EvalError {
+            message: e.to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        }
     };
     Ok(match name.value.as_str() {
         "sum" => {
@@ -229,13 +231,13 @@ fn eval_conversion_fn(
         }
         "to_int" => {
             let arg = eval_expr(&args[0], values, local_values, ctx)?;
-            let f =
-                arg.expect_scalar("to_int argument")
-                    .map_err(|msg| GraphcalError::EvalError {
-                        message: msg,
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    })?;
+            let f = arg
+                .expect_scalar("to_int argument")
+                .map_err(|e| GraphcalError::EvalError {
+                    message: e.to_string(),
+                    src: ctx.src.clone(),
+                    span: expr.span.into(),
+                })?;
             if !f.is_finite() {
                 return Err(GraphcalError::EvalError {
                     message: format!("to_int() requires a finite value, got {f}"),
@@ -506,8 +508,8 @@ fn eval_builtin_or_user_fn(
             .map(|a| {
                 let rv = eval_expr(a, values, local_values, ctx)?;
                 rv.expect_scalar("function argument")
-                    .map_err(|msg| GraphcalError::EvalError {
-                        message: msg,
+                    .map_err(|e| GraphcalError::EvalError {
+                        message: e.to_string(),
                         src: ctx.src.clone(),
                         span: a.span.into(),
                     })

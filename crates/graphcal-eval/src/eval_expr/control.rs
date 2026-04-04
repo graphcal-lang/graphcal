@@ -20,8 +20,8 @@ pub(super) fn eval_if(
 ) -> Result<RuntimeValue, GraphcalError> {
     let cond = eval_expr(condition, values, local_values, ctx)?
         .expect_bool("if condition")
-        .map_err(|msg| GraphcalError::EvalError {
-            message: msg,
+        .map_err(|e| GraphcalError::EvalError {
+            message: e.to_string(),
             src: ctx.src.clone(),
             span: expr.span.into(),
         })?;
