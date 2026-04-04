@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 graphcal-compiler = { workspace = true }
+graphcal-io = { workspace = true }
 indexmap.workspace = true
 miette.workspace = true
 petgraph = { workspace = true }

@@ -3,7 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use graphcal_eval::io::FileSystemReader;
+use crate::FileSystemReader;
 
 /// Filesystem reader that delegates to the operating system via `std::fs`.
 #[derive(Debug, Clone, Copy, Default)]

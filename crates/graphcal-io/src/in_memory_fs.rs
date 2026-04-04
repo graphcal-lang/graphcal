@@ -1,31 +1,10 @@
-//! Filesystem abstraction for the compiler core.
-//!
-//! The compiler is generic over [`FileSystemReader`], enabling:
-//! - Real filesystem access (via `graphcal_io::RealFileSystem`)
-//! - In-memory filesystems (for tests and WASM)
-//! - Overlay filesystems (for LSP unsaved editor buffers)
+//! In-memory filesystem for tests and WASM environments.
 
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Abstraction over filesystem read operations.
-///
-/// The loader ([`crate::loader`]) is generic over this trait so that the
-/// compiler core never calls `std::fs` directly.
-pub trait FileSystemReader {
-    /// Read the entire contents of a file as a UTF-8 string.
-    fn read_to_string(&self, path: &Path) -> Result<String, io::Error>;
-
-    /// Return the canonical, absolute form of a path.
-    fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error>;
-
-    /// Return `true` if `path` points to a regular file.
-    fn is_file(&self, path: &Path) -> bool;
-
-    /// Return `true` if `path` points to an existing filesystem entry.
-    fn exists(&self, path: &Path) -> bool;
-}
+use crate::FileSystemReader;
 
 /// In-memory filesystem for tests and WASM environments.
 ///
@@ -84,27 +63,6 @@ impl FileSystemReader for InMemoryFileSystem {
         }
         // Check if it's a "directory" (prefix of any file path).
         self.files.keys().any(|k| k.starts_with(path) && k != path)
-    }
-}
-
-/// Test-only real filesystem implementation (avoids circular dev-dependency on `graphcal-io`).
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TestRealFs;
-
-#[cfg(test)]
-impl FileSystemReader for TestRealFs {
-    fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
-        std::fs::read_to_string(path)
-    }
-    fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        path.canonicalize()
-    }
-    fn is_file(&self, path: &Path) -> bool {
-        path.is_file()
-    }
-    fn exists(&self, path: &Path) -> bool {
-        path.exists()
     }
 }
 
