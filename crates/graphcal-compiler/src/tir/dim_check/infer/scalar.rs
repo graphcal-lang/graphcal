@@ -510,11 +510,13 @@ pub(super) fn infer_as_cast(
     // Resolve the target type
     let no_dim_params: &[GenericParamName] = &[];
     let no_index_params: &[GenericParamName] = &[];
+    let no_nat_params: &[GenericParamName] = &[];
     let resolved_target = crate::tir::tir::resolve_type_expr(
         target_type,
         registry,
         no_dim_params,
         no_index_params,
+        no_nat_params,
         src,
     )?;
     let target_declared = crate::tir::tir::resolved_to_declared_type(&resolved_target, src)?;

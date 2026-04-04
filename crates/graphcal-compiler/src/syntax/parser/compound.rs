@@ -1,7 +1,7 @@
 use crate::syntax::ast::TypeExpr;
 use crate::syntax::ast::{
-    Expr, ExprKind, FieldInit, ForBinding, LetBinding, MatchArm, MatchPattern, PatternBinding,
-    TupleMatchArm,
+    Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, LetBinding, MatchArm, MatchPattern,
+    NatExpr, PatternBinding, TupleMatchArm,
 };
 use crate::syntax::names::{DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName};
 use crate::syntax::span::Span;
@@ -330,16 +330,14 @@ impl Parser<'_> {
 
     // --- For comprehension ---
 
-    /// Parse a for comprehension: `for m: Maneuver, n: Phase { expr }`
+    /// Parse a for comprehension: `for m: Maneuver, i: range(3) { expr }`
     pub(super) fn parse_for_comp(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
         loop {
             let var = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
             self.expect(Token::Colon)?;
-            let index = self
-                .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                .into_spanned::<IndexName>();
+            let index = self.parse_for_binding_index()?;
             bindings.push(ForBinding { var, index });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
@@ -373,6 +371,60 @@ impl Parser<'_> {
             },
             span,
         })
+    }
+
+    /// Parse a for binding index: either a named index (`Maneuver`) or `range(N)`.
+    fn parse_for_binding_index(&mut self) -> Result<ForBindingIndex, ParseError> {
+        // Check if next token is the identifier "range"
+        if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
+            let text = self.lexer.slice_at(span);
+            if text == "range" {
+                let range_start = span;
+                self.lexer.next_token(); // consume "range"
+                self.expect(Token::LParen)?;
+                // Parse the nat expression inside range(...)
+                let nat_expr = self.parse_nat_expr()?;
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                let range_span = range_start.merge(rparen_span);
+                return Ok(ForBindingIndex::Range {
+                    arg: nat_expr,
+                    span: range_span,
+                });
+            }
+        }
+        // Named index
+        let index = self
+            .parse_ident_with_casing("PascalCase", is_pascal_case)?
+            .into_spanned::<IndexName>();
+        Ok(ForBindingIndex::Named(index))
+    }
+
+    /// Parse a nat expression: either an integer literal or an identifier (generic Nat param).
+    fn parse_nat_expr(&mut self) -> Result<NatExpr, ParseError> {
+        match self.lexer.peek() {
+            Some(Token::Number) => {
+                let (_, span) = self.advance()?;
+                let text = self.lexer.slice_at(span).replace('_', "");
+                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
+                    reason: "expected non-negative integer in range()".to_string(),
+                    src: self.named_source(),
+                    span: span.into(),
+                })?;
+                Ok(NatExpr::Literal(value, span))
+            }
+            Some(Token::Ident) => {
+                let ident = self.parse_any_ident()?;
+                Ok(NatExpr::Var(ident))
+            }
+            _ => {
+                let (tok, span) = self.advance()?;
+                Err(self.unexpected_token(
+                    "integer literal or Nat parameter name",
+                    &tok.to_string(),
+                    span,
+                ))
+            }
+        }
     }
 
     // --- Scan expression ---
@@ -735,7 +787,10 @@ mod tests {
                 ExprKind::ForComp { bindings, body } => {
                     assert_eq!(bindings.len(), 1);
                     assert_eq!(bindings[0].var.name, "m");
-                    assert_eq!(bindings[0].index.value.as_str(), "Maneuver");
+                    let ForBindingIndex::Named(spanned) = &bindings[0].index else {
+                        panic!("expected Named")
+                    };
+                    assert_eq!(spanned.value.as_str(), "Maneuver");
                     assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
                 }
                 other => panic!("expected ForComp, got {other:?}"),
@@ -753,9 +808,15 @@ mod tests {
                 ExprKind::ForComp { bindings, .. } => {
                     assert_eq!(bindings.len(), 2);
                     assert_eq!(bindings[0].var.name, "r");
-                    assert_eq!(bindings[0].index.value.as_str(), "Row");
+                    let ForBindingIndex::Named(spanned) = &bindings[0].index else {
+                        panic!("expected Named")
+                    };
+                    assert_eq!(spanned.value.as_str(), "Row");
                     assert_eq!(bindings[1].var.name, "c");
-                    assert_eq!(bindings[1].index.value.as_str(), "Col");
+                    let ForBindingIndex::Named(spanned) = &bindings[1].index else {
+                        panic!("expected Named")
+                    };
+                    assert_eq!(spanned.value.as_str(), "Col");
                 }
                 other => panic!("expected ForComp, got {other:?}"),
             },

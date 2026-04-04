@@ -676,7 +676,20 @@ pub fn format_for_comp(
         .map(|b| {
             RcDoc::text(b.var.name.clone())
                 .append(RcDoc::text(": "))
-                .append(RcDoc::text(b.index.value.as_str().to_string()))
+                .append(match &b.index {
+                    graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
+                        RcDoc::text(spanned.value.as_str().to_string())
+                    }
+                    graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
+                        let arg_str = match arg {
+                            graphcal_compiler::syntax::ast::NatExpr::Literal(n, _) => n.to_string(),
+                            graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
+                                ident.name.clone()
+                            }
+                        };
+                        RcDoc::text(format!("range({arg_str})"))
+                    }
+                })
         })
         .collect();
     let bindings_doc = RcDoc::intersperse(binding_docs, RcDoc::text(", "));

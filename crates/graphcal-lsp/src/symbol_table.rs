@@ -868,10 +868,30 @@ fn collect_expr_refs(
         ExprKind::ForComp { bindings, body } => {
             scopes.push();
             for binding in bindings {
-                table.references.push(ReferenceInfo {
-                    span: binding.index.span,
-                    target: SymbolKey::TopLevel(binding.index.value.to_string()),
-                });
+                let (detail, ref_info) = match &binding.index {
+                    graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
+                        let detail = format!("loop variable over {}", spanned.value);
+                        let ref_info = Some(ReferenceInfo {
+                            span: spanned.span,
+                            target: SymbolKey::TopLevel(spanned.value.to_string()),
+                        });
+                        (detail, ref_info)
+                    }
+                    graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
+                        let detail = match arg {
+                            graphcal_compiler::syntax::ast::NatExpr::Literal(n, _) => {
+                                format!("loop variable over range({n})")
+                            }
+                            graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
+                                format!("loop variable over range({})", ident.name)
+                            }
+                        };
+                        (detail, None)
+                    }
+                };
+                if let Some(ri) = ref_info {
+                    table.references.push(ri);
+                }
                 let var_name = binding.var.name.clone();
                 let key = SymbolKey::ExprScoped {
                     kind: ExprScopeKind::For,
@@ -886,7 +906,7 @@ fn collect_expr_refs(
                         name_span: binding.var.span,
                         decl_span: binding.var.span,
                         type_description: None,
-                        detail: Some(format!("loop variable over {}", binding.index.value)),
+                        detail: Some(detail),
                     },
                 );
                 scopes.insert(var_name, key);
@@ -1135,10 +1155,17 @@ fn collect_type_expr_refs(
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_expr_refs(base, table);
             for idx in indexes {
-                table.references.push(ReferenceInfo {
-                    span: idx.span,
-                    target: SymbolKey::TopLevel(idx.name.clone()),
-                });
+                match idx {
+                    graphcal_compiler::syntax::ast::IndexExpr::Name(ident) => {
+                        table.references.push(ReferenceInfo {
+                            span: ident.span,
+                            target: SymbolKey::TopLevel(ident.name.clone()),
+                        });
+                    }
+                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(_, _) => {
+                        // No reference to resolve for literal integers
+                    }
+                }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
@@ -1246,7 +1273,12 @@ fn format_type_with_constraints(
             .iter()
             .map(|i| match i {
                 ResolvedIndex::Concrete(name, _) => name.to_string(),
-                ResolvedIndex::GenericParam(name, _) => name.to_string(),
+                // GenericParam and GenericNatParam have different inner types
+                // (IndexName vs GenericParamName) but both format via Display.
+                ResolvedIndex::GenericParam(name, _) | ResolvedIndex::GenericNatParam(name, _) => {
+                    name.to_string()
+                }
+                ResolvedIndex::NatLiteral(n, _) => n.to_string(),
             })
             .collect();
         format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
@@ -1408,6 +1440,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                                 "(required, dim: {})",
                                 registry.dimensions.format_dimension(dimension)
                             ));
+                        }
+                        IndexKind::NatRange { size } => {
+                            def_mut.type_description = Some(format!("range({size})"));
                         }
                     }
                 }

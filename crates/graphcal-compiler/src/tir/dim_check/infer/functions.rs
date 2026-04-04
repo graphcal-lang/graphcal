@@ -405,7 +405,10 @@ impl InferCtx<'_> {
             .map(|a| self.infer_arg(a))
             .collect::<Result<_, _>>()?;
 
-        if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
+        if sig.generic_dim_params.is_empty()
+            && sig.generic_index_params.is_empty()
+            && sig.generic_nat_params.is_empty()
+        {
             // Non-generic: check each param type using resolved signature
             for (i, param) in sig.params.iter().enumerate() {
                 let expected =
@@ -429,12 +432,14 @@ impl InferCtx<'_> {
             let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
             let mut index_sub: HashMap<GenericParamName, crate::syntax::names::IndexName> =
                 HashMap::new();
+            let mut nat_sub: HashMap<GenericParamName, u64> = HashMap::new();
             for (i, param) in sig.params.iter().enumerate() {
                 crate::tir::tir::unify_resolved_type(
                     &param.resolved_type,
                     &arg_types[i],
                     &mut dim_sub,
                     &mut index_sub,
+                    &mut nat_sub,
                     self.registry,
                     self.src,
                     self.args[i].span,
@@ -445,6 +450,7 @@ impl InferCtx<'_> {
                 &sig.return_type,
                 &dim_sub,
                 &index_sub,
+                &nat_sub,
                 self.src,
             )?;
             Ok(ret_type)

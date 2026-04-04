@@ -295,6 +295,7 @@ fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
             let constraint = match p.constraint {
                 GenericConstraint::Dim => "Dim",
                 GenericConstraint::Index => "Index",
+                GenericConstraint::Nat => "Nat",
                 GenericConstraint::Type => "Type",
             };
             let mut doc = RcDoc::text(p.name.value.as_str().to_string())

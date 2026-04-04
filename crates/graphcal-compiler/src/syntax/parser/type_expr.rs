@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, MulDivOp, TypeExpr, TypeExprKind, UnitDef,
-    UnitExpr, UnitExprItem,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, IndexExpr, MulDivOp, TypeExpr, TypeExprKind,
+    UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::names::UnitName;
 use crate::syntax::span::Span;
@@ -107,6 +107,7 @@ impl Parser<'_> {
         }
 
         // Check for optional `[Index, ...]` suffix
+        // Supports named indexes (`Phase`), generic params (`I`, `N`), and nat literals (`3`)
         if self.lexer.peek() == Some(&Token::LBracket) {
             let (_, _bracket_span) = self.advance()?;
             let mut indexes = Vec::new();
@@ -114,9 +115,8 @@ impl Parser<'_> {
                 if self.lexer.peek() == Some(&Token::RBracket) {
                     break;
                 }
-                let idx_name =
-                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
-                indexes.push(idx_name);
+                let idx_expr = self.parse_index_expr()?;
+                indexes.push(idx_expr);
                 if self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
                 } else {
@@ -511,6 +511,41 @@ impl Parser<'_> {
         Ok(args)
     }
 
+    /// Parse an index expression in type position: either an identifier or an integer literal.
+    ///
+    /// - `Phase` → `IndexExpr::Name` (named index or generic param)
+    /// - `3` → `IndexExpr::NatLiteral` (desugars to `range(3)`)
+    fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
+        match self.lexer.peek() {
+            Some(Token::Number) => {
+                let (_, span) = self.advance()?;
+                let text = self.lexer.slice_at(span).replace('_', "");
+                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
+                    reason: "expected non-negative integer in index position".to_string(),
+                    src: self.named_source(),
+                    span: span.into(),
+                })?;
+                Ok(IndexExpr::NatLiteral(value, span))
+            }
+            Some(
+                Token::Ident
+                | Token::Linspace
+                | Token::Step
+                | Token::Scan
+                | Token::Unfold
+                | Token::Index,
+            ) => {
+                let ident =
+                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                Ok(IndexExpr::Name(ident))
+            }
+            _ => {
+                let (tok, span) = self.advance()?;
+                Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
+            }
+        }
+    }
+
     /// Check if `<` follows the current ident token (used for type application detection).
     /// Scans the raw source after the ident span to find `<` (skipping whitespace).
     pub(super) fn is_lt_after_ident(&self, ident_span: crate::syntax::span::Span) -> bool {
@@ -604,7 +639,10 @@ mod tests {
                     TypeExprKind::Indexed { base, indexes } => {
                         assert!(matches!(base.kind, TypeExprKind::DimExpr(_)));
                         assert_eq!(indexes.len(), 1);
-                        assert_eq!(indexes[0].name, "Maneuver");
+                        let IndexExpr::Name(ident) = &indexes[0] else {
+                            panic!("expected Name")
+                        };
+                        assert_eq!(ident.name, "Maneuver");
                     }
                     other => panic!("expected Indexed type, got {other:?}"),
                 }
@@ -621,8 +659,14 @@ mod tests {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::Indexed { indexes, .. } => {
                     assert_eq!(indexes.len(), 2);
-                    assert_eq!(indexes[0].name, "Row");
-                    assert_eq!(indexes[1].name, "Col");
+                    let IndexExpr::Name(ident) = &indexes[0] else {
+                        panic!("expected Name")
+                    };
+                    assert_eq!(ident.name, "Row");
+                    let IndexExpr::Name(ident) = &indexes[1] else {
+                        panic!("expected Name")
+                    };
+                    assert_eq!(ident.name, "Col");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
@@ -702,7 +746,10 @@ mod tests {
                         crate::syntax::ast::DomainBoundKind::Max
                     );
                     assert_eq!(indexes.len(), 1);
-                    assert_eq!(indexes[0].name, "Maneuver");
+                    let IndexExpr::Name(ident) = &indexes[0] else {
+                        panic!("expected Name")
+                    };
+                    assert_eq!(ident.name, "Maneuver");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },

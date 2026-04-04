@@ -492,6 +492,8 @@ pub enum GenericConstraint {
     Dim,
     /// `I: Index` -- the generic stands for an index.
     Index,
+    /// `N: Nat` -- the generic stands for a natural number (type-level).
+    Nat,
     /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
     Type,
 }
@@ -617,6 +619,29 @@ pub struct DomainBound {
 }
 
 /// A type expression (dimension annotation on declarations).
+/// An expression in index position of an indexed type.
+///
+/// In `Velocity[Maneuver]`, the `Maneuver` is an `IndexExpr::Name`.
+/// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatLiteral`.
+#[derive(Debug, Clone)]
+pub enum IndexExpr {
+    /// A named index or generic parameter: `Maneuver`, `I`, `N`
+    Name(Ident),
+    /// An integer literal in index position: `3` (desugars to `range(3)` internally)
+    NatLiteral(u64, Span),
+}
+
+impl IndexExpr {
+    /// Get the source span of this index expression.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Name(ident) => ident.span,
+            Self::NatLiteral(_, span) => *span,
+        }
+    }
+}
+
 /// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
 ///
 /// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
@@ -641,10 +666,10 @@ pub enum TypeExprKind {
     Datetime,
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
-    /// An indexed type like `Velocity[Maneuver]` or `Dimensionless[A, B]`
+    /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
         base: Box<TypeExpr>,
-        indexes: Vec<Ident>,
+        indexes: Vec<IndexExpr>,
     },
     /// A generic type application like `Vec3<Length, ECI>` or `Timestamp<UTC>`
     TypeApplication {
@@ -878,11 +903,47 @@ pub struct MapEntry {
     pub value: Expr,
 }
 
-/// A binding in a `for` comprehension: `m: Maneuver`
+/// A binding in a `for` comprehension: `m: Maneuver` or `i: range(3)`
 #[derive(Debug, Clone)]
 pub struct ForBinding {
     pub var: Ident,
-    pub index: Spanned<IndexName>,
+    pub index: ForBindingIndex,
+}
+
+/// The index in a for binding: either a named index or a `range(...)` expression.
+#[derive(Debug, Clone)]
+pub enum ForBindingIndex {
+    /// A named index: `for m: Maneuver { ... }`
+    Named(Spanned<IndexName>),
+    /// A range expression: `for i: range(3) { ... }` or `for i: range(N) { ... }`
+    Range {
+        /// The argument to `range(...)` — a nat literal or generic nat param.
+        arg: NatExpr,
+        /// Span of the entire `range(...)` expression.
+        span: Span,
+    },
+}
+
+/// A Nat expression (type-level natural number).
+///
+/// At Level 0, only literals and variables are supported.
+#[derive(Debug, Clone)]
+pub enum NatExpr {
+    /// An integer literal, e.g., `3`
+    Literal(u64, Span),
+    /// A variable (generic Nat parameter), e.g., `N`
+    Var(Ident),
+}
+
+impl NatExpr {
+    /// Get the source span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Literal(_, span) => *span,
+            Self::Var(ident) => ident.span,
+        }
+    }
 }
 
 /// An argument in an index access: either a qualified variant or a loop variable.

@@ -284,7 +284,7 @@ module.exports = grammar({
       optional(seq("=", field("default", $.type_expr))),
     ),
 
-    generic_constraint: $ => choice("Dim", "Index", "Type"),
+    generic_constraint: $ => choice("Dim", "Index", "Nat", "Type"),
 
     fn_param: $ => seq(
       field("name", $.identifier),
@@ -599,14 +599,23 @@ module.exports = grammar({
     int_type: $ => "Int",
     datetime_type: $ => "Datetime",
 
-    // Indexed type: Velocity[Maneuver] or Velocity(min: 0)[Maneuver]
+    // Indexed type: Velocity[Maneuver], Dimensionless[3, 4], D[M, N]
     indexed_type: $ => seq(
       field("base", choice($.constrained_type, $._type_expr_base)),
       "[",
-      $.identifier,
-      repeat(seq(",", $.identifier)),
+      $._index_expr,
+      repeat(seq(",", $._index_expr)),
       "]",
     ),
+
+    // An expression in index position: either a name or an integer literal
+    _index_expr: $ => choice(
+      $.identifier,
+      $.nat_literal,
+    ),
+
+    // Integer literal in type/index position (e.g., 3 in D[3])
+    nat_literal: $ => /[0-9]+/,
 
     // ---------------------------------------------------------------
     // Dimension expressions: Length, Length^2, Mass * Length / Time^2
@@ -830,7 +839,15 @@ module.exports = grammar({
     for_binding: $ => seq(
       field("var", $.identifier),
       ":",
-      field("index", $.identifier),
+      field("index", choice($.identifier, $.range_expr)),
+    ),
+
+    // range(N) expression in for bindings
+    range_expr: $ => seq(
+      "range",
+      "(",
+      field("arg", choice($.identifier, $.nat_literal)),
+      ")",
     ),
 
     // scan(source, init, |acc, val| body) -- accumulator scan (prefix scan)

@@ -321,7 +321,7 @@
     },
 
     "for-binding": {
-      "comment": "for m: Maneuver, n: Phase — highlight all bindings in the for-header",
+      "comment": "for m: Maneuver, i: range(3), j: range(N) — highlight all bindings",
       "begin": "\\b(for)\\b",
       "end": "(?=\\{)",
       "beginCaptures": {
@@ -329,11 +329,22 @@
       },
       "patterns": [
         {
+          "comment": "Named index binding: var: IndexName",
           "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)\\s*([A-Z][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "variable.other.graphcal" },
             "2": { "name": "punctuation.separator.colon.graphcal" },
             "3": { "name": "entity.name.type.graphcal" }
+          }
+        },
+        {
+          "comment": "Range binding: var: range(N) or var: range(3)",
+          "match": "\\b([a-zA-Z][a-zA-Z0-9_]*)\\s*(:)\\s*(range)\\s*\\(\\s*([a-zA-Z0-9_]+)\\s*\\)",
+          "captures": {
+            "1": { "name": "variable.other.graphcal" },
+            "2": { "name": "punctuation.separator.colon.graphcal" },
+            "3": { "name": "support.function.graphcal" },
+            "4": { "name": "entity.name.type.graphcal" }
           }
         },
         {
@@ -348,7 +359,7 @@
     },
 
     "control-keywords": {
-      "match": "\\b(if|else|for|match|table|scan|unfold|step)\\b",
+      "match": "\\b(if|else|for|match|table|scan|unfold|step|range)\\b",
       "name": "keyword.control.graphcal"
     },
 
@@ -526,7 +537,7 @@
     },
 
     "builtin-types": {
-      "match": "\\b(Dimensionless|Bool|Int|Datetime|Dim|Index)\\b",
+      "match": "\\b(Dimensionless|Bool|Int|Datetime|Dim|Index|Nat)\\b",
       "name": "support.type.graphcal"
     },
 

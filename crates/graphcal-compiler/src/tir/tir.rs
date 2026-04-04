@@ -68,6 +68,10 @@ pub enum ResolvedTypeExpr {
 impl ResolvedTypeExpr {
     /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "ResolvedIndex arms have distinct semantic types (IndexName vs GenericParamName) even though the bodies are identical"
+    )]
     pub fn format(&self, registry: &Registry) -> String {
         match self {
             Self::Dimensionless => "Dimensionless".to_string(),
@@ -108,6 +112,8 @@ impl ResolvedTypeExpr {
                     .map(|i| match i {
                         ResolvedIndex::Concrete(name, _) => name.to_string(),
                         ResolvedIndex::GenericParam(name, _) => name.to_string(),
+                        ResolvedIndex::NatLiteral(n, _) => n.to_string(),
+                        ResolvedIndex::GenericNatParam(name, _) => name.to_string(),
                     })
                     .collect();
                 format!("{base_str}[{}]", idx_strs.join(", "))
@@ -173,6 +179,10 @@ pub enum ResolvedIndex {
     Concrete(IndexName, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
+    /// A nat literal in index position, e.g. `3` (desugars to `range(3)`)
+    NatLiteral(u64, Span),
+    /// A generic nat parameter in index position, e.g. `N` where `N: Nat`
+    GenericNatParam(GenericParamName, Span),
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +194,7 @@ pub enum ResolvedIndex {
 pub struct ResolvedFnSig {
     pub generic_dim_params: Vec<GenericParamName>,
     pub generic_index_params: Vec<GenericParamName>,
+    pub generic_nat_params: Vec<GenericParamName>,
     pub params: Vec<ResolvedFnParam>,
     pub return_type: ResolvedTypeExpr,
 }
@@ -318,20 +329,24 @@ impl TIR {
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
 /// dimension, struct, or index.
+#[expect(
+    clippy::too_many_lines,
+    reason = "type resolution requires handling many declaration kinds"
+)]
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
     let mut resolved_fn_sigs = HashMap::new();
 
-    let no_dim_params: &[GenericParamName] = &[];
-    let no_index_params: &[GenericParamName] = &[];
+    let no_generic_params: &[GenericParamName] = &[];
 
     // Resolve type annotations for all consts/params/nodes (no generic params in scope).
     for entry in &ir.consts {
         let resolved = resolve_type_expr(
             &entry.type_ann,
             &ir.registry,
-            no_dim_params,
-            no_index_params,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
             src,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -340,8 +355,9 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         let resolved = resolve_type_expr(
             &entry.type_ann,
             &ir.registry,
-            no_dim_params,
-            no_index_params,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
             src,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -350,8 +366,9 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         let resolved = resolve_type_expr(
             &entry.type_ann,
             &ir.registry,
-            no_dim_params,
-            no_index_params,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
             src,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -371,11 +388,23 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             .filter(|g| g.constraint == crate::registry::registry::FnGenericConstraint::Index)
             .map(|g| g.name.clone())
             .collect();
+        let nat_params: Vec<GenericParamName> = fn_def
+            .generic_params
+            .iter()
+            .filter(|g| g.constraint == crate::registry::registry::FnGenericConstraint::Nat)
+            .map(|g| g.name.clone())
+            .collect();
 
         let mut resolved_params = Vec::with_capacity(fn_def.params.len());
         for p in &fn_def.params {
-            let resolved =
-                resolve_type_expr(&p.type_expr, &ir.registry, &dim_params, &index_params, src)?;
+            let resolved = resolve_type_expr(
+                &p.type_expr,
+                &ir.registry,
+                &dim_params,
+                &index_params,
+                &nat_params,
+                src,
+            )?;
             resolved_params.push(ResolvedFnParam {
                 name: p.name.clone(),
                 resolved_type: resolved,
@@ -386,6 +415,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             &ir.registry,
             &dim_params,
             &index_params,
+            &nat_params,
             src,
         )?;
 
@@ -394,6 +424,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             ResolvedFnSig {
                 generic_dim_params: dim_params,
                 generic_index_params: index_params,
+                generic_nat_params: nat_params,
                 params: resolved_params,
                 return_type,
             },
@@ -480,10 +511,27 @@ pub fn resolved_to_declared_type(
                             index: name.clone(),
                         };
                     }
+                    ResolvedIndex::NatLiteral(n, _) => {
+                        let idx_name =
+                            IndexName::new(crate::registry::registry::nat_range_index_name(*n));
+                        result = DeclaredType::Indexed {
+                            element: Box::new(result),
+                            index: idx_name,
+                        };
+                    }
                     ResolvedIndex::GenericParam(name, span) => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "cannot use generic index parameter `{name}` as a concrete type"
+                            ),
+                            src: src.clone(),
+                            span: (*span).into(),
+                        });
+                    }
+                    ResolvedIndex::GenericNatParam(name, span) => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "cannot use generic nat parameter `{name}` as a concrete type"
                             ),
                             src: src.clone(),
                             span: (*span).into(),
@@ -517,11 +565,16 @@ pub fn resolved_to_declared_type(
     clippy::implicit_hasher,
     reason = "always called with standard HashMap"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "unification needs all substitution maps, registry, and source context"
+)]
 pub fn unify_resolved_type(
     resolved: &ResolvedTypeExpr,
     actual: &crate::tir::dim_check::InferredType,
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
     index_sub: &mut HashMap<GenericParamName, IndexName>,
+    nat_sub: &mut HashMap<GenericParamName, u64>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -530,9 +583,10 @@ pub fn unify_resolved_type(
 
     match resolved {
         ResolvedTypeExpr::Indexed { base, indexes } => {
-            // Peel off index layers from actual type, binding index generics
+            // Peel off index layers from actual type, binding index generics.
+            // Iterate forward: first index in the list is the outermost Indexed layer.
             let mut current = actual;
-            for idx in indexes.iter().rev() {
+            for idx in indexes {
                 let InferredType::Indexed {
                     element,
                     index: actual_idx,
@@ -571,10 +625,50 @@ pub fn unify_resolved_type(
                             });
                         }
                     }
+                    ResolvedIndex::NatLiteral(n, _) => {
+                        // Check that the actual index is the matching nat range
+                        let expected_name = crate::registry::registry::nat_range_index_name(*n);
+                        if actual_idx.as_str() != expected_name {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: IndexName::new(expected_name),
+                                found: actual_idx.clone(),
+                                src: src.clone(),
+                                span: span.into(),
+                            });
+                        }
+                    }
+                    ResolvedIndex::GenericNatParam(gp, _) => {
+                        // Extract the nat value from the actual index name
+                        let actual_nat = crate::registry::registry::parse_nat_range_index_name(
+                            actual_idx.as_str(),
+                        )
+                        .ok_or_else(|| GraphcalError::IndexMismatch {
+                            expected: IndexName::new(format!("range({gp})")),
+                            found: actual_idx.clone(),
+                            src: src.clone(),
+                            span: span.into(),
+                        })?;
+                        if let Some(prev) = nat_sub.get(gp) {
+                            if *prev != actual_nat {
+                                return Err(GraphcalError::IndexMismatch {
+                                    expected: IndexName::new(
+                                        crate::registry::registry::nat_range_index_name(*prev),
+                                    ),
+                                    found: actual_idx.clone(),
+                                    src: src.clone(),
+                                    span: span.into(),
+                                });
+                            }
+                        } else {
+                            nat_sub.insert(gp.clone(), actual_nat);
+                        }
+                    }
                 }
                 current = element;
             }
-            unify_resolved_type(base, current, dim_sub, index_sub, registry, src, span)
+            unify_resolved_type(
+                base, current, dim_sub, index_sub, nat_sub, registry, src, span,
+            )
         }
 
         ResolvedTypeExpr::Bool => {
@@ -814,6 +908,7 @@ pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
     dim_sub: &HashMap<GenericParamName, Dimension>,
     index_sub: &HashMap<GenericParamName, IndexName>,
+    nat_sub: &HashMap<GenericParamName, u64>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
     use crate::tir::dim_check::InferredType;
@@ -831,7 +926,9 @@ pub fn substitute_resolved_type(
         } => {
             let mut inferred_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
-                inferred_args.push(substitute_resolved_type(arg, dim_sub, index_sub, src)?);
+                inferred_args.push(substitute_resolved_type(
+                    arg, dim_sub, index_sub, nat_sub, src,
+                )?);
             }
             Ok(InferredType::Struct(name.clone(), inferred_args))
         }
@@ -877,7 +974,7 @@ pub fn substitute_resolved_type(
         }
 
         ResolvedTypeExpr::Indexed { base, indexes } => {
-            let mut result = substitute_resolved_type(base, dim_sub, index_sub, src)?;
+            let mut result = substitute_resolved_type(base, dim_sub, index_sub, nat_sub, src)?;
             for idx in indexes.iter().rev() {
                 let resolved_idx = match idx {
                     ResolvedIndex::Concrete(name, _) => name.clone(),
@@ -889,6 +986,17 @@ pub fn substitute_resolved_type(
                             src: src.clone(),
                             span: (*span).into(),
                         })?,
+                    ResolvedIndex::NatLiteral(n, _) => {
+                        IndexName::new(crate::registry::registry::nat_range_index_name(*n))
+                    }
+                    ResolvedIndex::GenericNatParam(gp, span) => {
+                        let n = nat_sub.get(gp).ok_or_else(|| GraphcalError::EvalError {
+                            message: format!("generic nat `{gp}` not bound during substitution"),
+                            src: src.clone(),
+                            span: (*span).into(),
+                        })?;
+                        IndexName::new(crate::registry::registry::nat_range_index_name(*n))
+                    }
                 };
                 result = InferredType::Indexed {
                     element: Box::new(result),
@@ -945,6 +1053,7 @@ pub fn resolve_type_expr(
     registry: &Registry,
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     match &type_ann.kind {
@@ -954,21 +1063,38 @@ pub fn resolve_type_expr(
         TypeExprKind::Datetime => Ok(ResolvedTypeExpr::Datetime(TimeScale::UTC)),
 
         TypeExprKind::Indexed { base, indexes } => {
-            let resolved_base = resolve_type_expr(base, registry, dim_params, index_params, src)?;
+            let resolved_base =
+                resolve_type_expr(base, registry, dim_params, index_params, nat_params, src)?;
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
-                let idx_name = &idx.name;
-                if let Some(gp) = index_params.iter().find(|p| p.as_str() == idx_name) {
-                    resolved_indexes.push(ResolvedIndex::GenericParam(gp.clone(), idx.span));
-                } else if registry.indexes.get_index(idx_name).is_some() {
-                    resolved_indexes
-                        .push(ResolvedIndex::Concrete(IndexName::new(idx_name), idx.span));
-                } else {
-                    return Err(GraphcalError::UnknownIndex {
-                        name: idx.as_index_name(),
-                        src: src.clone(),
-                        span: idx.span.into(),
-                    });
+                match idx {
+                    crate::syntax::ast::IndexExpr::NatLiteral(n, span) => {
+                        resolved_indexes.push(ResolvedIndex::NatLiteral(*n, *span));
+                    }
+                    crate::syntax::ast::IndexExpr::Name(ident) => {
+                        let idx_name = &ident.name;
+                        if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
+                            // Generic nat param in index position: `D[N]` where `N: Nat`
+                            resolved_indexes
+                                .push(ResolvedIndex::GenericNatParam(gp.clone(), ident.span));
+                        } else if let Some(gp) =
+                            index_params.iter().find(|p| p.as_str() == idx_name)
+                        {
+                            resolved_indexes
+                                .push(ResolvedIndex::GenericParam(gp.clone(), ident.span));
+                        } else if registry.indexes.get_index(idx_name).is_some() {
+                            resolved_indexes.push(ResolvedIndex::Concrete(
+                                IndexName::new(idx_name),
+                                ident.span,
+                            ));
+                        } else {
+                            return Err(GraphcalError::UnknownIndex {
+                                name: ident.as_index_name(),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        }
+                    }
                 }
             }
             Ok(ResolvedTypeExpr::Indexed {
@@ -1144,7 +1270,8 @@ pub fn resolve_type_expr(
             // Resolve each explicit type argument, then fill in defaults
             let mut resolved_args = Vec::with_capacity(total_params);
             for arg in type_args {
-                let resolved = resolve_type_expr(arg, registry, dim_params, index_params, src)?;
+                let resolved =
+                    resolve_type_expr(arg, registry, dim_params, index_params, nat_params, src)?;
                 resolved_args.push(resolved);
             }
             // Fill in defaults for any remaining params
@@ -1161,8 +1288,14 @@ pub fn resolve_type_expr(
                             src: src.clone(),
                             span: type_ann.span.into(),
                         })?;
-                let resolved =
-                    resolve_type_expr(default_expr, registry, dim_params, index_params, src)?;
+                let resolved = resolve_type_expr(
+                    default_expr,
+                    registry,
+                    dim_params,
+                    index_params,
+                    nat_params,
+                    src,
+                )?;
                 resolved_args.push(resolved);
             }
             Ok(ResolvedTypeExpr::GenericStruct {
@@ -1274,7 +1407,7 @@ mod tests {
     fn resolve_dimensionless() {
         let r = make_registry();
         let te = parse_type("Dimensionless");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Dimensionless);
     }
 
@@ -1282,7 +1415,7 @@ mod tests {
     fn resolve_bool() {
         let r = make_registry();
         let te = parse_type("Bool");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Bool);
     }
 
@@ -1290,7 +1423,7 @@ mod tests {
     fn resolve_int() {
         let r = make_registry();
         let te = parse_type("Int");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Int);
     }
 
@@ -1298,7 +1431,7 @@ mod tests {
     fn resolve_concrete_dimension() {
         let r = make_registry();
         let te = parse_type("Length");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(
             resolved,
             ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
@@ -1309,7 +1442,7 @@ mod tests {
     fn resolve_compound_dimension() {
         let r = make_registry();
         let te = parse_type("Length / Time^2");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
             / Dimension::base(BaseDimId::Prelude("Time".to_string())).pow_int(2);
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
@@ -1319,7 +1452,7 @@ mod tests {
     fn resolve_struct_type() {
         let r = make_registry_with_struct();
         let te = parse_type("TransferResult");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert!(
             matches!(resolved, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
         );
@@ -1330,7 +1463,7 @@ mod tests {
         let r = make_registry();
         let dim_params = vec![GenericParamName::new("D")];
         let te = parse_type("D");
-        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         assert!(
             matches!(resolved, ResolvedTypeExpr::GenericDimParam(name, _) if name.as_str() == "D")
         );
@@ -1341,7 +1474,7 @@ mod tests {
         let r = make_registry();
         let dim_params = vec![GenericParamName::new("D")];
         let te = parse_type("D^2");
-        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         match resolved {
             ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
                 assert_eq!(terms.len(), 1);
@@ -1363,7 +1496,7 @@ mod tests {
         let dim_params = vec![GenericParamName::new("D")];
         // D * Length  — this is a DimExpr with a generic and a concrete term
         let te = parse_type("D * Length");
-        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         match resolved {
             ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
                 assert_eq!(terms.len(), 2);
@@ -1380,7 +1513,7 @@ mod tests {
     fn resolve_concrete_indexed() {
         let r = make_registry_with_index();
         let te = parse_type("Length[Maneuver]");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         match resolved {
             ResolvedTypeExpr::Indexed { base, indexes } => {
                 assert_eq!(
@@ -1404,7 +1537,8 @@ mod tests {
         let dim_params = vec![GenericParamName::new("D")];
         let index_params = vec![GenericParamName::new("I")];
         let te = parse_type("D[I]");
-        let resolved = resolve_type_expr(&te, &r, &dim_params, &index_params, &make_src()).unwrap();
+        let resolved =
+            resolve_type_expr(&te, &r, &dim_params, &index_params, &[], &make_src()).unwrap();
         match resolved {
             ResolvedTypeExpr::Indexed { base, indexes } => {
                 assert!(
@@ -1423,7 +1557,7 @@ mod tests {
     fn resolve_unknown_dimension_error() {
         let r = make_registry();
         let te = parse_type("UnknownDim");
-        let err = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap_err();
+        let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownDimension { .. }));
     }
 
@@ -1431,7 +1565,7 @@ mod tests {
     fn resolve_unknown_index_error() {
         let r = make_registry();
         let te = parse_type("Length[UnknownIdx]");
-        let err = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap_err();
+        let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownIndex { .. }));
     }
 
@@ -1446,7 +1580,7 @@ mod tests {
         let r = make_registry_with_struct();
         let dim_params = vec![GenericParamName::new("TransferResult")];
         let te = parse_type("TransferResult");
-        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         assert!(matches!(resolved, ResolvedTypeExpr::Struct(..)));
     }
 
@@ -1454,7 +1588,7 @@ mod tests {
     fn resolve_velocity_derived_dimension() {
         let r = make_registry();
         let te = parse_type("Velocity");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
             / Dimension::base(BaseDimId::Prelude("Time".to_string()));
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
@@ -1718,7 +1852,7 @@ mod tests {
     fn resolve_bare_datetime() {
         let r = make_registry();
         let te = parse_type("Datetime");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
     }
 
@@ -1726,7 +1860,7 @@ mod tests {
     fn resolve_datetime_utc() {
         let r = make_registry();
         let te = parse_type("Datetime<UTC>");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
     }
 
@@ -1734,7 +1868,7 @@ mod tests {
     fn resolve_datetime_tt() {
         let r = make_registry();
         let te = parse_type("Datetime<TT>");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TT));
     }
 
@@ -1742,7 +1876,7 @@ mod tests {
     fn resolve_datetime_tai() {
         let r = make_registry();
         let te = parse_type("Datetime<TAI>");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TAI));
     }
 
@@ -1750,7 +1884,7 @@ mod tests {
     fn resolve_datetime_gpst() {
         let r = make_registry();
         let te = parse_type("Datetime<GPST>");
-        let resolved = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap();
+        let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::GPST));
     }
 
@@ -1758,7 +1892,7 @@ mod tests {
     fn resolve_datetime_unknown_scale_error() {
         let r = make_registry();
         let te = parse_type("Datetime<XYZ>");
-        let err = resolve_type_expr(&te, &r, &[], &[], &make_src()).unwrap_err();
+        let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
         assert!(matches!(err, GraphcalError::EvalError { .. }));
     }
 

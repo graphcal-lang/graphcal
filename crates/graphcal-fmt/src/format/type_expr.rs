@@ -18,7 +18,14 @@ pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
         TypeExprKind::Indexed { base, indexes } => {
             let idx_docs: Vec<RcDoc<'static>> = indexes
                 .iter()
-                .map(|i| RcDoc::text(i.name.clone()))
+                .map(|i| match i {
+                    graphcal_compiler::syntax::ast::IndexExpr::Name(ident) => {
+                        RcDoc::text(ident.name.clone())
+                    }
+                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(n, _) => {
+                        RcDoc::text(n.to_string())
+                    }
+                })
                 .collect();
             format_type_expr_inline(base)
                 .append(RcDoc::text("["))
