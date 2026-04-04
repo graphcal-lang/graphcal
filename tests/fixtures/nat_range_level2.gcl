@@ -1,0 +1,45 @@
+// nat_range_level2.gcl -- Nat arithmetic Level 2 (multiplication)
+
+// --- Flatten: M * N in return type ---
+// Takes an M x N matrix, returns a vector of size M * N.
+fn flatten<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[M * N] = for k: range(M * N) {
+    a[k / N, k % N]
+};
+
+param mat23: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+// flatten => 6-element vector of 1.0
+node flat6: Dimensionless[6] = flatten(@mat23);
+
+// --- Scale: N * K where K is literal ---
+fn repeat_twice<N: Nat, D: Dim>(v: D[N]) -> D[N * 2] = for i: range(N * 2) {
+    v[i % N]
+};
+
+param v3: Dimensionless[3] = for i: range(3) { 2.0 };
+// v3 = [2, 2, 2]
+// repeat_twice => [2, 2, 2, 2, 2, 2]
+node v6: Dimensionless[6] = repeat_twice(@v3);
+
+// --- Unification with multiplication: M * N size inference ---
+// matmul_vec: a is M x N, b is N-vector. M bound from a's first index,
+// then N is inferred from a's second index.
+fn matmul_vec<M: Nat, N: Nat, D1: Dim, D2: Dim>(
+    a: D1[M, N], b: D2[N]
+) -> (D1 * D2)[M] = for i: range(M) {
+    sum(for j: range(N) { a[i, j] * b[j] })
+};
+
+param a23: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+param b3: Dimensionless[3] = for j: range(3) { 2.0 };
+// matmul_vec: each row dot product = 3 * 2.0 = 6.0
+node mv: Dimensionless[2] = matmul_vec(@a23, @b3);
+
+// --- Mixed addition and multiplication: M * N + 1 ---
+fn flatten_and_pad<M: Nat, N: Nat>(a: Dimensionless[M, N]) -> Dimensionless[M * N + 1] =
+    for k: range(M * N + 1) {
+        if k < M * N { a[k / N, k % N] } else { 0.0 }
+    };
+
+param mat22: Dimensionless[2, 2] = for i: range(2), j: range(2) { 1.0 };
+// flatten_and_pad: [1, 1, 1, 1, 0]
+node padded5: Dimensionless[5] = flatten_and_pad(@mat22);

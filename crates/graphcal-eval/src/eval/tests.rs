@@ -1576,6 +1576,61 @@ fn eval_nat_range_level1() {
 }
 
 #[test]
+fn eval_nat_range_level2() {
+    use crate::eval::types::Value;
+
+    // Helper: extract a 1D indexed value as a Vec<f64>
+    fn extract_1d(val: &Value) -> Vec<f64> {
+        match val {
+            Value::Indexed { entries, .. } => entries
+                .iter()
+                .map(|(_, v)| v.si_value().unwrap())
+                .collect(),
+            other => panic!("expected Indexed, got {other:?}"),
+        }
+    }
+
+    let source = include_str!("../../../../tests/fixtures/nat_range_level2.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // --- flat6: flatten of 2x3 all-ones matrix → 6-element vector of 1.0 ---
+    let flat6 = find_entry(&result, "flat6");
+    let flat6_vals = extract_1d(&flat6);
+    assert_eq!(flat6_vals.len(), 6, "flat6 should have 6 elements");
+    for (i, v) in flat6_vals.iter().enumerate() {
+        assert!((v - 1.0).abs() < 1e-10, "flat6[{i}] = {v}, expected 1.0");
+    }
+
+    // --- v6: repeat_twice of [2,2,2] → [2,2,2,2,2,2] ---
+    let v6 = find_entry(&result, "v6");
+    let v6_vals = extract_1d(&v6);
+    assert_eq!(v6_vals.len(), 6, "v6 should have 6 elements");
+    for (i, v) in v6_vals.iter().enumerate() {
+        assert!((v - 2.0).abs() < 1e-10, "v6[{i}] = {v}, expected 2.0");
+    }
+
+    // --- mv: matmul_vec of 2x3 all-ones * 3-vector of 2.0 → [6.0, 6.0] ---
+    let mv = find_entry(&result, "mv");
+    let mv_vals = extract_1d(&mv);
+    assert_eq!(mv_vals.len(), 2, "mv should have 2 elements");
+    for (i, v) in mv_vals.iter().enumerate() {
+        assert!((v - 6.0).abs() < 1e-10, "mv[{i}] = {v}, expected 6.0");
+    }
+
+    // --- padded5: flatten_and_pad of 2x2 all-ones → [1, 1, 1, 1, 0] ---
+    let padded5 = find_entry(&result, "padded5");
+    let padded5_vals = extract_1d(&padded5);
+    assert_eq!(padded5_vals.len(), 5, "padded5 should have 5 elements");
+    let expected_padded = [1.0, 1.0, 1.0, 1.0, 0.0];
+    for (i, (v, e)) in padded5_vals.iter().zip(expected_padded.iter()).enumerate() {
+        assert!(
+            (v - e).abs() < 1e-10,
+            "padded5[{i}] = {v}, expected {e}"
+        );
+    }
+}
+
+#[test]
 fn eval_turbofish() {
     use crate::eval::types::Value;
 

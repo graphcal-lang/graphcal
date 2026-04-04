@@ -229,6 +229,9 @@ fn format_nat_expr(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
         NatExpr::Add(lhs, rhs, _) => {
             format!("{} + {}", format_nat_expr(lhs), format_nat_expr(rhs))
         }
+        NatExpr::Mul(lhs, rhs, _) => {
+            format!("{} * {}", format_nat_expr(lhs), format_nat_expr(rhs))
+        }
     }
 }
 

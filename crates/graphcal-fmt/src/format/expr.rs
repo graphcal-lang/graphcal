@@ -32,6 +32,13 @@ fn format_nat_expr_str(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String
                 format_nat_expr_str(rhs)
             )
         }
+        NatExpr::Mul(lhs, rhs, _) => {
+            format!(
+                "{} * {}",
+                format_nat_expr_str(lhs),
+                format_nat_expr_str(rhs)
+            )
+        }
     }
 }
 

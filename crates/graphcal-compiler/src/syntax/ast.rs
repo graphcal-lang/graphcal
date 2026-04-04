@@ -932,7 +932,7 @@ pub enum ForBindingIndex {
 
 /// A Nat expression (type-level natural number).
 ///
-/// Supports literals, variables, and addition (Level 1 arithmetic).
+/// Supports literals, variables, addition (Level 1), and multiplication (Level 2).
 #[derive(Debug, Clone)]
 pub enum NatExpr {
     /// An integer literal, e.g., `3`
@@ -941,6 +941,8 @@ pub enum NatExpr {
     Var(Ident),
     /// Addition of two nat expressions, e.g., `N + 1`, `M + N`
     Add(Box<Self>, Box<Self>, Span),
+    /// Multiplication of two nat expressions, e.g., `N * 3`, `M * N`
+    Mul(Box<Self>, Box<Self>, Span),
 }
 
 impl NatExpr {
@@ -948,7 +950,7 @@ impl NatExpr {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Literal(_, span) | Self::Add(_, _, span) => *span,
+            Self::Literal(_, span) | Self::Add(_, _, span) | Self::Mul(_, _, span) => *span,
             Self::Var(ident) => ident.span,
         }
     }

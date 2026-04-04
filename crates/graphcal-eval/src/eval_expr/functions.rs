@@ -611,6 +611,11 @@ fn eval_nat_expr(nat_expr: &graphcal_compiler::syntax::ast::NatExpr) -> Option<u
             let r = eval_nat_expr(rhs)?;
             Some(l + r)
         }
+        NatExpr::Mul(lhs, rhs, _) => {
+            let l = eval_nat_expr(lhs)?;
+            let r = eval_nat_expr(rhs)?;
+            Some(l * r)
+        }
         NatExpr::Var(_) => None,
     }
 }
@@ -690,7 +695,7 @@ fn nat_expr_contains_var(expr: &graphcal_compiler::syntax::ast::NatExpr, var_nam
     match expr {
         NatExpr::Literal(_, _) => false,
         NatExpr::Var(ident) => ident.name == var_name,
-        NatExpr::Add(lhs, rhs, _) => {
+        NatExpr::Add(lhs, rhs, _) | NatExpr::Mul(lhs, rhs, _) => {
             nat_expr_contains_var(lhs, var_name) || nat_expr_contains_var(rhs, var_name)
         }
     }
@@ -736,6 +741,15 @@ fn nat_expr_linear_parts(
             let (lc, lv) = nat_expr_linear_parts(lhs, var_name);
             let (rc, rv) = nat_expr_linear_parts(rhs, var_name);
             (lc + rc, lv + rv)
+        }
+        NatExpr::Mul(lhs, rhs, _) => {
+            let (lc, lv) = nat_expr_linear_parts(lhs, var_name);
+            let (rc, rv) = nat_expr_linear_parts(rhs, var_name);
+            // For linear solving: (lc * rc) is the constant-constant product,
+            // (lc * rv + rc * lv) is the effective coefficient of the variable.
+            // Cross-term lv * rv is the quadratic coefficient — we ignore it
+            // (solve_nat_expr_for_var only handles linear equations).
+            (lc * rc, lc * rv + rc * lv)
         }
     }
 }

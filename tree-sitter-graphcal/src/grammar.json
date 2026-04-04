@@ -2687,6 +2687,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "nat_mul_expr"
+        },
+        {
+          "type": "SYMBOL",
           "name": "identifier"
         },
         {
@@ -2718,6 +2722,10 @@
                 {
                   "type": "SYMBOL",
                   "name": "nat_add_expr"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "nat_mul_expr"
                 }
               ]
             }
@@ -2725,6 +2733,61 @@
           {
             "type": "STRING",
             "value": "+"
+          },
+          {
+            "type": "FIELD",
+            "name": "right",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "nat_literal"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "nat_mul_expr"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "nat_mul_expr": {
+      "type": "PREC_LEFT",
+      "value": 6,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "left",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "nat_literal"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "nat_mul_expr"
+                }
+              ]
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "*"
           },
           {
             "type": "FIELD",

@@ -610,17 +610,25 @@ module.exports = grammar({
       "]",
     ),
 
-    // An expression in index position: a name, integer literal, or nat addition
+    // An expression in index position: a name, integer literal, nat addition, or nat multiplication
     _index_expr: $ => choice(
       $.nat_add_expr,
+      $.nat_mul_expr,
       $.identifier,
       $.nat_literal,
     ),
 
-    // Nat addition expression in index position: N + 1, M + N + 2
+    // Nat addition expression in index position: N + 1, M + N + 2, M * N + 1
     nat_add_expr: $ => prec.left(PREC.ADD, seq(
-      field("left", choice($.identifier, $.nat_literal, $.nat_add_expr)),
+      field("left", choice($.identifier, $.nat_literal, $.nat_add_expr, $.nat_mul_expr)),
       "+",
+      field("right", choice($.identifier, $.nat_literal, $.nat_mul_expr)),
+    )),
+
+    // Nat multiplication expression in index position: M * N, M * N * P, 2 * N
+    nat_mul_expr: $ => prec.left(PREC.MUL, seq(
+      field("left", choice($.identifier, $.nat_literal, $.nat_mul_expr)),
+      "*",
       field("right", choice($.identifier, $.nat_literal)),
     )),
 

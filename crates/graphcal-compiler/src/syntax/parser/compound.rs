@@ -400,16 +400,32 @@ impl Parser<'_> {
         Ok(ForBindingIndex::Named(index))
     }
 
-    /// Parse a nat expression: supports literals, identifiers, and addition.
+    /// Parse a nat expression: supports literals, identifiers, addition, and multiplication.
     ///
-    /// Grammar: `nat_expr := nat_atom ('+' nat_atom)*`
+    /// Grammar (with precedence: `*` binds tighter than `+`):
+    /// ```text
+    /// nat_expr := nat_mul_term ('+' nat_mul_term)*
+    /// nat_mul_term := nat_atom ('*' nat_atom)*
+    /// ```
     fn parse_nat_expr(&mut self) -> Result<NatExpr, ParseError> {
-        let mut lhs = self.parse_nat_atom()?;
+        let mut lhs = self.parse_nat_mul_term()?;
         while self.lexer.peek() == Some(&Token::Plus) {
             self.lexer.next_token(); // consume '+'
-            let rhs = self.parse_nat_atom()?;
+            let rhs = self.parse_nat_mul_term()?;
             let span = lhs.span().merge(rhs.span());
             lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), span);
+        }
+        Ok(lhs)
+    }
+
+    /// Parse a multiplicative nat term: `nat_atom ('*' nat_atom)*`
+    fn parse_nat_mul_term(&mut self) -> Result<NatExpr, ParseError> {
+        let mut lhs = self.parse_nat_atom()?;
+        while self.lexer.peek() == Some(&Token::Star) {
+            self.lexer.next_token(); // consume '*'
+            let rhs = self.parse_nat_atom()?;
+            let span = lhs.span().merge(rhs.span());
+            lhs = NatExpr::Mul(Box::new(lhs), Box::new(rhs), span);
         }
         Ok(lhs)
     }

@@ -1983,7 +1983,7 @@ fn collect_nat_range_literals_from_nat_expr(
             registry.ensure_nat_range_index(*n);
         }
         NatExpr::Var(_) => {}
-        NatExpr::Add(lhs, rhs, _) => {
+        NatExpr::Add(lhs, rhs, _) | NatExpr::Mul(lhs, rhs, _) => {
             collect_nat_range_literals_from_nat_expr(lhs, registry);
             collect_nat_range_literals_from_nat_expr(rhs, registry);
         }
