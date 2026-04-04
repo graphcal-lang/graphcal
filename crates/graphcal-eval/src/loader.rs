@@ -20,6 +20,35 @@ pub struct LoadedFile {
     pub ast: File,
     /// Named source for diagnostics.
     pub named_source: NamedSource<Arc<String>>,
+    /// Loader-resolved canonical paths for each import declaration, keyed by the
+    /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
+    /// Produced by the loader so that downstream consumers (evaluator, LSP) can
+    /// look up resolved imports without re-resolving.
+    pub resolved_imports: HashMap<String, PathBuf>,
+}
+
+impl LoadedFile {
+    /// Iterate over import declarations together with their loader-resolved
+    /// canonical paths.
+    pub fn imports_with_paths(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &graphcal_compiler::syntax::ast::Declaration,
+            &graphcal_compiler::syntax::ast::ImportDecl,
+            &Path,
+        ),
+    > {
+        self.ast.declarations.iter().filter_map(|decl| {
+            if let DeclKind::Import(import_decl) = &decl.kind {
+                self.resolved_imports
+                    .get(&import_decl.path.display_path())
+                    .map(|path| (decl, import_decl, path.as_path()))
+            } else {
+                None
+            }
+        })
+    }
 }
 
 /// A loaded project: a root file plus all transitively imported files.
@@ -56,6 +85,7 @@ impl LoadedProject {
             source,
             ast,
             named_source,
+            resolved_imports: HashMap::new(),
         };
         let mut files = HashMap::new();
         files.insert(path.clone(), loaded_file);
@@ -165,6 +195,7 @@ fn load_file_dfs<F: FileSystemReader>(
 
     // Find import declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut resolved_imports = HashMap::new();
     for decl in &ast.declarations {
         if let DeclKind::Import(import_decl) = &decl.kind {
             let import_canonical = resolve_import_path(
@@ -184,6 +215,8 @@ fn load_file_dfs<F: FileSystemReader>(
                     span: import_decl.path.span().into(),
                 }));
             }
+
+            resolved_imports.insert(import_decl.path.display_path(), import_canonical.clone());
 
             load_file_dfs(
                 &import_canonical,
@@ -210,6 +243,7 @@ fn load_file_dfs<F: FileSystemReader>(
             source,
             ast,
             named_source,
+            resolved_imports,
         },
     );
 
