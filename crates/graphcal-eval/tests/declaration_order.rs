@@ -121,6 +121,55 @@ fn assert_results_equal(original: &EvalResult, shuffled: &EvalResult) {
 }
 
 // ============================================================================
+// Targeted forward-reference tests
+// ============================================================================
+
+/// Derived dimension declared before the dimension it references.
+#[test]
+fn forward_ref_derived_dimension() {
+    let source = r"
+        dimension Acceleration = Velocity / Time;
+        dimension Velocity = Length / Time;
+        const G0: Acceleration = 9.80665 m/s^2;
+    ";
+    compile_and_eval(source).expect("forward-ref derived dimension must compile and evaluate");
+}
+
+/// Unit declared before the unit it references in its definition.
+#[test]
+fn forward_ref_unit() {
+    let source = r"
+        unit km_custom: Length = 1000 m_base;
+        unit m_base: Length;
+        const DIST: Length = 5.0 km_custom;
+    ";
+    compile_and_eval(source).expect("forward-ref unit must compile and evaluate");
+}
+
+/// Chain of derived dimensions: A depends on B depends on C, declared in reverse.
+#[test]
+fn forward_ref_derived_dimension_chain() {
+    let source = r"
+        dimension Jerk = Acceleration / Time;
+        dimension Acceleration = Velocity / Time;
+        dimension Velocity = Length / Time;
+        param j: Jerk = 1.0 m/s^3;
+    ";
+    compile_and_eval(source).expect("chained forward-ref dimensions must compile and evaluate");
+}
+
+/// Range index declared before the unit it uses in its start/end/step.
+#[test]
+fn forward_ref_range_index_unit() {
+    let source = r"
+        range Distances(0.0 custom_m, 100.0 custom_m, step: 10.0 custom_m);
+        unit custom_m: Length;
+        node num_points: Dimensionless = count(for d: Distances { 1.0 });
+    ";
+    compile_and_eval(source).expect("range index with forward-ref unit must compile and evaluate");
+}
+
+// ============================================================================
 // Property-based tests
 // ============================================================================
 

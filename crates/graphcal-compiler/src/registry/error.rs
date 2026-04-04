@@ -204,6 +204,29 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cyclic dimension dependency involving `{name}`")]
+    #[diagnostic(
+        code(graphcal::D008),
+        help("derived dimensions cannot form dependency cycles")
+    )]
+    CyclicDimension {
+        name: DimName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("involved in cycle")]
+        span: SourceSpan,
+    },
+
+    #[error("cyclic unit dependency involving `{name}`")]
+    #[diagnostic(code(graphcal::D009), help("units cannot form dependency cycles"))]
+    CyclicUnit {
+        name: UnitName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("involved in cycle")]
+        span: SourceSpan,
+    },
+
     #[error("exponent in power must be a numeric literal for dimensional analysis")]
     #[diagnostic(
         code(graphcal::D005),

@@ -173,7 +173,10 @@ fn eval_consts_from_tir(
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
 
-    for entry in &tir.consts {
+    // Sort consts by name for canonical tie-breaking among incomparable nodes.
+    let mut sorted_consts: Vec<&_> = tir.consts.iter().collect();
+    sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in &sorted_consts {
         let name_str = entry.name.to_string();
         let idx = graph.add_node(name_str.clone());
         index_map.insert(name_str, idx);
@@ -236,32 +239,62 @@ fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(Vec<String>, HashMap<String, Expr>), GraphcalError> {
+    // Merge params and nodes, then sort by name for canonical tie-breaking
+    // among incomparable nodes in the topological sort.
+    enum DeclRef<'a> {
+        Param(&'a graphcal_compiler::ir::ir::ParamEntry),
+        Node(&'a graphcal_compiler::ir::ir::NodeEntry),
+    }
+
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
     let mut expressions: HashMap<String, Expr> = HashMap::new();
 
+    let mut all_decls: Vec<DeclRef<'_>> = Vec::new();
     for entry in &tir.params {
-        let name_str = entry.name.to_string();
-        let idx = graph.add_node(name_str.clone());
-        index_map.insert(name_str.clone(), idx);
-        match &entry.default_expr {
-            Some(expr) => {
-                expressions.insert(name_str, expr.clone());
-            }
-            None => {
-                return Err(GraphcalError::RequiredParamNotProvided {
-                    name: name_str,
-                    src: src.clone(),
-                    span: entry.span.into(),
-                });
-            }
-        }
+        all_decls.push(DeclRef::Param(entry));
     }
     for entry in &tir.nodes {
-        let name_str = entry.name.to_string();
-        let idx = graph.add_node(name_str.clone());
-        index_map.insert(name_str.clone(), idx);
-        expressions.insert(name_str, entry.expr.clone());
+        all_decls.push(DeclRef::Node(entry));
+    }
+    all_decls.sort_by(|a, b| {
+        let name_a = match a {
+            DeclRef::Param(e) => &e.name,
+            DeclRef::Node(e) => &e.name,
+        };
+        let name_b = match b {
+            DeclRef::Param(e) => &e.name,
+            DeclRef::Node(e) => &e.name,
+        };
+        name_a.cmp(name_b)
+    });
+
+    for decl in &all_decls {
+        match decl {
+            DeclRef::Param(entry) => {
+                let name_str = entry.name.to_string();
+                let idx = graph.add_node(name_str.clone());
+                index_map.insert(name_str.clone(), idx);
+                match &entry.default_expr {
+                    Some(expr) => {
+                        expressions.insert(name_str, expr.clone());
+                    }
+                    None => {
+                        return Err(GraphcalError::RequiredParamNotProvided {
+                            name: name_str,
+                            src: src.clone(),
+                            span: entry.span.into(),
+                        });
+                    }
+                }
+            }
+            DeclRef::Node(entry) => {
+                let name_str = entry.name.to_string();
+                let idx = graph.add_node(name_str.clone());
+                index_map.insert(name_str.clone(), idx);
+                expressions.insert(name_str, entry.expr.clone());
+            }
+        }
     }
 
     for (name, deps) in &tir.runtime_deps {
