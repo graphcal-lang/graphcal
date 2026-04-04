@@ -526,10 +526,7 @@ impl Parser<'_> {
         let first_atom = self.parse_nat_atom_in_index()?;
 
         // Check if this is followed by an operator (* or +)
-        let has_operator = matches!(
-            self.lexer.peek(),
-            Some(&Token::Star | &Token::Plus)
-        );
+        let has_operator = matches!(self.lexer.peek(), Some(&Token::Star | &Token::Plus));
 
         if !has_operator {
             // Simple case: bare atom. Desugar appropriately.

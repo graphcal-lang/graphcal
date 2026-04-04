@@ -242,7 +242,10 @@ impl Monomial {
 
     /// Get the total degree of this monomial (sum of exponents).
     #[must_use]
-    #[expect(dead_code, reason = "useful for future non-linear unification extensions")]
+    #[expect(
+        dead_code,
+        reason = "useful for future non-linear unification extensions"
+    )]
     fn degree(&self) -> u64 {
         self.0.values().sum()
     }
@@ -349,10 +352,7 @@ impl NatPolyForm {
     /// Returns the constant term (coefficient of the empty monomial).
     #[must_use]
     pub fn constant(&self) -> u64 {
-        self.terms
-            .get(&Monomial::constant())
-            .copied()
-            .unwrap_or(0)
+        self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
     }
 
     /// Returns `true` if this form has no variables (is a constant).
@@ -470,7 +470,9 @@ impl NatPolyForm {
                 } else if let Some((var_name, exp_str)) = factor.split_once('^') {
                     // Variable with exponent: "N^2"
                     let exp: u64 = exp_str.parse().ok()?;
-                    *mono_vars.entry(GenericParamName::new(var_name.trim())).or_insert(0) += exp;
+                    *mono_vars
+                        .entry(GenericParamName::new(var_name.trim()))
+                        .or_insert(0) += exp;
                 } else {
                     // Plain variable name
                     *mono_vars.entry(GenericParamName::new(factor)).or_insert(0) += 1;
@@ -1014,9 +1016,9 @@ fn unify_nat_poly_form(
             if let Some(prev) = nat_sub.get(&var) {
                 if *prev != value {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: IndexName::new(
-                            crate::registry::registry::nat_range_index_name(*prev),
-                        ),
+                        expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                            *prev,
+                        )),
                         found: actual_idx.clone(),
                         src: src.clone(),
                         span: span.into(),
@@ -2439,16 +2441,16 @@ mod tests {
     fn nat_leq_var_plus_constant() {
         // N <= N + 1
         let a = NatPolyForm::from_var(GenericParamName::new("N"));
-        let b = NatPolyForm::from_var(GenericParamName::new("N"))
-            .add(&NatPolyForm::from_constant(1));
+        let b =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_var_plus_constant_reverse() {
         // N + 1 <= N → false
-        let a = NatPolyForm::from_var(GenericParamName::new("N"))
-            .add(&NatPolyForm::from_constant(1));
+        let a =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
         let b = NatPolyForm::from_var(GenericParamName::new("N"));
         assert!(!a.is_leq(&b));
     }
@@ -2488,8 +2490,8 @@ mod tests {
     #[test]
     fn parse_index_name_var_plus_constant() {
         let form = NatPolyForm::from_index_name("__nat_range_N + 1").unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("N"))
-            .add(&NatPolyForm::from_constant(1));
+        let expected =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
         assert_eq!(form, expected);
     }
 

@@ -1582,10 +1582,9 @@ fn eval_nat_range_level2() {
     // Helper: extract a 1D indexed value as a Vec<f64>
     fn extract_1d(val: &Value) -> Vec<f64> {
         match val {
-            Value::Indexed { entries, .. } => entries
-                .iter()
-                .map(|(_, v)| v.si_value().unwrap())
-                .collect(),
+            Value::Indexed { entries, .. } => {
+                entries.iter().map(|(_, v)| v.si_value().unwrap()).collect()
+            }
             other => panic!("expected Indexed, got {other:?}"),
         }
     }
@@ -1623,10 +1622,7 @@ fn eval_nat_range_level2() {
     assert_eq!(padded5_vals.len(), 5, "padded5 should have 5 elements");
     let expected_padded = [1.0, 1.0, 1.0, 1.0, 0.0];
     for (i, (v, e)) in padded5_vals.iter().zip(expected_padded.iter()).enumerate() {
-        assert!(
-            (v - e).abs() < 1e-10,
-            "padded5[{i}] = {v}, expected {e}"
-        );
+        assert!((v - e).abs() < 1e-10, "padded5[{i}] = {v}, expected {e}");
     }
 }
 
