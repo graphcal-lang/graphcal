@@ -80,22 +80,23 @@ pub(super) fn infer_binop(
             Ok(InferredType::Bool)
         }
         // Equality: operands must have the same ValueType.
+        // Int and Fin(N) are compatible for equality comparison.
         BinOp::Eq | BinOp::Ne => {
-            if lhs_type != rhs_type {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(&lhs_type, registry),
-                    found: format_inferred_type(&rhs_type, registry),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                    help: "equality operands must have the same type".to_string(),
-                });
+            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
+                return Ok(InferredType::Bool);
             }
-            Ok(InferredType::Bool)
+            Err(GraphcalError::DimensionMismatch {
+                expected: format_inferred_type(&lhs_type, registry),
+                found: format_inferred_type(&rhs_type, registry),
+                src: src.clone(),
+                span: rhs.span.into(),
+                help: "equality operands must have the same type".to_string(),
+            })
         }
-        // Ordering comparisons: require same-type scalar or Int operands, return Bool
+        // Ordering comparisons: require same-type scalar or Int/Fin operands, return Bool
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            if lhs_type == InferredType::Int || rhs_type == InferredType::Int {
-                if lhs_type != rhs_type {
+            if lhs_type.is_int_like() || rhs_type.is_int_like() {
+                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: format_inferred_type(&lhs_type, registry),
                         found: format_inferred_type(&rhs_type, registry),
@@ -137,7 +138,7 @@ pub(super) fn infer_binop(
         // Arithmetic operators: require matching numeric operands (Int or Scalar)
         // or structs with derive(Add)/derive(Sub)
         BinOp::Add | BinOp::Sub => {
-            if lhs_type == InferredType::Int && rhs_type == InferredType::Int {
+            if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
             // Check for derive(Add)/derive(Sub) on struct types
@@ -236,7 +237,7 @@ pub(super) fn infer_binop(
             Ok(InferredType::Scalar(lhs_dim))
         }
         BinOp::Mul => {
-            if lhs_type == InferredType::Int && rhs_type == InferredType::Int {
+            if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
             let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
@@ -244,7 +245,7 @@ pub(super) fn infer_binop(
             Ok(InferredType::Scalar(lhs_dim * rhs_dim))
         }
         BinOp::Div => {
-            if lhs_type == InferredType::Int && rhs_type == InferredType::Int {
+            if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
             let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
@@ -252,7 +253,7 @@ pub(super) fn infer_binop(
             Ok(InferredType::Scalar(lhs_dim / rhs_dim))
         }
         BinOp::Mod => {
-            if lhs_type == InferredType::Int && rhs_type == InferredType::Int {
+            if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
             Err(GraphcalError::DimensionMismatch {
@@ -268,8 +269,8 @@ pub(super) fn infer_binop(
             })
         }
         BinOp::Pow => {
-            // Int ^ Int (literal non-negative) -> Int
-            if lhs_type == InferredType::Int {
+            // Int/Fin ^ Int (literal non-negative) -> Int
+            if lhs_type.is_int_like() {
                 if let ExprKind::Integer(n) = &rhs.kind {
                     if *n >= 0 {
                         return Ok(InferredType::Int);

@@ -31,7 +31,8 @@ pub(super) fn types_match(
 ) -> bool {
     match (declared, inferred) {
         (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
-        (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
+        (DeclaredType::Bool, InferredType::Bool) => true,
+        (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
         (DeclaredType::Label(d), InferredType::Label(i)) => d == i,
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
@@ -69,6 +70,9 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 /// Format an inferred type for display in diagnostics.
 #[must_use]
 pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
+    if let InferredType::Fin(bound) = it {
+        return format!("Fin({})", bound.format());
+    }
     inferred_to_declared(it).format(&registry.dimensions)
 }
 
@@ -77,7 +81,7 @@ fn inferred_to_declared(it: &InferredType) -> DeclaredType {
     match it {
         InferredType::Scalar(d) => DeclaredType::Scalar(d.clone()),
         InferredType::Bool => DeclaredType::Bool,
-        InferredType::Int => DeclaredType::Int,
+        InferredType::Int | InferredType::Fin(_) => DeclaredType::Int,
         InferredType::Datetime(scale) => DeclaredType::Datetime(*scale),
         InferredType::Label(index) => DeclaredType::Label(index.clone()),
         InferredType::Struct(n, args) => {

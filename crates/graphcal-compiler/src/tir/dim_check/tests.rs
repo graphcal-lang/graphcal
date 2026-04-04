@@ -981,3 +981,69 @@ a
 };";
     check(source).unwrap();
 }
+
+// -----------------------------------------------------------------------
+// Fin(N) type: loop variable bounds checking
+// -----------------------------------------------------------------------
+
+#[test]
+fn fin_same_size_indexing() {
+    // i : Fin(3) indexing into D[3] — 3 <= 3 — safe
+    let source = "\
+param v: Dimensionless[3] = for i: range(3) { 1.0 };
+node w: Dimensionless[3] = for i: range(3) { @v[i] };";
+    check(source).unwrap();
+}
+
+#[test]
+fn fin_smaller_bound_indexing() {
+    // i : Fin(3) indexing into D[5] — 3 <= 5 — safe
+    let source = "\
+param v: Dimensionless[5] = for i: range(5) { 1.0 };
+node w: Dimensionless[3] = for i: range(3) { @v[i] };";
+    check(source).unwrap();
+}
+
+#[test]
+fn fin_out_of_bounds() {
+    // i : Fin(5) indexing into D[3] — 5 > 3 — compile error
+    let source = "\
+param v: Dimensionless[3] = for i: range(3) { 1.0 };
+node w: Dimensionless[5] = for i: range(5) { @v[i] };";
+    let err = check(source).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("index out of bounds"),
+        "expected bounds error, got: {msg}"
+    );
+}
+
+#[test]
+fn fin_comparison_same_range() {
+    // i : Fin(3), j : Fin(3) — i == j is valid
+    let source = "\
+node m: Dimensionless[3, 3] = for i: range(3), j: range(3) {
+    if i == j { 1.0 } else { 0.0 }
+};";
+    check(source).unwrap();
+}
+
+#[test]
+fn fin_arithmetic_with_int() {
+    // Fin(N) * Dimensionless -> error (Fin is not Scalar)
+    // Fin(N) + Fin(M) -> Int (arithmetic), then Int * Dimensionless -> error
+    // to_float(i) -> Dimensionless (via Int coercion)
+    let source = "\
+node v: Dimensionless[3] = for i: range(3) { to_float(i) };";
+    check(source).unwrap();
+}
+
+#[test]
+fn fin_generic_drop_last() {
+    // Generic fn where Fin(N) indexes into D[N+1] — N <= N+1 — safe
+    let source = "\
+fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] = for i: range(N) { v[i] };
+param v4: Dimensionless[4] = for i: range(4) { 1.0 };
+node v3: Dimensionless[3] = drop_last(@v4);";
+    check(source).unwrap();
+}

@@ -9,6 +9,7 @@ use miette::NamedSource;
 
 use crate::syntax::ast::{Expr, ForBinding, ForBindingIndex, IndexArg, NatExpr};
 use crate::syntax::names::{FieldName, FnName, GenericParamName, IndexName, StructTypeName};
+use crate::tir::tir::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
@@ -42,6 +43,20 @@ fn nat_expr_to_index_name_str(expr: &NatExpr) -> String {
             // During generic function body checking, we use symbolic names.
             let formatted = format_nat_expr(expr);
             format!("__nat_range_{formatted}")
+        }
+    }
+}
+
+/// Normalize a `NatExpr` to `NatLinearForm` without requiring nat param validation.
+///
+/// This is a lenient version used during type inference where the nat params
+/// in scope are not directly available. Variable validation is done elsewhere.
+fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
+    match expr {
+        NatExpr::Literal(n, _) => NatLinearForm::from_constant(*n),
+        NatExpr::Var(ident) => NatLinearForm::from_var(GenericParamName::new(&ident.name)),
+        NatExpr::Add(lhs, rhs, _) => {
+            normalize_nat_expr_lenient(lhs).add(&normalize_nat_expr_lenient(rhs))
         }
     }
 }
@@ -90,15 +105,14 @@ pub(super) fn infer_for_comp(
                     | crate::registry::registry::IndexKind::RequiredRange { dimension } => {
                         InferredType::Scalar(dimension.clone())
                     }
-                    crate::registry::registry::IndexKind::NatRange { .. } => {
-                        // Nat range loop variables are Int (will be Fin(N) later)
-                        InferredType::Int
+                    crate::registry::registry::IndexKind::NatRange { size } => {
+                        InferredType::Fin(NatLinearForm::from_constant(*size))
                     }
                 }
             }
-            ForBindingIndex::Range { .. } => {
-                // `for i: range(N)` — loop variable is Int
-                InferredType::Int
+            ForBindingIndex::Range { arg, .. } => {
+                // `for i: range(N)` — loop variable is Fin(N)
+                InferredType::Fin(normalize_nat_expr_lenient(arg))
             }
         };
         inner_locals.insert(binding.var.name.clone(), var_type);
@@ -515,8 +529,49 @@ pub(super) fn infer_index_access(
                                 span: ident.span.into(),
                             });
                         }
+                        // Int has no static bound — no bounds checking possible.
                         // If the index is not in registry (generic nat param),
                         // allow it — it will be checked at call site.
+                    }
+                    InferredType::Fin(fin_bound) => {
+                        // Fin(N) can index into nat-range indexes with bounds checking.
+                        // Extract the index size as a NatLinearForm and check: fin_bound <= size.
+                        let index_form = if let Some(idx_def) =
+                            registry.indexes.get_index(idx_name.as_str())
+                        {
+                            if !idx_def.is_nat_range() {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!(
+                                        "`{}` (Fin({})) cannot index into non-nat-range index `{}`",
+                                        ident.name,
+                                        fin_bound.format(),
+                                        idx_name
+                                    ),
+                                    src: src.clone(),
+                                    span: ident.span.into(),
+                                });
+                            }
+                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                        } else {
+                            // Index not in registry: symbolic nat range (generic param).
+                            NatLinearForm::from_index_name(idx_name.as_str())
+                        };
+                        if let Some(index_form) = &index_form
+                            && !fin_bound.is_leq(index_form)
+                        {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "index out of bounds: `{}` has type Fin({}) but array has size {}",
+                                    ident.name,
+                                    fin_bound.format(),
+                                    index_form.format(),
+                                ),
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
+                        }
+                        // If we can't determine the index size, allow it —
+                        // the check will happen at the call site.
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
