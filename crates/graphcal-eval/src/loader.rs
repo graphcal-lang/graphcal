@@ -6,8 +6,8 @@ use miette::NamedSource;
 
 use crate::error::GraphcalError;
 use crate::eval::CompileError;
-use crate::io::FileSystemReader;
 use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
+use graphcal_io::FileSystemReader;
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
@@ -421,9 +421,9 @@ mod tests {
     use super::*;
     use std::fs;
 
-    use crate::io::TestRealFs;
+    use graphcal_io::RealFileSystem;
 
-    const FS: TestRealFs = TestRealFs;
+    const FS: RealFileSystem = RealFileSystem;
 
     /// Create a temporary directory with the given files and return its path.
     fn setup_temp_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -510,31 +510,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Test-only overlay filesystem (avoids circular dev-dependency on `graphcal-io`).
-    struct TestOverlayFs {
-        overlay_path: PathBuf,
-        overlay_content: String,
-    }
-
-    impl crate::io::FileSystemReader for TestOverlayFs {
-        fn read_to_string(&self, path: &Path) -> Result<String, std::io::Error> {
-            if path == self.overlay_path {
-                Ok(self.overlay_content.clone())
-            } else {
-                std::fs::read_to_string(path)
-            }
-        }
-        fn canonicalize(&self, path: &Path) -> Result<PathBuf, std::io::Error> {
-            path.canonicalize()
-        }
-        fn is_file(&self, path: &Path) -> bool {
-            path == self.overlay_path || path.is_file()
-        }
-        fn exists(&self, path: &Path) -> bool {
-            path == self.overlay_path || path.exists()
-        }
-    }
-
     #[test]
     fn load_with_overlay_uses_overlay_for_root() {
         let dir = setup_temp_dir(&[("main.gcl", "param x: Dimensionless = 1.0;")]);
@@ -542,10 +517,11 @@ mod tests {
 
         let overlay_source = "param x: Dimensionless = 99.0;";
         let canonical = root_path.canonicalize().unwrap();
-        let fs = TestOverlayFs {
-            overlay_path: canonical,
-            overlay_content: overlay_source.to_string(),
-        };
+        let fs = graphcal_io::OverlayFileSystem::new(
+            RealFileSystem,
+            canonical,
+            overlay_source.to_string(),
+        );
         let project = load_project(&root_path, None, &fs).unwrap();
 
         let root_file = &project.files[&project.root];
@@ -566,10 +542,11 @@ mod tests {
 
         let overlay_source = "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
-        let fs = TestOverlayFs {
-            overlay_path: canonical,
-            overlay_content: overlay_source.to_string(),
-        };
+        let fs = graphcal_io::OverlayFileSystem::new(
+            RealFileSystem,
+            canonical,
+            overlay_source.to_string(),
+        );
         let project = load_project(&root_path, None, &fs).unwrap();
 
         // Root file should use overlay content
@@ -588,10 +565,8 @@ mod tests {
 
         let bad_overlay = "this is not valid graphcal";
         let canonical = root_path.canonicalize().unwrap();
-        let fs = TestOverlayFs {
-            overlay_path: canonical,
-            overlay_content: bad_overlay.to_string(),
-        };
+        let fs =
+            graphcal_io::OverlayFileSystem::new(RealFileSystem, canonical, bad_overlay.to_string());
         let result = load_project(&root_path, None, &fs);
         assert!(result.is_err());
     }

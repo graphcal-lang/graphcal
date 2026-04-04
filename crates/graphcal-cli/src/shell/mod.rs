@@ -23,10 +23,10 @@ use graphcal_eval::eval::{
     AssertResult, CompileError, EvalResult, NodeError, Value, compile_and_eval_from_project,
     compile_to_tir_from_project,
 };
-use graphcal_eval::io::FileSystemReader as _;
 use graphcal_eval::loader::LoadedProject;
 use graphcal_eval::registry::UnitScale;
 use graphcal_eval::tir::TIR;
+use graphcal_io::FileSystemReader as _;
 
 use commands::{Command, HELP_TEXT, parse_command};
 use format::{format_value_changed, format_value_line};

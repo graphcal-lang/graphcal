@@ -3,7 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use graphcal_eval::io::FileSystemReader;
+use crate::FileSystemReader;
 
 /// A filesystem reader that intercepts reads to a single overlaid path,
 /// returning in-memory content instead of delegating to the base reader.
@@ -63,7 +63,7 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
 mod tests {
     #![allow(clippy::unwrap_used, reason = "test code")]
 
-    use graphcal_eval::io::InMemoryFileSystem;
+    use crate::InMemoryFileSystem;
 
     use super::*;
 

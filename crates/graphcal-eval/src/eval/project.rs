@@ -2002,7 +2002,7 @@ pub(super) fn apply_overrides(
 /// Resolves imports from `use` declarations in the root file, lowers to IR,
 /// type-resolves, and runs all checks (recursion, dimensions). The project may
 /// have been loaded from disk, constructed from in-memory source, or a mix of
-/// both (via [`crate::io::OverlayFileSystem`](crate::io) + [`crate::loader::load_project`]).
+/// both (via [`graphcal_io::OverlayFileSystem`] + [`crate::loader::load_project`]).
 ///
 /// # Errors
 ///
@@ -2043,7 +2043,7 @@ pub fn compile_and_eval_from_project(
 /// Loads all files referenced by `use` declarations starting from `root_path`,
 /// collects imported declarations, and evaluates the root file with imports merged.
 ///
-/// All filesystem access goes through the provided [`crate::io::FileSystemReader`].
+/// All filesystem access goes through the provided [`graphcal_io::FileSystemReader`].
 ///
 /// # Errors
 ///
@@ -2052,7 +2052,7 @@ pub fn compile_and_eval_from_project(
     clippy::implicit_hasher,
     reason = "public API accepts HashMap without requiring specific hasher"
 )]
-pub fn compile_and_eval_project<F: crate::io::FileSystemReader>(
+pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     project_root: Option<&Path>,
@@ -2082,12 +2082,12 @@ pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, Compi
 /// Loads all files referenced by `use` declarations starting from `root_path`,
 /// resolves imports, and runs the pipeline up through dimension checking.
 ///
-/// All filesystem access goes through the provided [`crate::io::FileSystemReader`].
+/// All filesystem access goes through the provided [`graphcal_io::FileSystemReader`].
 ///
 /// # Errors
 ///
 /// Returns a [`CompileError`] if loading, parsing, resolution, or checking fails.
-pub fn compile_to_tir_project<F: crate::io::FileSystemReader>(
+pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     project_root: Option<&Path>,
     fs: &F,

@@ -539,6 +539,7 @@ name = "graphcal-eval"
 version = "0.1.0"
 dependencies = [
  "graphcal-compiler",
+ "graphcal-io",
  "hifitime",
  "indexmap",
  "insta",
@@ -563,9 +564,6 @@ dependencies = [
 [[package]]
 name = "graphcal-io"
 version = "0.1.0"
-dependencies = [
- "graphcal-eval",
-]
 
 [[package]]
 name = "graphcal-lsp"

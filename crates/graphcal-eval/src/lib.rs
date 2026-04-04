@@ -33,5 +33,4 @@ pub use graphcal_compiler::tir::tir;
 pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;
-pub mod io;
 pub mod loader;

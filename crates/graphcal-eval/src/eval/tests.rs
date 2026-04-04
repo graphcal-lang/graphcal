@@ -7,9 +7,9 @@
 )]
 use super::*;
 use crate::error::GraphcalError;
-use crate::io::TestRealFs;
+use graphcal_io::RealFileSystem;
 
-const FS: TestRealFs = TestRealFs;
+const FS: RealFileSystem = RealFileSystem;
 
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {

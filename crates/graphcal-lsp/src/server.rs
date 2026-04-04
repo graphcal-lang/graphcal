@@ -152,7 +152,7 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
     let name = uri.as_str();
     match uri.to_file_path() {
         Ok(path) => {
-            use graphcal_eval::io::FileSystemReader as _;
+            use graphcal_io::FileSystemReader as _;
             let base_fs = graphcal_io::RealFileSystem;
             let canonical = base_fs.canonicalize(&path).map_err(|_| {
                 Box::new(CompileError::Eval(
