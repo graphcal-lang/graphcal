@@ -65,7 +65,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@39b03b784b1fb8d2e38e4d6dcf888b991e3c5898 # cargo-llvm-cov
+        uses: taiki-e/install-action@a164de717a0ee9284c2d9db1c6016a4c339cd333 # v2.69.14
+        with:
+          tool: cargo-llvm-cov
 
       - name: Generate coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
@@ -83,7 +85,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: taiki-e/install-action@3832b65b6b2cff92f32da68a8d0955ef55df05f8 # cargo-hack
+      - uses: taiki-e/install-action@a164de717a0ee9284c2d9db1c6016a4c339cd333 # v2.69.14
+        with:
+          tool: cargo-hack
 
       - name: Check MSRV
         run: cargo hack check --workspace --rust-version --ignore-private
