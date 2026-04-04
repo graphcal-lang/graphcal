@@ -167,97 +167,252 @@ impl ResolvedDimTerm {
     }
 }
 
-/// A normalized linear form for Nat expressions: `constant + Σ(coefficient * variable)`.
+/// A monomial: product of variables raised to natural number exponents.
 ///
-/// This is the canonical representation for Level 1 Nat arithmetic (addition only).
-/// Two `NatLinearForm`s are equal iff their constant and all coefficients match.
+/// Represented as a sorted map from variable name to exponent.
+/// The empty map represents the constant monomial (= 1).
 ///
 /// Examples:
-/// - `3` → `{ constant: 3, terms: {} }`
-/// - `N` → `{ constant: 0, terms: { N: 1 } }`
-/// - `N + 1` → `{ constant: 1, terms: { N: 1 } }`
-/// - `M + N + 2` → `{ constant: 2, terms: { M: 1, N: 1 } }`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NatLinearForm {
-    /// The constant term.
-    pub constant: u64,
-    /// Variable → coefficient mapping (only non-zero coefficients).
-    pub terms: BTreeMap<GenericParamName, u64>,
-}
+/// - `{}` represents the constant 1 (used for the constant term in a polynomial)
+/// - `{N: 1}` represents `N`
+/// - `{M: 1, N: 1}` represents `M * N`
+/// - `{N: 2}` represents `N^2`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Monomial(BTreeMap<GenericParamName, u64>);
 
-impl NatLinearForm {
-    /// Create a linear form from a constant.
+impl Monomial {
+    /// The constant monomial (empty product = 1).
     #[must_use]
-    pub const fn from_constant(c: u64) -> Self {
-        Self {
-            constant: c,
-            terms: BTreeMap::new(),
-        }
+    const fn constant() -> Self {
+        Self(BTreeMap::new())
     }
 
-    /// Create a linear form from a single variable with coefficient 1.
+    /// A single-variable monomial with exponent 1.
+    #[must_use]
+    fn var(name: GenericParamName) -> Self {
+        let mut m = BTreeMap::new();
+        m.insert(name, 1);
+        Self(m)
+    }
+
+    /// Returns `true` if this is the constant monomial (no variables).
+    #[must_use]
+    fn is_constant(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Multiply two monomials: add exponents of each variable.
+    #[must_use]
+    fn mul(&self, other: &Self) -> Self {
+        let mut result = self.0.clone();
+        for (var, exp) in &other.0 {
+            *result.entry(var.clone()).or_insert(0) += exp;
+        }
+        Self(result)
+    }
+
+    /// Evaluate the monomial given variable bindings.
+    /// Returns `None` if any variable is unbound.
+    #[must_use]
+    fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
+        let mut result: u64 = 1;
+        for (var, exp) in &self.0 {
+            let val = bindings.get(var)?;
+            result = result.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
+        }
+        Some(result)
+    }
+
+    /// Substitute bound variables, returning a new monomial (with only unbound vars)
+    /// and a multiplicative factor from the bound variables.
+    /// Returns `None` if arithmetic overflows.
+    #[must_use]
+    fn substitute(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<(Self, u64)> {
+        let mut remaining = BTreeMap::new();
+        let mut factor: u64 = 1;
+        for (var, exp) in &self.0 {
+            if let Some(val) = bindings.get(var) {
+                factor = factor.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
+            } else {
+                remaining.insert(var.clone(), *exp);
+            }
+        }
+        Some((Self(remaining), factor))
+    }
+
+    /// Get the total degree of this monomial (sum of exponents).
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "useful for future non-linear unification extensions"
+    )]
+    fn degree(&self) -> u64 {
+        self.0.values().sum()
+    }
+
+    /// Format as a human-readable string, e.g. `""` (empty/constant), `"N"`, `"M * N"`, `"N^2"`.
+    #[must_use]
+    fn format(&self) -> String {
+        let mut parts = Vec::new();
+        for (var, exp) in &self.0 {
+            if *exp == 1 {
+                parts.push(var.to_string());
+            } else {
+                parts.push(format!("{var}^{exp}"));
+            }
+        }
+        parts.join(" * ")
+    }
+}
+
+impl PartialOrd for Monomial {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Monomial {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare by iterating entries in sorted order (BTreeMap guarantees this).
+        let a: Vec<_> = self.0.iter().collect();
+        let b: Vec<_> = other.0.iter().collect();
+        a.cmp(&b)
+    }
+}
+
+/// A normalized polynomial form for Nat expressions.
+///
+/// This is the canonical representation for Nat arithmetic (Level 1 addition + Level 2
+/// multiplication). Each term is a monomial (product of variables with exponents) mapped
+/// to its coefficient. Two `NatPolyForm`s are equal iff their normalized terms match.
+///
+/// Examples:
+/// - `3` → `{ {} => 3 }`
+/// - `N` → `{ {N:1} => 1 }`
+/// - `N + 1` → `{ {N:1} => 1, {} => 1 }`
+/// - `M * N` → `{ {M:1, N:1} => 1 }`
+/// - `M * N + 3` → `{ {M:1, N:1} => 1, {} => 3 }`
+/// - `2 * N^2 + N + 1` → `{ {N:2} => 2, {N:1} => 1, {} => 1 }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NatPolyForm {
+    /// Monomial → coefficient mapping (only non-zero coefficients).
+    terms: BTreeMap<Monomial, u64>,
+}
+
+/// Backward-compatible alias.
+pub type NatLinearForm = NatPolyForm;
+
+impl NatPolyForm {
+    /// Create a polynomial from a constant.
+    #[must_use]
+    pub fn from_constant(c: u64) -> Self {
+        let mut terms = BTreeMap::new();
+        if c != 0 {
+            terms.insert(Monomial::constant(), c);
+        }
+        Self { terms }
+    }
+
+    /// Create a polynomial from a single variable with coefficient 1.
     #[must_use]
     pub fn from_var(name: GenericParamName) -> Self {
         let mut terms = BTreeMap::new();
-        terms.insert(name, 1);
-        Self { constant: 0, terms }
+        terms.insert(Monomial::var(name), 1);
+        Self { terms }
     }
 
-    /// Add two linear forms: `(c1 + terms1) + (c2 + terms2)`.
+    /// Add two polynomials.
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
         let mut terms = self.terms.clone();
-        for (var, coeff) in &other.terms {
-            *terms.entry(var.clone()).or_insert(0) += coeff;
+        for (mono, coeff) in &other.terms {
+            let entry = terms.entry(mono.clone()).or_insert(0);
+            *entry += coeff;
         }
-        Self {
-            constant: self.constant + other.constant,
-            terms,
+        // Remove zero-coefficient terms
+        terms.retain(|_, c| *c != 0);
+        Self { terms }
+    }
+
+    /// Multiply two polynomials (distributive law).
+    #[must_use]
+    pub fn mul(&self, other: &Self) -> Self {
+        let mut terms = BTreeMap::new();
+        for (m1, c1) in &self.terms {
+            for (m2, c2) in &other.terms {
+                let mono = m1.mul(m2);
+                *terms.entry(mono).or_insert(0) += c1 * c2;
+            }
         }
+        // Remove zero-coefficient terms
+        terms.retain(|_, c| *c != 0);
+        Self { terms }
+    }
+
+    /// Returns the constant term (coefficient of the empty monomial).
+    #[must_use]
+    pub fn constant(&self) -> u64 {
+        self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
     }
 
     /// Returns `true` if this form has no variables (is a constant).
     #[must_use]
     pub fn is_constant(&self) -> bool {
-        self.terms.is_empty()
+        self.terms.iter().all(|(m, _)| m.is_constant())
     }
 
     /// Evaluate to a concrete value given variable bindings.
     /// Returns `None` if any variable is unbound.
     #[must_use]
     pub fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
-        let mut result = self.constant;
-        for (var, coeff) in &self.terms {
-            result += coeff * bindings.get(var)?;
+        let mut result: u64 = 0;
+        for (mono, coeff) in &self.terms {
+            result = result.checked_add(coeff.checked_mul(mono.evaluate(bindings)?)?)?;
         }
         Some(result)
     }
 
-    /// Format as a human-readable string, e.g. `"3"`, `"N"`, `"N + 1"`, `"M + N + 2"`.
+    /// Format as a human-readable string.
+    ///
+    /// Examples: `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"M * N + 3"`, `"2 * N^2 + N + 1"`.
     #[must_use]
     pub fn format(&self) -> String {
+        if self.terms.is_empty() {
+            return "0".to_string();
+        }
         let mut parts = Vec::new();
-        for (var, coeff) in &self.terms {
+        // Non-constant terms first (sorted by monomial), then constant.
+        for (mono, coeff) in &self.terms {
+            if mono.is_constant() {
+                continue;
+            }
+            let mono_str = mono.format();
             if *coeff == 1 {
-                parts.push(var.to_string());
+                parts.push(mono_str);
             } else {
-                parts.push(format!("{coeff} * {var}"));
+                parts.push(format!("{coeff} * {mono_str}"));
             }
         }
-        if self.constant > 0 || parts.is_empty() {
-            parts.push(self.constant.to_string());
+        if let Some(&c) = self.terms.get(&Monomial::constant())
+            && (c > 0 || parts.is_empty())
+        {
+            parts.push(c.to_string());
         }
-        parts.join(" + ")
+        if parts.is_empty() {
+            "0".to_string()
+        } else {
+            parts.join(" + ")
+        }
     }
 
     /// Generate a canonical synthetic index name for this nat form.
     ///
     /// For constants, produces `__nat_range_3`.
-    /// For symbolic forms, produces `__nat_range_N+1` etc.
+    /// For symbolic forms, produces `__nat_range_N + 1`, `__nat_range_M * N`, etc.
     #[must_use]
     pub fn to_index_name_str(&self) -> String {
         if self.is_constant() {
-            crate::registry::registry::nat_range_index_name(self.constant)
+            crate::registry::registry::nat_range_index_name(self.constant())
         } else {
             format!("__nat_range_{}", self.format())
         }
@@ -265,75 +420,91 @@ impl NatLinearForm {
 
     /// Check if `self <= other` for all non-negative variable assignments.
     ///
-    /// Returns `true` iff `self.constant <= other.constant` and for every variable,
-    /// `self.coeff(var) <= other.coeff(var)`. This is sound because all `Nat`
-    /// variables are non-negative: if any coefficient in `self` exceeds the
-    /// corresponding coefficient in `other`, we can make the variable arbitrarily
-    /// large to violate the inequality.
+    /// Returns `true` iff for every monomial, the coefficient in `self` is <=
+    /// the coefficient in `other`. This is sound because all `Nat` variables
+    /// are non-negative, so each monomial evaluates to a non-negative value.
     #[must_use]
     pub fn is_leq(&self, other: &Self) -> bool {
-        if self.constant > other.constant {
-            return false;
-        }
-        // Check that every variable in `self` has coefficient <= in `other`
-        for (var, &coeff) in &self.terms {
-            let other_coeff = other.terms.get(var).copied().unwrap_or(0);
+        // Check that every monomial in `self` has coefficient <= in `other`
+        for (mono, &coeff) in &self.terms {
+            let other_coeff = other.terms.get(mono).copied().unwrap_or(0);
             if coeff > other_coeff {
                 return false;
             }
         }
-        // Variables only in `other` (not in `self`) have coefficient 0 in self,
-        // which is always <= other's coefficient. No check needed.
+        // Monomials only in `other` have coefficient 0 in self → always <=.
         true
     }
 
-    /// Parse a `NatLinearForm` from a nat-range index name suffix.
+    /// Parse a `NatPolyForm` from a nat-range index name suffix.
     ///
     /// Given an index name like `__nat_range_3` or `__nat_range_N + 1`,
-    /// strips the prefix and parses the suffix into a `NatLinearForm`.
+    /// strips the prefix and parses the suffix into a `NatPolyForm`.
     /// Returns `None` if the name doesn't have the expected prefix or
     /// the suffix cannot be parsed.
     #[must_use]
     pub fn from_index_name(name: &str) -> Option<Self> {
         let suffix = name.strip_prefix("__nat_range_")?;
-        Self::parse_linear_form(suffix)
+        Self::parse_poly_form(suffix)
     }
 
-    /// Parse a string like `"3"`, `"N"`, or `"N + 1"` into a `NatLinearForm`.
+    /// Parse a string like `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"2 * N^2 + 1"`
+    /// into a `NatPolyForm`.
     #[must_use]
-    fn parse_linear_form(s: &str) -> Option<Self> {
-        let mut constant: u64 = 0;
+    fn parse_poly_form(s: &str) -> Option<Self> {
         let mut terms = BTreeMap::new();
         for part in s.split(" + ") {
             let part = part.trim();
             if part.is_empty() {
                 return None;
             }
-            if let Ok(n) = part.parse::<u64>() {
-                constant += n;
-            } else {
-                // Check for "k * Var" format
-                if let Some((coeff_str, var_str)) = part.split_once(" * ") {
-                    let coeff: u64 = coeff_str.trim().parse().ok()?;
-                    let var = var_str.trim();
-                    *terms.entry(GenericParamName::new(var)).or_insert(0) += coeff;
+            // Split on " * " to get factors of this term
+            let factors: Vec<&str> = part.split(" * ").collect();
+            let mut coeff: u64 = 1;
+            let mut mono_vars = BTreeMap::new();
+            for factor in &factors {
+                let factor = factor.trim();
+                if let Ok(n) = factor.parse::<u64>() {
+                    // Numeric factor → coefficient
+                    coeff *= n;
+                } else if let Some((var_name, exp_str)) = factor.split_once('^') {
+                    // Variable with exponent: "N^2"
+                    let exp: u64 = exp_str.parse().ok()?;
+                    *mono_vars
+                        .entry(GenericParamName::new(var_name.trim()))
+                        .or_insert(0) += exp;
                 } else {
                     // Plain variable name
-                    *terms.entry(GenericParamName::new(part)).or_insert(0) += 1;
+                    *mono_vars.entry(GenericParamName::new(factor)).or_insert(0) += 1;
                 }
             }
+            let mono = Monomial(mono_vars);
+            *terms.entry(mono).or_insert(0) += coeff;
         }
-        Some(Self { constant, terms })
+        terms.retain(|_, c| *c != 0);
+        Some(Self { terms })
+    }
+
+    /// Collect all variable names that appear in any monomial of this polynomial.
+    #[must_use]
+    pub fn variables(&self) -> std::collections::BTreeSet<GenericParamName> {
+        let mut vars = std::collections::BTreeSet::new();
+        for mono in self.terms.keys() {
+            for var in mono.0.keys() {
+                vars.insert(var.clone());
+            }
+        }
+        vars
     }
 }
 
-impl std::fmt::Display for NatLinearForm {
+impl std::fmt::Display for NatPolyForm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.format())
     }
 }
 
-/// Normalize an AST `NatExpr` into a `NatLinearForm`.
+/// Normalize an AST `NatExpr` into a `NatPolyForm`.
 ///
 /// All variables referenced must be Nat generic parameters in scope.
 /// Returns an error if a variable is not a known Nat param.
@@ -341,10 +512,10 @@ pub fn normalize_nat_expr(
     expr: &crate::syntax::ast::NatExpr,
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
-) -> Result<NatLinearForm, GraphcalError> {
+) -> Result<NatPolyForm, GraphcalError> {
     use crate::syntax::ast::NatExpr;
     match expr {
-        NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
+        NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         NatExpr::Var(ident) => {
             let gp = nat_params
                 .iter()
@@ -354,12 +525,17 @@ pub fn normalize_nat_expr(
                     src: src.clone(),
                     span: ident.span.into(),
                 })?;
-            Ok(NatLinearForm::from_var(gp.clone()))
+            Ok(NatPolyForm::from_var(gp.clone()))
         }
         NatExpr::Add(lhs, rhs, _) => {
             let l = normalize_nat_expr(lhs, nat_params, src)?;
             let r = normalize_nat_expr(rhs, nat_params, src)?;
             Ok(l.add(&r))
+        }
+        NatExpr::Mul(lhs, rhs, _) => {
+            let l = normalize_nat_expr(lhs, nat_params, src)?;
+            let r = normalize_nat_expr(rhs, nat_params, src)?;
+            Ok(l.mul(&r))
         }
     }
 }
@@ -371,10 +547,11 @@ pub enum ResolvedIndex {
     Concrete(IndexName, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
-    /// A Nat expression in index position (covers literals, variables, and additions).
+    /// A Nat expression in index position (covers literals, variables, addition, and multiplication).
     ///
-    /// Examples: `3` → constant form, `N` → single-variable form, `N + 1` → linear form.
-    NatExpr(NatLinearForm, Span),
+    /// Examples: `3` → constant form, `N` → single-variable form, `N + 1` → linear,
+    /// `M * N` → polynomial.
+    NatExpr(NatPolyForm, Span),
 }
 
 // ---------------------------------------------------------------------------
@@ -718,7 +895,7 @@ pub fn resolved_to_declared_type(
                             });
                         }
                         let idx_name = IndexName::new(
-                            crate::registry::registry::nat_range_index_name(form.constant),
+                            crate::registry::registry::nat_range_index_name(form.constant()),
                         );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
@@ -742,74 +919,83 @@ pub fn resolved_to_declared_type(
 }
 
 // ---------------------------------------------------------------------------
-// Nat linear form unification
+// Nat polynomial form unification
 // ---------------------------------------------------------------------------
 
-/// Solve a linear equation `form = target` for Nat generic params.
+/// Solve a polynomial equation `form = target` for Nat generic params.
 ///
 /// Substitutes already-bound variables, then:
-/// - If no unbound vars remain: checks `constant == target`.
-/// - If exactly one unbound var with coefficient `a`: solves `target - constant = a * var`.
-/// - If multiple unbound vars: returns an error (ambiguous).
-fn unify_nat_linear_form(
-    form: &NatLinearForm,
+/// - If no unbound vars remain: checks evaluated form == target.
+/// - If exactly one unbound var appears only linearly (degree 1): solves the linear equation.
+/// - Otherwise: returns an error (ambiguous or non-linear in unbound vars).
+fn unify_nat_poly_form(
+    form: &NatPolyForm,
     target: u64,
     nat_sub: &mut HashMap<GenericParamName, u64>,
     actual_idx: &IndexName,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
-    // Substitute already-bound variables
-    let mut remaining_target = target;
-    let mut unbound: Vec<(&GenericParamName, u64)> = Vec::new();
+    // Substitute already-bound variables in each monomial, collecting
+    // a reduced polynomial in only unbound variables + a constant part.
+    let mut reduced_constant: u64 = 0;
+    // (reduced_monomial, coefficient) pairs for terms with unbound variables
+    let mut reduced_terms: BTreeMap<Monomial, u64> = BTreeMap::new();
 
-    for (var, coeff) in &form.terms {
-        if let Some(bound_val) = nat_sub.get(var) {
-            let contribution = coeff * bound_val;
-            if remaining_target < form.constant + contribution {
-                // Would underflow — mismatch
-                return Err(GraphcalError::IndexMismatch {
-                    expected: IndexName::new(format!("range({})", form.format())),
-                    found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            remaining_target -= contribution;
+    for (mono, coeff) in &form.terms {
+        let Some((remaining_mono, factor)) = mono.substitute(nat_sub) else {
+            // Arithmetic overflow during substitution
+            return Err(GraphcalError::IndexMismatch {
+                expected: IndexName::new(format!("range({})", form.format())),
+                found: actual_idx.clone(),
+                src: src.clone(),
+                span: span.into(),
+            });
+        };
+        let term_value = coeff * factor;
+        if remaining_mono.is_constant() {
+            reduced_constant += term_value;
         } else {
-            unbound.push((var, *coeff));
+            *reduced_terms.entry(remaining_mono).or_insert(0) += term_value;
+        }
+    }
+    // Remove zero terms
+    reduced_terms.retain(|_, c| *c != 0);
+
+    if reduced_terms.is_empty() {
+        // All variables bound — check equality
+        if reduced_constant != target {
+            return Err(GraphcalError::IndexMismatch {
+                expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                    form.evaluate(nat_sub).unwrap_or(0),
+                )),
+                found: actual_idx.clone(),
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
+        return Ok(());
+    }
+
+    // Check if exactly one unbound variable appears, only at degree 1
+    let mut unbound_vars = std::collections::BTreeSet::new();
+    for mono in reduced_terms.keys() {
+        for var in mono.0.keys() {
+            unbound_vars.insert(var.clone());
         }
     }
 
-    // Check constant part
-    if remaining_target < form.constant {
-        return Err(GraphcalError::IndexMismatch {
-            expected: IndexName::new(format!("range({})", form.format())),
-            found: actual_idx.clone(),
-            src: src.clone(),
-            span: span.into(),
-        });
-    }
-    let remainder = remaining_target - form.constant;
+    if let [var] = unbound_vars.iter().collect::<Vec<_>>().as_slice() {
+        let var = (*var).clone();
+        // Check all remaining monomials are linear in this variable
+        let all_linear = reduced_terms
+            .keys()
+            .all(|m| m.0.len() == 1 && m.0.get(&var) == Some(&1));
 
-    match unbound.len() {
-        0 => {
-            // All variables bound — check equality
-            if remainder != 0 {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: IndexName::new(crate::registry::registry::nat_range_index_name(
-                        form.evaluate(nat_sub).unwrap_or(0),
-                    )),
-                    found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-        }
-        1 => {
-            // One unbound variable — solve
-            let (var, coeff) = unbound[0];
-            if !remainder.is_multiple_of(coeff) {
+        if all_linear {
+            // Solve: coeff * var + reduced_constant = target
+            let total_coeff: u64 = reduced_terms.values().sum();
+            if target < reduced_constant {
                 return Err(GraphcalError::IndexMismatch {
                     expected: IndexName::new(format!("range({})", form.format())),
                     found: actual_idx.clone(),
@@ -817,8 +1003,17 @@ fn unify_nat_linear_form(
                     span: span.into(),
                 });
             }
-            let value = remainder / coeff;
-            if let Some(prev) = nat_sub.get(var) {
+            let remainder = target - reduced_constant;
+            if total_coeff == 0 || !remainder.is_multiple_of(total_coeff) {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: IndexName::new(format!("range({})", form.format())),
+                    found: actual_idx.clone(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            let value = remainder / total_coeff;
+            if let Some(prev) = nat_sub.get(&var) {
                 if *prev != value {
                     return Err(GraphcalError::IndexMismatch {
                         expected: IndexName::new(crate::registry::registry::nat_range_index_name(
@@ -830,25 +1025,23 @@ fn unify_nat_linear_form(
                     });
                 }
             } else {
-                nat_sub.insert(var.clone(), value);
+                nat_sub.insert(var, value);
             }
-        }
-        _ => {
-            // Multiple unbound variables — ambiguous
-            let var_names: Vec<&str> = unbound.iter().map(|(v, _)| v.as_str()).collect();
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "cannot infer Nat parameters [{}] from a single index — \
-                     provide more arguments or use explicit type annotations",
-                    var_names.join(", ")
-                ),
-                src: src.clone(),
-                span: span.into(),
-            });
+            return Ok(());
         }
     }
 
-    Ok(())
+    // Multiple unbound variables or non-linear — ambiguous
+    let var_names: Vec<&str> = unbound_vars.iter().map(GenericParamName::as_str).collect();
+    Err(GraphcalError::EvalError {
+        message: format!(
+            "cannot infer Nat parameters [{}] from a single index — \
+             provide more arguments or use explicit type annotations",
+            var_names.join(", ")
+        ),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -943,8 +1136,8 @@ pub fn unify_resolved_type(
                             src: src.clone(),
                             span: span.into(),
                         })?;
-                        // Solve the linear equation: form = actual_nat
-                        unify_nat_linear_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
+                        // Solve the polynomial equation: form = actual_nat
+                        unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }
                 }
                 current = element;
@@ -1271,9 +1464,9 @@ pub fn substitute_resolved_type(
                         })?,
                     ResolvedIndex::NatExpr(form, span) => {
                         let n = form.evaluate(nat_sub).ok_or_else(|| {
-                            let unbound: Vec<&str> = form
-                                .terms
-                                .keys()
+                            let vars = form.variables();
+                            let unbound: Vec<&str> = vars
+                                .iter()
                                 .filter(|k| !nat_sub.contains_key(*k))
                                 .map(GenericParamName::as_str)
                                 .collect();
@@ -1361,7 +1554,7 @@ pub fn resolve_type_expr(
                 match idx {
                     crate::syntax::ast::IndexExpr::NatLiteral(n, span) => {
                         resolved_indexes.push(ResolvedIndex::NatExpr(
-                            NatLinearForm::from_constant(*n),
+                            NatPolyForm::from_constant(*n),
                             *span,
                         ));
                     }
@@ -1374,7 +1567,7 @@ pub fn resolve_type_expr(
                         if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
                             // Generic nat param in index position: `D[N]` where `N: Nat`
                             resolved_indexes.push(ResolvedIndex::NatExpr(
-                                NatLinearForm::from_var(gp.clone()),
+                                NatPolyForm::from_var(gp.clone()),
                                 ident.span,
                             ));
                         } else if let Some(gp) =
@@ -2217,102 +2410,213 @@ mod tests {
 
     #[test]
     fn nat_leq_constant_equal() {
-        let a = NatLinearForm::from_constant(3);
-        let b = NatLinearForm::from_constant(3);
+        let a = NatPolyForm::from_constant(3);
+        let b = NatPolyForm::from_constant(3);
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_constant_less() {
-        let a = NatLinearForm::from_constant(2);
-        let b = NatLinearForm::from_constant(5);
+        let a = NatPolyForm::from_constant(2);
+        let b = NatPolyForm::from_constant(5);
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_constant_greater() {
-        let a = NatLinearForm::from_constant(5);
-        let b = NatLinearForm::from_constant(3);
+        let a = NatPolyForm::from_constant(5);
+        let b = NatPolyForm::from_constant(3);
         assert!(!a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_same_var() {
         // N <= N
-        let a = NatLinearForm::from_var(GenericParamName::new("N"));
-        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        let a = NatPolyForm::from_var(GenericParamName::new("N"));
+        let b = NatPolyForm::from_var(GenericParamName::new("N"));
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_var_plus_constant() {
         // N <= N + 1
-        let a = NatLinearForm::from_var(GenericParamName::new("N"));
-        let b = NatLinearForm::from_var(GenericParamName::new("N"))
-            .add(&NatLinearForm::from_constant(1));
+        let a = NatPolyForm::from_var(GenericParamName::new("N"));
+        let b =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_var_plus_constant_reverse() {
         // N + 1 <= N → false
-        let a = NatLinearForm::from_var(GenericParamName::new("N"))
-            .add(&NatLinearForm::from_constant(1));
-        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        let a =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
+        let b = NatPolyForm::from_var(GenericParamName::new("N"));
         assert!(!a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_different_vars() {
         // N <= M → false (N could be larger)
-        let a = NatLinearForm::from_var(GenericParamName::new("N"));
-        let b = NatLinearForm::from_var(GenericParamName::new("M"));
+        let a = NatPolyForm::from_var(GenericParamName::new("N"));
+        let b = NatPolyForm::from_var(GenericParamName::new("M"));
         assert!(!a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_zero_leq_anything() {
         // 0 <= N
-        let a = NatLinearForm::from_constant(0);
-        let b = NatLinearForm::from_var(GenericParamName::new("N"));
+        let a = NatPolyForm::from_constant(0);
+        let b = NatPolyForm::from_var(GenericParamName::new("N"));
         assert!(a.is_leq(&b));
     }
 
     // -----------------------------------------------------------------------
-    // NatLinearForm::from_index_name tests
+    // NatPolyForm::from_index_name tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn parse_index_name_constant() {
-        let form = NatLinearForm::from_index_name("__nat_range_3").unwrap();
-        assert_eq!(form, NatLinearForm::from_constant(3));
+        let form = NatPolyForm::from_index_name("__nat_range_3").unwrap();
+        assert_eq!(form, NatPolyForm::from_constant(3));
     }
 
     #[test]
     fn parse_index_name_variable() {
-        let form = NatLinearForm::from_index_name("__nat_range_N").unwrap();
-        assert_eq!(form, NatLinearForm::from_var(GenericParamName::new("N")));
+        let form = NatPolyForm::from_index_name("__nat_range_N").unwrap();
+        assert_eq!(form, NatPolyForm::from_var(GenericParamName::new("N")));
     }
 
     #[test]
     fn parse_index_name_var_plus_constant() {
-        let form = NatLinearForm::from_index_name("__nat_range_N + 1").unwrap();
-        let expected = NatLinearForm::from_var(GenericParamName::new("N"))
-            .add(&NatLinearForm::from_constant(1));
+        let form = NatPolyForm::from_index_name("__nat_range_N + 1").unwrap();
+        let expected =
+            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
         assert_eq!(form, expected);
     }
 
     #[test]
     fn parse_index_name_two_vars() {
-        let form = NatLinearForm::from_index_name("__nat_range_M + N + 2").unwrap();
-        let expected = NatLinearForm::from_var(GenericParamName::new("M"))
-            .add(&NatLinearForm::from_var(GenericParamName::new("N")))
-            .add(&NatLinearForm::from_constant(2));
+        let form = NatPolyForm::from_index_name("__nat_range_M + N + 2").unwrap();
+        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
+            .add(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .add(&NatPolyForm::from_constant(2));
         assert_eq!(form, expected);
     }
 
     #[test]
     fn parse_index_name_no_prefix() {
-        assert!(NatLinearForm::from_index_name("Phase").is_none());
+        assert!(NatPolyForm::from_index_name("Phase").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // NatPolyForm multiplication tests (Level 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nat_mul_constants() {
+        let a = NatPolyForm::from_constant(3);
+        let b = NatPolyForm::from_constant(4);
+        assert_eq!(a.mul(&b), NatPolyForm::from_constant(12));
+    }
+
+    #[test]
+    fn nat_mul_var_by_constant() {
+        // N * 3
+        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let three = NatPolyForm::from_constant(3);
+        let result = n.mul(&three);
+        // Should format as "3 * N"
+        assert_eq!(result.format(), "3 * N");
+        // Evaluate with N=5 → 15
+        let mut bindings = HashMap::new();
+        bindings.insert(GenericParamName::new("N"), 5);
+        assert_eq!(result.evaluate(&bindings), Some(15));
+    }
+
+    #[test]
+    fn nat_mul_two_vars() {
+        // M * N
+        let m = NatPolyForm::from_var(GenericParamName::new("M"));
+        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let result = m.mul(&n);
+        assert_eq!(result.format(), "M * N");
+        let mut bindings = HashMap::new();
+        bindings.insert(GenericParamName::new("M"), 3);
+        bindings.insert(GenericParamName::new("N"), 4);
+        assert_eq!(result.evaluate(&bindings), Some(12));
+    }
+
+    #[test]
+    fn nat_mul_distributive() {
+        // (M + 1) * N = M * N + N
+        let m = NatPolyForm::from_var(GenericParamName::new("M"));
+        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let m_plus_1 = m.add(&NatPolyForm::from_constant(1));
+        let result = m_plus_1.mul(&n);
+        // Evaluate with M=2, N=3 → (2+1)*3 = 9
+        let mut bindings = HashMap::new();
+        bindings.insert(GenericParamName::new("M"), 2);
+        bindings.insert(GenericParamName::new("N"), 3);
+        assert_eq!(result.evaluate(&bindings), Some(9));
+    }
+
+    #[test]
+    fn nat_mul_mixed_add() {
+        // M * N + 1
+        let m = NatPolyForm::from_var(GenericParamName::new("M"));
+        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let result = m.mul(&n).add(&NatPolyForm::from_constant(1));
+        assert_eq!(result.format(), "M * N + 1");
+        let mut bindings = HashMap::new();
+        bindings.insert(GenericParamName::new("M"), 2);
+        bindings.insert(GenericParamName::new("N"), 3);
+        assert_eq!(result.evaluate(&bindings), Some(7));
+    }
+
+    #[test]
+    fn nat_poly_is_constant() {
+        let c = NatPolyForm::from_constant(5);
+        assert!(c.is_constant());
+
+        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        assert!(!n.is_constant());
+
+        let mn = NatPolyForm::from_var(GenericParamName::new("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
+        assert!(!mn.is_constant());
+    }
+
+    #[test]
+    fn nat_poly_leq_with_mul() {
+        // M * N <= M * N + 1
+        let mn = NatPolyForm::from_var(GenericParamName::new("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
+        let mn_plus_1 = mn.add(&NatPolyForm::from_constant(1));
+        assert!(mn.is_leq(&mn_plus_1));
+        assert!(!mn_plus_1.is_leq(&mn));
+    }
+
+    #[test]
+    fn nat_poly_format_zero() {
+        let z = NatPolyForm::from_constant(0);
+        assert_eq!(z.format(), "0");
+    }
+
+    #[test]
+    fn parse_index_name_mul() {
+        let form = NatPolyForm::from_index_name("__nat_range_M * N").unwrap();
+        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
+        assert_eq!(form, expected);
+    }
+
+    #[test]
+    fn parse_index_name_mul_plus_const() {
+        let form = NatPolyForm::from_index_name("__nat_range_M * N + 1").unwrap();
+        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .add(&NatPolyForm::from_constant(1));
+        assert_eq!(form, expected);
     }
 }

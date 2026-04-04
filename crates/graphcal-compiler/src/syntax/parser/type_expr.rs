@@ -513,65 +513,66 @@ impl Parser<'_> {
 
     /// Parse an index expression in type position.
     ///
+    /// Supports names, literals, addition, and multiplication with correct precedence:
+    /// `*` binds tighter than `+`, so `M + N * P` parses as `M + (N * P)`.
+    ///
     /// - `Phase` → `IndexExpr::Name` (named index or generic param)
     /// - `3` → `IndexExpr::NatLiteral` (desugars to `range(3)`)
     /// - `N + 1` → `IndexExpr::NatExpr` (compound Nat expression)
+    /// - `M * N` → `IndexExpr::NatExpr` (multiplication)
+    /// - `M * N + 1` → `IndexExpr::NatExpr` (mixed arithmetic)
     fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
-        match self.lexer.peek() {
-            Some(Token::Number) => {
-                let (_, span) = self.advance()?;
-                let text = self.lexer.slice_at(span).replace('_', "");
-                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected non-negative integer in index position".to_string(),
-                    src: self.named_source(),
-                    span: span.into(),
-                })?;
-                // Check for addition: `3 + N`, `3 + M + 1`, etc.
-                if self.lexer.peek() == Some(&Token::Plus) {
-                    let mut lhs = NatExpr::Literal(value, span);
-                    while self.lexer.peek() == Some(&Token::Plus) {
-                        self.lexer.next_token(); // consume '+'
-                        let rhs = self.parse_nat_atom_in_index()?;
-                        let full_span = span.merge(rhs.span());
-                        lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
-                    }
-                    Ok(IndexExpr::NatExpr(lhs))
-                } else {
-                    Ok(IndexExpr::NatLiteral(value, span))
-                }
-            }
-            Some(
-                Token::Ident
-                | Token::Linspace
-                | Token::Step
-                | Token::Scan
-                | Token::Unfold
-                | Token::Index,
-            ) => {
-                let ident =
-                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
-                // Check for addition: `N + 1`, `N + M`, etc.
-                if self.lexer.peek() == Some(&Token::Plus) {
-                    let mut lhs = NatExpr::Var(ident);
-                    while self.lexer.peek() == Some(&Token::Plus) {
-                        self.lexer.next_token(); // consume '+'
-                        let rhs = self.parse_nat_atom_in_index()?;
-                        let full_span = lhs.span().merge(rhs.span());
-                        lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
-                    }
-                    Ok(IndexExpr::NatExpr(lhs))
-                } else {
-                    Ok(IndexExpr::Name(ident))
-                }
-            }
-            _ => {
-                let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
-            }
+        // Parse the first multiplicative term
+        let first_atom = self.parse_nat_atom_in_index()?;
+
+        // Check if this is followed by an operator (* or +)
+        let has_operator = matches!(self.lexer.peek(), Some(&Token::Star | &Token::Plus));
+
+        if !has_operator {
+            // Simple case: bare atom. Desugar appropriately.
+            return match first_atom {
+                NatExpr::Literal(value, span) => Ok(IndexExpr::NatLiteral(value, span)),
+                NatExpr::Var(ident) => Ok(IndexExpr::Name(ident)),
+                _ => Ok(IndexExpr::NatExpr(first_atom)),
+            };
         }
+
+        // Has operators: parse as a full nat additive expression.
+        // First, finish parsing the current multiplicative term.
+        let mut lhs = self.parse_nat_mul_continuation(first_atom)?;
+
+        // Then parse additive continuation: `+ term + term + ...`
+        while self.lexer.peek() == Some(&Token::Plus) {
+            self.lexer.next_token(); // consume '+'
+            let rhs = self.parse_nat_mul_term_in_index()?;
+            let full_span = lhs.span().merge(rhs.span());
+            lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
+        }
+
+        Ok(IndexExpr::NatExpr(lhs))
     }
 
-    /// Parse a single nat atom in index position (for the RHS of `+` in index expressions).
+    /// Parse a multiplicative term in index position: `atom * atom * ...`
+    ///
+    /// This is a complete multiplicative term (starts by parsing an atom).
+    fn parse_nat_mul_term_in_index(&mut self) -> Result<NatExpr, ParseError> {
+        let atom = self.parse_nat_atom_in_index()?;
+        self.parse_nat_mul_continuation(atom)
+    }
+
+    /// Given an already-parsed left-hand atom, continue parsing `* atom * atom ...`
+    fn parse_nat_mul_continuation(&mut self, first: NatExpr) -> Result<NatExpr, ParseError> {
+        let mut lhs = first;
+        while self.lexer.peek() == Some(&Token::Star) {
+            self.lexer.next_token(); // consume '*'
+            let rhs = self.parse_nat_atom_in_index()?;
+            let full_span = lhs.span().merge(rhs.span());
+            lhs = NatExpr::Mul(Box::new(lhs), Box::new(rhs), full_span);
+        }
+        Ok(lhs)
+    }
+
+    /// Parse a single nat atom in index position (literal or variable).
     fn parse_nat_atom_in_index(&mut self) -> Result<NatExpr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {

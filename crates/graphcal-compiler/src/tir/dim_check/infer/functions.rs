@@ -590,6 +590,11 @@ fn eval_nat_expr_to_u64(nat_expr: &crate::syntax::ast::NatExpr) -> Result<u64, G
             let r = eval_nat_expr_to_u64(rhs)?;
             Ok(l + r)
         }
+        NatExpr::Mul(lhs, rhs, _) => {
+            let l = eval_nat_expr_to_u64(lhs)?;
+            let r = eval_nat_expr_to_u64(rhs)?;
+            Ok(l * r)
+        }
     }
 }
 

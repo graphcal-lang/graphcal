@@ -309,7 +309,31 @@ fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
     for i: range(N + 1) { if i < N { v[i] } else { 0.0 } };
 ```
 
-`Nat` expressions are normalized to a canonical linear form (`c + a₁·x₁ + a₂·x₂ + …`) and compared structurally. Subtraction is not supported — instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+`Nat` expressions are normalized to a canonical form and compared structurally. Subtraction is not supported — instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+
+### Nat Arithmetic (Multiplication)
+
+`Nat` expressions also support multiplication, enabling functions that relate sizes through products — useful for reshape, flatten, and Kronecker product patterns:
+
+```
+// Flatten a matrix into a vector
+fn flatten<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[M * N] =
+    for k: range(M * N) { a[k / N, k % N] };
+
+param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+node flat: Dimensionless[6] = flatten(@mat);
+// The compiler solves M = 2, N = 3 from the argument, then M * N = 6
+```
+
+Multiplication binds tighter than addition, so `M + N * P` is parsed as `M + (N * P)`. Mixed expressions are normalized to canonical polynomial form:
+
+```
+// Flatten and pad with a trailing zero
+fn flatten_and_pad<M: Nat, N: Nat>(a: Dimensionless[M, N]) -> Dimensionless[M * N + 1] =
+    for k: range(M * N + 1) {
+        if k < M * N { a[k / N, k % N] } else { 0.0 }
+    };
+```
 
 ### Expression-Based Indexing
 

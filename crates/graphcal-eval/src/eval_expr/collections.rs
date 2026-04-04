@@ -52,6 +52,11 @@ fn eval_nat_expr(
             let r = eval_nat_expr(rhs, local_values, ctx)?;
             Ok(l + r)
         }
+        NatExpr::Mul(lhs, rhs, _) => {
+            let l = eval_nat_expr(lhs, local_values, ctx)?;
+            let r = eval_nat_expr(rhs, local_values, ctx)?;
+            Ok(l * r)
+        }
     }
 }
 
