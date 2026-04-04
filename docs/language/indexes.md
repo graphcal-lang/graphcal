@@ -244,6 +244,54 @@ index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.
 
+## Nat Range Indexes
+
+Integer literals in index position create anonymous **nat range** indexes. These are useful for vectors, matrices, and other fixed-size numeric arrays:
+
+```
+// A 3-element vector
+param v: Dimensionless[3] = for i: range(3) { 1.0 };
+
+// A 2x3 matrix
+param m: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+```
+
+The integer `3` in `Dimensionless[3]` internally creates an anonymous index `range(3)` with elements `{0, 1, 2}`.
+
+### Iterating over Nat Ranges
+
+Use `for i: range(N)` to iterate over a nat range index:
+
+```
+node doubled: Dimensionless[3] = for i: range(3) { @v[i] * 2.0 };
+```
+
+The loop variable `i` has type `Int` and can be used to index into nat-range-indexed values.
+
+### Generic Functions with Nat Parameters
+
+Functions can be generic over nat range sizes with `N: Nat`:
+
+```
+fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
+    for j: range(N), i: range(M) { a[i, j] };
+
+fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
+    sum(for i: range(N) { a[i] * b[i] });
+```
+
+When calling a generic function, `Nat` parameters are inferred from the argument shapes. Two nat ranges are equal if and only if their sizes are equal — `range(3)` and `range(4)` are different indexes.
+
+### Composing Nat Ranges with Named Indexes
+
+Nat range indexes compose freely with named indexes:
+
+```
+index Phase = { Launch, Cruise };
+
+param data: Dimensionless[3, Phase] = for i: range(3), p: Phase { 1.0 };
+```
+
 ## Required Indexes
 
 An index can be declared **without** specifying its variants or range values. These are **required indexes** — they must be bound via a [parameterized import](multi-file.md#index-bindings) when the file is used as a library.

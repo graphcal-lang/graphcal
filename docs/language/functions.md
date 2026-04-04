@@ -81,6 +81,22 @@ fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
 - `<I: Index>` declares an index type parameter
 - Works with any finite or range index
 
+## Nat Generics
+
+Functions can be generic over nat range sizes:
+
+```
+fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
+    for j: range(N), i: range(M) { a[i, j] };
+
+fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
+    sum(for i: range(N) { a[i] * b[i] });
+```
+
+- `<N: Nat>` declares a natural number type parameter
+- `N` can be used in index position (`D[N]`) and in `for i: range(N)` loops
+- The compiler infers `N` at each call site from the argument shapes
+
 ## Function Composition
 
 Functions can call other functions:

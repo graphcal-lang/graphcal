@@ -692,7 +692,7 @@ fn maneuver_fuel(m: Maneuver, params: MissionParams) -> Mass {
 
 ## Generics
 
-Functions and types can be generic over dimensions, indexes, and phantom types.
+Functions and types can be generic over dimensions, indexes, natural numbers, and phantom types.
 
 ### Generic Constraints
 
@@ -700,6 +700,7 @@ Functions and types can be generic over dimensions, indexes, and phantom types.
 |-----------|--------|---------|
 | `Dim` | `<D: Dim>` | `D` stands for any dimension |
 | `Index` | `<I: Index>` | `I` stands for any index |
+| `Nat` | `<N: Nat>` | `N` stands for a natural number (type-level size) |
 | `Type` | `<F: Type>` | `F` stands for any type (phantom/tag) |
 
 ### Default Type Parameters
@@ -744,6 +745,27 @@ fn kinetic_energy<D: Dim>(mass: Mass, speed: D) -> Mass * D^2 =
 ```
 
 During unification, the compiler solves for the generic variable. If the parameter type is `D` and the argument type is `Length`, then `D = Length`, and the return type `Mass * D^2` becomes `Mass * Length^2` (= `Energy`).
+
+### Nat Generics and Range Indexes
+
+`Nat` generics allow functions to be parameterized over array sizes. Integer literals in index position create anonymous **nat range** indexes:
+
+```
+// A 3-element vector (internally uses range(3))
+param v: Dimensionless[3] = for i: range(3) { 1.0 };
+
+// A generic transpose function
+fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
+    for j: range(N), i: range(M) { a[i, j] };
+
+// M and N are inferred from the argument shape
+param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+node transposed: Dimensionless[3, 2] = transpose(@mat);
+```
+
+During unification, `Nat` parameters are matched by identity: `range(M)` unifies with `range(3)` to bind `M = 3`. Two nat ranges are equal if and only if their sizes are equal.
+
+Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values.
 
 ## Type Equivalence
 
