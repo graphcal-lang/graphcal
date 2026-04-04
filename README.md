@@ -187,19 +187,21 @@ node result: Dimensionless = if @enabled { 1.0 } else { 0.0 };
 
 ### Pure functions with dimension generics
 
-Define reusable functions with compile-time dimension checking. Dimension generics (`<D: Dim>`) let you write functions that work across any physical quantity. Index generics (`<I: Index>`) enable generic aggregation.
+Define reusable functions with compile-time dimension checking. Dimension generics (`<D: Dim>`) let you write functions that work across any physical quantity. Index generics (`<I: Index>`) enable generic aggregation. Nat generics (`<N: Nat>`) enable size-generic operations on vectors and matrices.
 
 ```gcl
 fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
 fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
 fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
+fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
+    sum(for i: range(N) { a[i] * b[i] });
 ```
 
 Recursive functions are detected and rejected at compile time.
 
 ### Generic types with phantom parameters
 
-Type declarations support generic parameters with three constraint kinds: `D: Dim` (dimension), `I: Index` (index set), and `F: Type` (unconstrained/phantom). Default type parameters are supported.
+Type declarations support generic parameters with four constraint kinds: `D: Dim` (dimension), `I: Index` (index set), `N: Nat` (type-level natural number), and `F: Type` (unconstrained/phantom). Default type parameters are supported.
 
 ```gcl
 type Eci;      // marker type for ECI reference frame
@@ -270,6 +272,20 @@ node x: Dimensionless[TimeStep] = unfold(
         @x[prev_t] * (1.0 + @rate * dt)
     }
 );
+```
+
+### Nat range indexes for vectors and matrices
+
+Use integer literals in index position for anonymous numeric indexes. Combined with `Nat` generics, this enables size-generic linear algebra:
+
+```gcl
+param v: Length[3] = for i: range(3) { 1.0 m };
+
+fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
+    for j: range(N), i: range(M) { a[i, j] };
+
+param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+node transposed: Dimensionless[3, 2] = transpose(@mat);
 ```
 
 ### Multi-file projects
