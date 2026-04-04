@@ -202,8 +202,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let mut symbol_table = symbol_table::build_from_ast(root_ast);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
-            let imported_definitions =
-                collect_imported_definitions(uri, &project, Some(&tir));
+            let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
             let fn_signatures = build_fn_signatures(Some(&tir));
             let import_decls = collect_import_decl_info(root_ast);
             let (diagnostics, eval_values) = run_eval_from_project(&project, text);
