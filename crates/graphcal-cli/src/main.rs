@@ -248,11 +248,28 @@ fn handle_eval(
                     match plot_mode {
                         PlotOutput::Browser => {
                             let html = plot::render_html(&rendered);
-                            std::fs::write("graphcal_plot.html", html).unwrap_or_else(|e| {
-                                eprintln!("error: could not write HTML: {e}");
+                            let mut tmp = tempfile::Builder::new()
+                                .prefix("graphcal_plot_")
+                                .suffix(".html")
+                                .tempfile()
+                                .unwrap_or_else(|e| {
+                                    eprintln!("error: could not create temp file: {e}");
+                                    process::exit(2);
+                                });
+                            std::io::Write::write_all(&mut tmp, html.as_bytes()).unwrap_or_else(
+                                |e| {
+                                    eprintln!("error: could not write HTML: {e}");
+                                    process::exit(2);
+                                },
+                            );
+                            // Keep the temp file so the browser has time to read it.
+                            // The OS will clean it up on reboot.
+                            let path = tmp.into_temp_path();
+                            let kept = path.keep().unwrap_or_else(|e| {
+                                eprintln!("error: could not persist temp file: {e}");
                                 process::exit(2);
                             });
-                            if let Err(e) = open::that("graphcal_plot.html") {
+                            if let Err(e) = open::that(&kept) {
                                 eprintln!("error: could not open browser: {e}");
                                 process::exit(2);
                             }
@@ -388,29 +405,29 @@ fn run_format(paths: &[PathBuf], check: bool) {
     }
 }
 
-/// Recursively collect all `.gcl` files under a directory, sorted for deterministic output.
-fn collect_gcl_files(dir: &PathBuf) -> Vec<PathBuf> {
-    let mut files = collect_gcl_files_unsorted(dir);
-    files.sort();
-    files
-}
+/// Directories to skip during recursive `.gcl` file collection.
+const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pycache__"];
 
-/// Recursively collect all `.gcl` files under a directory (unsorted).
-fn collect_gcl_files_unsorted(dir: &PathBuf) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return files;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files.extend(collect_gcl_files_unsorted(&path));
-        } else if path.extension().is_some_and(|ext| ext == "gcl") {
-            files.push(path);
-        } else {
-            // Skip non-.gcl files
-        }
-    }
+/// Recursively collect all `.gcl` files under a directory, sorted for deterministic output.
+///
+/// Uses `walkdir` for safe traversal: symlinks are not followed and common
+/// generated directories (`.git`, `target`, `node_modules`, etc.) are skipped.
+fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip well-known generated/vendored directories
+            if e.file_type().is_dir() {
+                return !SKIP_DIRS.contains(&e.file_name().to_str().unwrap_or(""));
+            }
+            true
+        })
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "gcl"))
+        .map(walkdir::DirEntry::into_path)
+        .collect();
+    files.sort();
     files
 }
 
