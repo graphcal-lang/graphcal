@@ -288,6 +288,16 @@ param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
 node transposed: Dimensionless[3, 2] = transpose(@mat);
 ```
 
+`Nat` expressions support addition, enabling functions that relate input and output sizes:
+
+```gcl
+fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
+    for i: range(N) { v[i] };
+
+param v4: Dimensionless[4] = for i: range(4) { 1.0 };
+node v3: Dimensionless[3] = drop_last(@v4);  // compiler solves N + 1 = 4 → N = 3
+```
+
 ### Multi-file projects
 
 Split calculations across files with `import` declarations. All declaration kinds can be imported, and circular dependencies are detected at compile time.

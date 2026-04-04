@@ -765,7 +765,19 @@ node transposed: Dimensionless[3, 2] = transpose(@mat);
 
 During unification, `Nat` parameters are matched by identity: `range(M)` unifies with `range(3)` to bind `M = 3`. Two nat ranges are equal if and only if their sizes are equal.
 
-Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values.
+`Nat` expressions support addition, which enables functions that relate input and output sizes:
+
+```
+fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
+    for i: range(N) { v[i] };
+
+// When calling drop_last on a Dimensionless[4] vector,
+// the compiler solves N + 1 = 4 to deduce N = 3.
+```
+
+Expressions are normalized to a canonical linear form (`c + a₁·x₁ + …`) and equality is decided by comparing coefficients. Subtraction is not supported — instead, express the larger side with addition.
+
+Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values. `Nat` parameters are also available as runtime `Int` values in function bodies (e.g., `if i < N`).
 
 ## Type Equivalence
 
