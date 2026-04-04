@@ -1,0 +1,21 @@
+// turbofish.gcl -- explicit generic arguments at call sites (#322)
+
+// --- Identity matrix with turbofish (no template workaround needed) ---
+fn eye_tf<N: Nat>() -> Dimensionless[N, N] =
+    for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
+
+node eye3: Dimensionless[3, 3] = eye_tf<3>();
+
+// --- Turbofish with mixed generic params ---
+fn zeros<N: Nat, D: Dim>(d_template: D) -> D[N] =
+    for i: range(N) { 0.0 * d_template };
+
+param one_m: Length = 1.0 m;
+node zeros3: Length[3] = zeros<3, Length>(@one_m);
+
+// --- Turbofish on a function that could also infer (explicit is fine) ---
+fn scale_all<N: Nat>(v: Dimensionless[N], factor: Dimensionless) -> Dimensionless[N] =
+    for i: range(N) { v[i] * factor };
+
+param vec3: Dimensionless[3] = for i: range(3) { 2.0 };
+node scaled: Dimensionless[3] = scale_all<3>(@vec3, 10.0);

@@ -98,13 +98,19 @@ impl ExprVisitorMut for QualifiedRefRewriter {
         // Then rewrite the node itself
         let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
         expr.kind = match old_kind {
-            ExprKind::QualifiedFnCall { module, name, args } => {
+            ExprKind::QualifiedFnCall {
+                module,
+                name,
+                type_args,
+                args,
+            } => {
                 let flat = FnName::new(format!("{}::{}", module.name, name.value));
                 ExprKind::FnCall {
                     name: Spanned {
                         value: flat,
                         span: name.span,
                     },
+                    type_args,
                     args,
                 }
             }

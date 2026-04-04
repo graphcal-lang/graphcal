@@ -765,9 +765,10 @@ pub enum ExprKind {
     },
     /// Unary operation: `-x`, `!x`
     UnaryOp { op: UnaryOp, operand: Box<Expr> },
-    /// Function call: `sqrt(x)`, `atan2(y, x)`
+    /// Function call: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`
     FnCall {
         name: Spanned<FnName>,
+        type_args: Vec<GenericArg>,
         args: Vec<Expr>,
     },
     /// Conditional: `if cond { then_expr } else { else_expr }`
@@ -872,10 +873,11 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
-    /// Module-qualified function call: `module::fn_name(args...)`
+    /// Module-qualified function call: `module::fn_name(args...)` or `module::fn_name<3>(args...)`
     QualifiedFnCall {
         module: Ident,
         name: Spanned<FnName>,
+        type_args: Vec<GenericArg>,
         args: Vec<Expr>,
     },
 }
@@ -948,6 +950,29 @@ impl NatExpr {
         match self {
             Self::Literal(_, span) | Self::Add(_, _, span) => *span,
             Self::Var(ident) => ident.span,
+        }
+    }
+}
+
+/// A generic argument at a call site (turbofish syntax).
+///
+/// `eye<3>()` has one `GenericArg::Nat(NatExpr::Literal(3, ..))`.
+/// `some_fn<Length>()` has one `GenericArg::Type(TypeExpr { kind: DimExpr(..), .. })`.
+#[derive(Debug, Clone)]
+pub enum GenericArg {
+    /// A type expression (for Dim or Index generic params): `Length`, `Maneuver`
+    Type(TypeExpr),
+    /// A nat expression (for Nat generic params): `3`, `N + 1`
+    Nat(NatExpr),
+}
+
+impl GenericArg {
+    /// Get the source span of this generic argument.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Type(te) => te.span,
+            Self::Nat(ne) => ne.span(),
         }
     }
 }

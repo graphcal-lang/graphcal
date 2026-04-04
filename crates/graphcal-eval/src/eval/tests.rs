@@ -1574,3 +1574,55 @@ fn eval_nat_range_level1() {
         "trace_eye3 = {trace_val}, expected 3.0"
     );
 }
+
+#[test]
+fn eval_turbofish() {
+    use crate::eval::types::Value;
+
+    let source = include_str!("../../../../tests/fixtures/turbofish.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    // --- eye3: 3x3 identity matrix via turbofish ---
+    let eye3 = find_entry(&result, "eye3");
+    if let Value::Indexed { entries, .. } = &eye3 {
+        assert_eq!(entries.len(), 3, "eye3 should have 3 rows");
+        for (row_idx, (_, row_val)) in entries.iter().enumerate() {
+            if let Value::Indexed { entries: cols, .. } = row_val {
+                assert_eq!(cols.len(), 3, "each row should have 3 columns");
+                for (col_idx, (_, v)) in cols.iter().enumerate() {
+                    let expected = if row_idx == col_idx { 1.0 } else { 0.0 };
+                    if let Value::Scalar { si_value: s, .. } = v {
+                        assert!(
+                            (s - expected).abs() < 1e-10,
+                            "eye3[{row_idx},{col_idx}] = {s}, expected {expected}"
+                        );
+                    } else {
+                        panic!("eye3 entry should be Scalar");
+                    }
+                }
+            } else {
+                panic!("eye3 row should be Indexed");
+            }
+        }
+    } else {
+        panic!("eye3 should be Indexed, got {eye3:?}");
+    }
+
+    // --- scaled: scale_all<3> with explicit turbofish ---
+    let scaled = find_entry(&result, "scaled");
+    if let Value::Indexed { entries, .. } = &scaled {
+        assert_eq!(entries.len(), 3);
+        for (_, v) in entries {
+            if let Value::Scalar { si_value: s, .. } = v {
+                assert!(
+                    (s - 20.0).abs() < 1e-10,
+                    "scaled entry = {s}, expected 20.0"
+                );
+            } else {
+                panic!("scaled entry should be Scalar");
+            }
+        }
+    } else {
+        panic!("scaled should be Indexed, got {scaled:?}");
+    }
+}

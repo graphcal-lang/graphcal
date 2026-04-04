@@ -29,6 +29,8 @@ module.exports = grammar({
     // `identifier {` could be a struct_construction or a bare identifier
     // followed by a brace body (e.g., in `if condition { ... }`).
     [$._primary_expr, $.struct_construction],
+    // `identifier < type_expr` could be fn_call turbofish or struct_construction type args.
+    [$.generic_arg, $.struct_construction],
   ],
 
   rules: {
@@ -983,6 +985,13 @@ module.exports = grammar({
 
     fn_call: $ => prec(PREC.CALL, seq(
       field("name", $.identifier),
+      optional(seq(
+        "<",
+        field("generic_arg", $.generic_arg),
+        repeat(seq(",", field("generic_arg", $.generic_arg))),
+        optional(","),
+        ">",
+      )),
       "(",
       optional(seq(
         $._expr,
@@ -997,6 +1006,13 @@ module.exports = grammar({
       field("module", $.identifier),
       "::",
       field("name", $.identifier),
+      optional(seq(
+        "<",
+        field("generic_arg", $.generic_arg),
+        repeat(seq(",", field("generic_arg", $.generic_arg))),
+        optional(","),
+        ">",
+      )),
       "(",
       optional(seq(
         $._expr,
@@ -1005,6 +1021,12 @@ module.exports = grammar({
       )),
       ")",
     )),
+
+    // A generic argument in turbofish position: either a type or a nat literal
+    generic_arg: $ => choice(
+      $.type_expr,
+      $.number,
+    ),
 
     // Primary expressions
     _primary_expr: $ => choice(

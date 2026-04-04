@@ -226,18 +226,27 @@ pub(super) fn infer_type_with_owner(
         ),
 
         // --- Function calls ---
-        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
-            functions::infer_fn_call(
-                name,
-                args,
-                declared_types,
-                local_types,
-                registry,
-                builtin_fns,
-                resolved_fn_sigs,
-                src,
-            )
+        ExprKind::FnCall {
+            name,
+            type_args,
+            args,
         }
+        | ExprKind::QualifiedFnCall {
+            name,
+            type_args,
+            args,
+            ..
+        } => functions::infer_fn_call(
+            name,
+            type_args,
+            args,
+            declared_types,
+            local_types,
+            registry,
+            builtin_fns,
+            resolved_fn_sigs,
+            src,
+        ),
 
         // --- Control flow ---
         ExprKind::If {

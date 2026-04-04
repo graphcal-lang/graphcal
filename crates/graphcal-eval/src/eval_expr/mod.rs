@@ -123,9 +123,17 @@ pub fn eval_expr(
         }
 
         // --- Function calls (delegated) ---
-        ExprKind::FnCall { name, args } | ExprKind::QualifiedFnCall { name, args, .. } => {
-            functions::eval_fn_call(expr, name, args, values, local_values, ctx)
+        ExprKind::FnCall {
+            name,
+            type_args,
+            args,
         }
+        | ExprKind::QualifiedFnCall {
+            name,
+            type_args,
+            args,
+            ..
+        } => functions::eval_fn_call(expr, name, type_args, args, values, local_values, ctx),
 
         // --- Control flow (delegated) ---
         ExprKind::If {

@@ -113,6 +113,36 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("function `{name}` expects {expected} generic argument(s), got {got}")]
+    #[diagnostic(
+        code(graphcal::N007),
+        help("provide all generic parameters or none (to infer)")
+    )]
+    WrongGenericArity {
+        name: FnName,
+        expected: usize,
+        got: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("wrong number of generic arguments")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "generic argument type mismatch for parameter `{param}` of function `{name}`: expected {expected} constraint, got {found}"
+    )]
+    #[diagnostic(code(graphcal::N008))]
+    GenericArgMismatch {
+        name: FnName,
+        param: String,
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this generic argument")]
+        span: SourceSpan,
+    },
+
     #[error("cyclic dependency involving `{name}`")]
     #[diagnostic(
         code(graphcal::G001),

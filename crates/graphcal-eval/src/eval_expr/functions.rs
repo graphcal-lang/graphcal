@@ -19,6 +19,7 @@ use super::eval_expr;
 pub(super) fn eval_fn_call(
     expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -27,6 +28,7 @@ pub(super) fn eval_fn_call(
     let fn_ctx = FnDispatch {
         expr,
         name,
+        type_args,
         args,
         values,
         local_values,
@@ -59,6 +61,7 @@ type EvalHelperFn = fn(
 struct FnDispatch<'a, 'ctx> {
     expr: &'a Expr,
     name: &'a graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    type_args: &'a [graphcal_compiler::syntax::ast::GenericArg],
     args: &'a [Expr],
     values: &'a HashMap<String, RuntimeValue>,
     local_values: &'a HashMap<String, RuntimeValue>,
@@ -122,6 +125,7 @@ impl FnDispatch<'_, '_> {
         eval_builtin_or_user_fn(
             self.expr,
             self.name,
+            self.type_args,
             self.args,
             self.values,
             self.local_values,
@@ -496,6 +500,7 @@ fn eval_datetime_to_fn(
 fn eval_builtin_or_user_fn(
     expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -547,22 +552,24 @@ fn eval_builtin_or_user_fn(
         fn_locals.insert(param.name.clone(), val);
     }
 
-    // Resolve nat generic params by inspecting argument shapes.
-    // For each Nat generic param, find it in the parameter type annotations,
-    // then extract the corresponding nat range size from the actual argument value.
-    for gp in &fn_def.generic_params {
+    // Resolve nat generic params from turbofish type args and/or argument shapes.
+    // First try turbofish (explicit), then fall back to argument-shape extraction.
+    for (i, gp) in fn_def.generic_params.iter().enumerate() {
         if gp.constraint == graphcal_compiler::registry::registry::FnGenericConstraint::Nat {
             let nat_name = gp.name.as_str();
-            // Search through param types for occurrences of this nat param in index position
-            if let Some(size) = extract_nat_param_from_args(nat_name, fn_def, &fn_locals) {
-                // Register the nat range index in the registry if needed
-                // (it may not exist yet if the concrete size wasn't known at compile time)
-                // Note: we can't mutate the registry here, but the index should have been
-                // registered by the caller's type annotations.
+
+            // Try turbofish first
+            let size = if i < type_args.len() {
+                extract_nat_from_generic_arg(&type_args[i])
+            } else {
+                None
+            };
+            // Fall back to argument shape extraction
+            let size = size.or_else(|| extract_nat_param_from_args(nat_name, fn_def, &fn_locals));
+
+            if let Some(size) = size {
                 let nat_int = RuntimeValue::Int(i64::try_from(size).unwrap_or(0));
                 fn_locals.insert(format!("__nat_param_{nat_name}"), nat_int.clone());
-                // Also make the nat param available under its original name
-                // so it can be used in runtime expressions (e.g., `if i < N`).
                 fn_locals.insert(nat_name.to_string(), nat_int);
             }
         }
@@ -582,6 +589,29 @@ fn eval_builtin_or_user_fn(
             }
             eval_expr(expr, values, &block_locals, ctx)
         }
+    }
+}
+
+/// Extract a nat value from a turbofish `GenericArg`, if it is a `Nat` variant.
+fn extract_nat_from_generic_arg(arg: &graphcal_compiler::syntax::ast::GenericArg) -> Option<u64> {
+    use graphcal_compiler::syntax::ast::GenericArg;
+    match arg {
+        GenericArg::Nat(nat_expr) => eval_nat_expr(nat_expr),
+        GenericArg::Type(_) => None,
+    }
+}
+
+/// Evaluate a `NatExpr` to a concrete `u64` at runtime (literals and addition only).
+fn eval_nat_expr(nat_expr: &graphcal_compiler::syntax::ast::NatExpr) -> Option<u64> {
+    use graphcal_compiler::syntax::ast::NatExpr;
+    match nat_expr {
+        NatExpr::Literal(v, _) => Some(*v),
+        NatExpr::Add(lhs, rhs, _) => {
+            let l = eval_nat_expr(lhs)?;
+            let r = eval_nat_expr(rhs)?;
+            Some(l + r)
+        }
+        NatExpr::Var(_) => None,
     }
 }
 
