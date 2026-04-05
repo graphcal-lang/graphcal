@@ -113,7 +113,10 @@ pub(super) fn runtime_to_value(
                 entries: converted_entries,
             }
         }
-        #[expect(clippy::unreachable, reason = "RangeLabel is an internal-only intermediate value")]
+        #[expect(
+            clippy::unreachable,
+            reason = "RangeLabel is an internal-only intermediate value"
+        )]
         RuntimeValue::RangeLabel { .. } => {
             // RangeLabel is an intermediate value used during unfold evaluation;
             // it should never appear in final output.

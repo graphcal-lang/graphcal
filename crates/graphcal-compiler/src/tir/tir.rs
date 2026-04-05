@@ -1302,15 +1302,12 @@ pub fn unify_resolved_type(
                 let bound_dim = if *power == 1 {
                     actual_dim
                 } else {
-                    let exponent = Rational::try_new(1, *power).map_err(|_| {
-                        GraphcalError::InternalError {
-                            message: format!(
-                                "generic dimension parameter `{gp}` has zero power"
-                            ),
+                    let exponent =
+                        Rational::try_new(1, *power).map_err(|_| GraphcalError::InternalError {
+                            message: format!("generic dimension parameter `{gp}` has zero power"),
                             src: src.clone(),
                             span: span.into(),
-                        }
-                    })?;
+                        })?;
                     actual_dim.pow(exponent)
                 };
                 if let Some(prev) = dim_sub.get(gp) {

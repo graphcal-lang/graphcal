@@ -41,7 +41,10 @@ impl Rational {
     ///
     /// Panics if `den` is zero.
     #[must_use]
-    #[expect(clippy::panic, reason = "panicking variant for known-safe literal denominators")]
+    #[expect(
+        clippy::panic,
+        reason = "panicking variant for known-safe literal denominators"
+    )]
     pub fn new(num: i32, den: i32) -> Self {
         match Self::try_new(num, den) {
             Ok(r) => r,
@@ -135,7 +138,10 @@ fn reduce_i64(num: i64, den: i64) -> (i32, i32) {
         n = -n;
         d = -d;
     }
-    #[expect(clippy::expect_used, reason = "overflow of dimension exponents after GCD reduction is practically impossible")]
+    #[expect(
+        clippy::expect_used,
+        reason = "overflow of dimension exponents after GCD reduction is practically impossible"
+    )]
     (
         i32::try_from(n).expect("dimension exponent numerator overflow"),
         i32::try_from(d).expect("dimension exponent denominator overflow"),
@@ -146,7 +152,8 @@ impl std::ops::Add for Rational {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         // Widen to i64 to avoid intermediate overflow
-        let num = i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
+        let num =
+            i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
         let (n, d) = reduce_i64(num, den);
         Self { num: n, den: d }
@@ -156,7 +163,8 @@ impl std::ops::Add for Rational {
 impl std::ops::Sub for Rational {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        let num = i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
+        let num =
+            i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
         let (n, d) = reduce_i64(num, den);
         Self { num: n, den: d }
