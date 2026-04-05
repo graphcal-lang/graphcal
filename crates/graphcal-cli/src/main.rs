@@ -680,8 +680,9 @@ fn print_text(result: &EvalResult, no_assert: bool) {
                         }
                         FlatEntry::Value(name, value) => {
                             if let Value::Scalar { .. } = value {
+                                #[expect(clippy::expect_used, reason = "display_value always returns Ok for Scalar variant")]
                                 let formatted =
-                                    format_number(value.display_value().unwrap_or_default());
+                                    format_number(value.display_value().expect("value is Scalar"));
                                 if let Some(label) = value.display_label(&result.base_dim_symbols) {
                                     println!("{name:width$} = {formatted} {label}");
                                 } else {
@@ -797,9 +798,11 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                 let mut map = serde_json::Map::new();
                 map.insert("si_value".to_string(), serde_json::json!(si_value));
                 if let Some(du) = display_unit {
+                    #[expect(clippy::expect_used, reason = "display_value always returns Ok for Scalar variant")]
+                    let dv = v.display_value().expect("value is Scalar");
                     map.insert(
                         "display_value".to_string(),
-                        serde_json::json!(v.display_value().unwrap_or_default()),
+                        serde_json::json!(dv),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {

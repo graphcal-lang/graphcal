@@ -3,14 +3,18 @@
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Position, Range};
 
-/// Convert a byte offset in `source` to an LSP `Position` (0-based line and character).
+/// Convert a byte offset in `source` to an LSP `Position` (0-based line and UTF-16 character offset).
+///
+/// LSP positions use UTF-16 code units for the character offset, so characters
+/// outside the Basic Multilingual Plane (e.g., emoji, some CJK) count as 2.
+#[expect(clippy::cast_possible_truncation, reason = "char::len_utf16() returns 1 or 2, never truncates to u32")]
 pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
     let offset = offset.min(source.len());
     let (line, col) = source.char_indices().take_while(|(i, _)| *i < offset).fold(
         (0u32, 0u32),
         |(line, col), (_, ch)| match ch {
             '\n' => (line + 1, 0),
-            _ => (line, col + 1),
+            _ => (line, col + ch.len_utf16() as u32),
         },
     );
     Position {
@@ -19,7 +23,8 @@ pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
     }
 }
 
-/// Convert an LSP `Position` (0-based line and character) to a byte offset in `source`.
+/// Convert an LSP `Position` (0-based line and UTF-16 character offset) to a byte offset in `source`.
+#[expect(clippy::cast_possible_truncation, reason = "char::len_utf16() returns 1 or 2, never truncates to u32")]
 pub fn position_to_byte_offset(source: &str, position: Position) -> usize {
     let mut line = 0u32;
     let mut col = 0u32;
@@ -37,7 +42,7 @@ pub fn position_to_byte_offset(source: &str, position: Position) -> usize {
                     None
                 }
                 _ => {
-                    col += 1;
+                    col += ch.len_utf16() as u32;
                     None
                 }
             }
