@@ -539,11 +539,23 @@ fn format_encode_block(fmt: &mut Formatter<'_>, encodings: &[Encoding]) -> RcDoc
 
 /// `figure name = { plots: [a, b], title: "...", };`
 fn format_figure_decl(fmt: &mut Formatter<'_>, d: &FigureDecl) -> RcDoc<'static> {
-    format_composition_decl(fmt, "figure", d.name.value.as_str(), &d.plot_names, &d.fields)
+    format_composition_decl(
+        fmt,
+        "figure",
+        d.name.value.as_str(),
+        &d.plot_names,
+        &d.fields,
+    )
 }
 
 fn format_layer_decl(fmt: &mut Formatter<'_>, d: &LayerDecl) -> RcDoc<'static> {
-    format_composition_decl(fmt, "layer", d.name.value.as_str(), &d.plot_names, &d.fields)
+    format_composition_decl(
+        fmt,
+        "layer",
+        d.name.value.as_str(),
+        &d.plot_names,
+        &d.fields,
+    )
 }
 
 /// Shared formatter for `figure` and `layer` declarations (identical structure).
@@ -551,7 +563,9 @@ fn format_composition_decl(
     fmt: &mut Formatter<'_>,
     keyword: &str,
     name: &str,
-    plot_names: &[graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>],
+    plot_names: &[graphcal_compiler::syntax::names::Spanned<
+        graphcal_compiler::syntax::names::DeclName,
+    >],
     fields: &[graphcal_compiler::syntax::ast::PlotField],
 ) -> RcDoc<'static> {
     let header = RcDoc::text(format!("{keyword} {name} = "));

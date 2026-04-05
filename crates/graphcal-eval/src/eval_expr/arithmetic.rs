@@ -190,10 +190,9 @@ pub(super) fn eval_binop_expr(
                         let duration = hifitime::Duration::from_seconds(*secs);
                         return Ok(RuntimeValue::Datetime(*e + duration));
                     }
-                    return Err(ctx.eval_error(
-                        "cannot subtract a Datetime from a scalar",
-                        expr.span,
-                    ));
+                    return Err(
+                        ctx.eval_error("cannot subtract a Datetime from a scalar", expr.span)
+                    );
                 }
                 _ => {}
             }

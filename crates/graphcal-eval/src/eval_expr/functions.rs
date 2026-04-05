@@ -221,7 +221,9 @@ fn eval_conversion_fn(
         "to_float" => {
             let arg = eval_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
-                return Err(ctx.internal_error("to_float() received non-Int argument", args[0].span));
+                return Err(
+                    ctx.internal_error("to_float() received non-Int argument", args[0].span)
+                );
             };
             #[expect(
                 clippy::cast_precision_loss,
@@ -235,7 +237,10 @@ fn eval_conversion_fn(
                 .expect_scalar("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             if !f.is_finite() {
-                return Err(ctx.eval_error(format!("to_int() requires a finite value, got {f}"), expr.span));
+                return Err(ctx.eval_error(
+                    format!("to_int() requires a finite value, got {f}"),
+                    expr.span,
+                ));
             }
             // i64 range: -9_223_372_036_854_775_808 ..= 9_223_372_036_854_775_807
             // The casts below round to the nearest f64: i64::MIN rounds exactly,
@@ -262,7 +267,10 @@ fn eval_conversion_fn(
             )]
             Ok(RuntimeValue::Int(f as i64))
         }
-        _ => Err(ctx.internal_error(format!("unexpected conversion function `{}`", name.value), expr.span)),
+        _ => Err(ctx.internal_error(
+            format!("unexpected conversion function `{}`", name.value),
+            expr.span,
+        )),
     }
 }
 
@@ -352,7 +360,10 @@ fn eval_timescale_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     let arg = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg else {
-        return Err(ctx.internal_error(format!("{}() received non-Datetime argument", name.value), args[0].span));
+        return Err(ctx.internal_error(
+            format!("{}() received non-Datetime argument", name.value),
+            args[0].span,
+        ));
     };
     let converted = epoch.to_time_scale(target_scale.to_hifitime());
     Ok(RuntimeValue::Datetime(converted))
@@ -369,7 +380,10 @@ fn eval_datetime_extract_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
-        return Err(ctx.internal_error(format!("{}() received non-Datetime argument", name.value), args[0].span));
+        return Err(ctx.internal_error(
+            format!("{}() received non-Datetime argument", name.value),
+            args[0].span,
+        ));
     };
     // Decompose into Gregorian components in UTC
     let (year, month, day, hour, minute, second, _nanos) = epoch.to_gregorian_utc();
@@ -389,7 +403,10 @@ fn eval_datetime_extract_fn(
             doy
         }
         _ => {
-            return Err(ctx.eval_error(format!("unknown extraction function `{}`", name.value), name.span));
+            return Err(ctx.eval_error(
+                format!("unknown extraction function `{}`", name.value),
+                name.span,
+            ));
         }
     };
     Ok(RuntimeValue::Int(result))
@@ -413,7 +430,10 @@ fn eval_datetime_from_fn(
         )]
         RuntimeValue::Int(v) => v as f64,
         _ => {
-            return Err(ctx.internal_error(format!("{}() received non-numeric argument", name.value), args[0].span));
+            return Err(ctx.internal_error(
+                format!("{}() received non-numeric argument", name.value),
+                args[0].span,
+            ));
         }
     };
     let epoch = match name.value.as_str() {
@@ -421,7 +441,10 @@ fn eval_datetime_from_fn(
         "from_mjd" => hifitime::Epoch::from_mjd_utc(num),
         "from_unix" => hifitime::Epoch::from_unix_seconds(num),
         _ => {
-            return Err(ctx.eval_error(format!("unknown from-datetime function `{}`", name.value), name.span));
+            return Err(ctx.eval_error(
+                format!("unknown from-datetime function `{}`", name.value),
+                name.span,
+            ));
         }
     };
     Ok(RuntimeValue::Datetime(epoch))
@@ -438,14 +461,20 @@ fn eval_datetime_to_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
-        return Err(ctx.internal_error(format!("{}() received non-Datetime argument", name.value), args[0].span));
+        return Err(ctx.internal_error(
+            format!("{}() received non-Datetime argument", name.value),
+            args[0].span,
+        ));
     };
     let result = match name.value.as_str() {
         "to_jd" => epoch.to_jde_utc_days(),
         "to_mjd" => epoch.to_mjd_utc_days(),
         "to_unix" => epoch.to_unix_seconds(),
         _ => {
-            return Err(ctx.eval_error(format!("unknown to-datetime function `{}`", name.value), name.span));
+            return Err(ctx.eval_error(
+                format!("unknown to-datetime function `{}`", name.value),
+                name.span,
+            ));
         }
     };
     Ok(RuntimeValue::Scalar(result))

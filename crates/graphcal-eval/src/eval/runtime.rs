@@ -1052,8 +1052,7 @@ fn eval_composition_fields(
 ) {
     let mut properties = Vec::new();
     for field in fields {
-        let Some(comp_prop) = super::types::CompositionProperty::from_name(&field.name.name)
-        else {
+        let Some(comp_prop) = super::types::CompositionProperty::from_name(&field.name.name) else {
             continue;
         };
         if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
