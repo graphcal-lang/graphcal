@@ -4,7 +4,6 @@ use tower_lsp::lsp_types::{Location, Url};
 
 use crate::convert::span_to_range;
 use crate::server::AnalysisResult;
-use crate::symbol_table::{SymbolCategory, SymbolKey};
 
 /// Find all references to the symbol at the given byte offset.
 pub fn references(
@@ -19,24 +18,8 @@ pub fn references(
         analysis.symbol_table.find_definition_at(offset),
     ) {
         (Some(reference), _) => reference.target.clone(),
-        (None, Some(definition))
-            if matches!(
-                definition.category,
-                SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-            ) =>
-        {
-            return None;
-        }
-        // Use pointer-based reverse lookup to get the correct scoped key.
-        (None, Some(definition)) => analysis
-            .symbol_table
-            .definitions
-            .iter()
-            .find(|(_, d)| std::ptr::eq(*d, definition))
-            .map_or_else(
-                || SymbolKey::TopLevel(definition.name.clone()),
-                |(k, _)| k.clone(),
-            ),
+        (None, Some(definition)) if definition.is_builtin() => return None,
+        (None, Some(definition)) => analysis.symbol_table.find_definition_key(definition),
         (None, None) => return None,
     };
 
@@ -56,12 +39,7 @@ pub fn references(
             .symbol_table
             .definitions
             .get(&target_key)
-            .filter(|def| {
-                !matches!(
-                    def.category,
-                    SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-                ) && !def.name_span.is_empty()
-            })
+            .filter(|def| def.is_navigable())
             .map(|def| Location {
                 uri: uri.clone(),
                 range: span_to_range(&analysis.source, def.name_span),

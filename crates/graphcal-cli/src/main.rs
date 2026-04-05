@@ -302,13 +302,12 @@ fn handle_eval(
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
-#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
-fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
-    let targets = if paths.is_empty() {
+/// Resolve CLI path arguments to a list of `.gcl` files.
+///
+/// If `paths` is empty, collects all `.gcl` files from the current directory.
+/// Otherwise, expands directories and passes through individual files.
+fn resolve_target_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+    if paths.is_empty() {
         collect_gcl_files(&PathBuf::from("."))
     } else {
         let mut files = Vec::new();
@@ -320,7 +319,16 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
             }
         }
         files
-    };
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
+fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
+    let targets = resolve_target_files(paths);
 
     if targets.is_empty() {
         eprintln!("No .gcl files found");
@@ -352,19 +360,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 )]
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 fn run_format(paths: &[PathBuf], check: bool) {
-    let targets = if paths.is_empty() {
-        collect_gcl_files(&PathBuf::from("."))
-    } else {
-        let mut files = Vec::new();
-        for path in paths {
-            if path.is_dir() {
-                files.extend(collect_gcl_files(path));
-            } else {
-                files.push(path.clone());
-            }
-        }
-        files
-    };
+    let targets = resolve_target_files(paths);
 
     if targets.is_empty() {
         eprintln!("No .gcl files found");

@@ -34,10 +34,7 @@ fn find_rename_target(analysis: &AnalysisResult, offset: usize) -> Option<Rename
         let key = reference.target.clone();
         // Reject builtins and fields.
         if let Some(def) = analysis.symbol_table.definitions.get(&key) {
-            if matches!(
-                def.category,
-                SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst | SymbolCategory::Field
-            ) {
+            if def.is_builtin() || def.category == SymbolCategory::Field {
                 return None;
             }
         } else if analysis.imported_definitions.contains_key(&key) {
@@ -54,22 +51,10 @@ fn find_rename_target(analysis: &AnalysisResult, offset: usize) -> Option<Rename
         let is_local = analysis.symbol_table.definitions.contains_key(&key);
         Some(RenameTarget { key, is_local })
     } else if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        if matches!(
-            definition.category,
-            SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst | SymbolCategory::Field
-        ) {
+        if definition.is_builtin() || definition.category == SymbolCategory::Field {
             return None;
         }
-        // Use pointer-based reverse lookup to get the correct scoped key.
-        let actual_key = analysis
-            .symbol_table
-            .definitions
-            .iter()
-            .find(|(_, d)| std::ptr::eq(*d, definition))
-            .map_or_else(
-                || SymbolKey::TopLevel(definition.name.clone()),
-                |(k, _)| k.clone(),
-            );
+        let actual_key = analysis.symbol_table.find_definition_key(definition);
         Some(RenameTarget {
             key: actual_key,
             is_local: true,

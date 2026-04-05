@@ -34,35 +34,19 @@ pub(super) fn eval_binop_expr(
         BinOp::And => {
             let l = eval_expr(lhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             let r = eval_expr(rhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Bool(l && r))
         }
         BinOp::Or => {
             let l = eval_expr(lhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             let r = eval_expr(rhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Bool(l || r))
         }
         // Equality: compare same-typed value-level entities.
@@ -99,20 +83,12 @@ pub(super) fn eval_binop_expr(
                     Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
                 }
                 _ => {
-                    let lv = l.expect_scalar("comparison operand").map_err(|e| {
-                        GraphcalError::EvalError {
-                            message: e.to_string(),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        }
-                    })?;
-                    let rv = r.expect_scalar("comparison operand").map_err(|e| {
-                        GraphcalError::EvalError {
-                            message: e.to_string(),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        }
-                    })?;
+                    let lv = l
+                        .expect_scalar("comparison operand")
+                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
+                    let rv = r
+                        .expect_scalar("comparison operand")
+                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
                     Ok(RuntimeValue::Bool(eval_comparison(
                         *op, lv, rv, ctx.src, expr.span,
                     )?))
@@ -130,11 +106,10 @@ pub(super) fn eval_binop_expr(
                     BinOp::Le => li <= ri,
                     BinOp::Ge => li >= ri,
                     _ => {
-                        return Err(GraphcalError::InternalError {
-                            message: format!("unexpected operator {op:?} in integer comparison"),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        });
+                        return Err(ctx.internal_error(
+                            format!("unexpected operator {op:?} in integer comparison"),
+                            expr.span,
+                        ));
                     }
                 };
                 return Ok(RuntimeValue::Bool(result));
@@ -146,29 +121,20 @@ pub(super) fn eval_binop_expr(
                     BinOp::Le => le <= re,
                     BinOp::Ge => le >= re,
                     _ => {
-                        return Err(GraphcalError::InternalError {
-                            message: format!("unexpected operator {op:?} in datetime comparison"),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        });
+                        return Err(ctx.internal_error(
+                            format!("unexpected operator {op:?} in datetime comparison"),
+                            expr.span,
+                        ));
                     }
                 };
                 return Ok(RuntimeValue::Bool(result));
             }
-            let lv =
-                l.expect_scalar("comparison operand")
-                    .map_err(|e| GraphcalError::EvalError {
-                        message: e.to_string(),
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    })?;
-            let rv =
-                r.expect_scalar("comparison operand")
-                    .map_err(|e| GraphcalError::EvalError {
-                        message: e.to_string(),
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    })?;
+            let lv = l
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
+            let rv = r
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Bool(eval_comparison(
                 *op, lv, rv, ctx.src, expr.span,
             )?))
@@ -204,11 +170,7 @@ pub(super) fn eval_binop_expr(
                     if *op == BinOp::Sub {
                         return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
                     }
-                    return Err(GraphcalError::EvalError {
-                        message: "cannot add two datetimes".to_string(),
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    });
+                    return Err(ctx.eval_error("cannot add two datetimes", expr.span));
                 }
                 (RuntimeValue::Datetime(e), RuntimeValue::Scalar(secs)) => {
                     // Datetime +/- Scalar(Time) -> Datetime
@@ -216,11 +178,10 @@ pub(super) fn eval_binop_expr(
                     return match op {
                         BinOp::Add => Ok(RuntimeValue::Datetime(*e + duration)),
                         BinOp::Sub => Ok(RuntimeValue::Datetime(*e - duration)),
-                        _ => Err(GraphcalError::EvalError {
-                            message: format!("unsupported operator {op:?} for Datetime and scalar"),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        }),
+                        _ => Err(ctx.eval_error(
+                            format!("unsupported operator {op:?} for Datetime and scalar"),
+                            expr.span,
+                        )),
                     };
                 }
                 (RuntimeValue::Scalar(secs), RuntimeValue::Datetime(e)) => {
@@ -229,28 +190,18 @@ pub(super) fn eval_binop_expr(
                         let duration = hifitime::Duration::from_seconds(*secs);
                         return Ok(RuntimeValue::Datetime(*e + duration));
                     }
-                    return Err(GraphcalError::EvalError {
-                        message: "cannot subtract a Datetime from a scalar".to_string(),
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    });
+                    return Err(
+                        ctx.eval_error("cannot subtract a Datetime from a scalar", expr.span)
+                    );
                 }
                 _ => {}
             }
             let lv = l
                 .expect_scalar("binary operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             let rv = r
                 .expect_scalar("binary operand")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Scalar(eval_scalar_binop(
                 *op, lv, rv, ctx.src, expr.span,
             )?))
@@ -272,11 +223,9 @@ pub(super) fn eval_unaryop_expr(
             let v = eval_expr(operand, values, local_values, ctx)?;
             match v {
                 RuntimeValue::Int(i) => {
-                    let negated = i.checked_neg().ok_or_else(|| GraphcalError::EvalError {
-                        message: "integer negation overflow".to_string(),
-                        src: ctx.src.clone(),
-                        span: expr.span.into(),
-                    })?;
+                    let negated = i
+                        .checked_neg()
+                        .ok_or_else(|| ctx.eval_error("integer negation overflow", expr.span))?;
                     Ok(RuntimeValue::Int(negated))
                 }
                 RuntimeValue::Struct { type_name, fields } => {
@@ -284,22 +233,14 @@ pub(super) fn eval_unaryop_expr(
                 }
                 _ => Ok(RuntimeValue::Scalar(
                     -v.expect_scalar("unary negation")
-                        .map_err(|e| GraphcalError::EvalError {
-                            message: e.to_string(),
-                            src: ctx.src.clone(),
-                            span: expr.span.into(),
-                        })?,
+                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?,
                 )),
             }
         }
         UnaryOp::Not => {
             let v = eval_expr(operand, values, local_values, ctx)?
                 .expect_bool("logical NOT")
-                .map_err(|e| GraphcalError::EvalError {
-                    message: e.to_string(),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })?;
+                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Bool(!v))
         }
     }
