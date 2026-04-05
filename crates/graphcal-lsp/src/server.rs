@@ -7,11 +7,11 @@ use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
     PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
     ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
@@ -76,12 +76,19 @@ pub struct AnalysisResult {
     pub import_decls: Vec<ImportDeclInfo>,
 }
 
+/// Debounce delay for `did_change` notifications (milliseconds).
+const DEBOUNCE_DELAY_MS: u64 = 300;
+
 /// The LSP server backend.
 #[derive(Debug)]
 pub struct Backend {
     client: Client,
     /// Per-document analysis results, keyed by URI.
     documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    /// Generation counter per URI, used for debouncing `did_change`.
+    /// Each change increments the counter; a delayed task only runs analysis
+    /// if its generation matches the current counter (no newer change arrived).
+    change_generations: Arc<RwLock<HashMap<Url, u64>>>,
 }
 
 impl std::fmt::Debug for AnalysisResult {
@@ -559,52 +566,61 @@ fn collect_imported_definitions(
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_eval::tir::TIR>,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
+    use std::path::Path;
+
     let mut result = HashMap::new();
 
     let Some(root_file) = project.files.get(&project.root) else {
         return result;
     };
 
+    // Cache symbol tables per canonical path to avoid re-building for files imported
+    // by multiple `import` declarations.
+    let mut table_cache: HashMap<&Path, (SymbolTable, Url, String)> = HashMap::new();
+
     for (_decl, import_decl, canonical) in root_file.imports_with_paths() {
         let Some(loaded_file) = project.files.get(canonical) else {
             continue;
         };
 
-        let mut imported_table = symbol_table::build_from_ast(&loaded_file.ast);
-        if let Some(tir) = tir {
-            symbol_table::enrich_from_tir(&mut imported_table, tir);
-        }
-
-        let imported_uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
-            Url::parse(&format!("file://{}", loaded_file.path.display()))
-                .unwrap_or_else(|_| root_uri.clone())
-        });
-        let source = loaded_file.source.to_string();
+        let (imported_table, imported_uri, source) =
+            table_cache.entry(canonical).or_insert_with(|| {
+                let mut table = symbol_table::build_from_ast(&loaded_file.ast);
+                if let Some(tir) = tir {
+                    symbol_table::enrich_from_tir(&mut table, tir);
+                }
+                // Url::from_file_path handles percent-encoding correctly (spaces, special chars).
+                // It only fails for non-absolute paths, which should not occur for loaded files.
+                let uri =
+                    Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| root_uri.clone());
+                let src = loaded_file.source.to_string();
+                (table, uri, src)
+            });
 
         match &import_decl.kind {
             graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
                 for import_item in names {
                     let key = SymbolKey::TopLevel(import_item.name.name.clone());
-                    if let Some(def) = imported_table.definitions.remove(&key) {
+                    if let Some(def) = imported_table.definitions.get(&key) {
                         result.insert(
                             key,
                             ImportedDefinition {
                                 uri: imported_uri.clone(),
                                 source: source.clone(),
-                                definition: def,
+                                definition: def.clone(),
                             },
                         );
                     }
                 }
             }
             graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
-                for (key, def) in imported_table.definitions {
+                for (key, def) in &imported_table.definitions {
                     result.insert(
-                        key,
+                        key.clone(),
                         ImportedDefinition {
                             uri: imported_uri.clone(),
                             source: source.clone(),
-                            definition: def,
+                            definition: def.clone(),
                         },
                     );
                 }
@@ -678,10 +694,46 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        if let Some(change) = params.content_changes.into_iter().last() {
-            self.analyze_and_publish(params.text_document.uri, change.text)
-                .await;
+        let Some(change) = params.content_changes.into_iter().last() else {
+            return;
+        };
+        let uri = params.text_document.uri;
+        if !Self::is_graphcal_file(&uri) {
+            return;
         }
+
+        // Bump the generation counter for this URI.
+        let generation = *self
+            .change_generations
+            .write()
+            .await
+            .entry(uri.clone())
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+
+        // Spawn a delayed analysis task. If another change arrives within the
+        // debounce window, its generation will be higher and this task will
+        // skip analysis.
+        let client = self.client.clone();
+        let documents = self.documents.clone();
+        let generations = self.change_generations.clone();
+        let text = change.text;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
+
+            // Check if a newer change has superseded this one.
+            let current = *generations.read().await.get(&uri).unwrap_or(&0);
+            if current != generation {
+                return;
+            }
+
+            let analysis = run_analysis(&uri, &text);
+            let diagnostics = analysis.diagnostics.clone();
+            documents.write().await.insert(uri.clone(), analysis);
+            client.publish_diagnostics(uri, diagnostics, None).await;
+            let _ = client.inlay_hint_refresh().await;
+        });
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -689,6 +741,14 @@ impl LanguageServer for Backend {
             self.analyze_and_publish(params.text_document.uri, text)
                 .await;
         }
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        self.documents.write().await.remove(&uri);
+        self.change_generations.write().await.remove(&uri);
+        // Clear diagnostics for the closed document so stale errors don't linger.
+        self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
     async fn document_symbol(
@@ -815,6 +875,7 @@ pub async fn run() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         documents: Arc::new(RwLock::new(HashMap::new())),
+        change_generations: Arc::new(RwLock::new(HashMap::new())),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

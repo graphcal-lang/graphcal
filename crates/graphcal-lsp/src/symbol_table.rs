@@ -201,6 +201,10 @@ impl ScopeStack {
     }
 
     fn pop(&mut self) {
+        debug_assert!(
+            self.scopes.len() > 1,
+            "ScopeStack::pop called with only the root scope remaining"
+        );
         self.scopes.pop();
     }
 
@@ -969,12 +973,12 @@ fn collect_expr_refs(
             let acc_key = SymbolKey::ExprScoped {
                 kind: ExprScopeKind::Scan,
                 offset: scan_offset,
-                local: "acc".to_string(),
+                local: acc_name.name.clone(),
             };
             let val_key = SymbolKey::ExprScoped {
                 kind: ExprScopeKind::Scan,
                 offset: scan_offset,
-                local: "val".to_string(),
+                local: val_name.name.clone(),
             };
             table.definitions.insert(
                 acc_key.clone(),
@@ -1015,12 +1019,12 @@ fn collect_expr_refs(
             let prev_key = SymbolKey::ExprScoped {
                 kind: ExprScopeKind::Unfold,
                 offset: unfold_offset,
-                local: "prev".to_string(),
+                local: prev_name.name.clone(),
             };
             let curr_key = SymbolKey::ExprScoped {
                 kind: ExprScopeKind::Unfold,
                 offset: unfold_offset,
-                local: "curr".to_string(),
+                local: curr_name.name.clone(),
             };
             table.definitions.insert(
                 prev_key.clone(),
