@@ -181,19 +181,34 @@ fn convert_string(s: &str, param_name: &str) -> Result<Expr, JsonInputError> {
 }
 
 /// Convert a JSON number to an integer or dimensionless float.
+///
+/// Tries, in order: `i64` → `u64` (converted to `i64`) → `f64`.
+/// Returns an error if no representation works, or if a `u64` value
+/// exceeds `i64::MAX` (which would lose precision when cast to `f64`).
 fn convert_number(n: &serde_json::Number, param_name: &str) -> Result<Expr, JsonInputError> {
-    n.as_i64().map_or_else(
+    // Try i64 first (most common integer case).
+    if let Some(i) = n.as_i64() {
+        return Ok(synth_expr(ExprKind::Integer(i)));
+    }
+    // Try u64 for large unsigned integers (e.g., 9_999_999_999_999_999_999).
+    if let Some(u) = n.as_u64() {
+        return i64::try_from(u).map_or_else(
+            |_| {
+                Err(JsonInputError::InvalidNumber {
+                    param: param_name.to_string(),
+                })
+            },
+            |i| Ok(synth_expr(ExprKind::Integer(i))),
+        );
+    }
+    // Fall back to f64 for floating-point values.
+    n.as_f64().map_or_else(
         || {
-            n.as_f64().map_or_else(
-                || {
-                    Err(JsonInputError::InvalidNumber {
-                        param: param_name.to_string(),
-                    })
-                },
-                |f| Ok(synth_expr(ExprKind::Number(f))),
-            )
+            Err(JsonInputError::InvalidNumber {
+                param: param_name.to_string(),
+            })
         },
-        |i| Ok(synth_expr(ExprKind::Integer(i))),
+        |f| Ok(synth_expr(ExprKind::Number(f))),
     )
 }
 

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -21,59 +22,59 @@ use crate::tir::{ResolvedDomainConstraint, TIR};
 /// An assert body entry for execution.
 #[derive(Debug, Clone)]
 pub struct AssertBodyEntry {
-    pub name: String,
-    pub body: AssertBody,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) body: AssertBody,
+    pub(crate) span: Span,
 }
 
 /// A plot body entry for execution.
 #[derive(Debug, Clone)]
 pub struct PlotBodyEntry {
-    pub name: String,
-    pub decl: PlotDecl,
-    pub hidden: bool,
+    pub(crate) name: DeclName,
+    pub(crate) decl: PlotDecl,
+    pub(crate) hidden: bool,
 }
 
 /// A figure body entry for execution.
 #[derive(Debug, Clone)]
 pub struct FigureBodyEntry {
-    pub name: String,
-    pub decl: FigureDecl,
+    pub(crate) name: DeclName,
+    pub(crate) decl: FigureDecl,
 }
 
 /// A layer body entry for execution.
 #[derive(Debug, Clone)]
 pub struct LayerBodyEntry {
-    pub name: String,
-    pub decl: LayerDecl,
+    pub(crate) name: DeclName,
+    pub(crate) decl: LayerDecl,
 }
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
-    pub const_values: HashMap<String, RuntimeValue>,
+    pub(crate) const_values: HashMap<DeclName, RuntimeValue>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
-    pub imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
+    pub(crate) imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub topo_order: Vec<String>,
+    pub(crate) topo_order: Vec<DeclName>,
     /// Runtime expressions keyed by declaration name (params + nodes).
-    pub expressions: HashMap<String, Expr>,
+    pub(crate) expressions: HashMap<DeclName, Expr>,
     /// Assert bodies in source order.
-    pub assert_bodies: Vec<AssertBodyEntry>,
+    pub(crate) assert_bodies: Vec<AssertBodyEntry>,
     /// Plot declarations in source order.
-    pub plot_bodies: Vec<PlotBodyEntry>,
+    pub(crate) plot_bodies: Vec<PlotBodyEntry>,
     /// Figure declarations in source order.
-    pub figure_bodies: Vec<FigureBodyEntry>,
+    pub(crate) figure_bodies: Vec<FigureBodyEntry>,
     /// Layer declarations in source order.
-    pub layer_bodies: Vec<LayerBodyEntry>,
+    pub(crate) layer_bodies: Vec<LayerBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: HashMap<String, Vec<String>>,
+    pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<String, crate::resolve::ExpectedFail>,
+    pub(crate) expected_fail: HashMap<DeclName, crate::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
-    pub domain_constraints: HashMap<String, ResolvedDomainConstraint>,
+    pub(crate) domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -94,7 +95,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .asserts
         .iter()
         .map(|entry| AssertBodyEntry {
-            name: entry.name.to_string(),
+            name: DeclName::new(entry.name.to_string()),
             body: entry.body.clone(),
             span: entry.span,
         })
@@ -104,7 +105,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .plots
         .iter()
         .map(|entry| PlotBodyEntry {
-            name: entry.name.to_string(),
+            name: DeclName::new(entry.name.to_string()),
             decl: entry.decl.clone(),
             hidden: entry.hidden,
         })
@@ -114,7 +115,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .figures
         .iter()
         .map(|entry| FigureBodyEntry {
-            name: entry.name.to_string(),
+            name: DeclName::new(entry.name.to_string()),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -123,7 +124,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .layers
         .iter()
         .map(|entry| LayerBodyEntry {
-            name: entry.name.to_string(),
+            name: DeclName::new(entry.name.to_string()),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -147,12 +148,17 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         assumes_map: tir
             .assumes_map
             .iter()
-            .map(|(k, v)| (k.to_string(), v.iter().map(ToString::to_string).collect()))
+            .map(|(k, v)| {
+                (
+                    DeclName::new(k.to_string()),
+                    v.iter().map(|s| DeclName::new(s.to_string())).collect(),
+                )
+            })
             .collect(),
         expected_fail: tir
             .expected_fail
             .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
+            .map(|(k, v)| (DeclName::new(k.to_string()), v.clone()))
             .collect(),
         domain_constraints,
     })
@@ -162,7 +168,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 fn eval_consts_from_tir(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, RuntimeValue>, GraphcalError> {
+) -> Result<HashMap<DeclName, RuntimeValue>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -213,8 +219,9 @@ fn eval_consts_from_tir(
         .map(|entry| (entry.name.to_string(), &entry.expr))
         .collect();
 
+    // Use String-keyed map for eval_expr compatibility (it takes HashMap<String, RuntimeValue>).
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut str_values: HashMap<String, RuntimeValue> = HashMap::new();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -227,18 +234,22 @@ fn eval_consts_from_tir(
     for idx in sorted {
         let name = &graph[idx];
         let expr = const_exprs[name];
-        let val = eval_expr(expr, &values, &empty_locals, &ctx)?;
-        values.insert(name.clone(), val);
+        let val = eval_expr(expr, &str_values, &empty_locals, &ctx)?;
+        str_values.insert(name.clone(), val);
     }
 
-    Ok(values)
+    // Convert to DeclName-keyed map for the ExecPlan.
+    Ok(str_values
+        .into_iter()
+        .map(|(k, v)| (DeclName::new(k), v))
+        .collect())
 }
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.
 fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Vec<String>, HashMap<String, Expr>), GraphcalError> {
+) -> Result<(Vec<DeclName>, HashMap<DeclName, Expr>), GraphcalError> {
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
     enum DeclRef<'a> {
@@ -248,7 +259,7 @@ fn build_runtime_dag(
 
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
-    let mut expressions: HashMap<String, Expr> = HashMap::new();
+    let mut expressions: HashMap<DeclName, Expr> = HashMap::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = Vec::new();
     for entry in &tir.params {
@@ -277,7 +288,7 @@ fn build_runtime_dag(
                 index_map.insert(name_str.clone(), idx);
                 match &entry.default_expr {
                     Some(expr) => {
-                        expressions.insert(name_str, expr.clone());
+                        expressions.insert(DeclName::new(name_str), expr.clone());
                     }
                     None => {
                         return Err(GraphcalError::RequiredParamNotProvided {
@@ -292,7 +303,7 @@ fn build_runtime_dag(
                 let name_str = entry.name.to_string();
                 let idx = graph.add_node(name_str.clone());
                 index_map.insert(name_str.clone(), idx);
-                expressions.insert(name_str, entry.expr.clone());
+                expressions.insert(DeclName::new(name_str), entry.expr.clone());
             }
         }
     }
@@ -325,9 +336,9 @@ fn build_runtime_dag(
         }
     })?;
 
-    let topo_order: Vec<String> = topo_indices
+    let topo_order: Vec<DeclName> = topo_indices
         .into_iter()
-        .map(|idx| graph[idx].clone())
+        .map(|idx| DeclName::new(graph[idx].clone()))
         .collect();
 
     Ok((topo_order, expressions))
@@ -347,12 +358,17 @@ fn build_runtime_dag(
 )]
 fn resolve_domain_constraints(
     tir: &TIR,
-    const_values: &HashMap<String, RuntimeValue>,
+    const_values: &HashMap<DeclName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<DeclName, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    // Convert to String-keyed map for eval_expr compatibility.
+    let str_const_values: HashMap<String, RuntimeValue> = const_values
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -402,7 +418,7 @@ fn resolve_domain_constraints(
 
         for bound in domain_bounds {
             // Evaluate the bound expression.
-            let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
+            let rv = eval_expr(&bound.value, &str_const_values, &empty_locals, &ctx)?;
 
             let si_value = match &rv {
                 RuntimeValue::Scalar(v) => *v,
@@ -472,7 +488,7 @@ fn resolve_domain_constraints(
         }
 
         constraints.insert(
-            name_str,
+            DeclName::new(name_str),
             ResolvedDomainConstraint {
                 min: min_val,
                 max: max_val,
