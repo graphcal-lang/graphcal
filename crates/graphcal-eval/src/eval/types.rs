@@ -341,7 +341,7 @@ pub struct EvalResult {
     /// Evaluated layer specifications in source order.
     pub layers: Vec<LayerSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: std::collections::HashMap<String, Vec<String>>,
+    pub assumes_map: std::collections::HashMap<DeclName, Vec<DeclName>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,

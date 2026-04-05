@@ -252,27 +252,9 @@ impl<'src> Parser<'src> {
     }
 }
 
-pub(super) fn is_upper_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_uppercase())
-        && s.chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
-pub(super) fn is_lower_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_lowercase())
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-/// `PascalCase`: starts with uppercase, contains at least one lowercase letter
-/// (to distinguish from `UPPER_SNAKE_CASE` like `GRAVITY`).
-pub(super) fn is_pascal_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_uppercase())
-        && s.chars().any(|c| c.is_ascii_lowercase())
-}
+pub(super) use crate::syntax::names::is_lower_snake_case;
+pub(super) use crate::syntax::names::is_pascal_case;
+pub(super) use crate::syntax::names::is_upper_snake_case;
 
 /// Uppercase-starting identifier: `PascalCase` names or single-letter generic params like `I`.
 /// Used where both concrete index names (`Maneuver`) and generic params (`I`) are valid.

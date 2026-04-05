@@ -47,6 +47,18 @@ macro_rules! define_name_type {
             }
         }
 
+        impl PartialEq<str> for $Name {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+
+        impl PartialEq<&str> for $Name {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+
         impl AsRef<str> for $Name {
             fn as_ref(&self) -> &str {
                 &self.0
@@ -116,6 +128,37 @@ define_name_type! {
 define_name_type! {
     /// Name of a generic type parameter (e.g., `"D"`, `"I"`).
     pub struct GenericParamName;
+}
+
+// --- Naming convention helpers ---
+
+/// Check if `s` is a valid `lower_snake_case` identifier
+/// (starts with a lowercase letter, contains only lowercase letters, digits, and underscores).
+#[must_use]
+pub fn is_lower_snake_case(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_lowercase())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Check if `s` is a valid `UPPER_SNAKE_CASE` identifier
+/// (starts with an uppercase letter, contains only uppercase letters, digits, and underscores).
+#[must_use]
+pub fn is_upper_snake_case(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_uppercase())
+        && s.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Check if `s` is a valid `PascalCase` identifier
+/// (starts with an uppercase letter, contains at least one lowercase letter).
+#[must_use]
+pub fn is_pascal_case(s: &str) -> bool {
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_uppercase())
+        && s.chars().any(|c| c.is_ascii_lowercase())
 }
 
 // --- Spanned wrapper ---

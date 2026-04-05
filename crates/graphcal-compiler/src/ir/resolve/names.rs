@@ -77,18 +77,4 @@ pub(super) fn parse_expected_fail_args(
     Ok(ExpectedFail::Variants(keys))
 }
 
-#[must_use]
-pub fn is_upper_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_uppercase())
-        && s.chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
-#[must_use]
-pub fn is_lower_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_lowercase())
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
+pub use crate::syntax::names::{is_lower_snake_case, is_upper_snake_case};

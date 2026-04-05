@@ -178,18 +178,19 @@ pub(super) fn run_eval_loop(
 
     // Insert const values into the lookup table
     for (name, val) in &plan.const_values {
-        values.insert(name.clone(), val.clone());
+        values.insert(name.to_string(), val.clone());
     }
 
     // Evaluate in topological order (params first, then nodes that depend on them)
     for name in &plan.topo_order {
-        if values.contains_key(name) {
+        let name_str = name.to_string();
+        if values.contains_key(&name_str) {
             continue;
         }
 
         // Check if any dependency has failed
         let failed_deps: Vec<DeclName> = runtime_deps
-            .get(name)
+            .get(&name_str)
             .map(|deps| {
                 deps.iter()
                     .filter(|dep| errors.contains_key(dep.as_str()))
@@ -199,15 +200,15 @@ pub(super) fn run_eval_loop(
             .unwrap_or_default();
 
         if !failed_deps.is_empty() {
-            errors.insert(name.clone(), NodeError::DependencyFailed { failed_deps });
+            errors.insert(name_str, NodeError::DependencyFailed { failed_deps });
             continue;
         }
 
-        let expr = &plan.expressions[name];
+        let expr = &plan.expressions[name.as_str()];
 
         // Build eval context with unfold support for this node.
         let unfold_ctx = UnfoldContext {
-            self_name: name,
+            self_name: &name_str,
             declared_types,
         };
         let ctx = EvalContext {
@@ -223,20 +224,20 @@ pub(super) fn run_eval_loop(
         match result {
             Ok(val) => {
                 // Check domain constraints after successful evaluation.
-                if let Some(constraint) = plan.domain_constraints.get(name)
+                if let Some(constraint) = plan.domain_constraints.get(name.as_str())
                     && let Some(violation) = check_domain_constraint(&val, constraint)
                 {
-                    errors.insert(name.clone(), NodeError::EvalFailed { message: violation });
+                    errors.insert(name_str, NodeError::EvalFailed { message: violation });
                     continue;
                 }
-                values.insert(name.clone(), val);
+                values.insert(name_str, val);
             }
             Err(e) => {
                 let message = match &e {
                     GraphcalError::EvalError { message, .. } => message.clone(),
                     other => format!("{other}"),
                 };
-                errors.insert(name.clone(), NodeError::EvalFailed { message });
+                errors.insert(name_str, NodeError::EvalFailed { message });
             }
         }
     }
@@ -305,7 +306,7 @@ pub(super) fn evaluate_plan(
         .iter()
         .map(|e| {
             let name_str = e.name.to_string();
-            let val = make_value(&name_str, &plan.const_values[&name_str]);
+            let val = make_value(&name_str, &plan.const_values[name_str.as_str()]);
             (DeclName::new(&name_str), val)
         })
         .collect();
@@ -341,7 +342,9 @@ pub(super) fn evaluate_plan(
                 | DeclCategory::Layer => return None,
             };
             let result = match cat {
-                DeclCategory::Const => Ok(make_value(&name_str, &plan.const_values[&name_str])),
+                DeclCategory::Const => {
+                    Ok(make_value(&name_str, &plan.const_values[name_str.as_str()]))
+                }
                 DeclCategory::Param | DeclCategory::Node => make_result(&name_str),
                 DeclCategory::Assert
                 | DeclCategory::Plot
@@ -357,10 +360,10 @@ pub(super) fn evaluate_plan(
         .assert_bodies
         .iter()
         .map(|entry| {
-            let ef = plan.expected_fail.get(&entry.name);
+            let ef = plan.expected_fail.get(entry.name.as_str());
             let assert_result =
                 evaluate_assert_with_expected_fail(&entry.body, ef, &values, &empty_locals, &ctx);
-            (DeclName::new(&entry.name), assert_result, entry.span)
+            (entry.name.clone(), assert_result, entry.span)
         })
         .collect();
 
@@ -371,7 +374,7 @@ pub(super) fn evaluate_plan(
         .filter_map(|entry| {
             evaluate_plot(
                 &entry.decl,
-                &entry.name,
+                entry.name.as_str(),
                 entry.hidden,
                 &values,
                 &empty_locals,
@@ -405,7 +408,7 @@ pub(super) fn evaluate_plan(
                 }
             }
             super::types::FigureSpec {
-                name: DeclName::new(name),
+                name: name.clone(),
                 plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
                 properties,
             }
@@ -436,19 +439,14 @@ pub(super) fn evaluate_plan(
                 }
             }
             super::types::LayerSpec {
-                name: DeclName::new(name),
+                name: name.clone(),
                 plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
                 properties,
             }
         })
         .collect();
 
-    // Convert domain constraints to DeclName-keyed map for the result.
-    let domain_constraints = plan
-        .domain_constraints
-        .iter()
-        .map(|(name, c)| (DeclName::new(name), c.clone()))
-        .collect();
+    let domain_constraints = plan.domain_constraints.clone();
 
     EvalResult {
         consts,

@@ -748,7 +748,7 @@ fn format_assertion_line(
     name: &str,
     result: &graphcal_eval::eval::AssertResult,
     name_width: usize,
-    affected: Option<&Vec<String>>,
+    affected: Option<&Vec<graphcal_compiler::syntax::names::DeclName>>,
 ) -> String {
     use std::fmt::Write as _;
 
@@ -944,7 +944,11 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
                     AssertResult::Fail { message } => {
                         let mut obj = serde_json::json!({"status": "fail", "message": message});
                         if let Some(affected) = result.assumes_map.get(n.as_str()) {
-                            obj["affected_nodes"] = serde_json::json!(affected);
+                            let names: Vec<&str> = affected
+                                .iter()
+                                .map(graphcal_compiler::syntax::names::DeclName::as_str)
+                                .collect();
+                            obj["affected_nodes"] = serde_json::json!(names);
                         }
                         obj
                     }

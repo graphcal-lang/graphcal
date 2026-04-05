@@ -1292,7 +1292,11 @@ fn evaluate_and_store_file(
         file_path.to_path_buf(),
         EvaluatedFile {
             values: file_runtime_values,
-            const_values: plan.const_values,
+            const_values: plan
+                .const_values
+                .into_iter()
+                .map(|(k, v)| (k.into_inner(), v))
+                .collect(),
             declared_types: compiled.declared_types,
             assertions: eval_result
                 .assertions
