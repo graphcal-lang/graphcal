@@ -3,12 +3,12 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::ast::{ExprKind, MapEntryKey, MulDivOp};
+use graphcal_compiler::syntax::ast::{ExprKind, MapEntryKey};
 use graphcal_compiler::syntax::names::VariantName;
 use indexmap::IndexMap;
 
-use crate::eval_expr::{RuntimeValue, eval_expr};
-use crate::registry::{Registry, UnitScale};
+use crate::eval_expr::RuntimeValue;
+use crate::registry::Registry;
 
 use super::types::{DisplayUnit, Value};
 use crate::format::{format_number, format_unit_expr};
@@ -121,50 +121,25 @@ pub(super) fn extract_flat_display_unit(
 
 /// Resolve a `UnitExpr` to its compound scale factor for display purposes.
 ///
-/// Similar to `eval_expr::resolve_unit_scale` but returns `Option` instead of `Result`
-/// and builds a minimal `EvalContext` for evaluating dynamic scale expressions.
+/// Delegates to `eval_expr::resolve_unit_scale` with a minimal `EvalContext`,
+/// converting the `Result` to `Option`.
 fn resolve_display_unit_scale(
     unit: &graphcal_compiler::syntax::ast::UnitExpr,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> Option<f64> {
-    let mut compound_scale = 1.0;
-    for item in &unit.terms {
-        let info = registry.units.get_unit(item.name.value.as_str())?;
-        let unit_scale = match &info.scale {
-            UnitScale::Static(s) => *s,
-            UnitScale::Dynamic {
-                scale_expr,
-                base_unit_scale,
-            } => {
-                // Build a minimal EvalContext for evaluating the scale expression.
-                let builtin_consts = crate::builtins::builtin_constants();
-                let builtin_fns = crate::builtins::builtin_functions();
-                let empty_src =
-                    miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
-                let ctx = crate::eval_expr::EvalContext {
-                    builtin_consts,
-                    builtin_fns,
-                    registry,
-                    src: &empty_src,
-                    unfold_context: None,
-                };
-                let empty_locals = HashMap::new();
-                let scale_val = eval_expr(scale_expr, values, &empty_locals, &ctx).ok()?;
-                match scale_val {
-                    RuntimeValue::Scalar(s) => s * base_unit_scale,
-                    _ => return None,
-                }
-            }
-        };
-        let exp = item.power.unwrap_or(1);
-        let powered_scale = unit_scale.powi(exp);
-        match item.op {
-            MulDivOp::Mul => compound_scale *= powered_scale,
-            MulDivOp::Div => compound_scale /= powered_scale,
-        }
-    }
-    Some(compound_scale)
+    let builtin_consts = crate::builtins::builtin_constants();
+    let builtin_fns = crate::builtins::builtin_functions();
+    let empty_src = miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry,
+        src: &empty_src,
+        unfold_context: None,
+    };
+    let empty_locals = HashMap::new();
+    crate::eval_expr::resolve_unit_scale(unit, values, &empty_locals, &ctx).ok()
 }
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.

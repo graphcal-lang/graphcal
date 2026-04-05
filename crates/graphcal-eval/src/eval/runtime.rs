@@ -389,27 +389,16 @@ pub(super) fn evaluate_plan(
         .figure_bodies
         .iter()
         .map(|entry| {
-            let (name, decl) = (&entry.name, &entry.decl);
-            let mut properties = Vec::new();
-            for field in &decl.fields {
-                let Some(comp_prop) =
-                    super::types::CompositionProperty::from_name(&field.name.name)
-                else {
-                    continue;
-                };
-                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
-                    &field.value.kind
-                {
-                    properties.push((comp_prop, PlotFieldValue::String(s.clone())));
-                    continue;
-                }
-                if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
-                    properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
-                }
-            }
+            let (properties, plot_names) = eval_composition_fields(
+                &entry.decl.fields,
+                &entry.decl.plot_names,
+                &values,
+                &empty_locals,
+                &ctx,
+            );
             super::types::FigureSpec {
-                name: name.clone(),
-                plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
+                name: entry.name.clone(),
+                plot_names,
                 properties,
             }
         })
@@ -420,27 +409,16 @@ pub(super) fn evaluate_plan(
         .layer_bodies
         .iter()
         .map(|entry| {
-            let (name, decl) = (&entry.name, &entry.decl);
-            let mut properties = Vec::new();
-            for field in &decl.fields {
-                let Some(comp_prop) =
-                    super::types::CompositionProperty::from_name(&field.name.name)
-                else {
-                    continue;
-                };
-                if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) =
-                    &field.value.kind
-                {
-                    properties.push((comp_prop, PlotFieldValue::String(s.clone())));
-                    continue;
-                }
-                if let Ok(rv) = eval_expr(&field.value, &values, &empty_locals, &ctx) {
-                    properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
-                }
-            }
+            let (properties, plot_names) = eval_composition_fields(
+                &entry.decl.fields,
+                &entry.decl.plot_names,
+                &values,
+                &empty_locals,
+                &ctx,
+            );
             super::types::LayerSpec {
-                name: name.clone(),
-                plot_names: decl.plot_names.iter().map(|p| p.value.clone()).collect(),
+                name: entry.name.clone(),
+                plot_names,
                 properties,
             }
         })
@@ -1059,6 +1037,35 @@ fn dimension_label_from_declared_type(
         }
         _ => None,
     }
+}
+
+/// Evaluate composition fields (properties and plot names) shared by figures and layers.
+fn eval_composition_fields(
+    fields: &[graphcal_compiler::syntax::ast::PlotField],
+    plot_name_spans: &[graphcal_compiler::syntax::names::Spanned<DeclName>],
+    values: &HashMap<String, RuntimeValue>,
+    empty_locals: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> (
+    Vec<(super::types::CompositionProperty, PlotFieldValue)>,
+    Vec<DeclName>,
+) {
+    let mut properties = Vec::new();
+    for field in fields {
+        let Some(comp_prop) = super::types::CompositionProperty::from_name(&field.name.name)
+        else {
+            continue;
+        };
+        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+            properties.push((comp_prop, PlotFieldValue::String(s.clone())));
+            continue;
+        }
+        if let Ok(rv) = eval_expr(&field.value, values, empty_locals, ctx) {
+            properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
+        }
+    }
+    let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
+    (properties, plot_names)
 }
 
 /// Convert a `RuntimeValue` to a `PlotFieldValue`.

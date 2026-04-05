@@ -20,11 +20,7 @@ pub(super) fn eval_if(
 ) -> Result<RuntimeValue, GraphcalError> {
     let cond = eval_expr(condition, values, local_values, ctx)?
         .expect_bool("if condition")
-        .map_err(|e| GraphcalError::EvalError {
-            message: e.to_string(),
-            src: ctx.src.clone(),
-            span: expr.span.into(),
-        })?;
+        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
     if cond {
         eval_expr(then_branch, values, local_values, ctx)
     } else {
@@ -65,10 +61,8 @@ pub(super) fn eval_match(
             let matched_arm = arms
                 .iter()
                 .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("no match arm for label `{variant}`"),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
+                .ok_or_else(|| {
+                    ctx.eval_error(format!("no match arm for label `{variant}`"), expr.span)
                 })?;
 
             // Labels have no fields -- no bindings to process
@@ -82,10 +76,8 @@ pub(super) fn eval_match(
             let matched_arm = arms
                 .iter()
                 .find(|arm| arm.pattern.variant_name.value.as_str() == type_name.as_str())
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("no match arm for variant `{type_name}`"),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
+                .ok_or_else(|| {
+                    ctx.eval_error(format!("no match arm for variant `{type_name}`"), expr.span)
                 })?;
 
             // Bind pattern variables
@@ -95,14 +87,10 @@ pub(super) fn eval_match(
                     graphcal_compiler::syntax::ast::PatternBinding::Bind { field, var } => {
                         let field_val =
                             scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
-                                GraphcalError::EvalError {
-                                    message: format!(
-                                        "no field `{}` on type `{type_name}`",
-                                        field.value
-                                    ),
-                                    src: ctx.src.clone(),
-                                    span: field.span.into(),
-                                }
+                                ctx.eval_error(
+                                    format!("no field `{}` on type `{type_name}`", field.value),
+                                    field.span,
+                                )
                             })?;
                         arm_locals.insert(var.name.clone(), field_val.clone());
                     }
@@ -112,10 +100,9 @@ pub(super) fn eval_match(
 
             eval_expr(&matched_arm.body, values, &arm_locals, ctx)
         }
-        _ => Err(GraphcalError::EvalError {
-            message: "match scrutinee must be a label or tagged union".to_string(),
-            src: ctx.src.clone(),
-            span: scrutinee.span.into(),
-        }),
+        _ => Err(ctx.eval_error(
+            "match scrutinee must be a label or tagged union",
+            scrutinee.span,
+        )),
     }
 }

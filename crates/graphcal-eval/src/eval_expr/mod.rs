@@ -46,6 +46,26 @@ pub struct UnfoldContext<'a> {
     pub declared_types: &'a HashMap<String, DeclaredType>,
 }
 
+impl EvalContext<'_> {
+    /// Build a `GraphcalError::EvalError` using this context's source.
+    pub fn eval_error(&self, message: impl Into<String>, span: graphcal_compiler::syntax::span::Span) -> GraphcalError {
+        GraphcalError::EvalError {
+            message: message.into(),
+            src: self.src.clone(),
+            span: span.into(),
+        }
+    }
+
+    /// Build a `GraphcalError::InternalError` using this context's source.
+    pub fn internal_error(&self, message: impl Into<String>, span: graphcal_compiler::syntax::span::Span) -> GraphcalError {
+        GraphcalError::InternalError {
+            message: message.into(),
+            src: self.src.clone(),
+            span: span.into(),
+        }
+    }
+}
+
 /// Evaluate an expression given a set of resolved values and built-in functions.
 /// Returns a `RuntimeValue` (scalar or struct).
 ///
@@ -63,11 +83,10 @@ pub fn eval_expr(
     match &expr.kind {
         ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
         ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
-        ExprKind::StringLiteral(_) => Err(GraphcalError::EvalError {
-            message: "unexpected string literal in evaluation context".to_string(),
-            src: ctx.src.clone(),
-            span: expr.span.into(),
-        }),
+        ExprKind::StringLiteral(_) => Err(ctx.eval_error(
+            "unexpected string literal in evaluation context",
+            expr.span,
+        )),
         ExprKind::UnitLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, local_values, ctx)?;
             Ok(RuntimeValue::Scalar(*value * scale))
@@ -80,10 +99,8 @@ pub fn eval_expr(
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => values
             .get(ident.value.as_str())
             .cloned()
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!("undefined graph reference `@{}`", ident.value),
-                src: ctx.src.clone(),
-                span: expr.span.into(),
+            .ok_or_else(|| {
+                ctx.eval_error(format!("undefined graph reference `@{}`", ident.value), expr.span)
             }),
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
             .get(ident.value.as_str())
@@ -98,21 +115,15 @@ pub fn eval_expr(
                 // and may be referenced in expression position as ConstRef (uppercase).
                 local_values.get(ident.value.as_str()).cloned()
             })
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!("undefined constant `{}`", ident.value),
-                src: ctx.src.clone(),
-                span: expr.span.into(),
+            .ok_or_else(|| {
+                ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
             }),
-        ExprKind::LocalRef(ident) => {
-            local_values
-                .get(ident.name.as_str())
-                .cloned()
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("undefined local variable `{}`", ident.name),
-                    src: ctx.src.clone(),
-                    span: expr.span.into(),
-                })
-        }
+        ExprKind::LocalRef(ident) => local_values
+            .get(ident.name.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                ctx.eval_error(format!("undefined local variable `{}`", ident.name), expr.span)
+            }),
 
         // --- Arithmetic (delegated) ---
         ExprKind::BinOp { op, lhs, rhs } => {
@@ -195,16 +206,10 @@ pub fn eval_expr(
                 RuntimeValue::Struct { fields, .. } => fields
                     .get(field.value.as_str())
                     .cloned()
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("no field `{}` on struct", field.value),
-                        src: ctx.src.clone(),
-                        span: field.span.into(),
+                    .ok_or_else(|| {
+                        ctx.eval_error(format!("no field `{}` on struct", field.value), field.span)
                     }),
-                _ => Err(GraphcalError::EvalError {
-                    message: "field access on non-struct value".to_string(),
-                    src: ctx.src.clone(),
-                    span: inner.span.into(),
-                }),
+                _ => Err(ctx.eval_error("field access on non-struct value", inner.span)),
             }
         }
 
@@ -222,14 +227,13 @@ pub fn eval_expr(
                         .get(field_init.name.value.as_str())
                         .or_else(|| values.get(field_init.name.value.as_str()))
                         .cloned()
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!(
+                        .ok_or_else(|| ctx.eval_error(
+                            format!(
                                 "undefined variable `{}` for shorthand field",
                                 field_init.name.value
                             ),
-                            src: ctx.src.clone(),
-                            span: field_init.name.span.into(),
-                        })?
+                            field_init.name.span,
+                        ))?
                 };
                 field_map.insert(field_init.name.value.clone(), val);
             }
@@ -275,10 +279,8 @@ pub fn resolve_unit_scale(
             .registry
             .units
             .get_unit(item.name.value.as_str())
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!("unknown unit `{}`", item.name.value),
-                src: ctx.src.clone(),
-                span: item.name.span.into(),
+            .ok_or_else(|| {
+                ctx.eval_error(format!("unknown unit `{}`", item.name.value), item.name.span)
             })?;
         let unit_scale = match &info.scale {
             UnitScale::Static(s) => *s,
@@ -288,12 +290,10 @@ pub fn resolve_unit_scale(
             } => {
                 let scale_val = eval_expr(scale_expr, values, local_values, ctx)?;
                 let RuntimeValue::Scalar(scale_f64) = scale_val else {
-                    return Err(GraphcalError::EvalError {
-                        message: "dynamic unit scale expression must evaluate to a scalar"
-                            .to_string(),
-                        src: ctx.src.clone(),
-                        span: scale_expr.span.into(),
-                    });
+                    return Err(ctx.eval_error(
+                        "dynamic unit scale expression must evaluate to a scalar",
+                        scale_expr.span,
+                    ));
                 };
                 scale_f64 * base_unit_scale
             }

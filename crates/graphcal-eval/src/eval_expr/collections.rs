@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 
 use graphcal_compiler::syntax::ast::{Expr, MapEntry};
 use graphcal_compiler::syntax::names::VariantName;
+use graphcal_compiler::syntax::span::Span;
 
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;
@@ -26,44 +27,32 @@ fn eval_nat_expr(
             let key = format!("__nat_param_{}", ident.name);
             let nat_val = local_values
                 .get(&key)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "unresolved nat parameter `{}` in for-range binding",
-                        ident.name
-                    ),
-                    src: ctx.src.clone(),
-                    span: ident.span.into(),
-                })?;
+                .ok_or_else(|| ctx.internal_error(
+                    format!("unresolved nat parameter `{}` in for-range binding", ident.name),
+                    ident.span,
+                ))?;
             let RuntimeValue::Int(n) = nat_val else {
-                return Err(GraphcalError::InternalError {
-                    message: format!("nat parameter `{}` has non-integer value", ident.name),
-                    src: ctx.src.clone(),
-                    span: ident.span.into(),
-                });
+                return Err(ctx.internal_error(
+                    format!("nat parameter `{}` has non-integer value", ident.name),
+                    ident.span,
+                ));
             };
-            u64::try_from(*n).map_err(|_| GraphcalError::InternalError {
-                message: format!("nat parameter `{}` has negative value {}", ident.name, n),
-                src: ctx.src.clone(),
-                span: ident.span.into(),
-            })
+            u64::try_from(*n).map_err(|_| ctx.internal_error(
+                format!("nat parameter `{}` has negative value {}", ident.name, n),
+                ident.span,
+            ))
         }
         NatExpr::Add(lhs, rhs, span) => {
             let l = eval_nat_expr(lhs, local_values, ctx)?;
             let r = eval_nat_expr(rhs, local_values, ctx)?;
-            l.checked_add(r).ok_or_else(|| GraphcalError::EvalError {
-                message: format!("nat arithmetic overflow: {l} + {r}"),
-                src: ctx.src.clone(),
-                span: (*span).into(),
-            })
+            l.checked_add(r)
+                .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} + {r}"), *span))
         }
         NatExpr::Mul(lhs, rhs, span) => {
             let l = eval_nat_expr(lhs, local_values, ctx)?;
             let r = eval_nat_expr(rhs, local_values, ctx)?;
-            l.checked_mul(r).ok_or_else(|| GraphcalError::EvalError {
-                message: format!("nat arithmetic overflow: {l} * {r}"),
-                src: ctx.src.clone(),
-                span: (*span).into(),
-            })
+            l.checked_mul(r)
+                .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
     }
 }
@@ -101,11 +90,7 @@ pub(super) fn eval_index_access(
     let mut current = eval_expr(inner, values, local_values, ctx)?;
     for arg in args {
         let RuntimeValue::Indexed { entries, .. } = current else {
-            return Err(GraphcalError::EvalError {
-                message: "indexing a non-indexed value".to_string(),
-                src: ctx.src.clone(),
-                span: expr.span.into(),
-            });
+            return Err(ctx.eval_error("indexing a non-indexed value", expr.span));
         };
         let variant_name: VariantName = match arg {
             graphcal_compiler::syntax::ast::IndexArg::Variant { variant, .. } => {
@@ -115,11 +100,10 @@ pub(super) fn eval_index_access(
                 let var_val =
                     local_values
                         .get(&ident.name)
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!("undefined loop variable `{}`", ident.name),
-                            src: ctx.src.clone(),
-                            span: ident.span.into(),
-                        })?;
+                        .ok_or_else(|| ctx.eval_error(
+                            format!("undefined loop variable `{}`", ident.name),
+                            ident.span,
+                        ))?;
                 match var_val {
                     RuntimeValue::Label { variant, .. } => variant.clone(),
                     RuntimeValue::Struct { type_name, .. } => VariantName::new(type_name.as_str()),
@@ -131,11 +115,10 @@ pub(super) fn eval_index_access(
                         VariantName::new(format!("#{n}"))
                     }
                     _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!("`{}` is not a loop variable", ident.name),
-                            src: ctx.src.clone(),
-                            span: ident.span.into(),
-                        });
+                        return Err(ctx.eval_error(
+                            format!("`{}` is not a loop variable", ident.name),
+                            ident.span,
+                        ));
                     }
                 }
             }
@@ -144,33 +127,26 @@ pub(super) fn eval_index_access(
                 match val {
                     RuntimeValue::Int(n) => {
                         if n < 0 {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "index expression evaluated to negative value: {n}"
-                                ),
-                                src: ctx.src.clone(),
-                                span: index_expr.span.into(),
-                            });
+                            return Err(ctx.eval_error(
+                                format!("index expression evaluated to negative value: {n}"),
+                                index_expr.span,
+                            ));
                         }
                         VariantName::new(format!("#{n}"))
                     }
                     _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: "index expression must evaluate to an integer".to_string(),
-                            src: ctx.src.clone(),
-                            span: index_expr.span.into(),
-                        });
+                        return Err(ctx.eval_error(
+                            "index expression must evaluate to an integer",
+                            index_expr.span,
+                        ));
                     }
                 }
             }
         };
-        current = entries.get(variant_name.as_str()).cloned().ok_or_else(|| {
-            GraphcalError::EvalError {
-                message: format!("variant `{variant_name}` not found"),
-                src: ctx.src.clone(),
-                span: expr.span.into(),
-            }
-        })?;
+        current = entries
+            .get(variant_name.as_str())
+            .cloned()
+            .ok_or_else(|| ctx.eval_error(format!("variant `{variant_name}` not found"), expr.span))?;
     }
     Ok(current)
 }
@@ -196,11 +172,7 @@ pub(super) fn eval_scan(
         entries: source_entries,
     } = source_val
     else {
-        return Err(GraphcalError::EvalError {
-            message: "scan source must be an indexed value".to_string(),
-            src: ctx.src.clone(),
-            span: source.span.into(),
-        });
+        return Err(ctx.eval_error("scan source must be an indexed value", source.span));
     };
     let init_val = eval_expr(init, values, local_values, ctx)?;
 
@@ -246,43 +218,34 @@ pub(super) fn eval_unfold(
     let unfold_ctx = ctx
         .unfold_context
         .as_ref()
-        .ok_or_else(|| GraphcalError::EvalError {
-            message:
-                "unfold expression requires evaluation context with self_name and declared_types"
-                    .to_string(),
-            src: ctx.src.clone(),
-            span: expr.span.into(),
-        })?;
+        .ok_or_else(|| ctx.eval_error(
+            "unfold expression requires evaluation context with self_name and declared_types",
+            expr.span,
+        ))?;
     let self_name = unfold_ctx.self_name;
     let declared_types = unfold_ctx.declared_types;
 
     // Find the range index from the node's declared type
     let declared = declared_types
         .get(self_name)
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!("no declared type for node `{self_name}`"),
-            src: ctx.src.clone(),
-            span: (0, 0).into(),
-        })?;
+        .ok_or_else(|| ctx.eval_error(
+            format!("no declared type for node `{self_name}`"),
+            Span::new(0, 0),
+        ))?;
     let index_name = match declared {
         crate::declared_type::DeclaredType::Indexed { index, .. } => index.clone(),
         _ => {
-            return Err(GraphcalError::EvalError {
-                message: format!("node `{self_name}` must have an indexed type for time scan"),
-                src: ctx.src.clone(),
-                span: (0, 0).into(),
-            });
+            return Err(ctx.eval_error(
+                format!("node `{self_name}` must have an indexed type for time scan"),
+                Span::new(0, 0),
+            ));
         }
     };
     let idx_def = ctx
         .registry
         .indexes
         .get_index(index_name.as_str())
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!("unknown index `{index_name}`"),
-            src: ctx.src.clone(),
-            span: (0, 0).into(),
-        })?;
+        .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_name}`"), Span::new(0, 0)))?;
 
     let step_count = idx_def.step_count();
     let variants = idx_def.variants();
@@ -311,20 +274,18 @@ pub(super) fn eval_unfold(
             },
         );
 
-        let prev_value = idx_def
-            .step_value(i - 1)
-            .map_err(|e| GraphcalError::EvalError {
-                message: format!("internal: range index step {} out of bounds: {e}", i - 1),
-                src: ctx.src.clone(),
-                span: (0, 0).into(),
-            })?;
-        let curr_value = idx_def
-            .step_value(i)
-            .map_err(|e| GraphcalError::EvalError {
-                message: format!("internal: range index step {i} out of bounds: {e}"),
-                src: ctx.src.clone(),
-                span: (0, 0).into(),
-            })?;
+        let prev_value = idx_def.step_value(i - 1).map_err(|e| {
+            ctx.eval_error(
+                format!("internal: range index step {} out of bounds: {e}", i - 1),
+                Span::new(0, 0),
+            )
+        })?;
+        let curr_value = idx_def.step_value(i).map_err(|e| {
+            ctx.eval_error(
+                format!("internal: range index step {i} out of bounds: {e}"),
+                Span::new(0, 0),
+            )
+        })?;
 
         scan_locals.insert(
             prev_name.name.clone(),
@@ -387,11 +348,10 @@ fn eval_map_literal(
         .registry
         .indexes
         .get_index(idx_name.as_str())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("unknown index `{idx_name}`"),
-            src: ctx.src.clone(),
-            span: entries[0].keys[0].index.span.into(),
-        })?;
+        .ok_or_else(|| ctx.internal_error(
+            format!("unknown index `{idx_name}`"),
+            entries[0].keys[0].index.span,
+        ))?;
     let variants = idx_def.variants();
 
     let mut outer = IndexMap::new();
@@ -458,11 +418,7 @@ fn eval_for_comp(
         };
         &dynamic_nat_def
     } else {
-        return Err(GraphcalError::InternalError {
-            message: format!("unknown index `{idx_name}`"),
-            src: ctx.src.clone(),
-            span: error_span.into(),
-        });
+        return Err(ctx.internal_error(format!("unknown index `{idx_name}`"), error_span));
     };
     let remaining = &bindings[1..];
 
@@ -482,22 +438,16 @@ fn eval_for_comp(
                     .as_str()
                     .strip_prefix('#')
                     .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "range variant `{variant}` has unexpected format (expected #N)"
-                        ),
-                        src: ctx.src.clone(),
-                        span: error_span.into(),
-                    })?;
+                    .ok_or_else(|| ctx.internal_error(
+                        format!("range variant `{variant}` has unexpected format (expected #N)"),
+                        error_span,
+                    ))?;
                 RuntimeValue::RangeLabel {
                     step_index,
-                    value: idx_def.step_value(step_index).map_err(|e| {
-                        GraphcalError::InternalError {
-                            message: format!("range index step {step_index} out of bounds: {e}"),
-                            src: ctx.src.clone(),
-                            span: error_span.into(),
-                        }
-                    })?,
+                    value: idx_def.step_value(step_index).map_err(|e| ctx.internal_error(
+                        format!("range index step {step_index} out of bounds: {e}"),
+                        error_span,
+                    ))?,
                 }
             }
             crate::registry::IndexKind::NatRange { .. } => {
@@ -506,20 +456,14 @@ fn eval_for_comp(
                     .as_str()
                     .strip_prefix('#')
                     .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "nat range variant `{variant}` has unexpected format (expected #N)"
-                        ),
-                        src: ctx.src.clone(),
-                        span: error_span.into(),
-                    })?;
-                RuntimeValue::Int(i64::try_from(step_index).map_err(|_| {
-                    GraphcalError::InternalError {
-                        message: format!("nat range step {step_index} too large for i64"),
-                        src: ctx.src.clone(),
-                        span: error_span.into(),
-                    }
-                })?)
+                    .ok_or_else(|| ctx.internal_error(
+                        format!("nat range variant `{variant}` has unexpected format (expected #N)"),
+                        error_span,
+                    ))?;
+                RuntimeValue::Int(i64::try_from(step_index).map_err(|_| ctx.internal_error(
+                    format!("nat range step {step_index} too large for i64"),
+                    error_span,
+                ))?)
             }
         };
         inner_locals.insert(binding.var.name.clone(), binding_value);

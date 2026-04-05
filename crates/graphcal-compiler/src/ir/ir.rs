@@ -236,22 +236,7 @@ pub(crate) fn lower_to_builder(
     register_functions(&resolved, &mut builder, src)?;
 
     // Step 4: Extract type annotations from the AST and pair with resolved declarations.
-    // Build a map from declaration name to TypeExpr.
-    let mut type_anns: HashMap<String, TypeExpr> = HashMap::new();
-    for decl in &ast.declarations {
-        match &decl.kind {
-            DeclKind::Const(c) => {
-                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
-            }
-            DeclKind::Param(p) => {
-                type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
-            }
-            DeclKind::Node(n) => {
-                type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
-            }
-            _ => {}
-        }
-    }
+    let mut type_anns = extract_type_annotations(ast);
     // Also extract type annotations from imported declarations.
     for (name, type_ann, _, _) in &imported.consts {
         type_anns.insert(name.clone(), type_ann.clone());
@@ -453,21 +438,7 @@ pub fn lower_to_builder_with_imported_values(
     register_functions(&resolved, &mut builder, src)?;
 
     // Step 4: Extract type annotations from local declarations only.
-    let mut type_anns: HashMap<String, TypeExpr> = HashMap::new();
-    for decl in &ast.declarations {
-        match &decl.kind {
-            DeclKind::Const(c) => {
-                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
-            }
-            DeclKind::Param(p) => {
-                type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
-            }
-            DeclKind::Node(n) => {
-                type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
-            }
-            _ => {}
-        }
-    }
+    let mut type_anns = extract_type_annotations(ast);
 
     let consts = resolved
         .consts
@@ -2363,6 +2334,26 @@ fn register_functions(
         });
     }
     Ok(())
+}
+
+/// Extract a map of type annotations from const/param/node declarations.
+fn extract_type_annotations(ast: &File) -> HashMap<String, TypeExpr> {
+    let mut type_anns = HashMap::new();
+    for decl in &ast.declarations {
+        match &decl.kind {
+            DeclKind::Const(c) => {
+                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
+            }
+            DeclKind::Param(p) => {
+                type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
+            }
+            DeclKind::Node(n) => {
+                type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
+            }
+            _ => {}
+        }
+    }
+    type_anns
 }
 
 #[cfg(test)]

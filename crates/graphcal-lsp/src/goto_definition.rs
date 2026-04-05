@@ -5,7 +5,6 @@ use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, Url};
 use crate::convert::span_to_range;
 use crate::resolve::{SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
 
 /// Resolve go-to-definition for a position in an analyzed document.
 pub fn goto_definition(
@@ -26,12 +25,7 @@ fn resolve_local_definition(
     uri: &Url,
     source: &str,
 ) -> Option<GotoDefinitionResponse> {
-    // Builtins have no source location.
-    if matches!(
-        definition.category,
-        SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-    ) || definition.name_span.is_empty()
-    {
+    if !definition.is_navigable() {
         return None;
     }
     let range = span_to_range(source, definition.name_span);
@@ -45,11 +39,7 @@ fn resolve_local_definition(
 fn resolve_imported_definition(
     imported: &crate::server::ImportedDefinition,
 ) -> Option<GotoDefinitionResponse> {
-    if matches!(
-        imported.definition.category,
-        SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
-    ) || imported.definition.name_span.is_empty()
-    {
+    if !imported.definition.is_navigable() {
         return None;
     }
     let range = span_to_range(&imported.source, imported.definition.name_span);

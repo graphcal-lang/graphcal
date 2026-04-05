@@ -539,58 +539,28 @@ fn format_encode_block(fmt: &mut Formatter<'_>, encodings: &[Encoding]) -> RcDoc
 
 /// `figure name = { plots: [a, b], title: "...", };`
 fn format_figure_decl(fmt: &mut Formatter<'_>, d: &FigureDecl) -> RcDoc<'static> {
-    let header = RcDoc::text(format!("figure {} = ", d.name.value));
-
-    let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
-
-    // Emit `plots: [name1, name2],`
-    if !d.plot_names.is_empty() {
-        let names: Vec<RcDoc<'static>> = d
-            .plot_names
-            .iter()
-            .map(|p| RcDoc::text(p.value.as_str().to_string()))
-            .collect();
-        field_docs.push(
-            RcDoc::text("plots: [")
-                .append(RcDoc::intersperse(names, RcDoc::text(", ")))
-                .append(RcDoc::text("],")),
-        );
-    }
-
-    // Emit other fields
-    for f in &d.fields {
-        field_docs.push(
-            RcDoc::text(f.name.name.clone())
-                .append(RcDoc::text(": "))
-                .append(format_expr(fmt, &f.value))
-                .append(RcDoc::text(",")),
-        );
-    }
-
-    if field_docs.is_empty() {
-        return header.append(RcDoc::text("{};"));
-    }
-
-    header
-        .append(RcDoc::text("{"))
-        .append(
-            RcDoc::hardline()
-                .append(RcDoc::intersperse(field_docs, RcDoc::hardline()))
-                .nest(INDENT),
-        )
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("};"))
+    format_composition_decl(fmt, "figure", d.name.value.as_str(), &d.plot_names, &d.fields)
 }
 
 fn format_layer_decl(fmt: &mut Formatter<'_>, d: &LayerDecl) -> RcDoc<'static> {
-    let header = RcDoc::text(format!("layer {} = ", d.name.value));
+    format_composition_decl(fmt, "layer", d.name.value.as_str(), &d.plot_names, &d.fields)
+}
+
+/// Shared formatter for `figure` and `layer` declarations (identical structure).
+fn format_composition_decl(
+    fmt: &mut Formatter<'_>,
+    keyword: &str,
+    name: &str,
+    plot_names: &[graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>],
+    fields: &[graphcal_compiler::syntax::ast::PlotField],
+) -> RcDoc<'static> {
+    let header = RcDoc::text(format!("{keyword} {name} = "));
 
     let mut field_docs: Vec<RcDoc<'static>> = Vec::new();
 
     // Emit `plots: [name1, name2],`
-    if !d.plot_names.is_empty() {
-        let names: Vec<RcDoc<'static>> = d
-            .plot_names
+    if !plot_names.is_empty() {
+        let names: Vec<RcDoc<'static>> = plot_names
             .iter()
             .map(|p| RcDoc::text(p.value.as_str().to_string()))
             .collect();
@@ -602,7 +572,7 @@ fn format_layer_decl(fmt: &mut Formatter<'_>, d: &LayerDecl) -> RcDoc<'static> {
     }
 
     // Emit other fields
-    for f in &d.fields {
+    for f in fields {
         field_docs.push(
             RcDoc::text(f.name.name.clone())
                 .append(RcDoc::text(": "))

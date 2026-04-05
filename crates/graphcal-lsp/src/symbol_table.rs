@@ -130,6 +130,23 @@ pub struct DefinitionInfo {
     pub detail: Option<String>,
 }
 
+impl DefinitionInfo {
+    /// Returns `true` if this is a built-in function or constant.
+    pub const fn is_builtin(&self) -> bool {
+        matches!(
+            self.category,
+            SymbolCategory::BuiltinFn | SymbolCategory::BuiltinConst
+        )
+    }
+
+    /// Returns `true` if this definition has a navigable source location.
+    ///
+    /// Builtins and definitions with empty name spans have no source to navigate to.
+    pub const fn is_navigable(&self) -> bool {
+        !self.is_builtin() && !self.name_span.is_empty()
+    }
+}
+
 /// A reference occurrence: a name that refers to a definition.
 #[derive(Debug, Clone)]
 pub struct ReferenceInfo {
@@ -172,6 +189,21 @@ impl SymbolTable {
         self.definitions.values().find(|d| {
             offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len()
         })
+    }
+
+    /// Find the key for a definition using pointer identity.
+    ///
+    /// When `find_definition_at` returns a `&DefinitionInfo`, the caller may need the
+    /// corresponding `SymbolKey`. This method performs a reverse lookup using pointer
+    /// equality, falling back to a `TopLevel` key from the definition's name.
+    pub fn find_definition_key(&self, definition: &DefinitionInfo) -> SymbolKey {
+        self.definitions
+            .iter()
+            .find(|(_, d)| std::ptr::eq(*d, definition))
+            .map_or_else(
+                || SymbolKey::TopLevel(definition.name.clone()),
+                |(k, _)| k.clone(),
+            )
     }
 
     /// Find all references that point to the given target key.
