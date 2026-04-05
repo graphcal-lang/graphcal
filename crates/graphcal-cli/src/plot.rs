@@ -366,22 +366,39 @@ fn get_composition_number_property(
         })
 }
 
+/// HTML-escape a string to prevent XSS when interpolated into HTML content.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Render all figures as a single HTML page using Vega-Embed.
 pub fn render_html(figures: &[RenderedFigure]) -> String {
     use std::fmt::Write;
     let mut divs = String::new();
     for (i, fig) in figures.iter().enumerate() {
         let div_id = format!("graphcal-plot-{i}");
+        // Serialize spec via serde_json (properly escaped for JS context)
         let spec_json = serde_json::to_string(&fig.spec).unwrap_or_default();
+        let escaped_name = html_escape(&fig.name);
         let _ = write!(
             divs,
             r#"<div style="margin-bottom: 2em;">
-<h3>{name}</h3>
+<h3>{escaped_name}</h3>
 <div id="{div_id}"></div>
 <script>vegaEmbed('#{div_id}', {spec_json}).catch(console.error);</script>
 </div>
 "#,
-            name = fig.name,
         );
     }
     format!(

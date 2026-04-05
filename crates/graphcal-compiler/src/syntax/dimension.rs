@@ -41,18 +41,34 @@ impl Rational {
     ///
     /// Panics if `den` is zero.
     #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "panicking variant for known-safe literal denominators"
+    )]
     pub fn new(num: i32, den: i32) -> Self {
-        assert!(den != 0, "denominator must not be zero");
+        match Self::try_new(num, den) {
+            Ok(r) => r,
+            Err(RationalError::ZeroDenominator) => panic!("denominator must not be zero"),
+        }
+    }
+
+    /// Try to create a new rational number, automatically reduced.
+    ///
+    /// Returns `Err` if `den` is zero.
+    pub fn try_new(num: i32, den: i32) -> Result<Self, RationalError> {
+        if den == 0 {
+            return Err(RationalError::ZeroDenominator);
+        }
         if num == 0 {
-            return Self::ZERO;
+            return Ok(Self::ZERO);
         }
         let g = gcd(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
         let (n, d) = (num / g, den / g);
         // Normalize sign: denominator is always positive
         if d < 0 {
-            Self { num: -n, den: -d }
+            Ok(Self { num: -n, den: -d })
         } else {
-            Self { num: n, den: d }
+            Ok(Self { num: n, den: d })
         }
     }
 
@@ -89,17 +105,69 @@ impl Rational {
     }
 }
 
+/// Error from `Rational` construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RationalError {
+    ZeroDenominator,
+}
+
+impl fmt::Display for RationalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroDenominator => write!(f, "denominator must not be zero"),
+        }
+    }
+}
+
+impl std::error::Error for RationalError {}
+
+/// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
+///
+/// # Panics
+///
+/// Panics if the reduced result does not fit in `i32` (extremely unlikely for
+/// dimension exponents) or if `den` is zero.
+fn reduce_i64(num: i64, den: i64) -> (i32, i32) {
+    assert!(den != 0, "denominator must not be zero in reduce_i64");
+    if num == 0 {
+        return (0, 1);
+    }
+    let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
+    let (mut n, mut d) = (num / g, den / g);
+    if d < 0 {
+        n = -n;
+        d = -d;
+    }
+    #[expect(
+        clippy::expect_used,
+        reason = "overflow of dimension exponents after GCD reduction is practically impossible"
+    )]
+    (
+        i32::try_from(n).expect("dimension exponent numerator overflow"),
+        i32::try_from(d).expect("dimension exponent denominator overflow"),
+    )
+}
+
 impl std::ops::Add for Rational {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Self::new(self.num * rhs.den + rhs.num * self.den, self.den * rhs.den)
+        // Widen to i64 to avoid intermediate overflow
+        let num =
+            i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
+        let den = i64::from(self.den) * i64::from(rhs.den);
+        let (n, d) = reduce_i64(num, den);
+        Self { num: n, den: d }
     }
 }
 
 impl std::ops::Sub for Rational {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        Self::new(self.num * rhs.den - rhs.num * self.den, self.den * rhs.den)
+        let num =
+            i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
+        let den = i64::from(self.den) * i64::from(rhs.den);
+        let (n, d) = reduce_i64(num, den);
+        Self { num: n, den: d }
     }
 }
 
@@ -116,12 +184,19 @@ impl std::ops::Neg for Rational {
 impl std::ops::Mul for Rational {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self {
-        Self::new(self.num * rhs.num, self.den * rhs.den)
+        let num = i64::from(self.num) * i64::from(rhs.num);
+        let den = i64::from(self.den) * i64::from(rhs.den);
+        let (n, d) = reduce_i64(num, den);
+        Self { num: n, den: d }
     }
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd64(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd64(b, a % b) }
 }
 
 /// A unique identifier for a base dimension.

@@ -47,15 +47,23 @@ fn eval_nat_expr(
                 span: ident.span.into(),
             })
         }
-        NatExpr::Add(lhs, rhs, _) => {
+        NatExpr::Add(lhs, rhs, span) => {
             let l = eval_nat_expr(lhs, local_values, ctx)?;
             let r = eval_nat_expr(rhs, local_values, ctx)?;
-            Ok(l + r)
+            l.checked_add(r).ok_or_else(|| GraphcalError::EvalError {
+                message: format!("nat arithmetic overflow: {l} + {r}"),
+                src: ctx.src.clone(),
+                span: (*span).into(),
+            })
         }
-        NatExpr::Mul(lhs, rhs, _) => {
+        NatExpr::Mul(lhs, rhs, span) => {
             let l = eval_nat_expr(lhs, local_values, ctx)?;
             let r = eval_nat_expr(rhs, local_values, ctx)?;
-            Ok(l * r)
+            l.checked_mul(r).ok_or_else(|| GraphcalError::EvalError {
+                message: format!("nat arithmetic overflow: {l} * {r}"),
+                src: ctx.src.clone(),
+                span: (*span).into(),
+            })
         }
     }
 }

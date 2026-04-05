@@ -195,10 +195,21 @@ impl Value {
                 variant,
             } => format!("{index_name}::{variant}"),
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
-            Self::Datetime { .. } => self.format_datetime().unwrap_or_default(),
+            Self::Datetime { .. } =>
+            {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "format_datetime always returns Some for Datetime variant"
+                )]
+                self.format_datetime().expect("self is Datetime")
+            }
             Self::Scalar { .. } => {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "display_value always returns Ok for Scalar variant"
+                )]
                 let formatted = graphcal_compiler::registry::format::format_number(
-                    self.display_value().unwrap_or_default(),
+                    self.display_value().expect("self is Scalar"),
                 );
                 match symbols.and_then(|s| self.display_label(s)) {
                     Some(label) => format!("{formatted} [{label}]"),

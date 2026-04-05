@@ -520,6 +520,18 @@ fn eval_builtin_or_user_fn(
                     })
             })
             .collect::<Result<_, _>>()?;
+        if arg_values.len() != builtin.arity() {
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "builtin function `{}` expects {} argument(s) but got {}",
+                    name.value,
+                    builtin.arity(),
+                    arg_values.len(),
+                ),
+                src: ctx.src.clone(),
+                span: expr.span.into(),
+            });
+        }
         let result = (builtin.eval)(&arg_values);
         return Ok(RuntimeValue::Scalar(check_finite(
             result,
@@ -609,12 +621,12 @@ fn eval_nat_expr(nat_expr: &graphcal_compiler::syntax::ast::NatExpr) -> Option<u
         NatExpr::Add(lhs, rhs, _) => {
             let l = eval_nat_expr(lhs)?;
             let r = eval_nat_expr(rhs)?;
-            Some(l + r)
+            l.checked_add(r)
         }
         NatExpr::Mul(lhs, rhs, _) => {
             let l = eval_nat_expr(lhs)?;
             let r = eval_nat_expr(rhs)?;
-            Some(l * r)
+            l.checked_mul(r)
         }
         NatExpr::Var(_) => None,
     }
@@ -710,7 +722,7 @@ fn solve_nat_expr_for_var(
     var_name: &str,
     target: u64,
 ) -> Option<u64> {
-    let (constant_sum, var_coeff) = nat_expr_linear_parts(expr, var_name);
+    let (constant_sum, var_coeff) = nat_expr_linear_parts(expr, var_name)?;
     if var_coeff == 0 {
         return None;
     }
@@ -722,34 +734,38 @@ fn solve_nat_expr_for_var(
 }
 
 /// Decompose a `NatExpr` into `(constant_sum, coefficient_of_var)` for a given variable.
+///
+/// Returns `None` if arithmetic overflows.
 fn nat_expr_linear_parts(
     expr: &graphcal_compiler::syntax::ast::NatExpr,
     var_name: &str,
-) -> (u64, u64) {
+) -> Option<(u64, u64)> {
     use graphcal_compiler::syntax::ast::NatExpr;
     match expr {
-        NatExpr::Literal(n, _) => (*n, 0),
+        NatExpr::Literal(n, _) => Some((*n, 0)),
         NatExpr::Var(ident) => {
             if ident.name == var_name {
-                (0, 1)
+                Some((0, 1))
             } else {
                 // Other variables are treated as constants (they should already be resolved)
-                (0, 0)
+                Some((0, 0))
             }
         }
         NatExpr::Add(lhs, rhs, _) => {
-            let (lc, lv) = nat_expr_linear_parts(lhs, var_name);
-            let (rc, rv) = nat_expr_linear_parts(rhs, var_name);
-            (lc + rc, lv + rv)
+            let (lc, lv) = nat_expr_linear_parts(lhs, var_name)?;
+            let (rc, rv) = nat_expr_linear_parts(rhs, var_name)?;
+            Some((lc.checked_add(rc)?, lv.checked_add(rv)?))
         }
         NatExpr::Mul(lhs, rhs, _) => {
-            let (lc, lv) = nat_expr_linear_parts(lhs, var_name);
-            let (rc, rv) = nat_expr_linear_parts(rhs, var_name);
+            let (lc, lv) = nat_expr_linear_parts(lhs, var_name)?;
+            let (rc, rv) = nat_expr_linear_parts(rhs, var_name)?;
             // For linear solving: (lc * rc) is the constant-constant product,
             // (lc * rv + rc * lv) is the effective coefficient of the variable.
             // Cross-term lv * rv is the quadratic coefficient — we ignore it
             // (solve_nat_expr_for_var only handles linear equations).
-            (lc * rc, lc * rv + rc * lv)
+            let const_part = lc.checked_mul(rc)?;
+            let var_part = lc.checked_mul(rv)?.checked_add(rc.checked_mul(lv)?)?;
+            Some((const_part, var_part))
         }
     }
 }
