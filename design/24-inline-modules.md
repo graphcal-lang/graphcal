@@ -79,7 +79,7 @@ Every declaration in Graphcal falls into one of two categories:
 
 | Category | Meaning | Examples |
 | --- | --- | --- |
-| **Compile-time** | Value/definition is fully determined at compile time. Does not transitively depend on any `param`. | `dimension Length;`, `const unit km: Length = 1000.0 m;`, `const node PI_SQUARED: Dimensionless = PI * PI;` |
+| **Compile-time** | Value/definition is fully determined at compile time. Does not transitively depend on any `param`. | `base dimension Length;`, `const unit km: Length = 1000.0 m;`, `const node PI_SQUARED: Dimensionless = PI * PI;` |
 | **Runtime** | Value depends (directly or transitively) on `param`s. Participates in reactive evaluation. | `param mass: Mass;`, `node force: Force = @mass * 9.81 m/s^2;`, `unit USD: Money = @usd_to_eur;` |
 
 Some declarations are **inherently compile-time** — they can never depend on runtime values:
@@ -430,6 +430,7 @@ The only change for importers is the path. The DAG's semantics are identical.
 | `graph` keyword | `dag` keyword | Precision (acyclicity is a core invariant) and disambiguation from language name |
 | File DAGs and inline DAGs have different semantics | DAG = Module — uniform semantics | Extraction/inlining is a pure refactoring |
 | Ad-hoc path syntax | Unified module path system (`/` navigates down, `..` navigates up) | One path system for all references |
+| `dimension X;` (ambiguous: new base or required) | `base dimension X;` for new base dimensions, `dimension X;` for required | Disambiguation for dimension generics |
 
 ### What Gets Removed
 
@@ -659,46 +660,46 @@ include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
 node result: Velocity = @v * 2.0;
 ```
 
-## Open Questions
+### Instantiation multiplicity
 
-### Semantics
+The compiler always creates separate instances. If the same DAG is `include`d twice with the same arguments, two independent sub-DAGs are created. Deduplication is an optimization, not a semantic guarantee.
 
-1. **Instantiation multiplicity:** If the same DAG is `include`d twice with the same arguments, does the compiler create one or two sub-DAGs? (Proposal: always create separate instances. Deduplication is an optimization, not a semantic guarantee.)
+### Assertions inside DAGs
 
-2. **Assertions inside DAGs:** If a DAG contains `assert` declarations, are they evaluated at each instantiation? (Proposal: yes. Assertions are part of the DAG's contract.)
+Assertions are evaluated at each instantiation. They are part of the DAG's contract.
 
-3. **Recursive DAG instantiation:** A DAG instantiating itself (directly or mutually) must be detected and rejected.
+### Recursive DAG instantiation
 
-### Built-in Library Boundary
+A DAG instantiating itself (directly or mutually) is a compile error.
 
-4. **Where is the line between built-in and user-defined?** Domain-specific calculations are user DAGs. But what about `normalize`, `cross`, `weighted_sum`?
+### Built-in library boundary
 
-5. **Can users request new built-ins?** Language-level decision only, or is there a proposal mechanism?
+To be discussed on a case-by-case basis. Domain-specific calculations (rocket equation, orbital mechanics) are user DAGs. Whether operations like `normalize`, `cross`, `weighted_sum` should be built-in will be evaluated as the need arises.
 
 ### Migration
 
-6. **Clean break:** Since Graphcal is unpublished, this can be a clean break — remove `fn`, add `dag`, expand the built-in library. No coexistence period needed.
+Breaking changes are allowed. No need to maintain backward compatibility with existing user code or the current Graphcal implementation.
 
 ## Generics Status
 
 | Generic kind | Current `fn` syntax | Inline DAG equivalent | Status |
 | --- | --- | --- | --- |
 | Index | `<I: Index>` | `index I;` (required index) | **Solved** — same mechanism as injectable indexes |
-| Dim | `<D: Dim>` | `dimension D;` (required dimension)? | **Open** — see below |
-| Nat | `<N: Nat>` | No obvious required-declaration equivalent | **Deferred** — covered by built-in functions |
+| Dim | `<D: Dim>` | `dimension D;` (required dimension) | **Design ready** — implementation deferred |
+| Nat | `<N: Nat>` | `nat N;` (required nat) | **Syntax sketched** — implementation deferred |
 
 ### Index Generics: Solved
 
 Required indexes (`index I;`, `index T: Time;`) work identically to `<I: Index>` function generics. No new design needed.
 
-### Dimension Generics: Open Question
+### Dimension Generics: Design Ready
 
-Could a "required dimension" declaration serve as `<D: Dim>` generics?
+A "required dimension" declaration serves as `<D: Dim>` generics, following the same pattern as required indexes:
 
 ```gcl
 dag weighted_sum {
-    dimension D;
-    index I;
+    dimension D;                    // required: caller provides the dimension
+    index I;                        // required: caller provides the index
     param values: D[I];
     param weights: Dimensionless[I];
     node result: D = sum(for i: I { @values[i] * @weights[i] });
@@ -708,11 +709,50 @@ index Region = { NA, EU, APAC };
 include weighted_sum(D: Money, I: Region, values: @revenue, weights: @market_share) { result as total_revenue };
 ```
 
-**Decision:** Deferred. Start with concrete-typed DAGs + built-in functions. The required-dimension pattern is a natural extension if needed.
+#### Disambiguation: `base dimension` vs required `dimension`
 
-### Nat Generics: Deferred
+Without disambiguation, `dimension D;` is ambiguous — it could mean "define a new base dimension" or "require a dimension parameter." The solution is the `base dimension` keyword for defining new base dimensions:
 
-Covered by built-in functions for common cases (`transpose`, `dot`, `drop_last`).
+```gcl
+// New base dimension — explicit keyword, valid in any context:
+base dimension Money;
+base dimension Temperature;
+
+// Derived dimension — has a right-hand side, always unambiguous:
+dimension GravParam = Length^3 * Time^-2;
+
+// Required dimension (generic parameter) — no right-hand side, always a requirement:
+dag weighted_sum {
+    dimension D;   // unambiguous: declaration without RHS is a requirement
+}
+```
+
+The rule is context-independent: `dimension X;` (no RHS) is always a requirement. `base dimension X;` defines a new base dimension. `dimension X = ...;` defines a derived dimension.
+
+**Decision:** Design is ready. Implementation deferred — start with concrete-typed DAGs + built-in functions. Most dimension-generic operations are covered by built-ins, so the need may be limited.
+
+### Nat Generics: Syntax Sketched
+
+The required-declaration pattern extends to nat generics with `nat N;`:
+
+```gcl
+dag matmul {
+    nat M;
+    nat N;
+    nat P;
+    dimension D1;
+    dimension D2;
+    param a: D1[M, N];
+    param b: D2[N, P];
+    node result: D1 * D2[M, P] = ...;
+}
+```
+
+However, nat generics are significantly harder to implement than index or dimension generics. The difficulty is that useful nat-generic operations typically require **size arithmetic** in the type system — e.g., "input is N elements, output is N-1 elements," or "matrix multiply requires matching inner dimensions." This is a substantial type system extension.
+
+In practice, the operations that need nat generics (`dot`, `transpose`, `matmul`, `drop_last`) are better served as built-in functions where the compiler handles the size constraints internally.
+
+**Decision:** Syntax is sketched for completeness. Implementation deferred — built-in functions cover the common cases. If user-defined nat-generic DAGs are needed later, the `nat N;` required-declaration pattern is the starting point, but the constraint/arithmetic semantics need further design.
 
 ## Dependencies
 
