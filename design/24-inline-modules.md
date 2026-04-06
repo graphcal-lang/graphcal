@@ -1,12 +1,14 @@
-# Inline DAGs — Everything is a DAG
+# Inline DAGs, `const` Modifier, and the DAG-as-Module Model
 
-> Replace user-defined pure functions (`fn`) with inline `dag` definitions. A Graphcal file is a DAG; an inline `dag` block is a DAG. Built-in functions remain as the expression vocabulary. The only user-defined abstraction is the DAG.
+> Replace user-defined pure functions (`fn`) with inline `dag` definitions. Redefine `const` as a modifier (`const node`, `const unit`). Separate `import` (compile-time definitions) from `include` (DAG embedding). Unify around the principle that **a DAG is a module** — files and inline `dag` blocks are the same abstraction, navigated with a single path system.
 
 ## Status
 
-**Decision level:** Draft. Core idea accepted for exploration; syntax details need refinement. Scoping rules and `import`/`include` semantics are defined in [doc 25](./25-const-modifier-and-import-include.md).
+**Decision level:** Draft. Core idea accepted for exploration; details being refined. Emerged from discussion around [issue #334](https://github.com/shunichironomura/graphcal/issues/334) ("We don't need `const`") and the need to unify pure functions and parameterized imports.
 
 ## Motivation
+
+### Two mechanisms for the same thing
 
 Graphcal currently has two mechanisms for reusable parameterized computation:
 
@@ -16,6 +18,22 @@ Graphcal currently has two mechanisms for reusable parameterized computation:
 These solve the same fundamental problem — accepting inputs, computing derived values, producing outputs — but through different mechanisms with different syntax, scoping rules, type systems, and compiler paths.
 
 **The key insight:** A Graphcal file is already a DAG of `param`, `node`, `const`, and `index` declarations. Parameterized imports already instantiate one DAG into another. Pure functions are just a limited, expression-level version of the same thing. If we support defining named DAGs inline (not just as separate files), user-defined functions become unnecessary, and the language collapses to a single concept: **the DAG.**
+
+### The `const` question
+
+Issue #334 asks whether `const` can be removed in favor of `node`. However, `const` carries real semantic weight: it marks a value as **compile-time-known** and independent of runtime `param`s. This matters for evaluation phases, static guarantees, and — critically — scoping in inline DAGs.
+
+### Implicit visibility is an anti-pattern
+
+The original inline DAG design proposed that DAGs implicitly see `const`, `dimension`, `unit`, `type`, and `index` from enclosing scope. This is at odds with Graphcal's explicitness philosophy. Furthermore, `unit` blurs the boundary — a unit can depend on a runtime `param` (e.g., currency exchange rates), making the ad-hoc visibility list incorrect.
+
+### The unified solution
+
+Rather than three separate fixes, this document addresses all three problems together:
+
+1. **`dag` blocks** replace `fn` — one user-defined abstraction
+2. **`const` as a modifier** — principled compile-time/runtime distinction
+3. **`import`/`include` split** — explicit scoping with no implicit visibility beyond the prelude
 
 ## The Spreadsheet Model
 
@@ -29,9 +47,7 @@ Built-in functions are the **atoms of computation** — primitive operations tha
 node v: Velocity = sqrt(abs(@a - @b) + lerp(@x, @y, 0.5));
 ```
 
-This is analogous to spreadsheet formulas: `=SQRT(ABS(A1 - B1) + LERP(C1, D1, 0.5))`. The user composes built-in functions; the spreadsheet (Graphcal) evaluates them.
-
-Built-in functions can be dimension-generic (e.g., `abs` works for any dimension, `lerp` interpolates any dimension), support positional arguments, and compose freely in expressions. They are provided by the language, not defined by users.
+This is analogous to spreadsheet formulas: `=SQRT(ABS(A1 - B1) + LERP(C1, D1, 0.5))`. Built-in functions can be dimension-generic, support positional arguments, and compose freely in expressions. They are provided by the language, not defined by users.
 
 ### Layer 2: DAGs (User-Defined Reusable Computation)
 
@@ -49,7 +65,7 @@ include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
 
 ### Why This Works
 
-- **One mental model:** Users learn built-in functions (like learning spreadsheet formulas) and DAGs (like defining named sub-sheets). No "function definition" concept to learn.
+- **One mental model:** Users learn built-in functions (like spreadsheet formulas) and DAGs (like named sub-sheets). No "function definition" concept to learn.
 - **Uniform scoping:** Always `@` for DAG references. No special "function scope" where `@` is forbidden.
 - **Multi-output for free:** DAGs naturally export multiple values. No wrapper structs needed.
 - **Reactive by default:** DAG outputs participate in the reactive computation DAG.
@@ -57,9 +73,281 @@ include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
 
 ## Design
 
+### The Compile-Time / Runtime Distinction
+
+Every declaration in Graphcal falls into one of two categories:
+
+| Category | Meaning | Examples |
+| --- | --- | --- |
+| **Compile-time** | Value/definition is fully determined at compile time. Does not transitively depend on any `param`. | `dimension Length;`, `const unit km: Length = 1000.0 m;`, `const node PI_SQUARED: Dimensionless = PI * PI;` |
+| **Runtime** | Value depends (directly or transitively) on `param`s. Participates in reactive evaluation. | `param mass: Mass;`, `node force: Force = @mass * 9.81 m/s^2;`, `unit USD: Money = @usd_to_eur;` |
+
+Some declarations are **inherently compile-time** — they can never depend on runtime values:
+
+- `dimension` — defines a dimension (a type-level concept)
+- `type` — defines a type (a type-level concept)
+- `index` — defines a label set (a type-level concept, though values are indexed by it)
+
+Other declarations **can be either**, depending on whether their definition references `param`s:
+
+- `node` — compile-time if its expression only references other compile-time values; runtime otherwise
+- `unit` — compile-time if its scale factor is a compile-time expression; runtime if it depends on a `param`
+
+`param` is **always runtime** — it is, by definition, a user-adjustable input. `const param` is a compile error.
+
+### `const` as a Modifier
+
+The `const` keyword becomes a modifier that the user places on a declaration to **assert** "this is compile-time." The compiler verifies the assertion — if a `const`-marked declaration transitively depends on a `param`, it is a compile error.
+
+`const` must be explicit. Even if a `node` happens not to depend on any `param`, the compiler does **not** automatically treat it as compile-time. The user must write `const` to opt in. This ensures that adding a `param` dependency later produces a compile error at the declaration site, rather than silently changing the node's phase and breaking downstream `import` statements.
+
+```gcl
+// Compile-time node (replaces today's `const` declaration)
+const node R_EARTH: Length = 6371.0 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+
+// Compile-time unit (fixed conversion factor)
+const unit km: Length = 1000.0 m;
+
+// Runtime unit (depends on param)
+param usd_to_eur: Dimensionless = 0.92;
+unit USD: Money = @usd_to_eur EUR;
+
+// Runtime node (depends on param)
+param alt: Length = 400.0 km;
+node velocity: Velocity = sqrt(GM_EARTH / (R_EARTH + @alt));
+
+// ERROR: const node depends on a param
+// const node bad: Length = @alt + 1.0 m;
+
+// ERROR: const param is a contradiction
+// const param x: Length = 5.0 m;
+```
+
+**Constness propagates through unit references in expressions.** A literal like `1000.0 USD` implicitly multiplies by the unit's scale factor. If `USD` is a runtime unit, the expression is runtime. The compiler must trace constness through unit scale factors, not just `@`-references.
+
+```gcl
+// ERROR: const node uses a runtime unit
+// const node budget: Money = 1000.0 USD;
+//                                   ^^^ USD depends on param usd_to_eur
+```
+
+Today's standalone `const` declaration (`const GM_EARTH: GravParam = ...;`) becomes `const node GM_EARTH: GravParam = ...;`. This unifies the concept: a `const node` is a node that happens to be compile-time-known, participating in the same dependency tracking with the `const` modifier adding a static guarantee.
+
+### DAG = Module
+
+**A DAG is Graphcal's module.** This is the core organizational principle:
+
+- A `.gcl` file is a DAG (and therefore a module).
+- An inline `dag` block is a DAG (and therefore a module).
+- There is **no semantic difference** between a file DAG and an inline DAG. If you extract an inline DAG into its own file (or inline a file DAG), the semantics are identical — only the path used by importers changes.
+
+This means the module tree is a tree of DAGs, with the file system providing one possible physical layout:
+
+```
+myproject/
+  constants.gcl              → module: constants
+    dag earth { ... }        → module: constants/earth
+    dag mars { ... }         → module: constants/mars
+  orbital/
+    mechanics.gcl            → module: orbital/mechanics
+      dag inner { ... }      → module: orbital/mechanics/inner
+```
+
+File boundaries and inline DAG boundaries are interchangeable. The path system navigates the module tree uniformly.
+
+### Why `dag`, Not `graph`
+
+The keyword is `dag`, not `graph`, for two reasons:
+
+1. **Precision.** Acyclicity is a core language invariant — it is what makes reactive evaluation well-defined. When something is known to be a DAG, calling it a "graph" under-communicates this guarantee. In practice, people say "DAG" when they mean DAG (build DAGs, git DAGs, dependency DAGs).
+2. **Disambiguation.** "A Graphcal graph" is redundant; "a Graphcal DAG" is clear. Documentation, tutorials, and conversations benefit from the keyword being distinct from the language name.
+
+### `import` vs `include`
+
+The current `import` mechanism serves dual purposes: it both brings names into scope and instantiates sub-DAGs. This conflation is the root cause of the scoping confusion in inline DAGs.
+
+We separate these into two mechanisms:
+
+| Mechanism | Purpose | What it does | What can be referenced |
+| --- | --- | --- | --- |
+| `import` | **Definition import** | Brings a compile-time name into scope. No instantiation, no sub-DAG, no wiring. | `dimension`, `type`, `index`, `const node`, `const unit`, `dag` (the definition, not an instance) |
+| `include` | **DAG embedding** | Instantiates a DAG as a sub-DAG, wires params, produces runtime node values. | Runtime `node` values from the instantiated DAG |
+
+The keyword choice follows [Typst's convention](https://typst.app/docs/reference/scripting/#modules): `import` for bringing names into scope, `include` for embedding content.
+
+`import` brings a **name** into scope, not a **value**. Compile-time items have a single, fixed value (or are purely type-level), so "bringing the name into scope" is unambiguous. Runtime items are reactive — "importing" a runtime node would create a hidden dependency, violating the principle that a DAG's runtime dependencies are explicit in its parameter list. Runtime values must be wired through `param`s via `include`.
+
+`import` of compile-time values does **not** create per-instance copies. When a DAG is instantiated multiple times via `include`, the `import`ed compile-time values are shared.
+
+### Module Path System
+
+A single path system navigates the module tree, whether the target is in another file, an inline DAG, or the enclosing scope:
+
+| Path form | Meaning | Example |
+| --- | --- | --- |
+| `name/name` | Absolute path within a package | `constants/earth` |
+| `"./path.gcl"` | Relative file path (unpackaged files) | `"./constants.gcl"` |
+| `"../path.gcl"` | Relative file path going up (unpackaged, must stay within compilation root) | `"../shared/constants.gcl"` |
+| `..` | Parent scope (enclosing DAG) | `..` |
+| `../..` | Grandparent scope | `../..` |
+| `path/dag_name` | Sub-DAG within a file or module | `constants/earth`, `"./constants.gcl"/earth` |
+
+For **packaged code**, all paths are bare (no quotes) and resolved from the package root. `..` navigates up the module tree — whether crossing file or inline DAG boundaries:
+
+```gcl
+// In package myproject, file orbital/mechanics.gcl:
+import constants/earth { GM, R };                // absolute: another module
+import ../constants/earth { GM, R };             // relative: up to orbital/, then into constants/earth
+import .. { X };                                 // parent scope (inline DAG context)
+```
+
+For **unpackaged code**, file references use quoted paths. `..` inside inline DAGs still works for scope traversal:
+
+```gcl
+// Unpackaged file:
+import "./constants.gcl" { GM, R };              // file reference
+import "../shared/constants.gcl" { X };          // file reference going up (within compilation root)
+import "./constants.gcl"/earth { GM, R };        // sub-DAG within a file
+
+dag my_dag {
+    import .. { GM_EARTH };                      // parent scope (file-level)
+}
+```
+
+The compiler rejects any path that escapes the compilation root directory.
+
+### Inline DAG Declaration
+
+A `dag` block defines a reusable sub-DAG within a file:
+
+```gcl
+dag orbital_velocity {
+    param gm: GravParam;
+    param r: Length;
+    node v: Velocity = sqrt(@gm / @r);
+}
+```
+
+A `dag` block can contain the same declarations as a file — `param`, `node`, `const node`, `assert`, `type`, `dimension`, `unit`, `index` — because a file *is* a DAG. An inline `dag` block is simply a named DAG defined within another DAG.
+
+### DAG Parameterization: Not Just Params
+
+**All DAGs are parameterized the same way.** Whether a DAG is a file or an inline block, the caller can inject not just `param` values but also `index` definitions (see [doc 23](./23-injectable-index-import.md)). A DAG can declare **required** declarations that the caller must provide:
+
+| Declaration | With default (self-contained) | Required (caller must provide) |
+| --- | --- | --- |
+| `param` | `param x: Length = 5.0 m;` | `param x: Length;` |
+| Named index | `index Phase = { A, B, C };` | `index Phase;` |
+| Range index | `index T = linspace(0.0 s, 1.0 s, step: 0.1 s);` | `index T: Time;` |
+
+This means **Index generics are already solved** without any special generic syntax. A DAG with a required index is inherently index-generic:
+
+```gcl
+dag total_cost {
+    index I;                                    // required named index
+    param cost: Dimensionless[I];
+    node total: Dimensionless = sum(for i: I { @cost[i] });
+}
+
+index Subsystem = { ADCS, Propulsion, Comms };
+param sub_cost: Dimensionless[Subsystem] = { ... };
+
+// Caller provides both index and param bindings:
+include total_cost(I: Subsystem, cost: @sub_cost) { total };
+```
+
+The binding syntax distinguishes the two kinds by naming convention:
+
+- **PascalCase: PascalCase** → index binding (`I: Subsystem`)
+- **snake_case: expr** → param binding (`cost: @sub_cost`)
+
+### Instantiation with `include`
+
+DAGs are instantiated using `include` with **named arguments**. Named arguments are required (not positional), aligning with Graphcal's explicitness philosophy. This also visually distinguishes DAG instantiation (named args via `include`) from built-in function calls (positional args in expressions).
+
+`include` supports two forms: **selective import** (bind specific nodes into the current scope) and **namespace import** (bind the entire instance under a name, access members with `::`).
+
+```gcl
+// Selective import — bind specific nodes:
+include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
+include hohmann(gm: GM_EARTH, r1: R_EARTH + @alt1, r2: R_EARTH + @alt2) { dv1, dv2, total_dv };
+
+// Selective import with renaming:
+include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v as orbital_v };
+
+// Namespace import — access members with :::
+include thermal(material: @mat, area: @panel_area) as thermal;
+node q: Power = @thermal::heat_flux * @panel_area;
+node t: Temperature = @thermal::surface_temp;
+
+// From another module:
+include rocket/tsiolkovsky(dry_mass: @my_dry, fuel_mass: @my_fuel, isp: @my_isp) as r;
+node dv: Velocity = @r::delta_v;
+```
+
+DAG calls **cannot** appear in expression position. All DAG instantiation goes through `include` — there is no implicit "return value," no `result` convention, and no `output` keyword. This keeps a single, explicit mechanism for DAG instantiation.
+
+### Scoping Rules for Inline DAGs
+
+With `import` and `include` separated, the scoping rules become simple and explicit:
+
+1. **Prelude**: Always available (SI dimensions, units, builtin functions, builtin constants like `PI`). This is a well-defined, documented set.
+2. **`import` declarations**: Compile-time items explicitly brought into scope.
+3. **Own declarations**: The DAG's own `param`, `node`, `const node`, etc.
+4. **Nothing else implicit**: No declarations from enclosing scope leak in unless explicitly `import`ed.
+
+```gcl
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
+param alt: Length = 400.0 km;
+
+dag circular_velocity {
+    import .. { GM_EARTH, R_EARTH };  // explicit: compile-time values from enclosing scope
+
+    param alt: Length;
+    // GravParam, Length, Velocity — from prelude, no `import` needed
+    // GM_EARTH, R_EARTH — from `import` above
+    // @alt — own param
+    node v: Velocity = sqrt(GM_EARTH / (R_EARTH + @alt));
+}
+
+include circular_velocity(alt: @alt) { v };
+```
+
+### Reference Syntax
+
+The `@` sigil convention:
+
+- **`@name`** — references runtime values (`param`, non-const `node`) within DAG scope.
+- **Bare `name`** — references compile-time values (`const node`, `const unit`, dimensions, types, indexes, builtin constants, builtin functions).
+
+This preserves the current convention and provides instant visual feedback about the compile-time/runtime boundary at every use site:
+
+```gcl
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+param alt: Length = 400.0 km;
+
+// GM_EARTH is bare (compile-time), @alt has @ (runtime)
+node velocity: Velocity = sqrt(GM_EARTH / (R_EARTH + @alt));
+```
+
+The `const` modifier determines the reference syntax: `const node GM_EARTH` is compile-time → bare `GM_EARTH`. Non-const `node velocity` is runtime → `@velocity`.
+
+### Prelude
+
+The prelude provides the baseline vocabulary available everywhere without explicit `import`:
+
+- **SI base and derived dimensions**: `Length`, `Mass`, `Time`, `Velocity`, `Force`, etc.
+- **SI base and derived units**: `m`, `kg`, `s`, `km`, `N`, `J`, `W`, etc.
+- **Builtin constants**: `PI`, `E` (Euler's number), etc.
+- **Builtin functions**: `sqrt`, `abs`, `sin`, `cos`, `min`, `max`, `sum`, etc.
+
+Everything in the prelude is compile-time by nature. The prelude is the only source of implicit visibility — a fixed, documented set, not a scoping rule that depends on context. User-defined compile-time items must be explicitly `import`ed.
+
 ### Built-in Function Library
 
-The built-in function library is expanded to cover common generic operations that would otherwise require user-defined generic abstractions. These are the "spreadsheet functions" of Graphcal:
+The built-in function library is expanded to cover common generic operations that would otherwise require user-defined generic abstractions:
 
 **Math (dimension-generic where applicable):**
 
@@ -102,151 +390,46 @@ The built-in function library is expanded to cover common generic operations tha
 | `dot(a, b)` | `(D1[N], D2[N]) -> D1*D2` | Dot product |
 | `transpose(a)` | `D[M, N] -> D[N, M]` | Matrix transpose |
 
-This list is not exhaustive. The standard library can grow over time. The key principle is: **if a computation is generic and broadly useful, it should be a built-in function, not a user-defined DAG.**
+This list is not exhaustive. The key principle is: **if a computation is generic and broadly useful, it should be a built-in function, not a user-defined DAG.**
 
-### Inline DAG Declaration
+### Extracting and Inlining: A Pure Refactoring
 
-A `dag` block defines a reusable sub-DAG within a file:
+Because a DAG is a module regardless of whether it's a file or an inline block, extraction and inlining are mechanical refactorings:
 
 ```gcl
-dag orbital_velocity {
-    param gm: GravParam;
-    param r: Length;
-    node v: Velocity = sqrt(@gm / @r);
+// Before: rocket.gcl (separate file)
+param dry_mass: Mass;
+param fuel_mass: Mass;
+param isp: Time;
+node v_exhaust: Velocity = @isp * G0;
+node delta_v: Velocity = @v_exhaust * ln((@dry_mass + @fuel_mass) / @dry_mass);
+```
+
+```gcl
+// After: inlined into the importing file
+dag tsiolkovsky {
+    param dry_mass: Mass;
+    param fuel_mass: Mass;
+    param isp: Time;
+    node v_exhaust: Velocity = @isp * G0;
+    node delta_v: Velocity = @v_exhaust * ln((@dry_mass + @fuel_mass) / @dry_mass);
 }
 ```
 
-A `dag` block can contain the same declarations as a file — `param`, `node`, `const node`, `assert`, `type`, `dimension`, `unit`, `index` — because a file *is* a DAG. An inline `dag` block is simply a named DAG defined within another DAG.
+The only change for importers is the path. The DAG's semantics are identical.
 
-### DAG = Module
+## Summary of Changes
 
-A DAG is Graphcal's module. See [doc 25](./25-const-modifier-and-import-include.md) for the full design of the DAG-as-module model, including:
-
-- The unified module path system (`/` navigates down, `..` navigates up)
-- `import` for compile-time definitions, `include` for DAG embedding
-- Scoping rules for inline DAGs
-- Reference syntax (`@` for runtime, bare for compile-time)
-
-### DAG Parameterization: Not Just Params
-
-A key design principle: **all DAGs are parameterized the same way.** Whether a DAG is a file or an inline block, the caller can inject not just `param` values but also `index` definitions (see [23-injectable-index-import](./23-injectable-index-import.md)). A DAG can declare **required** declarations that the caller must provide:
-
-| Declaration | With default (self-contained) | Required (caller must provide) |
+| Current | Proposed | Rationale |
 | --- | --- | --- |
-| `param` | `param x: Length = 5.0 m;` | `param x: Length;` |
-| Named index | `index Phase = { A, B, C };` | `index Phase;` |
-| Range index | `index T = linspace(0.0 s, 1.0 s, step: 0.1 s);` | `index T: Time;` |
-
-This means **Index generics are already solved** without any special generic syntax. A DAG with a required index is inherently index-generic:
-
-```gcl
-dag total_cost {
-    index I;                                    // required named index
-    param cost: Dimensionless[I];
-    node total: Dimensionless = sum(for i: I { @cost[i] });
-}
-
-index Subsystem = { ADCS, Propulsion, Comms };
-param sub_cost: Dimensionless[Subsystem] = { ... };
-
-// Caller provides both index and param bindings:
-include total_cost(I: Subsystem, cost: @sub_cost) { total };
-```
-
-The binding syntax distinguishes the two kinds by naming convention (same as parameterized imports of file DAGs):
-
-- **PascalCase: PascalCase** → index binding (`I: Subsystem`)
-- **snake_case: expr** → param binding (`cost: @sub_cost`)
-
-### Instantiation Syntax
-
-DAGs are instantiated using `include` with **named arguments**:
-
-```gcl
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
-```
-
-Named arguments are required (not positional). This aligns with Graphcal's explicitness philosophy — readers can understand what each argument means without looking up the DAG definition. It also visually distinguishes DAG instantiation (named args via `include`) from built-in function calls (positional args in expressions):
-
-```gcl
-// Built-in function: positional args, in expression
-node v1: Velocity = sqrt(@gm / @r);
-
-// DAG instantiation: named args, via include
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
-```
-
-DAG calls **cannot** appear in expression position. All instantiation goes through `include`. See [doc 25](./25-const-modifier-and-import-include.md) for the rationale.
-
-### Multi-Output DAGs
-
-DAGs naturally export multiple values. Use `include` with selective imports or namespace access:
-
-```gcl
-dag hohmann {
-    param gm: GravParam;
-    param r1: Length;
-    param r2: Length;
-    node v1: Velocity = sqrt(@gm / @r1);
-    node v2: Velocity = sqrt(@gm / @r2);
-    node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
-    node dv2: Velocity = @v2 - sqrt(2.0 * @gm * @r1 / (@r2 * (@r1 + @r2)));
-    node total_dv: Velocity = @dv1 + @dv2;
-}
-
-// Selective import:
-include hohmann(gm: GM_EARTH, r1: R_EARTH + @alt1, r2: R_EARTH + @alt2) { dv1, dv2, total_dv };
-
-// Or namespace access:
-include hohmann(gm: GM_EARTH, r1: R_EARTH + @alt1, r2: R_EARTH + @alt2) as h;
-node total: Velocity = @h::total_dv;
-node ratio: Dimensionless = @h::dv1 / @h::dv2;
-```
-
-### Intermediate Values
-
-Where functions use `let` bindings, DAGs use `node` declarations:
-
-```gcl
-// Current function:
-fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult {
-    let v1 = sqrt(gm / r1);
-    let v2 = sqrt(gm / r2);
-    TransferResult { dv1, dv2, total_dv: dv1 + dv2 }
-}
-
-// As a DAG:
-dag hohmann {
-    param gm: GravParam;
-    param r1: Length;
-    param r2: Length;
-    node v1: Velocity = sqrt(@gm / @r1);
-    node v2: Velocity = sqrt(@gm / @r2);
-    node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
-    node dv2: Velocity = ...;
-    node total_dv: Velocity = @dv1 + @dv2;
-}
-```
-
-Intermediate values (`v1`, `v2`) become `node` declarations with explicit type annotations. This is consistent with Graphcal's philosophy: every value has an explicit type, and every intermediate is a named node in the DAG.
-
-### Everything is a DAG
-
-A Graphcal file is a DAG. An inline `dag` block is a DAG. They share the same structure (declarations), the same parameterization mechanism (required params, required indexes), and the same instantiation mechanism (`include` with bindings). The only differences are syntactic:
-
-| Aspect | File DAG | Inline DAG |
-| --- | --- | --- |
-| Declaration | Implicit (`.gcl` file) | `dag name { ... }` |
-| Path in `import`/`include` | File path or module path | Bare identifier or module path |
-
-An inline DAG is simply a DAG defined inside another DAG, rather than in its own file. Extracting an inline DAG into its own file (or inlining a file DAG) is a pure refactoring — the semantics are identical.
-
-The terminology is now uniform:
-
-- **DAG**: A directed acyclic graph of declarations (`param`, `node`, `const node`, `index`, etc.). Every `.gcl` file is a DAG. Every `dag` block is a DAG.
-- **`import`**: Brings compile-time definitions into scope.
-- **`include`**: Instantiates one DAG into another, with param and index bindings.
-- **Built-in function**: An atom of computation used within node expressions. Not a DAG.
+| `fn` keyword for user-defined functions | `dag` block — the only user-defined abstraction | One concept instead of two |
+| `const X: T = expr;` (separate declaration kind) | `const node X: T = expr;` (modifier on `node`) | `const` is a property, not a category |
+| All units are implicitly compile-time for scoping | `const unit` vs `unit` — explicit | Units can depend on runtime params |
+| Implicit visibility of `const`/`dimension`/`unit`/`type`/`index` in inline DAGs | Explicit `import` declarations + prelude | No implicit scoping beyond the prelude |
+| `import` serves dual purpose (definition import + DAG embedding) | `import` for compile-time definitions, `include` for DAG embedding | Principled separation of concerns |
+| `graph` keyword | `dag` keyword | Precision (acyclicity is a core invariant) and disambiguation from language name |
+| File DAGs and inline DAGs have different semantics | DAG = Module — uniform semantics | Extraction/inlining is a pure refactoring |
+| Ad-hoc path syntax | Unified module path system (`/` navigates down, `..` navigates up) | One path system for all references |
 
 ### What Gets Removed
 
@@ -258,7 +441,7 @@ The terminology is now uniform:
 | User-defined function registry (`FunctionRegistry`) | DAG registry |
 | Recursion detection on functions | Recursion detection on DAG instantiation |
 | `<I: Index>` function generics | Required index declarations (`index I;`) in DAG body |
-| `FnGenericParam` / `FnGenericConstraint` | Required declarations + built-in functions (Dim/Nat generics deferred, see Future Extensions) |
+| `FnGenericParam` / `FnGenericConstraint` | Required declarations + built-in functions (Dim/Nat generics deferred) |
 | Function evaluation (`eval_builtin_or_user_fn` for user fns) | DAG instantiation (sub-DAG creation + wiring) |
 | User-defined `abs`, `lerp`, `clamp` | Promoted to built-in functions |
 
@@ -322,7 +505,6 @@ include hohmann(gm: GM_EARTH, r1: R_EARTH + @alt1, r2: R_EARTH + @alt2) { dv1, d
 ### Index-Parameterized DAG
 
 ```gcl
-// DAG with required index — reusable over any label set
 dag power_budget {
     index Component;                        // required: caller provides the label set
     param power_draw: Power[Component];
@@ -330,7 +512,6 @@ dag power_budget {
     node max_draw: Power = max(for c: Component { @power_draw[c] });
 }
 
-// Instantiate with different indexes:
 index Avionics = { IMU, StarTracker, GPS };
 index Propulsion = { Thruster, Valve, Tank };
 
@@ -340,23 +521,30 @@ include power_budget(Component: Propulsion, power_draw: @prop_power) as prop_bud
 node total: Power = @av_budget::total_power + @prop_budget::total_power;
 ```
 
-This is the same mechanism as injectable indexes in file DAGs ([doc 23](./23-injectable-index-import.md)), applied to inline DAGs. No special generic syntax needed — the `index Component;` declaration is the "type parameter."
-
-### Generic Operations Use Built-in Functions
+### Scoping with `import` and `include`
 
 ```gcl
-// No user-defined generic needed — abs, lerp, clamp are all built-in:
-node d: Length = abs(@a - @b);
-node mid: Length = lerp(@x, @y, 0.5);
-node safe: Force = clamp(@thrust, @min_thrust, @max_thrust);
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
 
-// Compose freely:
-node v: Velocity = sqrt(abs(@a) + lerp(@b, @c, 0.5));
+dag circular_velocity {
+    import .. { GM_EARTH, R_EARTH };  // explicit compile-time import
+
+    param alt: Length;
+    node v: Velocity = sqrt(GM_EARTH / (R_EARTH + @alt));
+}
+
+dag outer {
+    const node B: Dimensionless = 2.0;
+
+    dag inner {
+        import .. { B };              // from outer
+        import ../.. { GM_EARTH };    // from file scope
+    }
+}
 ```
 
 ### Reuse Across Files
-
-An inline DAG in one file can be imported by another file, just like any other declaration:
 
 ```gcl
 // rocket.gcl
@@ -375,6 +563,102 @@ import rocket { tsiolkovsky };
 include tsiolkovsky(dry_mass: @my_dry_mass, fuel_mass: @my_fuel, isp: @my_isp) { delta_v };
 ```
 
+### `const` and `import` Interaction
+
+```gcl
+// earth.gcl
+dag earth {
+    const node GM: GravParam = 3.986004418e5 km^3/s^2;
+    const node R: Length = 6371.0 km;
+    param surface_temp: Temperature = 288.0 K;
+}
+
+// main.gcl — import const values without instantiation
+import earth { GM, R };           // OK: const values, no instantiation needed
+// import earth { surface_temp }; // ERROR: runtime value, must use include
+```
+
+## Settled Design Decisions
+
+### `private` keyword
+
+Deferred. Visibility control will be designed separately. For now, all declarations are public.
+
+### Re-exports
+
+Allowed. If a DAG imports a compile-time item, that item becomes part of the DAG's public scope and can be imported by others through that DAG's path:
+
+```gcl
+// facade.gcl — re-exports from multiple sources
+import constants/earth { GM_EARTH, R_EARTH };
+import constants/mars { GM_MARS, R_MARS };
+// Consumers can now: import facade { GM_EARTH, GM_MARS };
+```
+
+### Glob imports
+
+Prohibited. All imports must name their items explicitly.
+
+### Namespace access syntax
+
+`::` is used at use sites to access members of a namespaced `include` (e.g., `@r::delta_v`). `/` is used in `import`/`include` paths to navigate the module tree. `/` is for *finding* a module, `::` is for *accessing* its members.
+
+### Declaration ordering
+
+Does not matter. A DAG is a set of declarations — the compiler resolves the topological order. Forward references are valid.
+
+### Importing `const` values from inside a DAG
+
+Allowed without instantiation. Evaluating `const` values is not "instantiation." This works even if the DAG has required params — `const` values are independent of params by definition.
+
+### `const index`
+
+Not introduced. All indexes are inherently compile-time. Injectable indexes are resolved at compile time (monomorphization).
+
+### `const` on `dag` definitions
+
+Deferred. Minimal gain over separate files/DAGs of `const node` declarations.
+
+### `include` without param bindings
+
+Deferred. Empty parens required for now: `include my_dag() { x }`.
+
+### Type-level items in inline DAGs
+
+User-defined type-level items (`dimension`, `type`) must be explicitly `import`ed. Only the prelude is implicit:
+
+```gcl
+dimension GravParam = Length^3 * Time^-2;
+
+dag circular_velocity {
+    import .. { GravParam };  // required — user-defined dimension
+    param gm: GravParam;
+    param r: Length;
+    node v: Velocity = sqrt(@gm / @r);
+}
+```
+
+### Circular `const` dependencies
+
+Compile error. The compiler topologically sorts all compile-time declarations and rejects cycles.
+
+### Prelude shadowing
+
+Compile error. Silently overriding `m` or `kg` could cause subtle calculation errors.
+
+### No expression-position DAG calls
+
+All DAG instantiation goes through `include`. No implicit return value, no `result` convention, no `output` keyword.
+
+```gcl
+// NOT allowed:
+// node v: Velocity = orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) * 2.0;
+
+// Instead:
+include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @alt) { v };
+node result: Velocity = @v * 2.0;
+```
+
 ## Open Questions
 
 ### Semantics
@@ -383,13 +667,13 @@ include tsiolkovsky(dry_mass: @my_dry_mass, fuel_mass: @my_fuel, isp: @my_isp) {
 
 2. **Assertions inside DAGs:** If a DAG contains `assert` declarations, are they evaluated at each instantiation? (Proposal: yes. Assertions are part of the DAG's contract.)
 
-3. **Recursive DAG instantiation:** A DAG instantiating itself (directly or mutually) must be detected and rejected, same as current function recursion detection.
+3. **Recursive DAG instantiation:** A DAG instantiating itself (directly or mutually) must be detected and rejected.
 
 ### Built-in Library Boundary
 
-4. **Where is the line between built-in and user-defined?** The built-in library should cover generic, broadly-useful operations. Domain-specific calculations (rocket equation, orbital mechanics, thermal analysis) are user DAGs. But what about operations like `normalize`, `cross`, `weighted_sum`? The boundary needs to be drawn carefully to avoid an ever-growing built-in library while ensuring users don't need DAG generics for common math.
+4. **Where is the line between built-in and user-defined?** Domain-specific calculations are user DAGs. But what about `normalize`, `cross`, `weighted_sum`?
 
-5. **Can users request new built-ins?** Should there be a mechanism for users to propose additions to the built-in function library, or is this a language-level decision only?
+5. **Can users request new built-ins?** Language-level decision only, or is there a proposal mechanism?
 
 ### Migration
 
@@ -397,17 +681,15 @@ include tsiolkovsky(dry_mass: @my_dry_mass, fuel_mass: @my_fuel, isp: @my_isp) {
 
 ## Generics Status
 
-The "required declarations" pattern (same mechanism as parameterized file imports) covers generics as follows:
-
 | Generic kind | Current `fn` syntax | Inline DAG equivalent | Status |
 | --- | --- | --- | --- |
 | Index | `<I: Index>` | `index I;` (required index) | **Solved** — same mechanism as injectable indexes |
 | Dim | `<D: Dim>` | `dimension D;` (required dimension)? | **Open** — see below |
-| Nat | `<N: Nat>` | No obvious required-declaration equivalent | **Deferred** — covered by built-in functions for common cases |
+| Nat | `<N: Nat>` | No obvious required-declaration equivalent | **Deferred** — covered by built-in functions |
 
 ### Index Generics: Solved
 
-Required indexes (`index I;`, `index T: Time;`) work identically to `<I: Index>` function generics. The compiler already has index substitution machinery from injectable indexes. No new design needed.
+Required indexes (`index I;`, `index T: Time;`) work identically to `<I: Index>` function generics. No new design needed.
 
 ### Dimension Generics: Open Question
 
@@ -415,62 +697,30 @@ Could a "required dimension" declaration serve as `<D: Dim>` generics?
 
 ```gcl
 dag weighted_sum {
-    dimension D;                    // required: caller provides the dimension
-    index I;                        // required: caller provides the index
+    dimension D;
+    index I;
     param values: D[I];
     param weights: Dimensionless[I];
     node result: D = sum(for i: I { @values[i] * @weights[i] });
 }
 
-// Caller provides dimension and index:
 index Region = { NA, EU, APAC };
 include weighted_sum(D: Money, I: Region, values: @revenue, weights: @market_share) { result as total_revenue };
 ```
 
-This follows the same "required declaration" pattern as indexes. The dimension is declared without a definition inside the DAG, and the caller binds it at instantiation.
-
-**Arguments for:**
-
-- Consistent with the required-index pattern — no new concept, just extending to another declaration kind
-- The compiler already has dimension substitution in type expressions (analogous to `substitute_type_expr_index_names`)
-- Avoids a separate generic syntax (`<D: Dim>`) that only applies to DAGs
-
-**Arguments against:**
-
-- Dimensions are structural (products of base dimensions), not named entities like indexes. `D: Money` at the call site is a binding, but unlike index binding (which replaces a name), dimension binding replaces a structural type — the substitution semantics are different.
-- Inference is important: `lerp(@x, @y, 0.5)` should infer `D = Length` from `@x: Length` without the caller writing `D: Length`. Can required dimensions support inference? (Possibly: if all required-dimension params are bound with expressions, the compiler can infer the dimension from the expression types.)
-- Most dimension-generic operations are covered by built-in functions, so the need may be limited.
-
-**Decision:** Deferred. Start with concrete-typed DAGs + built-in functions. If real-world usage demonstrates the need for user-defined dimension-generic DAGs, the required-dimension pattern is a natural extension.
+**Decision:** Deferred. Start with concrete-typed DAGs + built-in functions. The required-dimension pattern is a natural extension if needed.
 
 ### Nat Generics: Deferred
 
-Nat generics (`<N: Nat>`) are used for size-polymorphic operations like `transpose`, `dot`, `drop_last`. These are covered by built-in functions. If user-defined nat-generic DAGs are needed later, the mechanism could be a "required nat" declaration, though the syntax is less obvious than for indexes or dimensions.
+Covered by built-in functions for common cases (`transpose`, `dot`, `drop_last`).
 
-## Future Extensions
+## Dependencies
 
-### Required Dimensions in File DAGs
-
-File DAGs already support required indexes. Extending to required dimensions would be a natural evolution:
-
-```gcl
-// lib.gcl — a file DAG with required index and dimension
-dimension D;
-index I;
-param values: D[I];
-param weights: Dimensionless[I];
-node result: D = sum(for i: I { @values[i] * @weights[i] });
-```
-
-This is already how required indexes work in file DAGs today. Extending to required dimensions would make file DAGs and inline DAGs fully equivalent in their parameterization capabilities.
-
-## Dependencies on Other Aspects
-
-- **[25 — `const` Modifier, `import`/`include`](./25-const-modifier-and-import-include.md)**: Defines the `import`/`include` split, scoping rules, module path system, and reference syntax that this design depends on.
-- **Computation Model** ([01](./01-computation-model.md)): Inline DAGs are sub-DAGs within the computation DAG.
-- **Scoping** ([08](./08-scoping.md)): `@` resolution within DAG bodies.
-- **Namespace & Multi-File** ([09](./09-namespace.md)): DAG imports integrate with the existing import system.
-- **Indexes** ([07](./07-indexes.md)): Injectable indexes as a precedent for DAG parameterization.
-- **Injectable Index Import** ([23](./23-injectable-index-import.md)): DAG-level index parameterization.
-- **Pure Functions** ([12](./12-pure-functions.md)): This design supersedes doc 12.
-- **Type System Stratification** ([20](./20-type-system-stratification.md)): DAGs are declarations, not types.
+- **[01 — Computation Model](./01-computation-model.md)**: Redefines the `const` evaluation phase. Inline DAGs are sub-DAGs within the computation DAG.
+- **[04 — Dimensions & Units](./04-dimensions-and-units.md)**: `const unit` vs runtime `unit` distinction.
+- **[07 — Indexes](./07-indexes.md)**: Injectable indexes as a precedent for DAG parameterization.
+- **[08 — Scoping](./08-scoping.md)**: Reference syntax — bare names for compile-time, `@` for runtime.
+- **[09 — Namespace & Multi-File](./09-namespace.md)**: `import`/`include` split replaces the current single `import`. Unified module path system supersedes current conventions.
+- **[12 — Pure Functions](./12-pure-functions.md)**: This design supersedes doc 12.
+- **[20 — Type System Stratification](./20-type-system-stratification.md)**: DAGs are declarations, not types.
+- **[23 — Injectable Index Import](./23-injectable-index-import.md)**: DAG-level index parameterization. All indexes are inherently compile-time.
