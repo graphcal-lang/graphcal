@@ -53,7 +53,7 @@ Each aspect of the language design is documented in a separate file for independ
 | [11](./11-system-dynamics.md) | System Dynamics | Mostly settled | Temporal simulation via `scan` pattern (Vensim replacement) |
 | [12](./12-pure-functions.md) | Pure Functions | Design complete | `fn` keyword, purity via `@` prohibition |
 | [24](./24-inline-modules.md) | **Inline Graphs** | Draft | Replace `fn` with inline `graph` blocks — everything is a graph |
-| [25](./25-const-modifier-and-use-import.md) | **`const` Modifier & `use` Import** | Draft | `const` as modifier (`const node`, `const unit`), `use` vs `import` for compile-time vs runtime |
+| [25](./25-const-modifier-and-import-include.md) | **`const` Modifier & `import`/`include`** | Draft | `const` as modifier (`const node`, `const unit`), `import` vs `include` for compile-time vs runtime |
 
 ### Tooling & Ecosystem
 
