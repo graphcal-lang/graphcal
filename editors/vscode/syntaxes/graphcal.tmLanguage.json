@@ -8,6 +8,7 @@
     { "include": "#attribute" },
     { "include": "#fn-declaration" },
     { "include": "#type-declaration" },
+    { "include": "#base-dimension-declaration" },
     { "include": "#dimension-declaration" },
     { "include": "#unit-declaration" },
     { "include": "#index-declaration" },
@@ -75,6 +76,15 @@
       "captures": {
         "1": { "name": "keyword.declaration.type.graphcal" },
         "2": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "base-dimension-declaration": {
+      "match": "\\b(base)\\s+(dimension)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.dimension.graphcal" },
+        "2": { "name": "keyword.declaration.dimension.graphcal" },
+        "3": { "name": "entity.name.type.graphcal" }
       }
     },
 

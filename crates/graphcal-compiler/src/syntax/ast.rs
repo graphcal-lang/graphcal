@@ -64,6 +64,7 @@ pub enum DeclKind {
     Param(ParamDecl),
     Node(NodeDecl),
     ConstNode(ConstNodeDecl),
+    BaseDimension(BaseDimDecl),
     Dimension(DimDecl),
     Unit(UnitDecl),
     Type(TypeDecl),
@@ -354,12 +355,17 @@ pub struct ConstNodeDecl {
     pub value: Expr,
 }
 
-/// Dimension declaration: `dimension Velocity = Length / Time;`
+/// Base dimension declaration: `base dimension Length;`
+#[derive(Debug, Clone)]
+pub struct BaseDimDecl {
+    pub name: Spanned<DimName>,
+}
+
+/// Derived dimension declaration: `dimension Velocity = Length / Time;`
 #[derive(Debug, Clone)]
 pub struct DimDecl {
     pub name: Spanned<DimName>,
-    /// `None` for base dimensions: `dimension Length;`
-    pub definition: Option<DimExpr>,
+    pub definition: DimExpr,
 }
 
 /// Unit declaration: `unit km: Length = 1000 m;` or `const unit km: Length = 1000 m;`
@@ -1137,7 +1143,8 @@ pub fn desugar_tuple_matches(file: &mut File) {
                     desugar_expr(&mut field.value);
                 }
             }
-            DeclKind::Dimension(_)
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
             | DeclKind::Index(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)

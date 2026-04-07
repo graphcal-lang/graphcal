@@ -1442,12 +1442,11 @@ fn register_declarations_impl(
     // Also collect derived dims, units, and dependent indexes for later phases.
     for decl in &file.declarations {
         match &decl.kind {
+            DeclKind::BaseDimension(d) if should_register(d.name.value.as_str()) => {
+                register_base_dimension_decl(d, registry, file_path);
+            }
             DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
-                if d.definition.is_some() {
-                    derived_dims.push(d);
-                } else {
-                    register_dimension_decl(d, registry, src, file_path)?;
-                }
+                derived_dims.push(d);
             }
             DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
                 units.push(u);
@@ -1477,7 +1476,7 @@ fn register_declarations_impl(
     if !derived_dims.is_empty() {
         let sorted = topo_sort_derived_dims(&derived_dims, src)?;
         for d in sorted {
-            register_dimension_decl(d, registry, src, file_path)?;
+            register_dimension_decl(d, registry, src)?;
         }
     }
 
@@ -1567,12 +1566,9 @@ fn topo_sort_derived_dims<'a>(
     // Self-references (e.g., `dimension Mass = Mass;` aliasing a prelude dimension) are
     // excluded — they resolve against the existing registry during registration.
     for d in dims {
-        let Some(def) = &d.definition else {
-            continue;
-        };
         let self_name = d.name.value.as_str();
         let from = name_to_idx[self_name];
-        for item in &def.terms {
+        for item in &d.definition.terms {
             let dep_name = item.term.name.name.as_str();
             if dep_name != self_name
                 && let Some(&to) = name_to_idx.get(dep_name)
@@ -1655,31 +1651,31 @@ fn topo_sort_units<'a>(
         .collect())
 }
 
+fn register_base_dimension_decl(
+    d: &crate::syntax::ast::BaseDimDecl,
+    registry: &mut RegistryBuilder,
+    file_path: &std::path::Path,
+) {
+    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+        file: file_path.to_path_buf(),
+        name: d.name.value.to_string(),
+    };
+    registry.register_base_dimension(d.name.value.clone(), dim_id);
+}
+
 fn register_dimension_decl(
     d: &crate::syntax::ast::DimDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-    file_path: &std::path::Path,
 ) -> Result<(), GraphcalError> {
-    if let Some(def) = &d.definition {
-        // Derived dimension — resolve the expression
-        let dim =
-            registry
-                .resolve_dim_expr(def)
-                .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: d.name.value.clone(),
-                    src: src.clone(),
-                    span: d.name.span.into(),
-                })?;
-        registry.register_dimension(d.name.value.clone(), dim);
-    } else {
-        // Base dimension — register a new orthogonal axis
-        let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
-            file: file_path.to_path_buf(),
-            name: d.name.value.to_string(),
-        };
-        registry.register_base_dimension(d.name.value.clone(), dim_id);
-    }
+    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(|| {
+        GraphcalError::UnknownDimension {
+            name: d.name.value.clone(),
+            src: src.clone(),
+            span: d.name.span.into(),
+        }
+    })?;
+    registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
 

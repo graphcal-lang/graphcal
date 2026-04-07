@@ -10,7 +10,7 @@
 
 Graphcal's dimension system currently has 8 hard-coded base dimensions (7 SI + Angle) represented as a fixed-size `[Rational; 8]` exponent vector. Some real-world engineering calculations require dimensions that are **irreducible** — they cannot be expressed as products of powers of SI base dimensions.
 
-The design doc ([04](./04-dimensions-and-units.md)) already lists "User-defined base dimensions" as an open question. The language syntax already supports bodyless `dimension` declarations (`dimension Foo;`), but the implementation currently skips them (`ir.rs:184-186`).
+The design doc ([04](./04-dimensions-and-units.md)) already lists "User-defined base dimensions" as an open question. The language syntax already supports bodyless `base dimension` declarations (`base dimension Foo;`), but the implementation currently skips them (`ir.rs:184-186`).
 
 ## Catalog of Non-SI Dimension Use Cases
 
@@ -31,14 +31,14 @@ Many other commonly cited examples are "counts of discrete things" that need to 
 
 | Quantity | Example Units | Seems Like |
 | --- | --- | --- |
-| People | crew_member, person, FTE | `dimension People;` |
-| Pixel | px, Mpx | `dimension Pixel;` |
-| Cycle | cycle, revolution | `dimension Cycle;` |
-| Packet | packet, frame | `dimension Packet;` |
-| Vehicle | vehicle, spacecraft | `dimension Vehicle;` |
-| Sample/Event | sample, event | `dimension Sample;` |
-| Request | request, query | `dimension Request;` |
-| Cell | cell | `dimension Cell;` |
+| People | crew_member, person, FTE | `base dimension People;` |
+| Pixel | px, Mpx | `base dimension Pixel;` |
+| Cycle | cycle, revolution | `base dimension Cycle;` |
+| Packet | packet, frame | `base dimension Packet;` |
+| Vehicle | vehicle, spacecraft | `base dimension Vehicle;` |
+| Sample/Event | sample, event | `base dimension Sample;` |
+| Request | request, query | `base dimension Request;` |
+| Cell | cell | `base dimension Cell;` |
 
 However, these are all **the same kind of thing** — a dimensionless count of discrete items. The safety requirement (`5 crew_member + 3 packet` must be a compile error) doesn't require separate *dimensions*; it requires separate *semantic tags*.
 
@@ -46,7 +46,7 @@ This is exactly what Graphcal's **Spaces** feature ([06](./06-spaces.md)) provid
 
 ```gcl
 // A single Count dimension + phantom type parameters for type safety:
-dimension Count;
+base dimension Count;
 unit count: Count;
 
 // Marker types for countable things
@@ -118,7 +118,7 @@ pub enum BaseDim {
 This means:
 
 - There is no slot for `Information`, `Money`, or any user-defined base dimension.
-- Bodyless `dimension Information;` declarations are parsed but silently skipped during IR lowering.
+- Bodyless `base dimension Information;` declarations are parsed but silently skipped during IR lowering.
 - All dimension algebra (`Mul`, `Div`, `pow`) operates on exactly 8 elements.
 
 ### What Numbat Does
@@ -257,7 +257,7 @@ No syntax changes needed. The existing bodyless `dimension` declaration is the m
 // In user's .gcl file or a library:
 
 // -- True non-SI base dimensions --
-dimension Information;
+base dimension Information;
 unit bit: Information;
 unit byte: Information = 8 bit;
 unit kB: Information = 1000 byte;
@@ -267,7 +267,7 @@ unit MiB: Information = 1024 KiB;
 unit GB: Information = 1000 MB;
 unit GiB: Information = 1024 MiB;
 
-dimension Money;
+base dimension Money;
 unit USD: Money;
 unit EUR: Money = 0.92 USD;     // snapshot rate — see currency section
 unit JPY: Money = 0.0067 USD;
@@ -283,7 +283,7 @@ param price: DataCost = 0.023 USD / GB;
 node monthly_cost: Money = @storage * @price;
 
 // -- Counting quantities (use Count + phantom type parameters, not new dimensions) --
-dimension Count;
+base dimension Count;
 unit count: Count;
 
 type Person {}
@@ -302,7 +302,7 @@ param sats: Counted<Count, Satellite> = Counted<Count, Satellite> { value: 24 co
 Currencies should be a **single `Money` base dimension** with units providing conversion factors:
 
 ```gcl
-dimension Money;
+base dimension Money;
 unit USD: Money;                   // base unit
 unit EUR: Money = 0.92 USD;       // 1 EUR = 0.92 USD
 unit JPY: Money = 0.0067 USD;     // 1 JPY = 0.0067 USD
@@ -393,7 +393,7 @@ The test: *does this quantity form meaningful derived dimensions through algebra
 The design doc mentions `unit launch;` auto-creating a dimension. With this proposal, the explicit form is preferred:
 
 ```gcl
-dimension Count;
+base dimension Count;
 unit count: Count;
 type Launch {}
 type Counted<D: Dim, C: Type> { value: D }

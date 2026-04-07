@@ -78,7 +78,7 @@ node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
 You can also define your own base dimensions and units for domain-specific quantities:
 
 ```gcl
-dimension Information;              // new base dimension
+base dimension Information;         // new base dimension
 unit bit: Information;              // base unit
 unit byte: Information = 8.0 bit;   // derived unit
 unit kB: Information = 1000.0 byte;
@@ -680,7 +680,7 @@ node y: Dimensionless[Step] = unfold(
 
 ```gcl
 // information.gcl
-dimension Information;
+base dimension Information;
 unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;

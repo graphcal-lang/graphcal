@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // User-defined base dimension
-dimension Information;
+base dimension Information;
 unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;

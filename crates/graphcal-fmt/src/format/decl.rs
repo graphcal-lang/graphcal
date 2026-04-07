@@ -1,8 +1,8 @@
 use graphcal_compiler::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, DeclKind, Declaration, DimDecl, Encoding, FieldDecl,
-    FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl, IndexDecl,
-    IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr,
-    UnionTypeDecl, UnitDecl, UnitDef,
+    AssertBody, AssertDecl, Attribute, BaseDimDecl, DeclKind, Declaration, DimDecl, Encoding,
+    FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
+    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
@@ -20,6 +20,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Param(d) => format_param_decl(fmt, d),
         DeclKind::Node(d) => format_node_decl(fmt, d),
         DeclKind::ConstNode(d) => format_const_node_decl(fmt, d),
+        DeclKind::BaseDimension(d) => format_base_dim_decl(d),
         DeclKind::Dimension(d) => format_dim_decl(fmt, d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
@@ -127,15 +128,20 @@ fn format_value_decl(
     header.append(val).append(RcDoc::text(";"))
 }
 
-/// `dimension Name = DimExpr;` or `dimension Name;`
+/// `base dimension Name;`
+fn format_base_dim_decl(d: &BaseDimDecl) -> RcDoc<'static> {
+    RcDoc::text("base dimension ")
+        .append(RcDoc::text(d.name.value.as_str().to_string()))
+        .append(RcDoc::text(";"))
+}
+
+/// `dimension Name = DimExpr;`
 fn format_dim_decl(_fmt: &Formatter<'_>, d: &DimDecl) -> RcDoc<'static> {
-    let mut doc = RcDoc::text("dimension ").append(RcDoc::text(d.name.value.as_str().to_string()));
-    if let Some(ref def) = d.definition {
-        doc = doc
-            .append(RcDoc::text(" = "))
-            .append(format_dim_expr_inline(def));
-    }
-    doc.append(RcDoc::text(";"))
+    RcDoc::text("dimension ")
+        .append(RcDoc::text(d.name.value.as_str().to_string()))
+        .append(RcDoc::text(" = "))
+        .append(format_dim_expr_inline(&d.definition))
+        .append(RcDoc::text(";"))
 }
 
 /// `unit name: Dim = scale unit_expr;` or `unit name: Dim;`

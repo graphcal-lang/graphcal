@@ -51,10 +51,10 @@ Exponents are integer or rational literals.
 
 ### User-Defined Base Dimensions
 
-Declare a new base dimension with a bare declaration (no `= ...`):
+Declare a new base dimension with the `base dimension` syntax:
 
 ```
-dimension Information;
+base dimension Information;
 ```
 
 Then build derived dimensions from it:
@@ -112,7 +112,7 @@ A base unit declaration (`unit bit: Information;` with no `= ...`) defines the c
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
 
 ```
-dimension Money;
+base dimension Money;
 unit USD: Money;
 
 param usd_per_eur: Dimensionless = 1.08;

@@ -19,6 +19,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("base")]
+    Base,
     #[token("dimension")]
     Dimension,
     #[token("unit")]
@@ -159,6 +161,7 @@ impl std::fmt::Display for Token {
             Self::Else => write!(f, "else"),
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
+            Self::Base => write!(f, "base"),
             Self::Dimension => write!(f, "dimension"),
             Self::Unit => write!(f, "unit"),
             Self::Type => write!(f, "type"),
@@ -442,7 +445,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else dimension unit type let fn index for import match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dimension unit type let fn index for import match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -452,6 +455,7 @@ mod tests {
                 Token::Const,
                 Token::If,
                 Token::Else,
+                Token::Base,
                 Token::Dimension,
                 Token::Unit,
                 Token::Type,
@@ -472,6 +476,14 @@ mod tests {
                 Token::Step,
             ]
         );
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_base() {
+        // "baseline" should be Ident, not Base + "line"
+        let mut lexer = Token::lexer("baseline");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "baseline");
     }
 
     #[test]

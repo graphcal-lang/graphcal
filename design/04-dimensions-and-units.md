@@ -16,10 +16,10 @@ Dimensions form an algebra over base physical quantities:
 
 ```gcl
 // Base dimensions (defined in prelude)
-dimension Length;
-dimension Time;
-dimension Mass;
-dimension Angle;
+base dimension Length;
+base dimension Time;
+base dimension Mass;
+base dimension Angle;
 
 // Derived dimensions -- algebraic combinations
 dimension Velocity = Length / Time;

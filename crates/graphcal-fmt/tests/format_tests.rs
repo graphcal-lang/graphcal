@@ -245,9 +245,9 @@ fn format_dimension_decl() {
 
 #[test]
 fn format_base_dimension() {
-    let source = "dimension Length;\n";
+    let source = "base dimension Length;\n";
     let formatted = format_source(source).unwrap();
-    assert_eq!(formatted, "dimension Length;\n");
+    assert_eq!(formatted, "base dimension Length;\n");
 }
 
 #[test]
