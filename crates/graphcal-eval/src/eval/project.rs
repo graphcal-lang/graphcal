@@ -2086,6 +2086,7 @@ pub(super) fn file_has_declaration(
         DeclKind::Plot(p) => p.name.value.as_str() == name,
         DeclKind::Figure(f) => f.name.value.as_str() == name,
         DeclKind::Layer(l) => l.name.value.as_str() == name,
+        DeclKind::Dag(d) => d.name.value.as_str() == name,
         DeclKind::Import(_) | DeclKind::Include(_) => false,
     })
 }

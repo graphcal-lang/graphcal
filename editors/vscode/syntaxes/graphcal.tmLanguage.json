@@ -23,6 +23,7 @@
     { "include": "#encode-keyword" },
     { "include": "#figure-declaration" },
     { "include": "#layer-declaration" },
+    { "include": "#dag-declaration" },
     { "include": "#include-declaration" },
     { "include": "#import-declaration" },
     { "include": "#let-binding" },
@@ -247,6 +248,18 @@
           }
         },
         { "include": "#import-item-list" }
+      ]
+    },
+
+    "dag-declaration": {
+      "begin": "\\b(dag)\\s+([a-z][a-z0-9_]*)\\s*\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "1": { "name": "keyword.declaration.dag.graphcal" },
+        "2": { "name": "entity.name.function.dag.graphcal" }
+      },
+      "patterns": [
+        { "include": "$self" }
       ]
     },
 

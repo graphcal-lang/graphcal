@@ -1,8 +1,8 @@
 use graphcal_compiler::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, BaseDimDecl, DeclKind, Declaration, DimDecl, Encoding,
-    FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
-    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
-    TypeDecl, TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
+    Encoding, FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam,
+    ImportDecl, IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding,
+    ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
@@ -29,6 +29,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
         DeclKind::Include(d) => format_include_decl(fmt, d),
+        DeclKind::Dag(d) => format_dag_decl(fmt, d),
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
@@ -393,6 +394,22 @@ fn format_include_decl(fmt: &mut Formatter<'_>, d: &IncludeDecl) -> RcDoc<'stati
     let path_doc = format_import_or_include_path("include", &d.path);
     let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
     format_import_or_include_kind(path_doc, bindings_doc, &d.kind)
+}
+
+/// `dag name { declarations... }`
+fn format_dag_decl(fmt: &mut Formatter<'_>, d: &DagDecl) -> RcDoc<'static> {
+    let header = RcDoc::text(format!("dag {} {{", d.name.value.as_str()));
+    if d.body.is_empty() {
+        return RcDoc::text(format!("dag {} {{}}", d.name.value.as_str()));
+    }
+    let body_parts: Vec<RcDoc<'static>> =
+        d.body.iter().map(|decl| format_decl(fmt, decl)).collect();
+    let body = RcDoc::intersperse(body_parts, RcDoc::hardline().append(RcDoc::hardline()));
+    header
+        .append(RcDoc::hardline())
+        .append(body.nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
 }
 
 /// Format the path portion of an import/include declaration.

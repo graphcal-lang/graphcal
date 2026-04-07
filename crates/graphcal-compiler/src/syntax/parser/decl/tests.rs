@@ -301,6 +301,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Index(i) => i.name.value.as_str(),
             DeclKind::Import(_) => "<import>",
             DeclKind::Include(_) => "<include>",
+            DeclKind::Dag(d) => d.name.value.as_str(),
             DeclKind::Assert(a) => a.name.value.as_str(),
             DeclKind::Plot(p) => p.name.value.as_str(),
             DeclKind::Figure(f) => f.name.value.as_str(),
@@ -1094,5 +1095,96 @@ fn parse_required_range_compound_dim() {
             }
         }
         other => panic!("expected index declaration, got {other:?}"),
+    }
+}
+
+// --- dag declaration tests ---
+
+#[test]
+fn parse_dag_empty_body() {
+    let file = Parser::new("dag my_pipeline {}").parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Dag(d) => {
+            assert_eq!(d.name.value.as_str(), "my_pipeline");
+            assert!(d.body.is_empty());
+        }
+        other => panic!("expected dag, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_dag_with_declarations() {
+    let file = Parser::new(
+        "dag rocket {
+            param thrust: Force;
+            node accel: Acceleration = @thrust / 1000.0 kg;
+        }",
+    )
+    .parse_file()
+    .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Dag(d) => {
+            assert_eq!(d.name.value.as_str(), "rocket");
+            assert_eq!(d.body.len(), 2);
+            assert!(
+                matches!(&d.body[0].kind, DeclKind::Param(p) if p.name.value.as_str() == "thrust")
+            );
+            assert!(
+                matches!(&d.body[1].kind, DeclKind::Node(n) if n.name.value.as_str() == "accel")
+            );
+        }
+        other => panic!("expected dag, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_dag_name_must_be_lower_snake_case() {
+    let result = Parser::new("dag MyPipeline {}").parse_file();
+    assert!(result.is_err(), "PascalCase dag name should be rejected");
+}
+
+#[test]
+fn parse_dag_with_attributes() {
+    let file = Parser::new(
+        "#[hidden]
+        dag my_dag {
+            param x: Dimensionless;
+        }",
+    )
+    .parse_file()
+    .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    assert_eq!(file.declarations[0].attributes.len(), 1);
+    assert_eq!(file.declarations[0].attributes[0].name.name, "hidden");
+    assert!(matches!(&file.declarations[0].kind, DeclKind::Dag(_)));
+}
+
+#[test]
+fn parse_nested_dag() {
+    let file = Parser::new(
+        "dag outer {
+            dag inner {
+                param x: Dimensionless;
+            }
+        }",
+    )
+    .parse_file()
+    .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Dag(outer) => {
+            assert_eq!(outer.name.value.as_str(), "outer");
+            assert_eq!(outer.body.len(), 1);
+            match &outer.body[0].kind {
+                DeclKind::Dag(inner) => {
+                    assert_eq!(inner.name.value.as_str(), "inner");
+                    assert_eq!(inner.body.len(), 1);
+                }
+                other => panic!("expected inner dag, got {other:?}"),
+            }
+        }
+        other => panic!("expected outer dag, got {other:?}"),
     }
 }

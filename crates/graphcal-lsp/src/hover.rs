@@ -105,5 +105,8 @@ fn format_hover(def: &DefinitionInfo) -> String {
         SymbolCategory::Layer => {
             format!("```graphcal\nlayer {}\n```", def.name)
         }
+        SymbolCategory::Dag => {
+            format!("```graphcal\ndag {} {{ ... }}\n```", def.name)
+        }
     }
 }

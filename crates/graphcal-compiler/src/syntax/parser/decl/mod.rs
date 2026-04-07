@@ -3,6 +3,7 @@ use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
 
+mod dag;
 mod dim_unit;
 mod figure;
 mod import;
@@ -22,7 +23,7 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const node`, `base dimension`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
+        let expected = "`param`, `node`, `const node`, `base dimension`, `dimension`, `unit`, `type`, `fn`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -64,6 +65,7 @@ impl Parser<'_> {
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Import) => self.parse_import_decl(),
             Some(Token::Include) => self.parse_include_decl(),
+            Some(Token::Dag) => self.parse_dag_decl(),
             Some(Token::Assert) => self.parse_assert(),
             Some(Token::Plot) => self.parse_plot(),
             Some(Token::Figure) => self.parse_figure(),

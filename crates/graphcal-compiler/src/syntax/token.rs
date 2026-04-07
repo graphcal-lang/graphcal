@@ -39,6 +39,8 @@ pub enum Token {
     Import,
     #[token("include")]
     Include,
+    #[token("dag")]
+    Dag,
     #[token("match")]
     Match,
     #[token("as")]
@@ -173,6 +175,7 @@ impl std::fmt::Display for Token {
             Self::For => write!(f, "for"),
             Self::Import => write!(f, "import"),
             Self::Include => write!(f, "include"),
+            Self::Dag => write!(f, "dag"),
             Self::Match => write!(f, "match"),
             Self::As => write!(f, "as"),
             Self::Assert => write!(f, "assert"),
@@ -448,7 +451,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dimension unit type let fn index for import include match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dimension unit type let fn index for import include dag match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -468,6 +471,7 @@ mod tests {
                 Token::For,
                 Token::Import,
                 Token::Include,
+                Token::Dag,
                 Token::Match,
                 Token::As,
                 Token::Assert,
@@ -808,6 +812,23 @@ mod tests {
         let mut lexer = Token::lexer("importable");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "importable");
+    }
+
+    #[test]
+    fn lex_dag_keyword() {
+        let tokens = lex_tokens("dag my_pipeline {}");
+        assert_eq!(
+            tokens,
+            vec![Token::Dag, Token::Ident, Token::LBrace, Token::RBrace,]
+        );
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_dag() {
+        // "dagger" should be Ident, not Dag + "ger"
+        let mut lexer = Token::lexer("dagger");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "dagger");
     }
 
     #[test]
