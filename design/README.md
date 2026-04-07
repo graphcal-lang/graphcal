@@ -51,7 +51,8 @@ Each aspect of the language design is documented in a separate file for independ
 | --- | --- | --- | --- |
 | [10](./10-tables-and-autofill.md) | Tables & Autofill | Partially settled | N-dimensional labeled tables with map/scan/reduce |
 | [11](./11-system-dynamics.md) | System Dynamics | Mostly settled | Temporal simulation via `scan` pattern (Vensim replacement) |
-| [12](./12-pure-functions.md) | Pure Functions | Design complete | `fn` keyword, purity via `@` prohibition |
+| [12](./12-pure-functions.md) | Pure Functions | Superseded by 24 | `fn` keyword, purity via `@` prohibition |
+| [24](./24-inline-modules.md) | **Inline DAGs, `const` Modifier, DAG-as-Module** | Draft | Replace `fn` with `dag` blocks, `const` as modifier, `import`/`include` split, unified module path system |
 
 ### Tooling & Ecosystem
 
