@@ -4,6 +4,6 @@ dimension Velocity = Length / Time;
 param my_mass: Mass = 800.0 kg;
 
 #[allow_defaults]
-import "./rocket.gcl"(dry_mass: @my_mass) { delta_v };
+include "./rocket.gcl"(dry_mass: @my_mass) { delta_v };
 
 node result: Velocity = @delta_v;

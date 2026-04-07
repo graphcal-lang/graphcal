@@ -37,6 +37,8 @@ pub enum Token {
     For,
     #[token("import")]
     Import,
+    #[token("include")]
+    Include,
     #[token("match")]
     Match,
     #[token("as")]
@@ -170,6 +172,7 @@ impl std::fmt::Display for Token {
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
             Self::Import => write!(f, "import"),
+            Self::Include => write!(f, "include"),
             Self::Match => write!(f, "match"),
             Self::As => write!(f, "as"),
             Self::Assert => write!(f, "assert"),
@@ -445,7 +448,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dimension unit type let fn index for import match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dimension unit type let fn index for import include match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -464,6 +467,7 @@ mod tests {
                 Token::Index,
                 Token::For,
                 Token::Import,
+                Token::Include,
                 Token::Match,
                 Token::As,
                 Token::Assert,
@@ -800,9 +804,17 @@ mod tests {
 
     #[test]
     fn lex_identifier_starting_with_import() {
-        // "importable" should be Ident, not Use + "full"
+        // "importable" should be Ident, not Import + "able"
         let mut lexer = Token::lexer("importable");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "importable");
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_include() {
+        // "included" should be Ident, not Include + "d"
+        let mut lexer = Token::lexer("included");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "included");
     }
 }

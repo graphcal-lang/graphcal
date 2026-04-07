@@ -956,10 +956,10 @@ pub enum GraphcalError {
     ///
     /// Required indexes (`index Foo;`, `index Foo: Time;`) must be bound when the
     /// file is imported. They cannot be evaluated standalone.
-    #[error("required index `{name}` must be bound via parameterized import")]
+    #[error("required index `{name}` must be bound via parameterized include")]
     #[diagnostic(
         code(graphcal::I010),
-        help("use `import \"./file.gcl\"({name}: SomeIndex)` to bind this index")
+        help("use `include \"./file.gcl\"({name}: SomeIndex)` to bind this index")
     )]
     RequiredIndexNotBound {
         name: String,

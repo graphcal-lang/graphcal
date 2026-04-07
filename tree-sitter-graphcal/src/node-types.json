@@ -2308,16 +2308,6 @@
           }
         ]
       },
-      "param_bindings": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "import_param_bindings",
-            "named": true
-          }
-        ]
-      },
       "path": {
         "multiple": false,
         "required": true,
@@ -2385,7 +2375,61 @@
     }
   },
   {
-    "type": "import_param_binding",
+    "type": "include_declaration",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "param_bindings": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "include_param_bindings",
+            "named": true
+          }
+        ]
+      },
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "bare_module_path",
+            "named": true
+          },
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "import_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "include_param_binding",
     "named": true,
     "fields": {
       "name": {
@@ -2503,7 +2547,7 @@
     }
   },
   {
-    "type": "import_param_bindings",
+    "type": "include_param_bindings",
     "named": true,
     "fields": {},
     "children": {
@@ -2511,7 +2555,7 @@
       "required": true,
       "types": [
         {
-          "type": "import_param_binding",
+          "type": "include_param_binding",
           "named": true
         }
       ]
@@ -5223,6 +5267,10 @@
           "named": true
         },
         {
+          "type": "include_declaration",
+          "named": true
+        },
+        {
           "type": "index_declaration",
           "named": true
         },
@@ -7287,6 +7335,10 @@
   },
   {
     "type": "import",
+    "named": false
+  },
+  {
+    "type": "include",
     "named": false
   },
   {

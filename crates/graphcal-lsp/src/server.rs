@@ -261,18 +261,18 @@ fn run_eval_from_project(
     }
 }
 
-/// Extract import-declaration info from an AST for Document Links.
+/// Extract import/include-declaration info from an AST for Document Links.
 fn collect_import_decl_info(ast: &graphcal_compiler::syntax::ast::File) -> Vec<ImportDeclInfo> {
     ast.declarations
         .iter()
-        .filter_map(|decl| {
-            if let DeclKind::Import(u) = &decl.kind {
-                Some(ImportDeclInfo {
-                    path: u.path.clone(),
-                })
-            } else {
-                None
-            }
+        .filter_map(|decl| match &decl.kind {
+            DeclKind::Import(u) => Some(ImportDeclInfo {
+                path: u.path.clone(),
+            }),
+            DeclKind::Include(u) => Some(ImportDeclInfo {
+                path: u.path.clone(),
+            }),
+            _ => None,
         })
         .collect()
 }

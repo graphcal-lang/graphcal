@@ -236,24 +236,39 @@ fn compile_single_file_in_project(
         deferred_instantiated: Vec::new(),
     };
 
-    // Process all import declarations using loader-resolved canonical paths.
-    for (decl, import_decl, import_canonical) in loaded_file.imports_with_paths() {
+    // Process all import declarations (non-instantiated, compile-time items).
+    for (_decl, import_decl, import_canonical) in loaded_file.imports_with_paths() {
         let import_canonical = import_canonical.to_path_buf();
-        if import_decl.param_bindings.is_empty() {
+        process_non_instantiated_import(
+            project,
+            &import_canonical,
+            &import_decl.path,
+            &import_decl.kind,
+            file_src,
+            evaluated_files,
+            &mut ctx,
+        )?;
+    }
+
+    // Process all include declarations (DAG instantiation).
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+        let include_canonical = include_canonical.to_path_buf();
+        if include_decl.param_bindings.is_empty() {
             process_non_instantiated_import(
                 project,
-                &import_canonical,
-                import_decl,
+                &include_canonical,
+                &include_decl.path,
+                &include_decl.kind,
                 file_src,
                 evaluated_files,
                 &mut ctx,
             )?;
         } else {
-            process_instantiated_import(
+            process_instantiated_include(
                 project,
                 file_path,
-                &import_canonical,
-                import_decl,
+                &include_canonical,
+                include_decl,
                 decl,
                 file_src,
                 evaluated_files,
@@ -278,7 +293,7 @@ fn compile_single_file_in_project(
     )
 }
 
-/// Process an instantiated import (one with param bindings), deferring it for
+/// Process an instantiated include (one with param bindings), deferring it for
 /// post-lowering IR merging.
 #[expect(
     clippy::too_many_lines,
@@ -288,11 +303,11 @@ fn compile_single_file_in_project(
     clippy::too_many_arguments,
     reason = "needs access to project, importer, dep, and context"
 )]
-fn process_instantiated_import<'a>(
+fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
     importer_path: &Path,
     import_canonical: &PathBuf,
-    import_decl: &graphcal_compiler::syntax::ast::ImportDecl,
+    include_decl: &graphcal_compiler::syntax::ast::IncludeDecl,
     decl: &graphcal_compiler::syntax::ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
@@ -302,33 +317,33 @@ fn process_instantiated_import<'a>(
     let importer_loaded = &project.files[importer_path];
 
     // Determine the prefix (namespace) for the merged declarations.
-    let prefix = match &import_decl.kind {
+    let prefix = match &include_decl.kind {
         graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
             if let Some(alias_ident) = alias {
                 alias_ident.name.clone()
             } else {
-                derive_module_name_from_import_path(&import_decl.path, file_src)?
+                derive_module_name_from_import_path(&include_decl.path, file_src)?
             }
         }
         graphcal_compiler::syntax::ast::ImportKind::Selective(_) => {
-            // For selective instantiated imports, we still need a prefix
+            // For selective instantiated includes, we still need a prefix
             // for the merged declarations. Derive from filename.
-            derive_module_name_from_import_path(&import_decl.path, file_src)?
+            derive_module_name_from_import_path(&include_decl.path, file_src)?
         }
     };
 
-    // Check for duplicate module names (instantiated imports occupy the same namespace).
+    // Check for duplicate module names (instantiated includes occupy the same namespace).
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
             src: file_src.clone(),
-            span: import_decl.path.span().into(),
+            span: include_decl.path.span().into(),
             first: (*first_span).into(),
         }));
     }
     ctx.module_map.insert(
         prefix.clone(),
-        (import_canonical.clone(), import_decl.path.span()),
+        (import_canonical.clone(), include_decl.path.span()),
     );
 
     // Classify and validate bindings against the dependency's AST.
@@ -336,7 +351,7 @@ fn process_instantiated_import<'a>(
     // index binding (name targets a `cat`/`range` index).
     let mut bindings = HashMap::new();
     let mut index_bindings = HashMap::new();
-    for binding in &import_decl.param_bindings {
+    for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
 
         // Check if the binding name is a param in the dependency.
@@ -458,7 +473,7 @@ fn process_instantiated_import<'a>(
         }
         return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
             name: binding_name.clone(),
-            file_path: import_decl.path.display_path(),
+            file_path: include_decl.path.display_path(),
             src: file_src.clone(),
             span: binding.name.span.into(),
         }));
@@ -470,7 +485,7 @@ fn process_instantiated_import<'a>(
         String,
         Vec<graphcal_compiler::syntax::ast::Attribute>,
     > = HashMap::new();
-    let selective_names = match &import_decl.kind {
+    let selective_names = match &include_decl.kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
             for import_item in names {
@@ -481,7 +496,7 @@ fn process_instantiated_import<'a>(
                 if !file_has_declaration(&dep_loaded.ast, orig_name) {
                     return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                         name: orig_name.clone(),
-                        file_path: import_decl.path.display_path(),
+                        file_path: include_decl.path.display_path(),
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
                     }));
@@ -534,7 +549,7 @@ fn process_instantiated_import<'a>(
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
-            let import_span = import_decl.path.span();
+            let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast.declarations {
                 let (dep_name, is_const) = match &dep_decl.kind {
                     DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
@@ -572,7 +587,7 @@ fn process_instantiated_import<'a>(
                 GraphcalError::RequiredParamNotProvided {
                     name: idx.name.value.to_string(),
                     src: file_src.clone(),
-                    span: import_decl.path.span().into(),
+                    span: include_decl.path.span().into(),
                 },
             ));
         }
@@ -593,9 +608,9 @@ fn process_instantiated_import<'a>(
                 return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
                     name: p.name.value.to_string(),
                     src: file_src.clone(),
-                    span: import_decl.path.span().into(),
+                    span: include_decl.path.span().into(),
                     help: format!(
-                        "provide `{name} = <value>` in the import binding or add `#[allow_defaults]` to the import",
+                        "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
                         name = p.name.value,
                     ),
                 }));
@@ -608,9 +623,9 @@ fn process_instantiated_import<'a>(
                 return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
                     name: idx.name.value.to_string(),
                     src: file_src.clone(),
-                    span: import_decl.path.span().into(),
+                    span: include_decl.path.span().into(),
                     help: format!(
-                        "provide `{name} = <IndexName>` in the import binding or add `#[allow_defaults]` to the import",
+                        "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
                         name = idx.name.value,
                     ),
                 }));
@@ -630,12 +645,13 @@ fn process_instantiated_import<'a>(
     Ok(())
 }
 
-/// Process a non-instantiated import (no param bindings), importing values and
+/// Process a non-instantiated import or include (no param bindings), importing values and
 /// type-system declarations from the already-evaluated dependency.
 fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_canonical: &PathBuf,
-    import_decl: &graphcal_compiler::syntax::ast::ImportDecl,
+    import_path: &graphcal_compiler::syntax::ast::ImportPath,
+    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
@@ -647,11 +663,11 @@ fn process_non_instantiated_import<'a>(
                 import_canonical.display()
             ),
             src: file_src.clone(),
-            span: import_decl.path.span().into(),
+            span: import_path.span().into(),
         })
     })?;
 
-    match &import_decl.kind {
+    match import_kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
@@ -688,7 +704,7 @@ fn process_non_instantiated_import<'a>(
                         } else {
                             return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                                 name: orig_name.clone(),
-                                file_path: import_decl.path.display_path(),
+                                file_path: import_path.display_path(),
                                 src: file_src.clone(),
                                 span: import_item.name.span.into(),
                             }));
@@ -701,23 +717,23 @@ fn process_non_instantiated_import<'a>(
             let module_name = if let Some(alias_ident) = alias {
                 alias_ident.name.clone()
             } else {
-                derive_module_name_from_import_path(&import_decl.path, file_src)?
+                derive_module_name_from_import_path(import_path, file_src)?
             };
             if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
                 return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                     name: module_name,
                     src: file_src.clone(),
-                    span: import_decl.path.span().into(),
+                    span: import_path.span().into(),
                     first: (*first_span).into(),
                 }));
             }
             ctx.module_map.insert(
                 module_name.clone(),
-                (import_canonical.clone(), import_decl.path.span()),
+                (import_canonical.clone(), import_path.span()),
             );
 
             // Import all values under module::name prefix.
-            let import_span = import_decl.path.span();
+            let import_span = import_path.span();
             import_module_values(
                 dep,
                 &module_name,
@@ -781,10 +797,10 @@ fn rewrite_qualified_refs_in_ast<'a>(
             _ => {}
         }
     }
-    // Also rewrite qualified refs in param binding expressions.
+    // Also rewrite qualified refs in param binding expressions (in include declarations).
     for decl in &mut ast.declarations {
-        if let DeclKind::Import(import_decl) = &mut decl.kind {
-            for binding in &mut import_decl.param_bindings {
+        if let DeclKind::Include(include_decl) = &mut decl.kind {
+            for binding in &mut include_decl.param_bindings {
                 rewrite_qualified_refs(&mut binding.value);
             }
         }
@@ -1213,19 +1229,8 @@ fn build_dep_imported_values(
     let mut imported_names = ImportedValueNames::default();
     let mut imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
 
+    // Process import declarations (non-instantiated).
     for (_decl, import_decl, trans_canonical) in dep_loaded.imports_with_paths() {
-        // Only handle non-instantiated imports (transitive deps are pre-evaluated).
-        if !import_decl.param_bindings.is_empty() {
-            // Nested instantiated imports are not supported in this initial implementation.
-            // The dependency itself would need to be compiled with instantiation support.
-            // For now, return an error.
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "nested instantiated imports are not yet supported".to_string(),
-                src: dep_src.clone(),
-                span: import_decl.path.span().into(),
-            }));
-        }
-
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
@@ -1237,45 +1242,95 @@ fn build_dep_imported_values(
             })
         })?;
 
-        match &import_decl.kind {
-            graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
-                for import_item in names {
-                    let orig_name = &import_item.name.name;
-                    let local_name = import_item.local_name().to_string();
-                    // Type-system declarations are handled by the registry, not imported_values.
-                    let _ = import_selective_item(
-                        trans_dep,
-                        orig_name,
-                        &local_name,
-                        import_item.name.span,
-                        &mut imported_names,
-                        &mut imported_values,
-                        None,
-                    );
-                }
-            }
-            graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
-                let module_name = alias.as_ref().map_or_else(
-                    || {
-                        derive_module_name_from_import_path(&import_decl.path, dep_src)
-                            .unwrap_or_else(|_| "dep".to_string())
-                    },
-                    |alias_ident| alias_ident.name.clone(),
-                );
-                let import_span = import_decl.path.span();
-                import_module_values(
+        build_dep_import_values_for_kind(
+            &import_decl.path,
+            &import_decl.kind,
+            trans_dep,
+            dep_src,
+            &mut imported_names,
+            &mut imported_values,
+        );
+    }
+
+    // Process include declarations.
+    for (_decl, include_decl, trans_canonical) in dep_loaded.includes_with_paths() {
+        if !include_decl.param_bindings.is_empty() {
+            // Nested instantiated includes are not supported in this initial implementation.
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: "nested instantiated includes are not yet supported".to_string(),
+                src: dep_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
+        }
+
+        let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!(
+                    "internal: transitive dependency {} not yet evaluated",
+                    trans_canonical.display()
+                ),
+                src: dep_src.clone(),
+                span: include_decl.path.span().into(),
+            })
+        })?;
+
+        build_dep_import_values_for_kind(
+            &include_decl.path,
+            &include_decl.kind,
+            trans_dep,
+            dep_src,
+            &mut imported_names,
+            &mut imported_values,
+        );
+    }
+
+    Ok((imported_names, imported_values))
+}
+
+/// Helper: import values from a dependency according to the import kind.
+fn build_dep_import_values_for_kind(
+    import_path: &ImportPath,
+    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
+    trans_dep: &EvaluatedFile,
+    dep_src: &NamedSource<Arc<String>>,
+    imported_names: &mut ImportedValueNames,
+    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+) {
+    match import_kind {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
+            for import_item in names {
+                let orig_name = &import_item.name.name;
+                let local_name = import_item.local_name().to_string();
+                let _ = import_selective_item(
                     trans_dep,
-                    &module_name,
-                    import_span,
-                    &mut imported_names,
-                    &mut imported_values,
+                    orig_name,
+                    &local_name,
+                    import_item.name.span,
+                    imported_names,
+                    imported_values,
                     None,
                 );
             }
         }
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
+            let module_name = alias.as_ref().map_or_else(
+                || {
+                    derive_module_name_from_import_path(import_path, dep_src)
+                        .unwrap_or_else(|_| "dep".to_string())
+                },
+                |alias_ident| alias_ident.name.clone(),
+            );
+            let import_span = import_path.span();
+            import_module_values(
+                trans_dep,
+                &module_name,
+                import_span,
+                imported_names,
+                imported_values,
+                None,
+            );
+        }
     }
-
-    Ok((imported_names, imported_values))
 }
 
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
@@ -1360,14 +1415,20 @@ fn evaluate_project_perfile(
             }
         }
 
-        // Check params from non-parameterized selective imports
-        for (_decl, import_decl, import_canonical) in root_file.imports_with_paths() {
-            // Only check non-parameterized imports (parameterized have their own check)
-            if !import_decl.param_bindings.is_empty() {
-                continue;
-            }
-            if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &import_decl.kind
-            {
+        // Check params from non-parameterized selective imports and includes
+        let selective_imports: Vec<_> = root_file
+            .imports_with_paths()
+            .map(|(_, d, c)| (&d.kind, c))
+            .chain(root_file.includes_with_paths().filter_map(|(_, d, c)| {
+                if d.param_bindings.is_empty() {
+                    Some((&d.kind, c))
+                } else {
+                    None
+                }
+            }))
+            .collect();
+        for (import_kind, import_canonical) in selective_imports {
+            if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = import_kind {
                 let dep_file = &project.files[import_canonical];
                 let dep_src = &dep_file.named_source;
 
@@ -1563,13 +1624,21 @@ fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<Pat
     let root_file = &project.files[&project.root];
     let mut spans: HashMap<PathBuf, Span> = HashMap::new();
 
-    // Process root's direct imports in source order (as returned by imports_with_paths).
-    // For each, DFS into its transitive dependencies, propagating the root import span.
-    // `entry().or_insert()` ensures the first root import (in source order) to reach
+    // Process root's direct imports/includes in source order.
+    // For each, DFS into its transitive dependencies, propagating the root span.
+    // `entry().or_insert()` ensures the first root import/include (in source order) to reach
     // a transitive dep determines its attribution.
-    for (decl, _import_decl, canonical) in root_file.imports_with_paths() {
-        let root_span = decl.span;
-        let mut stack = vec![canonical.to_path_buf()];
+    let root_decl_paths: Vec<(Span, PathBuf)> = root_file
+        .imports_with_paths()
+        .map(|(d, _, c)| (d.span, c.to_path_buf()))
+        .chain(
+            root_file
+                .includes_with_paths()
+                .map(|(d, _, c)| (d.span, c.to_path_buf())),
+        )
+        .collect();
+    for (root_span, canonical) in root_decl_paths {
+        let mut stack = vec![canonical];
         while let Some(path) = stack.pop() {
             if path == project.root {
                 continue;
@@ -1577,9 +1646,14 @@ fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<Pat
             // Only process if not already attributed.
             if let std::collections::hash_map::Entry::Vacant(entry) = spans.entry(path.clone()) {
                 entry.insert(root_span);
-                // Push this file's own imports for transitive propagation.
+                // Push this file's own imports/includes for transitive propagation.
                 if let Some(file) = project.files.get(&path) {
                     for (_decl, _imp, c) in file.imports_with_paths() {
+                        if !spans.contains_key(c) {
+                            stack.push(c.to_path_buf());
+                        }
+                    }
+                    for (_decl, _inc, c) in file.includes_with_paths() {
                         if !spans.contains_key(c) {
                             stack.push(c.to_path_buf());
                         }
@@ -1666,11 +1740,19 @@ fn route_overrides_to_files(
             continue;
         }
 
-        // Check if the root file imports this param from a dependency.
+        // Check if the root file imports/includes this param from a dependency.
         let mut found = false;
-        for (_decl, import_decl, import_canonical) in root_file.imports_with_paths() {
-            if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &import_decl.kind
-            {
+        let selective_decls: Vec<_> = root_file
+            .imports_with_paths()
+            .map(|(_, d, c)| (&d.kind, c))
+            .chain(
+                root_file
+                    .includes_with_paths()
+                    .map(|(_, d, c)| (&d.kind, c)),
+            )
+            .collect();
+        for (import_kind, import_canonical) in selective_decls {
+            if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = import_kind {
                 for item in names {
                     let local_name = item.local_name().to_string();
                     if local_name == name_str {
@@ -2004,7 +2086,7 @@ pub(super) fn file_has_declaration(
         DeclKind::Plot(p) => p.name.value.as_str() == name,
         DeclKind::Figure(f) => f.name.value.as_str() == name,
         DeclKind::Layer(l) => l.name.value.as_str() == name,
-        DeclKind::Import(_) => false,
+        DeclKind::Import(_) | DeclKind::Include(_) => false,
     })
 }
 

@@ -2,7 +2,7 @@
 dimension Velocity = Length / Time;
 
 #[allow_defaults]
-import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
+include "./rocket.gcl"(dry_mass: 800.0 kg) as r;
 
 node dv: Velocity = @r::delta_v;
 node mr: Dimensionless = @r::mass_ratio;

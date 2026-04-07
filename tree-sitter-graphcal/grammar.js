@@ -49,6 +49,7 @@ module.exports = grammar({
       $.fn_declaration,
       $.index_declaration,
       $.import_declaration,
+      $.include_declaration,
       $.assert_declaration,
       $.plot_declaration,
       $.figure_declaration,
@@ -290,15 +291,12 @@ module.exports = grammar({
     // import "./path.gcl" { name1, name2 as alias2 };  -- selective import
     // import "./path.gcl";                               -- module import (name from filename)
     // import "./path.gcl" as alias;                      -- module import with alias
-    // import "./path.gcl"(dry_mass: 800.0 kg) { delta_v };  -- instantiated selective
-    // import "./path.gcl"(dry_mass: 800.0 kg) as stage_1;   -- instantiated module
     // import nasa/rocket { delta_v };                     -- bare module path
     // import nasa/rocket as r;                            -- bare module path with alias
     import_declaration: $ => seq(
       repeat($.attribute),
       "import",
       field("path", choice($.string_literal, $.bare_module_path)),
-      optional(field("param_bindings", $.import_param_bindings)),
       choice(
         // Selective import: { name1, name2 as alias }
         seq(
@@ -318,17 +316,45 @@ module.exports = grammar({
       ),
     ),
 
-    // Param bindings for module instantiation: (name: expr, ...)
-    import_param_bindings: $ => seq(
+    // include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };  -- selective include
+    // include "./rocket.gcl"(dry_mass: 800.0 kg) as stage_1;   -- module include
+    // include "./rocket.gcl" { delta_v };                        -- include without params
+    // include nasa/rocket(dry_mass: 800.0 kg) as stage;          -- bare module path
+    include_declaration: $ => seq(
+      repeat($.attribute),
+      "include",
+      field("path", choice($.string_literal, $.bare_module_path)),
+      optional(field("param_bindings", $.include_param_bindings)),
+      choice(
+        // Selective: { name1, name2 as alias }
+        seq(
+          "{",
+          optional(seq(
+            $.import_item,
+            repeat(seq(",", $.import_item)),
+            optional(","),
+          )),
+          "}",
+          ";",
+        ),
+        // Module with alias: as name ;
+        seq("as", field("alias", $.identifier), ";"),
+        // Module (bare): ;
+        ";",
+      ),
+    ),
+
+    // Param bindings for include instantiation: (name: expr, ...)
+    include_param_bindings: $ => seq(
       "(",
-      $.import_param_binding,
-      repeat(seq(",", $.import_param_binding)),
+      $.include_param_binding,
+      repeat(seq(",", $.include_param_binding)),
       optional(","),
       ")",
     ),
 
-    // A single param binding: name: expr
-    import_param_binding: $ => seq(
+    // A single param binding in include: name: expr
+    include_param_binding: $ => seq(
       field("name", $.identifier),
       ":",
       field("value", $._expr),
