@@ -1188,3 +1188,105 @@ fn parse_nested_dag() {
         other => panic!("expected outer dag, got {other:?}"),
     }
 }
+
+// ---- Phase 5: import .., single-segment include paths ----
+
+#[test]
+fn parse_import_parent_scope() {
+    let file = Parser::new("import .. { GM, R_EARTH };")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Import(import_decl) => {
+            assert!(import_decl.path.is_parent_scope());
+            match &import_decl.path {
+                crate::syntax::ast::ImportPath::ParentScope { levels, .. } => {
+                    assert_eq!(*levels, 1);
+                }
+                other => panic!("expected ParentScope, got {other:?}"),
+            }
+        }
+        other => panic!("expected Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_import_grandparent_scope() {
+    let file = Parser::new("import ../.. { X };").parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Import(import_decl) => match &import_decl.path {
+            crate::syntax::ast::ImportPath::ParentScope { levels, .. } => {
+                assert_eq!(*levels, 2);
+            }
+            other => panic!("expected ParentScope, got {other:?}"),
+        },
+        other => panic!("expected Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_include_single_segment_dag_name() {
+    let file = Parser::new("include my_dag(x: 1.0) { result };")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Include(include_decl) => {
+            match &include_decl.path {
+                crate::syntax::ast::ImportPath::ModulePath { segments, .. } => {
+                    assert_eq!(segments.len(), 1);
+                    assert_eq!(segments[0].name, "my_dag");
+                }
+                other => panic!("expected ModulePath, got {other:?}"),
+            }
+            assert_eq!(include_decl.param_bindings.len(), 1);
+        }
+        other => panic!("expected Include, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_include_parent_scope_not_supported() {
+    // `include ..` is not a valid syntax (you include DAGs, not parent scope)
+    // Actually `..` can be parsed; whether it makes sense is a semantic question.
+    // For now, the parser accepts it — semantic validation happens later.
+    let file = Parser::new("include ..(x: 1.0) { result };")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Include(include_decl) => {
+            assert!(include_decl.path.is_parent_scope());
+        }
+        other => panic!("expected Include, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_dag_with_import_parent() {
+    let file = Parser::new(
+        "dag my_dag {
+            import .. { GM };
+            param r: Length;
+            node v: Velocity = sqrt(GM / @r);
+        }",
+    )
+    .parse_file()
+    .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    match &file.declarations[0].kind {
+        DeclKind::Dag(dag) => {
+            assert_eq!(dag.name.value.as_str(), "my_dag");
+            assert_eq!(dag.body.len(), 3); // import, param, node
+            match &dag.body[0].kind {
+                DeclKind::Import(import_decl) => {
+                    assert!(import_decl.path.is_parent_scope());
+                }
+                other => panic!("expected Import, got {other:?}"),
+            }
+        }
+        other => panic!("expected Dag, got {other:?}"),
+    }
+}

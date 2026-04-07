@@ -215,6 +215,16 @@ fn load_file_dfs<F: FileSystemReader>(
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
 
+    // Collect inline DAG names so we can skip includes that reference them.
+    let dag_names: HashSet<String> = ast
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.kind {
+            DeclKind::Dag(dag) => Some(dag.name.value.to_string()),
+            _ => None,
+        })
+        .collect();
+
     // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     let mut resolved_imports = HashMap::new();
@@ -224,6 +234,19 @@ fn load_file_dfs<F: FileSystemReader>(
             DeclKind::Include(include_decl) => &include_decl.path,
             _ => continue,
         };
+
+        // Skip parent scope paths (`import .. { ... }`) — resolved at eval time.
+        if path.is_parent_scope() {
+            continue;
+        }
+
+        // Skip single-segment module paths that reference inline DAGs.
+        if let ImportPath::ModulePath { segments, .. } = path
+            && segments.len() == 1
+            && dag_names.contains(segments[0].name.as_str())
+        {
+            continue;
+        }
 
         let import_canonical =
             resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)?;
@@ -370,6 +393,15 @@ fn resolve_import_path<F: FileSystemReader>(
         }
         ImportPath::ModulePath { segments, span } => {
             resolve_module_path(segments, *span, project_root, src, manifest, fs)
+        }
+        ImportPath::ParentScope { span, .. } => {
+            // Parent scope paths (`import .. { ... }`) are resolved at eval time,
+            // not during file loading. They should be skipped by load_file_dfs.
+            Err(CompileError::Eval(GraphcalError::EvalError {
+                message: "`..` parent scope paths cannot be resolved to files".to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            }))
         }
     }
 }

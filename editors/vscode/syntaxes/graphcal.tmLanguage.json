@@ -238,6 +238,7 @@
       },
       "patterns": [
         { "include": "#strings" },
+        { "include": "#parent-scope-path" },
         { "include": "#bare-module-path" },
         {
           "comment": "Module alias: import '...' as alias",
@@ -274,6 +275,7 @@
       },
       "patterns": [
         { "include": "#strings" },
+        { "include": "#parent-scope-path" },
         { "include": "#bare-module-path" },
         {
           "comment": "Module alias: include '...' as alias",
@@ -364,6 +366,12 @@
       "comment": "Bare module path in import: import nasa/rocket, import nasa/orbital/transfer",
       "match": "\\b([a-z][a-z0-9_]*)(/[a-z][a-z0-9_]*)+\\b",
       "name": "entity.name.namespace.graphcal"
+    },
+
+    "parent-scope-path": {
+      "comment": "Parent scope path: import .. { X } or import ../.. { X }",
+      "match": "\\.\\.((/\\.\\.)*)",
+      "name": "keyword.operator.scope.graphcal"
     },
 
     "as-keyword": {

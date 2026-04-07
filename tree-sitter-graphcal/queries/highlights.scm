@@ -119,6 +119,13 @@
 ; include nasa/rocket(params) { delta_v }
 (include_declaration path: (bare_module_path) @module)
 
+; include my_dag(params) { result }
+(include_declaration path: (dag_ref_path) @function)
+
+; import .. { GM }
+(import_declaration path: (parent_scope_path) @keyword)
+(include_declaration path: (parent_scope_path) @keyword)
+
 ; dag my_pipeline { ... }
 (dag_declaration name: (identifier) @function)
 

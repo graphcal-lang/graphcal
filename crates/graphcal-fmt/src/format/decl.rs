@@ -429,6 +429,13 @@ fn format_import_or_include_path(
                 .join("/");
             RcDoc::text(format!("{keyword} {path_str}"))
         }
+        graphcal_compiler::syntax::ast::ImportPath::ParentScope { levels, .. } => {
+            let mut path_str = "..".to_string();
+            for _ in 1..*levels {
+                path_str.push_str("/..");
+            }
+            RcDoc::text(format!("{keyword} {path_str}"))
+        }
     }
 }
 

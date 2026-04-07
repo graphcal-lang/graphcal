@@ -49,6 +49,11 @@ fn derive_module_name_from_import_path(
                 .last()
                 .map_or_else(|| "module".to_string(), |seg| seg.name.clone()))
         }
+        ImportPath::ParentScope { .. } => {
+            // Parent scope imports don't derive a module name;
+            // they bring items directly into scope.
+            Ok("parent".to_string())
+        }
     }
 }
 
@@ -196,6 +201,29 @@ struct DeferredInstantiatedImport {
     import_item_attributes: HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
 }
 
+/// A deferred inline DAG include that needs IR merging.
+struct DeferredInlineDagInclude {
+    /// Virtual File AST constructed from the DAG body declarations.
+    dag_body: graphcal_compiler::syntax::ast::File,
+    /// Imported names collected from `import ..` inside the DAG body.
+    dag_imported_names: ImportedValueNames,
+    /// Type-system declarations imported from parent scope via `import ..`.
+    dag_parent_type_decls: Vec<graphcal_compiler::syntax::ast::Declaration>,
+    /// The prefix for all merged declarations (from alias or dag name).
+    prefix: String,
+    /// Param bindings: `param_name` → binding expression.
+    bindings: HashMap<String, Expr>,
+    /// Index bindings: `dep_index_name` → `importer_index_name`.
+    index_bindings: HashMap<String, String>,
+    /// For selective imports: the selected names and their local aliases.
+    /// `None` for module imports.
+    selective_names: Option<Vec<(String, String)>>,
+    /// Span of the include declaration (for diagnostics).
+    import_span: Span,
+    /// Per-import-item attributes.
+    import_item_attributes: HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
+}
+
 /// Mutable state accumulated while processing import declarations.
 ///
 /// Bundles the various collections that [`compile_single_file_in_project`] builds
@@ -209,6 +237,7 @@ struct ImportContext<'a> {
     module_map: HashMap<String, (PathBuf, Span)>,
     extra_registry_builders: Vec<&'a Registry>,
     deferred_instantiated: Vec<DeferredInstantiatedImport>,
+    deferred_inline_dags: Vec<DeferredInlineDagInclude>,
 }
 
 /// Compile a single file within a project, using pre-evaluated values from dependencies.
@@ -234,7 +263,22 @@ fn compile_single_file_in_project(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_instantiated: Vec::new(),
+        deferred_inline_dags: Vec::new(),
     };
+
+    // Collect inline DAG definitions from the file's AST.
+    let dag_definitions: HashMap<String, &graphcal_compiler::syntax::ast::DagDecl> = loaded_file
+        .ast
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.kind {
+            DeclKind::Dag(dag) => Some((dag.name.value.to_string(), dag)),
+            _ => None,
+        })
+        .collect();
+
+    // Check for recursive DAG instantiation.
+    check_dag_recursion(&dag_definitions, file_src)?;
 
     // Process all import declarations (non-instantiated, compile-time items).
     for (_decl, import_decl, import_canonical) in loaded_file.imports_with_paths() {
@@ -250,7 +294,8 @@ fn compile_single_file_in_project(
         )?;
     }
 
-    // Process all include declarations (DAG instantiation).
+    // Process all include declarations (file-based DAG instantiation).
+    // Inline DAG includes (single-segment module paths matching a dag name) are handled below.
     for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
         let include_canonical = include_canonical.to_path_buf();
         if include_decl.param_bindings.is_empty() {
@@ -275,6 +320,37 @@ fn compile_single_file_in_project(
                 &mut ctx,
             )?;
         }
+    }
+
+    // Process inline DAG includes (include dag_name(...) { ... }).
+    // These are includes with single-segment module paths that match inline DAG definitions.
+    for decl in &loaded_file.ast.declarations {
+        let DeclKind::Include(include_decl) = &decl.kind else {
+            continue;
+        };
+        // Only handle single-segment module paths that match a DAG name.
+        let dag_name = match &include_decl.path {
+            graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. }
+                if segments.len() == 1 =>
+            {
+                &segments[0].name
+            }
+            _ => continue,
+        };
+        let dag_def = match dag_definitions.get(dag_name.as_str()) {
+            Some(dag) => *dag,
+            None => continue, // Not an inline DAG — already handled by file-based includes
+        };
+
+        process_inline_dag_include(
+            dag_def,
+            dag_name,
+            include_decl,
+            decl,
+            &loaded_file.ast,
+            file_src,
+            &mut ctx,
+        )?;
     }
 
     // For module imports, resolve qualified references in expressions.
@@ -645,6 +721,343 @@ fn process_instantiated_include<'a>(
     Ok(())
 }
 
+/// Process an inline DAG include (`include dag_name(...) { ... }`).
+///
+/// Creates a virtual File from the DAG body, validates bindings against it,
+/// and defers for IR merging.
+#[expect(
+    clippy::too_many_lines,
+    reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
+)]
+fn process_inline_dag_include(
+    dag_def: &graphcal_compiler::syntax::ast::DagDecl,
+    dag_name: &str,
+    include_decl: &graphcal_compiler::syntax::ast::IncludeDecl,
+    decl: &graphcal_compiler::syntax::ast::Declaration,
+    parent_ast: &graphcal_compiler::syntax::ast::File,
+    file_src: &NamedSource<Arc<String>>,
+    ctx: &mut ImportContext<'_>,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::ast::ImportKind;
+
+    // Determine the prefix (namespace) for the merged declarations.
+    let prefix = match &include_decl.kind {
+        ImportKind::Module { alias } => alias.as_ref().map_or_else(
+            || dag_name.to_string(),
+            |alias_ident| alias_ident.name.clone(),
+        ),
+        ImportKind::Selective(_) => dag_name.to_string(),
+    };
+
+    // Check for duplicate module names.
+    // We use a sentinel path for inline DAGs in the module_map.
+    let sentinel_path = PathBuf::from(format!("<dag:{dag_name}>"));
+    if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
+        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+            name: prefix,
+            src: file_src.clone(),
+            span: include_decl.path.span().into(),
+            first: (*first_span).into(),
+        }));
+    }
+    ctx.module_map
+        .insert(prefix.clone(), (sentinel_path, include_decl.path.span()));
+
+    // Create a virtual File from the DAG body, filtering out `import ..` declarations.
+    // Import .. declarations are processed separately to populate the DAG's imported names.
+    let mut dag_body_decls = Vec::new();
+    let mut dag_imported_names = ImportedValueNames::default();
+    let mut dag_parent_type_decls = Vec::new();
+
+    for body_decl in &dag_def.body {
+        match &body_decl.kind {
+            DeclKind::Import(import_decl) if import_decl.path.is_parent_scope() => {
+                // Process `import .. { ... }` — bring parent scope items into DAG scope.
+                process_parent_scope_import(
+                    &import_decl.kind,
+                    parent_ast,
+                    file_src,
+                    &mut dag_imported_names,
+                    &mut dag_parent_type_decls,
+                )?;
+            }
+            _ => {
+                dag_body_decls.push(body_decl.clone());
+            }
+        }
+    }
+
+    let dag_body = graphcal_compiler::syntax::ast::File {
+        declarations: dag_body_decls,
+    };
+
+    // Classify and validate bindings against the DAG body's declarations.
+    let mut bindings = HashMap::new();
+    let mut index_bindings = HashMap::new();
+    for binding in &include_decl.param_bindings {
+        let binding_name = &binding.name.name;
+
+        // Check if the binding name is a param in the DAG body.
+        let is_param = dag_body.declarations.iter().any(
+            |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name),
+        );
+        if is_param {
+            bindings.insert(binding_name.clone(), binding.value.clone());
+            continue;
+        }
+
+        // Check if it's an index in the DAG body.
+        let dep_index = dag_body.declarations.iter().find_map(|d| match &d.kind {
+            DeclKind::Index(idx) if idx.name.value.as_str() == binding_name => Some(idx),
+            _ => None,
+        });
+        if let Some(_dep_idx) = dep_index {
+            let rhs_name =
+                extract_index_name_from_binding_expr(&binding.value, binding_name, file_src)?;
+            index_bindings.insert(binding_name.clone(), rhs_name);
+            continue;
+        }
+
+        // Unknown binding target.
+        let actual_kind = dag_body.declarations.iter().find_map(|d| match &d.kind {
+            DeclKind::ConstNode(c) if c.name.value.as_str() == binding_name => Some("const node"),
+            DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
+            _ => None,
+        });
+        if let Some(kind) = actual_kind {
+            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
+                name: binding_name.clone(),
+                actual_kind: kind.to_string(),
+                src: file_src.clone(),
+                span: binding.name.span.into(),
+            }));
+        }
+        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+            name: binding_name.clone(),
+            file_path: dag_name.to_string(),
+            src: file_src.clone(),
+            span: binding.name.span.into(),
+        }));
+    }
+
+    // Register imported names in the importer's scope.
+    let mut import_item_attributes: HashMap<
+        String,
+        Vec<graphcal_compiler::syntax::ast::Attribute>,
+    > = HashMap::new();
+    let selective_names = match &include_decl.kind {
+        ImportKind::Selective(names) => {
+            let mut selective = Vec::new();
+            for import_item in names {
+                let orig_name = &import_item.name.name;
+                let local_name = import_item.local_name().to_string();
+
+                // Verify the name exists in the DAG body.
+                if !file_has_declaration(&dag_body, orig_name) {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                        name: orig_name.clone(),
+                        file_path: dag_name.to_string(),
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
+                }
+
+                if !import_item.attributes.is_empty() {
+                    import_item_attributes
+                        .insert(orig_name.clone(), import_item.attributes.clone());
+                }
+
+                // Register the local name in scope.
+                let is_const = dag_body.declarations.iter().any(|d| {
+                    matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name)
+                });
+                let is_runtime = dag_body.declarations.iter().any(|d| {
+                    matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
+                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
+                });
+                let scoped = ScopedName::Local(local_name.clone());
+                let span = import_item.name.span;
+                if is_const {
+                    ctx.imported_names.const_names.push((scoped, span));
+                } else if is_runtime {
+                    ctx.imported_names.param_names.push((scoped, span));
+                } else {
+                    // Type-system declarations — handled via registry merge.
+                }
+
+                selective.push((orig_name.clone(), local_name));
+            }
+            Some(selective)
+        }
+        ImportKind::Module { .. } => {
+            // Register all DAG body names under the prefix.
+            let import_span = include_decl.path.span();
+            for dep_decl in &dag_body.declarations {
+                let (dep_name, is_const) = match &dep_decl.kind {
+                    DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
+                    DeclKind::ConstNode(c) => (Some(c.name.value.to_string()), true),
+                    DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
+                    _ => (None, false),
+                };
+                if let Some(name) = dep_name {
+                    let scoped = ScopedName::Qualified {
+                        module: prefix.clone(),
+                        member: name,
+                    };
+                    if is_const {
+                        ctx.imported_names.const_names.push((scoped, import_span));
+                    } else {
+                        ctx.imported_names.param_names.push((scoped, import_span));
+                    }
+                }
+            }
+            None
+        }
+    };
+
+    // Strict binding check: all required params/indexes must be bound.
+    for dep_decl in &dag_body.declarations {
+        if let DeclKind::Index(idx) = &dep_decl.kind
+            && idx.kind.is_required()
+            && !index_bindings.contains_key(idx.name.value.as_str())
+        {
+            return Err(CompileError::Eval(
+                GraphcalError::RequiredParamNotProvided {
+                    name: idx.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                },
+            ));
+        }
+    }
+
+    let allow_defaults = decl
+        .attributes
+        .iter()
+        .any(|a| a.name.name == "allow_defaults");
+    if !allow_defaults {
+        for dep_decl in &dag_body.declarations {
+            if let DeclKind::Param(p) = &dep_decl.kind
+                && p.value.is_some()
+                && !bindings.contains_key(p.name.value.as_str())
+            {
+                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
+                    name: p.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                    help: format!(
+                        "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
+                        name = p.name.value,
+                    ),
+                }));
+            }
+            if let DeclKind::Index(idx) = &dep_decl.kind
+                && !idx.kind.is_required()
+                && !index_bindings.contains_key(idx.name.value.as_str())
+            {
+                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
+                    name: idx.name.value.to_string(),
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                    help: format!(
+                        "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
+                        name = idx.name.value,
+                    ),
+                }));
+            }
+        }
+    }
+
+    ctx.deferred_inline_dags.push(DeferredInlineDagInclude {
+        dag_body,
+        dag_imported_names,
+        dag_parent_type_decls,
+        prefix,
+        bindings,
+        index_bindings,
+        selective_names,
+        import_span: decl.span,
+        import_item_attributes,
+    });
+    Ok(())
+}
+
+/// Process `import .. { ... }` declarations inside a DAG body.
+///
+/// Resolves the imported items to compile-time declarations in the parent scope
+/// and populates the DAG's imported names.
+fn process_parent_scope_import(
+    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
+    parent_ast: &graphcal_compiler::syntax::ast::File,
+    file_src: &NamedSource<Arc<String>>,
+    dag_imported_names: &mut ImportedValueNames,
+    dag_parent_type_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
+) -> Result<(), CompileError> {
+    let names = match import_kind {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => names,
+        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
+            // `import .. as alias;` or `import ..;` — not supported (semantics unclear).
+            // Only selective parent scope imports are supported.
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
+                src: file_src.clone(),
+                span: (0..0).into(),
+            }));
+        }
+    };
+
+    for import_item in names {
+        let orig_name = &import_item.name.name;
+        let local_name = import_item.local_name().to_string();
+
+        // Find the declaration in the parent scope.
+        let parent_decl = parent_ast.declarations.iter().find(|d| match &d.kind {
+            DeclKind::ConstNode(c) => c.name.value.as_str() == orig_name,
+            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
+            DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
+            DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
+            DeclKind::Type(t) => t.name.value.as_str() == orig_name,
+            DeclKind::UnionType(t) => t.name.value.as_str() == orig_name,
+            DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
+            DeclKind::Dag(dag) => dag.name.value.as_str() == orig_name,
+            // Runtime items and other declarations are NOT importable via `import ..`.
+            _ => false,
+        });
+
+        let parent_decl = parent_decl.ok_or_else(|| {
+            CompileError::Eval(GraphcalError::ImportNameNotFound {
+                name: orig_name.clone(),
+                file_path: "..".to_string(),
+                src: file_src.clone(),
+                span: import_item.name.span.into(),
+            })
+        })?;
+
+        // Classify the imported item.
+        match &parent_decl.kind {
+            DeclKind::ConstNode(_) => {
+                let scoped = ScopedName::Local(local_name);
+                dag_imported_names
+                    .const_names
+                    .push((scoped, import_item.name.span));
+            }
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
+            | DeclKind::Index(_) => {
+                // Type-system declarations — need to be registered in the DAG's registry.
+                dag_parent_type_decls.push(parent_decl.clone());
+            }
+            // DAG definitions and other items don't need registration in imported_names.
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Process a non-instantiated import or include (no param bindings), importing values and
 /// type-system declarations from the already-evaluated dependency.
 fn process_non_instantiated_import<'a>(
@@ -858,6 +1271,14 @@ fn lower_and_finalize(
         &mut unfrozen,
     )?;
 
+    // Process deferred inline DAG includes: compile DAG body to IR and merge.
+    process_deferred_inline_dag_includes(
+        &ctx.deferred_inline_dags,
+        file_src,
+        &mut builder,
+        &mut unfrozen,
+    )?;
+
     let ir = unfrozen.freeze(builder.build());
 
     // Apply overrides routed to this file (using original param names).
@@ -979,6 +1400,153 @@ fn process_deferred_instantiated_imports(
         }
     }
     Ok(())
+}
+
+/// Process deferred inline DAG includes by compiling each DAG body to IR
+/// and merging it into the importer's IR.
+fn process_deferred_inline_dag_includes(
+    deferred_dags: &[DeferredInlineDagInclude],
+    file_src: &NamedSource<Arc<String>>,
+    builder: &mut RegistryBuilder,
+    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+) -> Result<(), CompileError> {
+    for deferred in deferred_dags {
+        // Compile the DAG body to IR.
+        // The DAG body is lowered as if it were a standalone file, with only
+        // prelude + explicitly imported items in scope.
+        let (dag_builder, dag_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
+            &deferred.dag_body,
+            file_src,
+            &deferred.dag_imported_names,
+            HashMap::new(), // No pre-evaluated values for inline DAGs
+        )?;
+
+        // Register parent scope type-system declarations in the DAG's registry.
+        // These come from `import .. { DimName, UnitName }` in the DAG body.
+        let mut dag_builder = dag_builder;
+        for parent_decl in &deferred.dag_parent_type_decls {
+            let parent_ast = graphcal_compiler::syntax::ast::File {
+                declarations: vec![parent_decl.clone()],
+            };
+            let all_names: HashSet<String> = match &parent_decl.kind {
+                DeclKind::BaseDimension(d) => std::iter::once(d.name.value.to_string()).collect(),
+                DeclKind::Dimension(d) => std::iter::once(d.name.value.to_string()).collect(),
+                DeclKind::Unit(u) => std::iter::once(u.name.value.to_string()).collect(),
+                DeclKind::Type(t) => std::iter::once(t.name.value.to_string()).collect(),
+                DeclKind::UnionType(t) => std::iter::once(t.name.value.to_string()).collect(),
+                DeclKind::Index(idx) => std::iter::once(idx.name.value.to_string()).collect(),
+                _ => HashSet::new(),
+            };
+            if !all_names.is_empty() {
+                crate::ir::register_selected_declarations(
+                    &parent_ast,
+                    &mut dag_builder,
+                    file_src,
+                    &all_names,
+                )?;
+            }
+        }
+
+        // Merge the DAG's type-system declarations into the importer's registry.
+        let dag_registry = dag_builder.build();
+        merge_registry_into_builder(builder, &dag_registry, &deferred.index_bindings);
+
+        // Collect all declaration names in the DAG body.
+        let mut dep_names: HashSet<String> = HashSet::new();
+        for (name, _) in &dag_unfrozen.source_order {
+            dep_names.insert(name.member().to_string());
+        }
+        for fn_entry in &dag_unfrozen.functions {
+            dep_names.insert(fn_entry.name.member().to_string());
+        }
+
+        // Merge the DAG's IR into the importer's IR.
+        unfrozen.merge_dependency(
+            dag_unfrozen,
+            &deferred.prefix,
+            &deferred.bindings,
+            &dep_names,
+            &deferred.index_bindings,
+            &deferred.import_item_attributes,
+        );
+
+        // For selective imports, add alias nodes.
+        if let Some(selective) = &deferred.selective_names {
+            add_inline_dag_selective_aliases(&deferred.dag_body, selective, deferred, unfrozen);
+        }
+    }
+    Ok(())
+}
+
+/// Add alias declarations for selective inline DAG includes.
+fn add_inline_dag_selective_aliases(
+    dag_body: &graphcal_compiler::syntax::ast::File,
+    selective: &[(String, String)],
+    deferred: &DeferredInlineDagInclude,
+    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+) {
+    for (orig_name, local_name) in selective {
+        let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
+
+        // Find the type annotation from the DAG body's declarations.
+        let type_ann = dag_body.declarations.iter().find_map(|d| match &d.kind {
+            DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
+            DeclKind::Node(n) if n.name.value.as_str() == orig_name => Some(n.type_ann.clone()),
+            DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name => {
+                Some(c.type_ann.clone())
+            }
+            _ => None,
+        });
+
+        let Some(mut type_ann) = type_ann else {
+            continue;
+        };
+
+        // Substitute index names in the type annotation.
+        graphcal_compiler::ir::ir::substitute_type_expr_index_names(
+            &mut type_ann,
+            &deferred.index_bindings,
+        );
+
+        let is_const = dag_body.declarations.iter().any(
+            |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
+        );
+        let alias_expr = if is_const {
+            Expr {
+                kind: ExprKind::ConstRef(Spanned::new(
+                    DeclName::new(&prefixed_name),
+                    deferred.import_span,
+                )),
+                span: deferred.import_span,
+            }
+        } else {
+            Expr {
+                kind: ExprKind::GraphRef(Spanned::new(
+                    DeclName::new(&prefixed_name),
+                    deferred.import_span,
+                )),
+                span: deferred.import_span,
+            }
+        };
+
+        if is_const {
+            unfrozen.add_const_alias(
+                ScopedName::local(local_name.clone()),
+                type_ann,
+                alias_expr,
+                deferred.import_span,
+                ScopedName::local(prefixed_name),
+            );
+        } else {
+            unfrozen.add_node_alias(
+                ScopedName::local(local_name.clone()),
+                type_ann,
+                alias_expr,
+                deferred.import_span,
+                ScopedName::local(prefixed_name),
+            );
+        }
+    }
 }
 
 /// Add alias declarations for selective instantiated imports.
@@ -2065,6 +2633,84 @@ fn extract_index_name_from_binding_expr(
 ///
 /// Returns `true` if the file has a type-system declaration (dimension, unit,
 /// index, or struct type) with that name. This is used as a fallback when a
+/// Check for recursive DAG instantiation.
+///
+/// Builds a dependency graph of inline DAGs and detects cycles.
+/// Returns an error if a DAG directly or indirectly includes itself.
+fn check_dag_recursion(
+    dag_definitions: &HashMap<String, &graphcal_compiler::syntax::ast::DagDecl>,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    fn dfs<'a>(
+        node: &'a str,
+        deps: &HashMap<&str, Vec<&'a str>>,
+        visited: &mut HashSet<&'a str>,
+        in_stack: &mut HashSet<&'a str>,
+        path: &mut Vec<&'a str>,
+    ) -> Option<Vec<String>> {
+        if in_stack.contains(node) {
+            let cycle_start = path.iter().position(|n| *n == node).unwrap_or(0);
+            let mut cycle: Vec<String> = path[cycle_start..]
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            cycle.push(node.to_string());
+            return Some(cycle);
+        }
+        if visited.contains(node) {
+            return None;
+        }
+        visited.insert(node);
+        in_stack.insert(node);
+        path.push(node);
+
+        if let Some(neighbors) = deps.get(node) {
+            for &neighbor in neighbors {
+                if let Some(cycle) = dfs(neighbor, deps, visited, in_stack, path) {
+                    return Some(cycle);
+                }
+            }
+        }
+
+        in_stack.remove(node);
+        path.pop();
+        None
+    }
+
+    // Build adjacency list: dag_name -> set of dag names it includes.
+    let mut deps: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (name, dag) in dag_definitions {
+        let mut includes = Vec::new();
+        for decl in &dag.body {
+            if let DeclKind::Include(inc) = &decl.kind
+                && let graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. } =
+                    &inc.path
+                && segments.len() == 1
+            {
+                let target = segments[0].name.as_str();
+                if dag_definitions.contains_key(target) {
+                    includes.push(target);
+                }
+            }
+        }
+        deps.insert(name.as_str(), includes);
+    }
+
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut in_stack: HashSet<&str> = HashSet::new();
+    for name in dag_definitions.keys() {
+        if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
+            let cycle_str = cycle.join(" -> ");
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: format!("recursive DAG instantiation: {cycle_str}"),
+                src: file_src.clone(),
+                span: dag_definitions[name.as_str()].span.into(),
+            }));
+        }
+    }
+    Ok(())
+}
+
 /// selective import name is not found among the dependency's evaluated values
 /// or functions.
 pub(super) fn file_has_declaration(

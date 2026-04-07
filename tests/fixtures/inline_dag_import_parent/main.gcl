@@ -1,0 +1,17 @@
+// Inline DAG with import .. for parent scope access.
+dimension Velocity = Length / Time;
+dimension GravParam = Length^3 / Time^2;
+
+const node GM: GravParam = 3.986004418e14 m^3/s^2;
+const node R_EARTH: Length = 6371000.0 m;
+
+dag circular_velocity {
+    import .. { GM, R_EARTH };
+
+    param alt: Length;
+    node v: Velocity = sqrt(GM / (R_EARTH + @alt));
+}
+
+param altitude: Length = 400000.0 m;
+include circular_velocity(alt: @altitude) { v as orbital_v };
+node result: Velocity = @orbital_v;

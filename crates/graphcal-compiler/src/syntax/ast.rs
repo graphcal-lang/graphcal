@@ -244,13 +244,16 @@ pub enum ImportKind {
     Module { alias: Option<Ident> },
 }
 
-/// The path in an `import` declaration.
+/// The path in an `import` or `include` declaration.
 #[derive(Debug, Clone)]
 pub enum ImportPath {
     /// Quoted string path: `"./path/to/file.gcl"`
     FilePath { path: String, span: Span },
-    /// Bare identifier path: `nasa/rocket`
+    /// Bare identifier path: `nasa/rocket` or `dag_name`
     ModulePath { segments: Vec<Ident>, span: Span },
+    /// Parent scope path: `..` (1 level), `../..` (2 levels), etc.
+    /// Only valid inside `dag` blocks to access the enclosing scope.
+    ParentScope { levels: u32, span: Span },
 }
 
 impl ImportPath {
@@ -258,7 +261,9 @@ impl ImportPath {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::FilePath { span, .. } | Self::ModulePath { span, .. } => *span,
+            Self::FilePath { span, .. }
+            | Self::ModulePath { span, .. }
+            | Self::ParentScope { span, .. } => *span,
         }
     }
 
@@ -272,7 +277,20 @@ impl ImportPath {
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>()
                 .join("/"),
+            Self::ParentScope { levels, .. } => {
+                let mut path = "..".to_string();
+                for _ in 1..*levels {
+                    path.push_str("/..");
+                }
+                path
+            }
         }
+    }
+
+    /// Returns `true` if this is a `ParentScope` path (`..`, `../..`, etc.).
+    #[must_use]
+    pub const fn is_parent_scope(&self) -> bool {
+        matches!(self, Self::ParentScope { .. })
     }
 }
 

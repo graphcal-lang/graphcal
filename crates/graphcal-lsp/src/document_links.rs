@@ -24,7 +24,7 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
             ImportPath::FilePath { path, .. } => root_dir.join(path),
             // Bare module paths require manifest resolution which is not
             // available in the LSP document-link context yet. Skip them.
-            ImportPath::ModulePath { .. } => continue,
+            ImportPath::ModulePath { .. } | ImportPath::ParentScope { .. } => continue,
         };
         let Ok(canonical) = import_path.canonicalize() else {
             continue;
