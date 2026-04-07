@@ -1514,6 +1514,10 @@ fn register_declarations_impl(
                 collect_nat_ranges_from_type_expr(&d.type_ann, registry);
                 collect_nat_ranges_from_expr(&d.value, registry);
             }
+            DeclKind::ConstNode(d) => {
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
+                collect_nat_ranges_from_expr(&d.value, registry);
+            }
             DeclKind::Fn(d) => {
                 for p in &d.params {
                     collect_nat_ranges_from_type_expr(&p.type_ann, registry);
@@ -2342,6 +2346,9 @@ fn extract_type_annotations(ast: &File) -> HashMap<String, TypeExpr> {
             }
             DeclKind::Node(n) => {
                 type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
+            }
+            DeclKind::ConstNode(c) => {
+                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
             }
             _ => {}
         }

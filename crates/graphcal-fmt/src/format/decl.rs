@@ -19,6 +19,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
     let body = match &decl.kind {
         DeclKind::Param(d) => format_param_decl(fmt, d),
         DeclKind::Node(d) => format_node_decl(fmt, d),
+        DeclKind::ConstNode(d) => format_const_node_decl(fmt, d),
         DeclKind::Dimension(d) => format_dim_decl(fmt, d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
@@ -94,10 +95,17 @@ fn format_param_decl(fmt: &mut Formatter<'_>, d: &ParamDecl) -> RcDoc<'static> {
     )
 }
 
-/// `node name: Type = expr;` or `const node NAME: Type = expr;`
+/// `node name: Type = expr;`
 fn format_node_decl(fmt: &mut Formatter<'_>, d: &NodeDecl) -> RcDoc<'static> {
-    let keyword = if d.is_const { "const node" } else { "node" };
-    format_value_decl(fmt, keyword, &d.name.value, &d.type_ann, &d.value)
+    format_value_decl(fmt, "node", &d.name.value, &d.type_ann, &d.value)
+}
+
+/// `const node NAME: Type = expr;`
+fn format_const_node_decl(
+    fmt: &mut Formatter<'_>,
+    d: &graphcal_compiler::syntax::ast::ConstNodeDecl,
+) -> RcDoc<'static> {
+    format_value_decl(fmt, "const node", &d.name.value, &d.type_ann, &d.value)
 }
 
 /// Shared logic for param/node/const declarations.

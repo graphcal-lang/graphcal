@@ -63,6 +63,7 @@ pub struct Declaration {
 pub enum DeclKind {
     Param(ParamDecl),
     Node(NodeDecl),
+    ConstNode(ConstNodeDecl),
     Dimension(DimDecl),
     Unit(UnitDecl),
     Type(TypeDecl),
@@ -337,13 +338,20 @@ pub struct ParamDecl {
     pub value: Option<Expr>,
 }
 
+/// Runtime node declaration: `node name: Type = expr;`
 #[derive(Debug, Clone)]
 pub struct NodeDecl {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
     pub value: Expr,
-    /// Whether this node is declared with the `const` modifier (`const node`).
-    pub is_const: bool,
+}
+
+/// Const node declaration: `const node NAME: Type = expr;`
+#[derive(Debug, Clone)]
+pub struct ConstNodeDecl {
+    pub name: Spanned<DeclName>,
+    pub type_ann: TypeExpr,
+    pub value: Expr,
 }
 
 /// Dimension declaration: `dimension Velocity = Length / Time;`
@@ -363,8 +371,6 @@ pub struct UnitDecl {
     /// Scale definition: `(scale_value, base_unit_expr)`.
     /// `None` for base SI units: `unit m: Length;`
     pub definition: Option<UnitDef>,
-    /// Whether this unit is declared with the `const` modifier (`const unit`).
-    pub is_const: bool,
 }
 
 /// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.
@@ -1082,6 +1088,7 @@ pub fn desugar_tuple_matches(file: &mut File) {
                 }
             }
             DeclKind::Node(n) => desugar_expr(&mut n.value),
+            DeclKind::ConstNode(c) => desugar_expr(&mut c.value),
             DeclKind::Unit(u) => {
                 if let Some(def) = &mut u.definition {
                     desugar_expr(&mut def.scale_expr);

@@ -1,4 +1,6 @@
-use crate::syntax::ast::{AssertBody, AssertDecl, DeclKind, Declaration, NodeDecl, ParamDecl};
+use crate::syntax::ast::{
+    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl,
+};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
@@ -35,31 +37,9 @@ impl Parser<'_> {
 
     pub(super) fn parse_node(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Node)?;
-        self.parse_node_inner(start_span, false)
-    }
-
-    pub(super) fn parse_const_node(
-        &mut self,
-        const_span: crate::syntax::span::Span,
-    ) -> Result<Declaration, ParseError> {
-        // `const` keyword already consumed by the caller.
-        // Next token must be `node`.
-        self.expect(Token::Node)?;
-        self.parse_node_inner(const_span, true)
-    }
-
-    fn parse_node_inner(
-        &mut self,
-        start_span: crate::syntax::span::Span,
-        is_const: bool,
-    ) -> Result<Declaration, ParseError> {
-        let name = if is_const {
-            self.parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
-                .into_spanned::<DeclName>()
-        } else {
-            self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-                .into_spanned::<DeclName>()
-        };
+        let name = self
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
+            .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -72,7 +52,33 @@ impl Parser<'_> {
                 name,
                 type_ann,
                 value,
-                is_const,
+            }),
+            span,
+        })
+    }
+
+    pub(super) fn parse_const_node(
+        &mut self,
+        const_span: crate::syntax::span::Span,
+    ) -> Result<Declaration, ParseError> {
+        // `const` keyword already consumed by the caller.
+        // Next token must be `node`.
+        self.expect(Token::Node)?;
+        let name = self
+            .parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
+            .into_spanned::<DeclName>();
+        self.expect(Token::Colon)?;
+        let type_ann = self.parse_type_expr()?;
+        self.expect(Token::Eq)?;
+        let value = self.parse_expr()?;
+        let (_, semi_span) = self.expect(Token::Semicolon)?;
+        let span = const_span.merge(semi_span);
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::ConstNode(ConstNodeDecl {
+                name,
+                type_ann,
+                value,
             }),
             span,
         })
