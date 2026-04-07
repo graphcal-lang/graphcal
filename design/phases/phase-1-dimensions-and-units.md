@@ -57,7 +57,7 @@ Phase 0 (Scalar Graph) must be complete. Phase 1 extends Phase 0:
 - [x] **Inline dimension expressions in types:** Supported. `param gm: Length^3 / Time^2 = ...;`
       works directly without requiring a `dimension` declaration first.
 - [x] **Type annotation policy:** Type annotations are **required** on all declarations
-      (`param`, `node`, `const`). Literals inside expressions have their types inferred
+      (`param`, `node`, `const node`). Literals inside expressions have their types inferred
       (`2.0` → `Dimensionless`, `400 km` → `Length`). The compiler checks that the
       inferred dimension of the RHS matches the declared type.
 
@@ -86,7 +86,7 @@ UnitDecl     = "unit" IDENT ":" DimExpr ("=" Expr UNIT_IDENT)? ";"
 // Extended declarations (type annotations REQUIRED)
 ParamDecl    = "param" LOWER_IDENT ":" TypeExpr "=" Expr ";"
 NodeDecl     = "node"  LOWER_IDENT ":" TypeExpr "=" Expr ";"
-ConstDecl    = "const" UPPER_IDENT ":" TypeExpr "=" Expr ";"
+ConstDecl    = "const" "node" UPPER_IDENT ":" TypeExpr "=" Expr ";"
 
 // Type expressions (dimension expressions or Dimensionless)
 TypeExpr     = "Dimensionless" | DimExpr
@@ -207,7 +207,7 @@ dimension Velocity = Length / Time;
 
 param alt: Length = 400 km;
 param period: Time = 90 min;
-const R_EARTH: Length = 6371 km;
+const node R_EARTH: Length = 6371 km;
 
 node circumference: Length = 2.0 * PI * (@R_EARTH + @alt);
 node speed: Velocity = @circumference / @period;

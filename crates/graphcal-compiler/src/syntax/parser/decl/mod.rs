@@ -22,11 +22,26 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, `assert`, `plot`, `figure`, or `layer`";
+        let expected = "`param`, `node`, `const node`, `dimension`, `unit`, `type`, `fn`, `index`, `import`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
-            Some(Token::Const) => self.parse_const(),
+            Some(Token::Const) => {
+                let (_, const_span) = self.advance()?;
+                match self.lexer.peek() {
+                    Some(Token::Node) => self.parse_const_node(const_span),
+                    Some(Token::Unit) => self.parse_const_unit(const_span),
+                    Some(_) => {
+                        let (tok, span) = self.advance()?;
+                        Err(self.unexpected_token(
+                            "`node` or `unit` after `const`",
+                            &tok.to_string(),
+                            span,
+                        ))
+                    }
+                    None => Err(self.unexpected_eof("`node` or `unit` after `const`")),
+                }
+            }
             Some(Token::Dimension) => self.parse_dimension_decl(),
             Some(Token::Unit) => self.parse_unit_decl(),
             Some(Token::Type) => self.parse_type_decl(),

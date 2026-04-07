@@ -16,7 +16,7 @@ import "./path/to/file.gcl" { name1, name2 };
 
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
-- All top-level declarations can be imported: `param`, `node`, `const`, `dimension`, `unit`, `type`, `index`, `fn`
+- All top-level declarations can be imported: `param`, `node`, `const node`, `dimension`, `unit`, `type`, `index`, `fn`
 
 ## Module Imports
 
@@ -36,7 +36,7 @@ import "./constants.gcl";
 import "./params.gcl";
 import "./lib.gcl";
 
-node g: Acceleration = constants::G0;           // qualified const
+node g: Acceleration = constants::G0;           // qualified const node
 node total: Mass = @params::dry_mass;           // qualified graph ref
 node y: Dimensionless = lib::double(@x);        // qualified fn call
 ```
@@ -150,7 +150,7 @@ node diff: Velocity = @velocity_a - @velocity_b;
 |-------------|--------------|-----------------|
 | `param` | `import "..." { name }` | `@name` |
 | `node` | `import "..." { name }` | `@name` |
-| `const` | `import "..." { NAME }` | `NAME` |
+| `const node` | `import "..." { NAME }` | `NAME` |
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
@@ -165,7 +165,7 @@ Imported `param` and `node` declarations are referenced with `@` just like local
 |-------------|-----------------|
 | `param` | `@module::name` |
 | `node` | `@module::name` |
-| `const` | `module::NAME` |
+| `const node` | `module::NAME` |
 | `fn` | `module::fn_name(...)` |
 
 Dimension, unit, type, and index declarations cannot currently be referenced via module-qualified syntax. To use types or dimensions from another file, use selective imports.
@@ -338,7 +338,7 @@ Required params can also be satisfied from the command line with `--set` or `--i
 ### Validation
 
 - Binding names must be `param` or index (`index`) declarations in the imported file
-- Binding a `node`, `const`, or unknown name is a compile error
+- Binding a `node`, `const node`, or unknown name is a compile error
 - All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
 - All required indexes must be provided by bindings
 - Index binding values must be the name of a concrete index in the importer's scope
@@ -402,7 +402,7 @@ param dry_mass: Mass;     // required
 param fuel_mass: Mass;    // required
 param isp: Time = 320 s;  // optional default
 
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 node v_exhaust: Velocity = @isp * G0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

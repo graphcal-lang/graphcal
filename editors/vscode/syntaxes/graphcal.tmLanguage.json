@@ -13,8 +13,9 @@
     { "include": "#index-declaration" },
     { "include": "#linspace-keyword" },
     { "include": "#param-declaration" },
+    { "include": "#const-node-declaration" },
+    { "include": "#const-unit-declaration" },
     { "include": "#node-declaration" },
-    { "include": "#const-declaration" },
     { "include": "#assert-declaration" },
     { "include": "#plot-declaration" },
     { "include": "#mark-keyword" },
@@ -122,11 +123,21 @@
       }
     },
 
-    "const-declaration": {
-      "match": "\\b(const)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+    "const-node-declaration": {
+      "match": "\\b(const)\\s+(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.declaration.const.graphcal" },
-        "2": { "name": "variable.other.constant.graphcal" }
+        "2": { "name": "keyword.declaration.node.graphcal" },
+        "3": { "name": "variable.other.constant.graphcal" }
+      }
+    },
+
+    "const-unit-declaration": {
+      "match": "\\b(const)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.const.graphcal" },
+        "2": { "name": "keyword.declaration.unit.graphcal" },
+        "3": { "name": "entity.name.type.unit.graphcal" }
       }
     },
 

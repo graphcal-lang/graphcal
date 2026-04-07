@@ -16,7 +16,7 @@ Functions in Graphcal are pure: they take inputs and return outputs without side
 dimension Velocity = Length / Time;
 dimension GravParam = Length^3 / Time^2;
 
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
 ```
@@ -52,7 +52,7 @@ fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult {
 Functions can call other functions:
 
 ```
-const R_EARTH: Length = 6371.0 km;
+const node R_EARTH: Length = 6371.0 km;
 
 fn earth_radius() -> Length = R_EARTH;
 

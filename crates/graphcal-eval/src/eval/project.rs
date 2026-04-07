@@ -440,8 +440,10 @@ fn process_instantiated_import<'a>(
             .declarations
             .iter()
             .find_map(|d| match &d.kind {
+                DeclKind::Node(n) if n.is_const && n.name.value.as_str() == binding_name => {
+                    Some("const node")
+                }
                 DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
-                DeclKind::Const(c) if c.name.value.as_str() == binding_name => Some("const"),
                 DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
                 DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
                 _ => None,
@@ -493,12 +495,12 @@ fn process_instantiated_import<'a>(
 
                 // Register the local name in scope for the resolver.
                 // Determine the category from the dep's AST.
-                let is_const = dep_loaded.ast.declarations.iter().any(
-                    |d| matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name),
-                );
+                let is_const = dep_loaded.ast.declarations.iter().any(|d| {
+                    matches!(&d.kind, DeclKind::Node(n) if n.is_const && n.name.value.as_str() == orig_name)
+                });
                 let is_runtime = dep_loaded.ast.declarations.iter().any(|d| {
                     matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
-                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
+                        || matches!(&d.kind, DeclKind::Node(n) if !n.is_const && n.name.value.as_str() == orig_name)
                 });
                 let scoped = ScopedName::Local(local_name.clone());
                 let span = import_item.name.span;
@@ -534,9 +536,8 @@ fn process_instantiated_import<'a>(
             let import_span = import_decl.path.span();
             for dep_decl in &dep_loaded.ast.declarations {
                 let (dep_name, is_const) = match &dep_decl.kind {
-                    DeclKind::Const(c) => (Some(c.name.value.to_string()), true),
                     DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
-                    DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
+                    DeclKind::Node(n) => (Some(n.name.value.to_string()), n.is_const),
                     _ => (None, false),
                 };
                 if let Some(name) = dep_name {
@@ -746,7 +747,6 @@ fn rewrite_qualified_refs_in_ast<'a>(
     let mut ast = ast.clone();
     for decl in &mut ast.declarations {
         match &mut decl.kind {
-            DeclKind::Const(c) => rewrite_qualified_refs(&mut c.value),
             DeclKind::Param(p) => {
                 if let Some(ref mut value) = p.value {
                     rewrite_qualified_refs(value);
@@ -981,9 +981,6 @@ fn add_selective_aliases(
             .declarations
             .iter()
             .find_map(|d| match &d.kind {
-                DeclKind::Const(c) if c.name.value.as_str() == orig_name => {
-                    Some(c.type_ann.clone())
-                }
                 DeclKind::Param(p) if p.name.value.as_str() == orig_name => {
                     Some(p.type_ann.clone())
                 }
@@ -1002,10 +999,9 @@ fn add_selective_aliases(
         );
 
         // Determine if this is a const or runtime declaration.
-        let is_const =
-            dep_loaded.ast.declarations.iter().any(
-                |d| matches!(&d.kind, DeclKind::Const(c) if c.name.value.as_str() == orig_name),
-            );
+        let is_const = dep_loaded.ast.declarations.iter().any(|d| {
+            matches!(&d.kind, DeclKind::Node(n) if n.is_const && n.name.value.as_str() == orig_name)
+        });
 
         // Create an alias expression: `@prefix::orig_name` (or `PREFIX::CONST`)
         let alias_expr = if is_const {
@@ -1703,11 +1699,11 @@ fn route_overrides_to_files(
             // in the root file to provide a better error message.
             for decl in &root_file.ast.declarations {
                 let kind = match &decl.kind {
+                    DeclKind::Node(n) if n.is_const && n.name.value.as_str() == name_str => {
+                        Some(DeclCategory::Const)
+                    }
                     DeclKind::Node(n) if n.name.value.as_str() == name_str => {
                         Some(DeclCategory::Node)
-                    }
-                    DeclKind::Const(c) if c.name.value.as_str() == name_str => {
-                        Some(DeclCategory::Const)
                     }
                     DeclKind::Assert(a) if a.name.value.as_str() == name_str => {
                         Some(DeclCategory::Assert)
@@ -1988,7 +1984,6 @@ pub(super) fn file_has_declaration(
     name: &str,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
-        DeclKind::Const(c) => c.name.value.as_str() == name,
         DeclKind::Param(p) => p.name.value.as_str() == name,
         DeclKind::Node(n) => n.name.value.as_str() == name,
         DeclKind::Fn(f) => f.name.value.as_str() == name,

@@ -31,7 +31,7 @@ miette was chosen over alternatives (ariadne, codespan-reporting) because:
 | --- | --- | --- | --- |
 | Error | `Severity::Error` | Compilation failures: type errors, cycles, unknown references | x |
 | Warning | `Severity::Warning` | Non-fatal issues: unused nodes, shadowed imports, implicit conversions | ! |
-| Advice | `Severity::Advice` | Style suggestions: zero-argument fn (suggest const), overly complex expressions | i |
+| Advice | `Severity::Advice` | Style suggestions: zero-argument fn (suggest const node), overly complex expressions | i |
 
 ## Error Code Scheme
 

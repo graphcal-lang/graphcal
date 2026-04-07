@@ -1504,10 +1504,6 @@ fn register_declarations_impl(
     // for-range expressions (e.g., `for i: range(3) { ... }`).
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Const(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
-                collect_nat_ranges_from_expr(&d.value, registry);
-            }
             DeclKind::Param(d) => {
                 collect_nat_ranges_from_type_expr(&d.type_ann, registry);
                 if let Some(ref value) = d.value {
@@ -2341,9 +2337,6 @@ fn extract_type_annotations(ast: &File) -> HashMap<String, TypeExpr> {
     let mut type_anns = HashMap::new();
     for decl in &ast.declarations {
         match &decl.kind {
-            DeclKind::Const(c) => {
-                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
-            }
             DeclKind::Param(p) => {
                 type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
             }

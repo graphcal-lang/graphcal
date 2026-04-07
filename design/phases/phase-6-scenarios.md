@@ -45,7 +45,7 @@ language works with scalars, dimensions, structs, functions, and tables.
       (e.g., `450 s` with unit). How is this parsed within YAML?
       May need quoting: `isp: "450 s"`.
 - [ ] **Override validation:** Overriding a non-existent param is an error.
-      Overriding a `node` or `const` is an error (only `param` can be overridden).
+      Overriding a `node` or `const node` is an error (only `param` can be overridden).
 - [ ] **Scenario discovery:** Are scenarios in a `scenarios/` directory by convention?
       Or can they be anywhere?
 

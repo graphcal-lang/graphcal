@@ -184,7 +184,7 @@ IDENT
      Used for: param, node, fn names, field names, local variables.
    - UPPER_SNAKE_CASE: starts with an uppercase letter, contains only
      uppercase letters, digits, and underscores.
-     Used for: const names, built-in constants (PI, E).
+     Used for: const node names, built-in constants (PI, E).
    - PascalCase: starts with an uppercase letter, contains at least
      one lowercase letter.
      Used for: type, index, variant names.
@@ -275,7 +275,7 @@ declaration_kind
    | import_decl
    | assert_decl;
 
-(* --- param, node, const --- *)
+(* --- param, node, const node --- *)
 (* All three require an explicit type annotation. *)
 param_decl
    = "param", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
@@ -284,7 +284,7 @@ node_decl
    = "node", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
 
 const_decl
-   = "const", upper_snake_case_ident, ":", type_expr, "=", expr, ";";
+   = "const", "node", upper_snake_case_ident, ":", type_expr, "=", expr, ";";
 
 (* --- dimension --- *)
 dimension_decl
@@ -466,7 +466,7 @@ assert_body
    type_expr corresponds to DeclType: a value_type optionally indexed.
    type_expr_base corresponds to ValueType (without indexing).
    Struct fields must be ValueTypes (type_expr_base), not DeclTypes.
-   param, node, const, and fn parameter/return annotations use DeclType
+   param, node, const node, and fn parameter/return annotations use DeclType
    (type_expr). *)
 type_expr
    = type_expr_base, [ "[", uppercase_starting_ident, { ",", uppercase_starting_ident }, "]" ];
@@ -631,7 +631,7 @@ graph_ref
 const_ref
    = [ lower_snake_case_ident, "::" ], upper_snake_case_ident;
 
-(* NAME — local const ref.  module::NAME — qualified const ref.
+(* NAME — local const node ref.  module::NAME — qualified const node ref.
    Includes built-in constants PI and E. *)
 local_ref
    = lower_snake_case_ident;

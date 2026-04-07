@@ -159,7 +159,7 @@ This restriction exists because Graphcal targets finite computation graphs, not 
 
 ## Calling Functions
 
-Functions are called in `node` expressions, `const` expressions, or within other function bodies:
+Functions are called in `node` expressions, `const node` expressions, or within other function bodies:
 
 ```
 node v: Velocity = orbital_velocity(GM_EARTH, R_EARTH + @parking_alt);

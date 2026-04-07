@@ -14,7 +14,7 @@ If you've used spreadsheets, you already understand Graphcal's core model:
 |-------------|----------|-------------|
 | Input cell | `param` | A value you provide, can be overridden |
 | Formula cell | `node` | A computed value derived from other values |
-| Named constant | `const` | A fixed value that never changes |
+| Named constant | `const node` | A fixed value that never changes |
 
 ## Your First File
 
@@ -23,7 +23,7 @@ Create a file `mass_budget.gcl`:
 ```
 param dry_mass: Dimensionless = 1200.0;
 param fuel_mass: Dimensionless = 2800.0;
-const MARGIN_FACTOR: Dimensionless = 1.1;
+const node MARGIN_FACTOR: Dimensionless = 1.1;
 
 node total_mass: Dimensionless = @dry_mass + @fuel_mass;
 node mass_with_margin: Dimensionless = @total_mass * MARGIN_FACTOR;
@@ -57,15 +57,15 @@ param dry_mass: Dimensionless = 1200.0;
 - **`: Dimensionless`** -- the dimension annotation (`Dimensionless` means a plain number)
 - **`= 1200.0`** -- the default value
 
-### Constants (`const`)
+### Constants (`const node`)
 
 Constants are fixed values known at compile time:
 
 ```
-const MARGIN_FACTOR: Dimensionless = 1.1;
+const node MARGIN_FACTOR: Dimensionless = 1.1;
 ```
 
-- **`const`** -- declares a compile-time constant
+- **`const node`** -- declares a compile-time constant
 - **`MARGIN_FACTOR`** -- the name (must be `UPPER_SNAKE_CASE`)
 
 ### Nodes (`node`)
@@ -84,7 +84,7 @@ node total_mass: Dimensionless = @dry_mass + @fuel_mass;
 The `@` prefix is how you reference values in the computation graph:
 
 - `@name` references a `param` or `node`
-- Bare `NAME` references a `const` or built-in constant
+- Bare `NAME` references a `const node` or built-in constant
 - The `@` sigil makes it visually clear which values participate in the reactive DAG
 
 ## Overriding Parameters
@@ -110,14 +110,14 @@ Graphcal enforces naming conventions at parse time:
 | Declaration | Convention | Example |
 |-------------|-----------|---------|
 | `param`, `node`, `fn` | `lower_snake_case` | `dry_mass`, `total_dv` |
-| `const` | `UPPER_SNAKE_CASE` | `MARGIN_FACTOR`, `G0` |
+| `const node` | `UPPER_SNAKE_CASE` | `MARGIN_FACTOR`, `G0` |
 | `type`, `index`, `dimension` | `PascalCase` | `TransferResult`, `Maneuver` |
 
 ## What You Learned
 
 - **`param`** for input values that can be overridden
 - **`node`** for computed values in the reactive graph
-- **`const`** for compile-time constants
+- **`const node`** for compile-time constants
 - **`@`** sigil to reference graph values
 - **`--set`** to override parameters from the command line
 

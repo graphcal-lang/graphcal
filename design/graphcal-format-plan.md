@@ -509,12 +509,12 @@ unit km: Length = 1000 m;
 unit kPa: Pressure = 1000 kg / m * s^2;
 ```
 
-#### `const` / `param` / `node` Declarations
+#### `const node` / `param` / `node` Declarations
 
 Short form (expression fits on one line):
 
 ```gcl
-const R_EARTH: Length = 6371.0 km;
+const node R_EARTH: Length = 6371.0 km;
 param parking_alt: Length = 200.0 km;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
@@ -717,7 +717,7 @@ panics on arbitrary input.
 |------|-------------|-----------------|
 | **0a** | Comment extraction (`extract_comments`) in `graphcal-syntax` | ~100 LOC |
 | **0b** | Create `graphcal-fmt` crate with `format_source` stub | Boilerplate |
-| **1a** | Format simple declarations (dimension, unit, const, param, node without blocks) | ~200 LOC |
+| **1a** | Format simple declarations (dimension, unit, const node, param, node without blocks) | ~200 LOC |
 | **1b** | Add `graphcal format` CLI subcommand | ~50 LOC |
 | **1c** | Idempotency + snapshot tests for step 1a | ~100 LOC |
 | **2a** | Format expressions (binop, unary, if, fn call, unit literal, convert) | ~300 LOC |

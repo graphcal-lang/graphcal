@@ -4,7 +4,7 @@
 
 ## Status
 
-**Decision level:** Mostly settled. Core primitives (`param`, `node`, `const`) are established. Evaluation strategy (hybrid eager/lazy with incremental recomputation) is resolved.
+**Decision level:** Mostly settled. Core primitives (`param`, `node`, `const node`) are established. Evaluation strategy (hybrid eager/lazy with incremental recomputation) is resolved.
 
 ## Summary
 
@@ -16,12 +16,12 @@ The fundamental unit is a **cell graph**: a directed acyclic graph (DAG) of name
 | --- | --- | --- |
 | Parameter | `param` | User-supplied input with a type and default value. Adjustable at runtime. |
 | Computation | `node` | Derived value computed from other nodes. Can have multi-line body. |
-| Constant | `const` | Immutable value. Not user-adjustable. Inlined by the compiler. |
+| Constant | `const node` | Immutable value. Not user-adjustable. Inlined by the compiler. |
 
 ```gcl
-param mass   = 5000 kg;        // input
-const G0     = 9.80665 m/s^2;  // constant
-node  thrust = @mass * @G0;    // computed
+param mass        = 5000 kg;        // input
+const node G0     = 9.80665 m/s^2;  // constant
+node  thrust      = @mass * @G0;    // computed
 ```
 
 ## Evaluation Strategy
@@ -53,9 +53,9 @@ Inputs are classified by how frequently they change, enabling the runtime to ski
 | --- | --- | --- |
 | Low | `param` adjusted by slider or input field | Every interaction |
 | Medium | Scenario overlays | On scenario switch |
-| High | `const`, imported material properties | Rarely or never |
+| High | `const node`, imported material properties | Rarely or never |
 
-When a low-durability `param` changes, nodes that depend only on high-durability inputs (`const`, external data) skip validation entirely. This optimization (borrowed from Salsa/rust-analyzer) eliminates redundant dependency-graph walks.
+When a low-durability `param` changes, nodes that depend only on high-durability inputs (`const node`, external data) skip validation entirely. This optimization (borrowed from Salsa/rust-analyzer) eliminates redundant dependency-graph walks.
 
 ### Stable Node Identity
 

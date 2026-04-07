@@ -14,7 +14,7 @@ Graphcal provides Python bindings via PyO3. Python can load `.gcl` graphs, read/
 
 Graphcal is implemented as a Rust workspace with four crates (`graphcal-cli`, `graphcal-eval`, `graphcal-syntax`, `graphcal-lsp`). Phases 0-5 are implemented:
 
-- Phase 0: Scalar graph (`param`/`node`/`const`, `@` sigil, `f64`)
+- Phase 0: Scalar graph (`param`/`node`/`const node`, `@` sigil, `f64`)
 - Phase 1: Dimensions & units (`dimension`, `unit`, `->` conversion)
 - Phase 2: Structs & multi-line nodes (`type`, block bodies, `let` bindings)
 - Phase 3: Pure functions (`fn`, `<D: Dim>` generics)

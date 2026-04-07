@@ -19,7 +19,7 @@ node a_eq_b: Bool = @a == @b;
 node a_le_b: Bool = @a <= @b;
 
 // Integer constant
-const SEVEN: Int = 7;
+const node SEVEN: Int = 7;
 
 // If-else with integers
 node clamped: Int = if @a > SEVEN { SEVEN } else { @a };

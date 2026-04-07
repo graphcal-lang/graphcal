@@ -247,7 +247,7 @@ node supply_margin: Mass = min(for y: Year { @supply[y].on_hand });
 | Vensim | Graphcal | Primitive |
 | --- | --- | --- |
 | Auxiliary variable | `node` | Same |
-| Constant | `param` or `const` | Same |
+| Constant | `param` or `const node` | Same |
 | Stock (Level) | `scan` field in struct | scan over time index |
 | Flow (Rate) | Expression in scan body | Math |
 | Subscript | `index` | Indexed values `T[I]` |

@@ -3,6 +3,6 @@
 
 param radius: Length;
 
-const PI: Dimensionless = 3.14159265358979;
+const node PI: Dimensionless = 3.14159265358979;
 
 node circumference: Length = 2.0 * PI * @radius;

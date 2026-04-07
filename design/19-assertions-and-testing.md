@@ -12,7 +12,7 @@
 
 Graphcal adds testing and validation through three features:
 
-1. **`assert` declaration kind** — a new top-level declaration (alongside `param`, `node`, `const`) that checks a boolean condition or value tolerance after evaluation.
+1. **`assert` declaration kind** — a new top-level declaration (alongside `param`, `node`, `const node`) that checks a boolean condition or value tolerance after evaluation.
 2. **`#[...]` attribute system** — a general-purpose metadata annotation on declarations, using the `#` sigil (since `//` is used for comments and `@` for graph references).
 3. **`#[assumes(...)]` attribute** — documents that a node's computation relies on an engineering assumption expressed as an `assert`, without creating a graph dependency. This enables engineers to break circular dependencies while maintaining traceability.
 
@@ -126,7 +126,7 @@ The engineering practice is to assume a value, compute forward, then verify the 
   node safety_factor: Dimensionless = 1.5;
   ```
 
-- [ ] **Name resolution:** The argument(s) to `#[assumes(...)]` must refer to `assert` declarations. Referencing a `node`, `param`, `const`, or nonexistent name is a compile error.
+- [ ] **Name resolution:** The argument(s) to `#[assumes(...)]` must refer to `assert` declarations. Referencing a `node`, `param`, `const node`, or nonexistent name is a compile error.
 
 - [ ] **Multiple assumptions:** A single `#[assumes(...)]` can list multiple assertions:
 
@@ -146,7 +146,7 @@ The engineering practice is to assume a value, compute forward, then verify the 
       - material_grade (main.gcl:15)
   ```
 
-- [ ] **Valid on `node` and `param`:** `#[assumes(...)]` is valid on `node` and `param` declarations. It is an error on `const` (constants don't depend on runtime values), `assert` (circular assumption), `fn` (functions are pure and don't reference the graph), and type/dimension/unit/index declarations.
+- [ ] **Valid on `node` and `param`:** `#[assumes(...)]` is valid on `node` and `param` declarations. It is an error on `const node` (constants don't depend on runtime values), `assert` (circular assumption), `fn` (functions are pure and don't reference the graph), and type/dimension/unit/index declarations.
 
 ### `#[lazy]` Attribute
 
@@ -157,7 +157,7 @@ The engineering practice is to assume a value, compute forward, then verify the 
   node detailed_report: Report = expensive_analysis(@all_data);
   ```
 
-- [ ] **Valid on `node` only:** `param` values must always be available (they're inputs). `const` values are compile-time. Only `node` evaluation can be deferred.
+- [ ] **Valid on `node` only:** `param` values must always be available (they're inputs). `const node` values are compile-time. Only `node` evaluation can be deferred.
 
 ### CLI Changes
 
@@ -237,7 +237,7 @@ AssertBody    = Expr                                    // must evaluate to Bool
 dimension Velocity = Length / Time;
 dimension SpecificImpulse = Time;
 
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 param dry_mass: Mass = 1200.0 kg;
 param isp: SpecificImpulse = 320.0 s;
 param delta_v: Velocity = 3000.0 m/s;

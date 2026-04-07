@@ -27,7 +27,7 @@ rocket_project/
 
 ```
 dimension Acceleration = Length / Time^2;
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 ```
 
 ### `params.gcl`
@@ -95,7 +95,7 @@ You can import any top-level declaration:
 |-------------|--------|-----------|
 | `param` | `import "..." { name }` | `@name` |
 | `node` | `import "..." { name }` | `@name` |
-| `const` | `import "..." { NAME }` | `NAME` |
+| `const node` | `import "..." { NAME }` | `NAME` |
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |

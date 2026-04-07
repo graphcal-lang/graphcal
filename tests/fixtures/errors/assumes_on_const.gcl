@@ -2,4 +2,4 @@
 assert check = true;
 
 #[assumes(check)]
-const X: Dimensionless = 1.0;
+const node X: Dimensionless = 1.0;

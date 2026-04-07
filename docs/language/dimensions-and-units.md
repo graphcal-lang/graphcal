@@ -130,13 +130,13 @@ Attach a unit to a numeric literal:
 ```
 param altitude: Length = 200.0 km;
 param duration: Time = 1.5 hour;
-const C: Velocity = 299792458.0 m/s;
+const node C: Velocity = 299792458.0 m/s;
 ```
 
 Compound unit expressions are supported:
 
 ```
-const GM: GravParam = 3.986e5 km^3/s^2;
+const node GM: GravParam = 3.986e5 km^3/s^2;
 ```
 
 ## Unit Conversion

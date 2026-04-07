@@ -343,7 +343,6 @@ fn extract_decl_name(kind: &DeclKind) -> Option<String> {
     match kind {
         DeclKind::Param(p) => Some(p.name.value.as_str().to_string()),
         DeclKind::Node(n) => Some(n.name.value.as_str().to_string()),
-        DeclKind::Const(c) => Some(c.name.value.as_str().to_string()),
         DeclKind::Dimension(d) => Some(d.name.value.as_str().to_string()),
         DeclKind::Unit(u) => Some(u.name.value.as_str().to_string()),
         DeclKind::Index(i) => Some(i.name.value.as_str().to_string()),

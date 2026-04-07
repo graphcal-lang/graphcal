@@ -28,7 +28,7 @@ Each aspect of the language design is documented in a separate file for independ
 
 | # | Aspect | Status | Description |
 | --- | --- | --- | --- |
-| [01](./01-computation-model.md) | Computation Model | Mostly settled | DAG of `param`/`node`/`const`, reactive evaluation, incremental recomputation |
+| [01](./01-computation-model.md) | Computation Model | Mostly settled | DAG of `param`/`node`/`const node`, reactive evaluation, incremental recomputation |
 | [02](./02-syntax-design.md) | Syntax Design | Mostly settled | Keywords, expressions, statement forms |
 | [08](./08-scoping.md) | Scoping (`@` Sigil) | Settled | `@name` = graph scope, bare `name` = local scope |
 | [09](./09-namespace.md) | Namespace & Multi-File | Mostly settled | Modules, imports, visibility, prelude |

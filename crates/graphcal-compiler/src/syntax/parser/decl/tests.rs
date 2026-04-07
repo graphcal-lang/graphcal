@@ -109,16 +109,16 @@ fn parse_node_with_compound_dim_type() {
 }
 
 #[test]
-fn parse_const_with_type() {
-    let file = Parser::new("const G0: Dimensionless = 9.80665;")
+fn parse_const_node_with_type() {
+    let file = Parser::new("const node G0: Dimensionless = 9.80665;")
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Const(c) => {
-            assert_eq!(c.name.value.as_str(), "G0");
-            assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
+        DeclKind::Node(n) if n.is_const => {
+            assert_eq!(n.name.value.as_str(), "G0");
+            assert!(matches!(n.type_ann.kind, TypeExprKind::Dimensionless));
         }
-        _ => panic!("expected const"),
+        _ => panic!("expected const node"),
     }
 }
 
@@ -258,9 +258,18 @@ fn parse_error_bad_param_casing() {
 }
 
 #[test]
-fn parse_error_bad_const_casing() {
-    let result = Parser::new("const bad_name: Dimensionless = 42.0;").parse_file();
+fn parse_error_bad_const_node_casing() {
+    let result = Parser::new("const node bad_name: Dimensionless = 42.0;").parse_file();
     assert!(result.is_err());
+}
+
+#[test]
+fn parse_error_standalone_const() {
+    let result = Parser::new("const G0: Dimensionless = 9.80665;").parse_file();
+    assert!(
+        result.is_err(),
+        "standalone `const` should be a parse error"
+    );
 }
 
 #[test]
@@ -270,7 +279,7 @@ dimension Velocity = Length / Time;
 
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;
-const R_EARTH: Length = 6371.0 km;
+const node R_EARTH: Length = 6371.0 km;
 
 node circumference: Length = 2.0 * PI * (R_EARTH + @alt);
 node speed: Velocity = @circumference / @period;
@@ -285,7 +294,6 @@ node speed_kmh: Velocity = @speed -> km/hour;
         .map(|d| match &d.kind {
             DeclKind::Param(p) => p.name.value.as_str(),
             DeclKind::Node(n) => n.name.value.as_str(),
-            DeclKind::Const(c) => c.name.value.as_str(),
             DeclKind::Dimension(d) => d.name.value.as_str(),
             DeclKind::Unit(u) => u.name.value.as_str(),
             DeclKind::Type(t) => t.name.value.as_str(),

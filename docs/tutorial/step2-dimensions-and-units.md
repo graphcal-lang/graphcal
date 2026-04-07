@@ -21,7 +21,7 @@ dimension Acceleration = Length / Time^2;
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
 param isp: Time = 320.0 s;
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 
 node v_exhaust: Velocity = @isp * G0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -59,7 +59,7 @@ The prelude provides common units. Attach a unit to a numeric literal:
 ```
 param altitude: Length = 200.0 km;
 param duration: Time = 3600.0 s;
-const SPEED_OF_LIGHT: Velocity = 299792458.0 m/s;
+const node SPEED_OF_LIGHT: Velocity = 299792458.0 m/s;
 ```
 
 ### Available Prelude Units

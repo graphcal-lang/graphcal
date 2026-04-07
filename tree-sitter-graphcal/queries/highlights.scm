@@ -89,9 +89,6 @@
 (param_declaration name: (identifier) @variable)
 (node_declaration name: (identifier) @variable)
 
-; const G0, const R_EARTH
-(const_declaration name: (identifier) @constant)
-
 ; dimension Velocity, dimension Length
 (dimension_declaration name: (identifier) @type)
 

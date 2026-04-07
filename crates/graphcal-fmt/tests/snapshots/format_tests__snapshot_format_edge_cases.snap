@@ -32,8 +32,8 @@ index Maneuver = { Departure, Midcourse1, Midcourse2, Correction, Insertion };
 
 index Step = linspace(0.0 s, 10.0 s, step: 1.0 s);
 
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
-const R_EARTH: Length = 6371.0 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
 
 // Long function signature that should wrap
 fn compute_transfer_velocity(gm: GravParam,

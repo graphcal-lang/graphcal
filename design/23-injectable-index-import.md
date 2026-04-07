@@ -116,7 +116,7 @@ node design_cost: Money = @cost[Phase::Design];  // BANNED
 | --- | --- | --- |
 | `param` default expression | **Yes** | Importer can rebind the param |
 | `node` expression | **No** | Not rebindable by importer |
-| `const` expression | **No** | Not rebindable |
+| `const node` expression | **No** | Not rebindable |
 | `assert` expression | **No** | Not rebindable |
 | `fn` body | **No** | Internal logic, not rebindable |
 | `#[expected_fail(...)]` attribute | **Yes** | Handled via import-site override (see below) |
@@ -167,7 +167,7 @@ This constraint is a feature: it forces library code to be truly generic over th
 
 ### What a Library Can/Cannot Do with an Index
 
-Since variant literals are banned in non-rebindable contexts for **all** indexes, the allowed operations are the same for required and default indexes in `node`/`const`/`assert`/`fn` contexts:
+Since variant literals are banned in non-rebindable contexts for **all** indexes, the allowed operations are the same for required and default indexes in `node`/`const node`/`assert`/`fn` contexts:
 
 | Operation | Named (`index`) | Range | Example |
 | --- | --- | --- | --- |
@@ -177,8 +177,8 @@ Since variant literals are banned in non-rebindable contexts for **all** indexes
 | Aggregation | Yes | Yes | `sum(for s: Subsystem { @x[s] })` |
 | Arithmetic on loop var | **No** | Yes | `t * 2.0` where `t: TimeStep` (scalar) |
 | `unfold` | **No** | Yes | `unfold(@x0, \|prev, curr\| { ... })` |
-| Variant literal (in node/const/assert/fn) | **No** | N/A | `Subsystem::ADCS` — banned |
-| Map literal (in node/const/assert/fn) | **No** | N/A | `{ Subsystem::ADCS: ... }` — banned |
+| Variant literal (in node/const node/assert/fn) | **No** | N/A | `Subsystem::ADCS` — banned |
+| Map literal (in node/const node/assert/fn) | **No** | N/A | `{ Subsystem::ADCS: ... }` — banned |
 | Variant literal (in param default) | Yes | N/A | `{ Subsystem::ADCS: 1.0 }` — allowed, rebindable |
 | Map literal (in param default) | Yes | N/A | `table[Subsystem] { ... }` — allowed, rebindable |
 
@@ -499,7 +499,7 @@ import "./lib.gcl"(
 
 Enforce the variant literal ban before implementing injectable indexes. This is a breaking change but the software is unpublished.
 
-1. **Compiler check**: During IR lowering or TIR type-checking, reject variant literals in `node`, `const`, `assert`, and `fn` contexts. Variant literals in `param` defaults and `#[expected_fail]` attributes remain allowed.
+1. **Compiler check**: During IR lowering or TIR type-checking, reject variant literals in `node`, `const node`, `assert`, and `fn` contexts. Variant literals in `param` defaults and `#[expected_fail]` attributes remain allowed.
 2. **Update test fixtures**: Refactor all affected test files to use the param-extraction pattern.
 3. **Error message**: "variant literal `Phase::Design` cannot be used in a node expression; extract it into a `param` default instead"
 4. **LSP diagnostic**: Same error, shown inline.
@@ -588,7 +588,7 @@ Enforce the variant literal ban before implementing injectable indexes. This is 
 
 - **Required range syntax?** `index Foo: Dim;` — the dimension after the colon declares the constraint. This parallels `param x: Length;` (name, colon, type constraint). Examples: `index TimeStep: Time;`, `index Altitude: Length;`.
 
-- **Variant literals in non-rebindable contexts?** Banned for all indexes (required and default) in `node`, `const`, `assert`, and `fn` contexts. Allowed in `param` defaults (rebindable) and `#[expected_fail]` attributes (handled via import-site override). This ensures every file is reusable as a library.
+- **Variant literals in non-rebindable contexts?** Banned for all indexes (required and default) in `node`, `const node`, `assert`, and `fn` contexts. Allowed in `param` defaults (rebindable) and `#[expected_fail]` attributes (handled via import-site override). This ensures every file is reusable as a library.
 
 - **`#[expected_fail]` with overridden indexes?** Library's variant-specific annotations are dropped when the index is overridden. The importing file can attach `#[expected_fail]` to import items to declare expected failures for the new variants. Import item syntax extended to `Attribute* IDENT ("as" IDENT)?`.
 
@@ -598,7 +598,7 @@ Enforce the variant literal ban before implementing injectable indexes. This is 
 
 - **CLI binding for required indexes?** Can `--set` or `--input` provide index definitions for a standalone file with required indexes? *Recommendation: defer. Focus on parameterized import bindings first. CLI binding can be designed later as a natural extension.*
 
-- **Can a required index appear in a const declaration?** E.g., `const weights: Dimensionless[I] = ...;`. Since const values must be fully evaluable at compile time and a required index has unknown variants, this seems problematic. *Recommendation: disallow required indexes in const declarations for now.*
+- **Can a required index appear in a const node declaration?** E.g., `const node weights: Dimensionless[I] = ...;`. Since const node values must be fully evaluable at compile time and a required index has unknown variants, this seems problematic. *Recommendation: disallow required indexes in const node declarations for now.*
 
 ## Dependencies
 

@@ -1,8 +1,8 @@
 use graphcal_compiler::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, ConstDecl, DeclKind, Declaration, DimDecl, Encoding,
-    FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    AssertBody, AssertDecl, Attribute, DeclKind, Declaration, DimDecl, Encoding, FieldDecl,
+    FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl, IndexDecl,
+    IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl, TypeExpr,
+    UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
@@ -19,7 +19,6 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
     let body = match &decl.kind {
         DeclKind::Param(d) => format_param_decl(fmt, d),
         DeclKind::Node(d) => format_node_decl(fmt, d),
-        DeclKind::Const(d) => format_const_decl(fmt, d),
         DeclKind::Dimension(d) => format_dim_decl(fmt, d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
@@ -95,14 +94,10 @@ fn format_param_decl(fmt: &mut Formatter<'_>, d: &ParamDecl) -> RcDoc<'static> {
     )
 }
 
-/// `node name: Type = expr;`
+/// `node name: Type = expr;` or `const node NAME: Type = expr;`
 fn format_node_decl(fmt: &mut Formatter<'_>, d: &NodeDecl) -> RcDoc<'static> {
-    format_value_decl(fmt, "node", &d.name.value, &d.type_ann, &d.value)
-}
-
-/// `const name: Type = expr;`
-fn format_const_decl(fmt: &mut Formatter<'_>, d: &ConstDecl) -> RcDoc<'static> {
-    format_value_decl(fmt, "const", &d.name.value, &d.type_ann, &d.value)
+    let keyword = if d.is_const { "const node" } else { "node" };
+    format_value_decl(fmt, keyword, &d.name.value, &d.type_ann, &d.value)
 }
 
 /// Shared logic for param/node/const declarations.

@@ -913,11 +913,11 @@ mod tests {
 
     #[test]
     fn parse_compound_unit_literal() {
-        let file = Parser::new("const G0: Acceleration = 9.80665 m/s^2;")
+        let file = Parser::new("const node G0: Acceleration = 9.80665 m/s^2;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Const(c) => match &c.value.kind {
+            DeclKind::Node(c) if c.is_const => match &c.value.kind {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 9.80665).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 2);

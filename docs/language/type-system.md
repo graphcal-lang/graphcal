@@ -26,7 +26,7 @@ Expression-level:
 
 - **Primitive** — An indivisible atomic datum.
 - **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, union types). This is the type of one value: you can pass it to a function, return it, store it.
-- **DeclType** — What can appear in type annotations of `param`, `node`, and `const` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
+- **DeclType** — What can appear in type annotations of `param`, `node`, and `const node` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
 - **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver::Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies, function parameters, and `let` bindings.
 
 ### DAG Correspondence
@@ -77,7 +77,7 @@ Only `Scalar` carries a physical dimension. `Int` and `Bool` are non-scalable --
 
 ```
 param count: Int = 42;
-const SEVEN: Int = 7;
+const node SEVEN: Int = 7;
 ```
 
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
@@ -261,7 +261,7 @@ Named index labels are proper runtime values within expressions:
 - Pattern match: `match m { Maneuver::Departure => ..., ... }` works.
 - Use in struct fields: `type Config { phase: Phase, maneuver: Maneuver }` works.
 
-However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
+However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
 
 A regular fieldless union type (`type Foo = A | B;`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
@@ -478,7 +478,7 @@ This section lists the type of each expression form and the constraints the comp
 | Expression | Type |
 |-----------|------|
 | `@name` | Declared type of param/node `name` |
-| `CONST_NAME` | Declared type of const `CONST_NAME` |
+| `CONST_NAME` | Declared type of `const node` `CONST_NAME` |
 | `local_var` | Type of the `let` binding or function parameter |
 
 ### Arithmetic Operators

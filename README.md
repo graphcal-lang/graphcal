@@ -15,7 +15,7 @@ dimension Acceleration = Length / Time^2;
 param dry_mass: Mass = 1200 kg;
 param fuel_mass: Mass = 2800 kg;
 param isp: Time = 320 s;
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 
 node v_exhaust: Velocity = @isp * G0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -92,7 +92,7 @@ node transfer_time: Time = @storage / @rate;
 
 ### Reactive computation graph
 
-Three declaration kinds -- `param` (inputs), `node` (computed), `const` (compile-time) -- form a DAG that is automatically evaluated in dependency order. A `param` can have a default value or be **required** (no `= value`), in which case it must be provided via `--set`, `--input`, or a parameterized import binding. Override any `param` at the command line with `--set` or `--input`. When any override is provided, all params must be explicitly supplied (use `--allow-defaults` to opt out).
+Three declaration kinds -- `param` (inputs), `node` (computed), `const node` (compile-time) -- form a DAG that is automatically evaluated in dependency order. A `param` can have a default value or be **required** (no `= value`), in which case it must be provided via `--set`, `--input`, or a parameterized import binding. Override any `param` at the command line with `--set` or `--input`. When any override is provided, all params must be explicitly supplied (use `--allow-defaults` to opt out).
 
 ```sh
 graphcal eval rocket.gcl --set 'dry_mass=800.0 kg' --set 'fuel_mass=3200.0 kg' --set 'isp=450.0 s'
@@ -180,7 +180,7 @@ node transfer: TransferResult = {
 ### If/else expressions
 
 ```gcl
-const SEVEN: Int = 7;
+const node SEVEN: Int = 7;
 node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
 node result: Dimensionless = if @enabled { 1.0 } else { 0.0 };
 ```
@@ -515,8 +515,8 @@ type TransferResult {
     tof: Time,
 }
 
-const R_EARTH: Length = 6371 km;
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200 km;
 param target_alt: Length = 35786 km;
@@ -697,7 +697,7 @@ node transfer_time: Time = @storage / @rate;
 ```gcl
 // constants.gcl
 dimension Acceleration = Length / Time^2;
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 ```
 
 ```gcl
