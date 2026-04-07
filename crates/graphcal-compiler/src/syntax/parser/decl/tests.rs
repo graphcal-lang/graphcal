@@ -124,13 +124,12 @@ fn parse_const_node_with_type() {
 
 #[test]
 fn parse_base_dimension() {
-    let file = Parser::new("dimension Length;").parse_file().unwrap();
+    let file = Parser::new("base dimension Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Dimension(d) => {
+        DeclKind::BaseDimension(d) => {
             assert_eq!(d.name.value.as_str(), "Length");
-            assert!(d.definition.is_none());
         }
-        _ => panic!("expected dimension"),
+        _ => panic!("expected base dimension"),
     }
 }
 
@@ -142,11 +141,10 @@ fn parse_derived_dimension() {
     match &file.declarations[0].kind {
         DeclKind::Dimension(d) => {
             assert_eq!(d.name.value.as_str(), "Velocity");
-            let def = d.definition.as_ref().unwrap();
-            assert_eq!(def.terms.len(), 2);
-            assert_eq!(def.terms[0].term.name.name, "Length");
-            assert_eq!(def.terms[1].op, MulDivOp::Div);
-            assert_eq!(def.terms[1].term.name.name, "Time");
+            assert_eq!(d.definition.terms.len(), 2);
+            assert_eq!(d.definition.terms[0].term.name.name, "Length");
+            assert_eq!(d.definition.terms[1].op, MulDivOp::Div);
+            assert_eq!(d.definition.terms[1].term.name.name, "Time");
         }
         _ => panic!("expected dimension"),
     }
@@ -295,6 +293,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Param(p) => p.name.value.as_str(),
             DeclKind::Node(n) => n.name.value.as_str(),
             DeclKind::ConstNode(c) => c.name.value.as_str(),
+            DeclKind::BaseDimension(d) => d.name.value.as_str(),
             DeclKind::Dimension(d) => d.name.value.as_str(),
             DeclKind::Unit(u) => u.name.value.as_str(),
             DeclKind::Type(t) => t.name.value.as_str(),

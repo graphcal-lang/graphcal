@@ -499,7 +499,7 @@ Using the `pretty` crate's `Doc` type (Wadler-Lindig algorithm):
 dimension Velocity = Length / Time;
 
 // Base dimension
-dimension Length;
+base dimension Length;
 ```
 
 #### `unit` Declarations

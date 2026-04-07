@@ -1,4 +1,4 @@
 // left.gcl -- left branch of diamond, imports shared
-import "./shared.gcl" { base };
-node doubled: Dimensionless = @base * 2.0;
+import "./shared.gcl" { base_val };
+node doubled: Dimensionless = @base_val * 2.0;
 assert doubled_positive = @doubled > 0.0;

@@ -39,7 +39,7 @@ Phase 0 (Scalar Graph) must be complete. Phase 1 extends Phase 0:
 - [x] **Display units:** If a value was written with a unit literal, display in that unit.
       If computed, display in base SI. Explicit `->` conversion overrides display unit.
       Clever unit inference deferred.
-- [x] **User-defined dimensions in the same file:** Yes. `dimension MyDim;` and
+- [x] **User-defined dimensions in the same file:** Yes. `base dimension MyDim;` and
       `dimension Velocity = Length / Time;` are supported in regular `.gcl` files.
 - [x] **Unit prefixes:** Individual declarations (no prefix mechanism).
       `unit km: Length = 1000 m;` is declared individually.
@@ -107,14 +107,14 @@ ConvertExpr  = Expr "->" UNIT_EXPR
 ### Base Dimensions (8)
 
 ```gcl
-dimension Length;
-dimension Time;
-dimension Mass;
-dimension Temperature;
-dimension ElectricCurrent;
-dimension Amount;
-dimension LuminousIntensity;
-dimension Angle;
+base dimension Length;
+base dimension Time;
+base dimension Mass;
+base dimension Temperature;
+base dimension ElectricCurrent;
+base dimension Amount;
+base dimension LuminousIntensity;
+base dimension Angle;
 ```
 
 ### Derived Dimensions (initial set)

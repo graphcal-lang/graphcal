@@ -514,6 +514,7 @@ fn process_instantiated_import<'a>(
                 }
                 // Type-system declarations from instantiated imports also need registration.
                 let is_type_system = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
+                    DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
                     DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
                     DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
                     DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
@@ -1994,6 +1995,7 @@ pub(super) fn file_has_declaration(
         DeclKind::ConstNode(c) => c.name.value.as_str() == name,
         DeclKind::Fn(f) => f.name.value.as_str() == name,
         DeclKind::Assert(a) => a.name.value.as_str() == name,
+        DeclKind::BaseDimension(d) => d.name.value.as_str() == name,
         DeclKind::Dimension(d) => d.name.value.as_str() == name,
         DeclKind::Unit(u) => u.name.value.as_str() == name,
         DeclKind::Index(idx) => idx.name.value.as_str() == name,

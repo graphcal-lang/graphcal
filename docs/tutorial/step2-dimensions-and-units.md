@@ -118,7 +118,7 @@ produces a compile-time error because you cannot add `Mass` and `Length`.
 You can define entirely new base dimensions for domain-specific quantities:
 
 ```
-dimension Information;
+base dimension Information;
 unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
@@ -130,7 +130,7 @@ param rate: Bandwidth = 100.0 bit / s;
 node transfer_time: Time = @storage / @rate;
 ```
 
-A bare `dimension Information;` without `= ...` declares a new base dimension.
+A `base dimension Information;` declaration creates a new base dimension.
 
 ## What You Learned
 

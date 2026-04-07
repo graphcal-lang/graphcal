@@ -167,7 +167,8 @@ fn collect_local_declarations(
                 all_user_fn_names.insert(fn_name_str);
                 continue;
             }
-            DeclKind::Dimension(_)
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
@@ -205,7 +206,8 @@ fn collect_local_declarations(
             DeclKind::Plot(_) => DeclCategory::Plot,
             DeclKind::Figure(_) => DeclCategory::Figure,
             DeclKind::Layer(_) => DeclCategory::Layer,
-            DeclKind::Dimension(_)
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
@@ -246,7 +248,8 @@ fn collect_local_declarations(
     // Second pass: resolve references and extract dependencies
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Dimension(_)
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
@@ -557,7 +560,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
-                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -580,7 +583,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => Some("figure"),
                         DeclKind::Layer(_) => Some("layer"),
                         DeclKind::Fn(_) => Some("fn"),
-                        DeclKind::Dimension(_) => Some("dimension"),
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
@@ -651,7 +654,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
-                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -678,7 +681,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
-                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -730,7 +733,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
                         DeclKind::Fn(_) => "fn",
-                        DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",

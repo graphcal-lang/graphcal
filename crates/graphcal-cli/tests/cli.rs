@@ -1424,7 +1424,7 @@ fn eval_auto_assert_module_import() {
 fn eval_diamond_import_assertions() {
     // Diamond import: shared.gcl is imported by both left.gcl and right.gcl,
     // and main.gcl imports both. All assertions should be evaluated and
-    // base_positive (from shared) should appear only once.
+    // base_val_positive (from shared) should appear only once.
     let output = graphcal_bin()
         .args(["eval", &fixture("multi/diamond_assert/main.gcl")])
         .output()
@@ -1442,8 +1442,8 @@ fn eval_diamond_import_assertions() {
     );
     // All three assertions from the dependency tree should pass.
     assert!(
-        stdout.contains("base_positive") && stdout.contains("PASS"),
-        "expected base_positive PASS: {stdout}"
+        stdout.contains("base_val_positive") && stdout.contains("PASS"),
+        "expected base_val_positive PASS: {stdout}"
     );
     assert!(
         stdout.contains("doubled_positive") && stdout.contains("PASS"),
@@ -1453,11 +1453,11 @@ fn eval_diamond_import_assertions() {
         stdout.contains("tripled_positive") && stdout.contains("PASS"),
         "expected tripled_positive PASS: {stdout}"
     );
-    // base_positive should appear exactly once (not duplicated from diamond).
-    let base_count = stdout.matches("base_positive").count();
+    // base_val_positive should appear exactly once (not duplicated from diamond).
+    let base_count = stdout.matches("base_val_positive").count();
     assert_eq!(
         base_count, 1,
-        "expected base_positive exactly once, found {base_count}: {stdout}"
+        "expected base_val_positive exactly once, found {base_count}: {stdout}"
     );
 }
 

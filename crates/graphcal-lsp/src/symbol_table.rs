@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::syntax::ast::{
-    AssertDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody, FnDecl,
-    ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PatternBinding, PlotDecl,
-    TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
+    AssertDecl, BaseDimDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind, FigureDecl, FnBody,
+    FnDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PatternBinding,
+    PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -287,6 +287,7 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
             DeclKind::ConstNode(c) => {
                 collect_const_node_decl(c, decl.span, &mut table, &mut scopes);
             }
+            DeclKind::BaseDimension(d) => collect_base_dim_decl(d, decl.span, &mut table),
             DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, &mut table),
             DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
             DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
@@ -422,6 +423,21 @@ fn collect_const_node_decl(
     collect_expr_refs(&c.value, table, scopes);
 }
 
+fn collect_base_dim_decl(d: &BaseDimDecl, decl_span: Span, table: &mut SymbolTable) {
+    let name = d.name.value.to_string();
+    table.definitions.insert(
+        SymbolKey::TopLevel(name.clone()),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Dimension,
+            name_span: d.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+}
+
 fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = d.name.value.to_string();
     table.definitions.insert(
@@ -435,9 +451,7 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
             detail: None,
         },
     );
-    if let Some(dim_expr) = &d.definition {
-        collect_dim_expr_refs(dim_expr, table);
-    }
+    collect_dim_expr_refs(&d.definition, table);
 }
 
 fn collect_unit_decl(

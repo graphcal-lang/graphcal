@@ -15,6 +15,7 @@
   "param"
   "node"
   "const"
+  "base"
   "dimension"
   "unit"
   "type"

@@ -7226,6 +7226,10 @@
     "named": false
   },
   {
+    "type": "base",
+    "named": false
+  },
+  {
     "type": "bool_type",
     "named": true
   },
