@@ -299,6 +299,7 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
             DeclKind::Figure(f) => collect_figure_decl(f, decl.span, &mut table, &mut scopes),
             DeclKind::Layer(l) => collect_layer_decl(l, decl.span, &mut table, &mut scopes),
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
+            DeclKind::Include(u) => collect_include_decl(u, &mut table),
         }
     }
 
@@ -753,7 +754,18 @@ fn collect_layer_decl(
 fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     // Each imported name is a reference; target resolution for cross-file
     // go-to-definition is handled separately.
-    if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = &u.kind {
+    collect_import_or_include_names(&u.kind, table);
+}
+
+fn collect_include_decl(u: &graphcal_compiler::syntax::ast::IncludeDecl, table: &mut SymbolTable) {
+    collect_import_or_include_names(&u.kind, table);
+}
+
+fn collect_import_or_include_names(
+    kind: &graphcal_compiler::syntax::ast::ImportKind,
+    table: &mut SymbolTable,
+) {
+    if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = kind {
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,

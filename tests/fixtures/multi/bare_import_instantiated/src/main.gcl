@@ -1,5 +1,5 @@
 #[allow_defaults]
-import nasa/rocket(dry_mass: 800.0 kg, fuel_mass: 3200.0 kg) as stage;
+include nasa/rocket(dry_mass: 800.0 kg, fuel_mass: 3200.0 kg) as stage;
 
 dimension Velocity = Length / Time;
 

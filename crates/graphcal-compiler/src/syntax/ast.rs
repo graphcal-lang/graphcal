@@ -72,6 +72,7 @@ pub enum DeclKind {
     Fn(FnDecl),
     Index(IndexDecl),
     Import(ImportDecl),
+    Include(IncludeDecl),
     Assert(AssertDecl),
     Plot(PlotDecl),
     Figure(FigureDecl),
@@ -274,24 +275,37 @@ impl ImportPath {
     }
 }
 
-/// Import declaration.
+/// Import declaration (compile-time definition import).
 ///
 /// Supports file paths (`import "./file.gcl" { ... };`) and bare module paths
-/// (`import nasa/rocket { ... };`). Optionally instantiated with param bindings:
-/// `import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`.
+/// (`import nasa/rocket { ... };`). No param bindings — for DAG instantiation
+/// with param bindings, use `include` instead.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     /// The import path (file-based or bare module path).
     pub path: ImportPath,
-    /// Param bindings for module instantiation (empty = non-instantiated).
-    pub param_bindings: Vec<ParamBinding>,
     /// The kind of import (selective or module).
+    pub kind: ImportKind,
+}
+
+/// Include declaration (DAG embedding / instantiation).
+///
+/// Supports file paths and bare module paths with optional param/index bindings:
+/// `include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`
+/// `include "./rocket.gcl"(dry_mass: 800.0 kg) as rocket;`
+#[derive(Debug, Clone)]
+pub struct IncludeDecl {
+    /// The import path (file-based or bare module path).
+    pub path: ImportPath,
+    /// Param/index bindings for DAG instantiation.
+    pub param_bindings: Vec<ParamBinding>,
+    /// The kind of include (selective or module).
     pub kind: ImportKind,
 }
 
 /// A param binding in a module instantiation: `name: expr`.
 ///
-/// Used in `import "path"(name: expr, ...) { ... };`
+/// Used in `include "path"(name: expr, ...) { ... };`
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     /// The param name in the imported file.
@@ -1148,7 +1162,8 @@ pub fn desugar_tuple_matches(file: &mut File) {
             | DeclKind::Index(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
-            | DeclKind::Import(_) => {}
+            | DeclKind::Import(_)
+            | DeclKind::Include(_) => {}
         }
     }
 }

@@ -28,7 +28,7 @@ pub struct LoadedFile {
 }
 
 impl LoadedFile {
-    /// Iterate over import declarations together with their loader-resolved
+    /// Iterate over `import` declarations together with their loader-resolved
     /// canonical paths.
     pub fn imports_with_paths(
         &self,
@@ -44,6 +44,28 @@ impl LoadedFile {
                 self.resolved_imports
                     .get(&import_decl.path.display_path())
                     .map(|path| (decl, import_decl, path.as_path()))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Iterate over `include` declarations together with their loader-resolved
+    /// canonical paths.
+    pub fn includes_with_paths(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &graphcal_compiler::syntax::ast::Declaration,
+            &graphcal_compiler::syntax::ast::IncludeDecl,
+            &Path,
+        ),
+    > {
+        self.ast.declarations.iter().filter_map(|decl| {
+            if let DeclKind::Include(include_decl) = &decl.kind {
+                self.resolved_imports
+                    .get(&include_decl.path.display_path())
+                    .map(|path| (decl, include_decl, path.as_path()))
             } else {
                 None
             }
@@ -193,42 +215,40 @@ fn load_file_dfs<F: FileSystemReader>(
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
 
-    // Find import declarations and recurse.
+    // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     let mut resolved_imports = HashMap::new();
     for decl in &ast.declarations {
-        if let DeclKind::Import(import_decl) = &decl.kind {
-            let import_canonical = resolve_import_path(
-                &import_decl.path,
-                parent_dir,
-                project_root,
-                &named_source,
-                manifest,
-                fs,
-            )?;
+        let path = match &decl.kind {
+            DeclKind::Import(import_decl) => &import_decl.path,
+            DeclKind::Include(include_decl) => &include_decl.path,
+            _ => continue,
+        };
 
-            // Path sandboxing: reject imports that resolve outside the project root.
-            if !import_canonical.starts_with(project_root) {
-                return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
-                    path: import_decl.path.display_path(),
-                    src: named_source,
-                    span: import_decl.path.span().into(),
-                }));
-            }
+        let import_canonical =
+            resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)?;
 
-            resolved_imports.insert(import_decl.path.display_path(), import_canonical.clone());
-
-            load_file_dfs(
-                &import_canonical,
-                project_root,
-                files,
-                load_order,
-                loading,
-                stack,
-                manifest,
-                fs,
-            )?;
+        // Path sandboxing: reject imports that resolve outside the project root.
+        if !import_canonical.starts_with(project_root) {
+            return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
+                path: path.display_path(),
+                src: named_source,
+                span: path.span().into(),
+            }));
         }
+
+        resolved_imports.insert(path.display_path(), import_canonical.clone());
+
+        load_file_dfs(
+            &import_canonical,
+            project_root,
+            files,
+            load_order,
+            loading,
+            stack,
+            manifest,
+            fs,
+        )?;
     }
 
     // Post-order: add this file after its dependencies.

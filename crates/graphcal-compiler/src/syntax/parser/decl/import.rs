@@ -7,25 +7,89 @@ use super::super::{ParseError, Parser};
 impl Parser<'_> {
     // --- import declaration ---
 
-    /// Parse an import declaration:
+    /// Parse an import declaration (compile-time definition import, no param bindings):
     /// `import "./path/to/file.gcl" { name1, name2 };`
-    #[expect(
-        clippy::too_many_lines,
-        reason = "sequential parser flow, splitting would add indirection without clarity"
-    )]
+    /// `import "./path/to/file.gcl" as alias;`
+    /// `import "./path/to/file.gcl";`
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
-        // Parse the import path: string literal or bare identifier path.
-        let path = match self.lexer.peek() {
+        let path = self.parse_import_path()?;
+
+        // Reject param bindings on `import` — use `include` for DAG instantiation.
+        if self.lexer.peek() == Some(&Token::LParen) {
+            let (_, span) = self.advance()?;
+            return Err(self.unexpected_token(
+                "`{`, `as`, or `;` after path (`import` cannot have param bindings; use `include` for DAG instantiation)",
+                "(",
+                span,
+            ));
+        }
+
+        // Determine the kind of import based on the next token.
+        let (kind, end_span) = self.parse_import_or_include_kind("`{`, `as`, or `;` after path")?;
+
+        let span = start_span.merge(end_span);
+
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
+            span,
+        })
+    }
+
+    // --- include declaration ---
+
+    /// Parse an include declaration (DAG embedding with optional param bindings):
+    /// `include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`
+    /// `include "./rocket.gcl"(dry_mass: 800.0 kg) as stage;`
+    /// `include "./rocket.gcl" { delta_v };`
+    pub(super) fn parse_include_decl(&mut self) -> Result<Declaration, ParseError> {
+        let (_, start_span) = self.expect(Token::Include)?;
+
+        let path = self.parse_import_path()?;
+
+        // Optional param bindings: `(name: expr, ...)`
+        let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
+            self.parse_import_param_bindings()?
+        } else {
+            Vec::new()
+        };
+
+        // Determine the kind based on the next token.
+        let after_hint = if param_bindings.is_empty() {
+            "`(`, `{`, `as`, or `;` after path"
+        } else {
+            "`{`, `as`, or `;` after param bindings"
+        };
+        let (kind, end_span) = self.parse_import_or_include_kind(after_hint)?;
+
+        let span = start_span.merge(end_span);
+
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
+                path,
+                param_bindings,
+                kind,
+            }),
+            span,
+        })
+    }
+
+    // --- shared helpers ---
+
+    /// Parse an import/include path: string literal or bare module path.
+    fn parse_import_path(&mut self) -> Result<crate::syntax::ast::ImportPath, ParseError> {
+        match self.lexer.peek() {
             Some(Token::StringLiteral) => {
                 let (_, span) = self.advance()?;
                 let raw = self.lexer.slice_at(span);
                 let path_str = raw[1..raw.len() - 1].to_string();
-                crate::syntax::ast::ImportPath::FilePath {
+                Ok(crate::syntax::ast::ImportPath::FilePath {
                     path: path_str,
                     span,
-                }
+                })
             }
             Some(Token::Ident) => {
                 // Bare module path: ident / ident / ...
@@ -55,87 +119,58 @@ impl Parser<'_> {
                 }
 
                 let path_end = segments.last().map_or(path_start, |s| s.span);
-                crate::syntax::ast::ImportPath::ModulePath {
+                Ok(crate::syntax::ast::ImportPath::ModulePath {
                     segments,
                     span: path_start.merge(path_end),
-                }
+                })
             }
             Some(tok) => {
                 let tok_str = tok.to_string();
                 let (_, span) = self.advance()?;
-                return Err(self.unexpected_token(
-                    "a string literal or module path",
-                    &tok_str,
-                    span,
-                ));
+                Err(self.unexpected_token("a string literal or module path", &tok_str, span))
             }
-            None => {
-                return Err(self.unexpected_eof("a string literal or module path"));
-            }
-        };
+            None => Err(self.unexpected_eof("a string literal or module path")),
+        }
+    }
 
-        // Optional param bindings: `(name: expr, ...)`
-        let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
-            self.parse_import_param_bindings()?
-        } else {
-            Vec::new()
-        };
-
-        // Determine the kind of import based on the next token:
-        //   `{`  → selective import (existing)
-        //   `as` → module import with alias
-        //   `;`  → module import with name derived from filename
-        let after_bindings_hint = if param_bindings.is_empty() {
-            "`(`, `{`, `as`, or `;` after path"
-        } else {
-            "`{`, `as`, or `;` after param bindings"
-        };
-        let (kind, end_span) = match self.lexer.peek() {
+    /// Parse the kind portion of an import/include declaration:
+    /// `{ name1, name2 as alias };` or `as alias;` or `;`
+    fn parse_import_or_include_kind(
+        &mut self,
+        hint: &str,
+    ) -> Result<(crate::syntax::ast::ImportKind, crate::syntax::span::Span), ParseError> {
+        match self.lexer.peek() {
             Some(Token::LBrace) => {
                 let names = self.parse_import_selective_body()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (crate::syntax::ast::ImportKind::Selective(names), end_span)
+                Ok((crate::syntax::ast::ImportKind::Selective(names), end_span))
             }
             Some(Token::As) => {
                 self.lexer.next_token(); // consume `as`
                 let alias = self.parse_any_ident()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (
+                Ok((
                     crate::syntax::ast::ImportKind::Module { alias: Some(alias) },
                     end_span,
-                )
+                ))
             }
             Some(Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                (
+                Ok((
                     crate::syntax::ast::ImportKind::Module { alias: None },
                     end_span,
-                )
+                ))
             }
             Some(tok) => {
                 let tok_str = tok.to_string();
                 let (_, span) = self.advance()?;
-                return Err(self.unexpected_token(after_bindings_hint, &tok_str, span));
+                Err(self.unexpected_token(hint, &tok_str, span))
             }
-            None => {
-                return Err(self.unexpected_eof(after_bindings_hint));
-            }
-        };
-
-        let span = start_span.merge(end_span);
-
-        Ok(Declaration {
-            attributes: vec![],
-            kind: DeclKind::Import(crate::syntax::ast::ImportDecl {
-                path,
-                param_bindings,
-                kind,
-            }),
-            span,
-        })
+            None => Err(self.unexpected_eof(hint)),
+        }
     }
 
-    /// Parse the `{ name1, name2 as alias, ... }` body of a selective import.
+    /// Parse the `{ name1, name2 as alias, ... }` body of a selective import/include.
     fn parse_import_selective_body(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
@@ -210,7 +245,7 @@ impl Parser<'_> {
         Ok(names)
     }
 
-    /// Parse the `(name: expr, ...)` param bindings of an instantiated import.
+    /// Parse the `(name: expr, ...)` param bindings of an include declaration.
     fn parse_import_param_bindings(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {

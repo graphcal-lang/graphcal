@@ -23,6 +23,7 @@
     { "include": "#encode-keyword" },
     { "include": "#figure-declaration" },
     { "include": "#layer-declaration" },
+    { "include": "#include-declaration" },
     { "include": "#import-declaration" },
     { "include": "#let-binding" },
     { "include": "#for-binding" },
@@ -239,6 +240,30 @@
         { "include": "#bare-module-path" },
         {
           "comment": "Module alias: import '...' as alias",
+          "match": "\\b(as)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.operator.as.graphcal" },
+            "2": { "name": "entity.name.namespace.graphcal" }
+          }
+        },
+        { "include": "#import-item-list" }
+      ]
+    },
+
+    "include-declaration": {
+      "begin": "\\b(include)\\b",
+      "end": ";",
+      "beginCaptures": {
+        "1": { "name": "keyword.declaration.include.graphcal" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.terminator.graphcal" }
+      },
+      "patterns": [
+        { "include": "#strings" },
+        { "include": "#bare-module-path" },
+        {
+          "comment": "Module alias: include '...' as alias",
           "match": "\\b(as)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.operator.as.graphcal" },

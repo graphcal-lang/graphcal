@@ -23,6 +23,7 @@
   "index"
   "linspace"
   "import"
+  "include"
   "as"
   "let"
   "if"
@@ -111,6 +112,12 @@
 ; import nasa/rocket { delta_v }
 (import_declaration path: (bare_module_path) @module)
 
+; include "./rocket.gcl"(params) { delta_v }
+(include_declaration path: (string_literal) @string)
+
+; include nasa/rocket(params) { delta_v }
+(include_declaration path: (bare_module_path) @module)
+
 ; Casing heuristics for import items:
 ; ALL_CAPS → constant, PascalCase → type, else → variable
 (import_item name: (identifier) @constant
@@ -182,9 +189,12 @@
 ; import "./path.gcl" as alias;
 (import_declaration alias: (identifier) @module)
 
-; Param bindings in instantiated imports: import "path"(name: expr) { ... }
-(import_param_binding name: (identifier) @variable)
-(import_param_binding ":" @operator)
+; include "./path.gcl" as alias;
+(include_declaration alias: (identifier) @module)
+
+; Param bindings in include declarations: include "path"(name: expr) { ... }
+(include_param_binding name: (identifier) @variable)
+(include_param_binding ":" @operator)
 
 ; ---------------------------------------------------------------
 ; Struct and index usage

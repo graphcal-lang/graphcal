@@ -300,6 +300,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Fn(f) => f.name.value.as_str(),
             DeclKind::Index(i) => i.name.value.as_str(),
             DeclKind::Import(_) => "<import>",
+            DeclKind::Include(_) => "<include>",
             DeclKind::Assert(a) => a.name.value.as_str(),
             DeclKind::Plot(p) => p.name.value.as_str(),
             DeclKind::Figure(f) => f.name.value.as_str(),
@@ -782,12 +783,12 @@ fn parse_import_bare_path_with_alias() {
 }
 
 #[test]
-fn parse_import_bare_path_with_param_bindings() {
-    let file = Parser::new("import nasa/rocket(dry_mass: 800.0 kg) as stage_1;")
+fn parse_include_bare_path_with_param_bindings() {
+    let file = Parser::new("include nasa/rocket(dry_mass: 800.0 kg) as stage_1;")
         .parse_file()
         .unwrap();
-    let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Import");
+    let DeclKind::Include(u) = &file.declarations[0].kind else {
+        panic!("expected Include");
     };
     assert!(matches!(
         &u.path,
@@ -800,6 +801,14 @@ fn parse_import_bare_path_with_param_bindings() {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().name, "stage_1");
+}
+
+#[test]
+fn parse_import_with_param_bindings_error() {
+    // import with param bindings should fail — use include instead
+    let result =
+        Parser::new(r#"import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };"#).parse_file();
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1010,17 +1019,17 @@ fn parse_required_range_simple() {
 }
 
 #[test]
-fn parse_import_item_with_expected_fail() {
-    let source = r#"import "./lib.gcl"(Phase: MyPhase) {
+fn parse_include_item_with_expected_fail() {
+    let source = r#"include "./lib.gcl"(Phase: MyPhase) {
     #[expected_fail(MyPhase::X)]
     my_assert,
 };"#;
     let file = Parser::new(source).parse_file().unwrap();
-    let DeclKind::Import(imp) = &file.declarations[0].kind else {
-        panic!("expected import");
+    let DeclKind::Include(imp) = &file.declarations[0].kind else {
+        panic!("expected include");
     };
     let ImportKind::Selective(items) = &imp.kind else {
-        panic!("expected selective import");
+        panic!("expected selective include");
     };
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name.name, "my_assert");
@@ -1030,17 +1039,17 @@ fn parse_import_item_with_expected_fail() {
 }
 
 #[test]
-fn parse_import_item_with_expected_fail_and_alias() {
-    let source = r#"import "./lib.gcl"(Phase: MyPhase) {
+fn parse_include_item_with_expected_fail_and_alias() {
+    let source = r#"include "./lib.gcl"(Phase: MyPhase) {
     #[expected_fail]
     my_assert as local_assert,
 };"#;
     let file = Parser::new(source).parse_file().unwrap();
-    let DeclKind::Import(imp) = &file.declarations[0].kind else {
-        panic!("expected import");
+    let DeclKind::Include(imp) = &file.declarations[0].kind else {
+        panic!("expected include");
     };
     let ImportKind::Selective(items) = &imp.kind else {
-        panic!("expected selective import");
+        panic!("expected selective include");
     };
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name.name, "my_assert");

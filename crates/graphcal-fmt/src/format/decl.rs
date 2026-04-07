@@ -1,8 +1,8 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DeclKind, Declaration, DimDecl, Encoding,
     FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam, ImportDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
+    TypeDecl, TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
@@ -28,6 +28,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
+        DeclKind::Include(d) => format_include_decl(fmt, d),
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
@@ -382,13 +383,26 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 }
 
 /// `import "path" { name1, name2 };` or `import "path";` or `import "path" as alias;`
-/// Optionally with param bindings: `import "path"(x = 1.0 km) { ... };`
-fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
-    let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
+fn format_import_decl(_fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
+    let path_doc = format_import_or_include_path("import", &d.path);
+    format_import_or_include_kind(path_doc, RcDoc::nil(), &d.kind)
+}
 
-    let path_doc = match &d.path {
+/// `include "path"(x: 1.0 km) { name };` or `include "path" as alias;`
+fn format_include_decl(fmt: &mut Formatter<'_>, d: &IncludeDecl) -> RcDoc<'static> {
+    let path_doc = format_import_or_include_path("include", &d.path);
+    let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
+    format_import_or_include_kind(path_doc, bindings_doc, &d.kind)
+}
+
+/// Format the path portion of an import/include declaration.
+fn format_import_or_include_path(
+    keyword: &str,
+    path: &graphcal_compiler::syntax::ast::ImportPath,
+) -> RcDoc<'static> {
+    match path {
         graphcal_compiler::syntax::ast::ImportPath::FilePath { path, .. } => {
-            RcDoc::text(format!("import \"{path}\""))
+            RcDoc::text(format!("{keyword} \"{path}\""))
         }
         graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. } => {
             let path_str = segments
@@ -396,11 +410,18 @@ fn format_import_decl(fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static>
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>()
                 .join("/");
-            RcDoc::text(format!("import {path_str}"))
+            RcDoc::text(format!("{keyword} {path_str}"))
         }
-    };
+    }
+}
 
-    match &d.kind {
+/// Format the kind portion (selective/module) of an import/include declaration.
+fn format_import_or_include_kind(
+    path_doc: RcDoc<'static>,
+    bindings_doc: RcDoc<'static>,
+    kind: &graphcal_compiler::syntax::ast::ImportKind,
+) -> RcDoc<'static> {
+    match kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             let name_docs: Vec<RcDoc<'static>> = names
                 .iter()

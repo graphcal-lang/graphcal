@@ -173,7 +173,8 @@ fn collect_local_declarations(
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
             | DeclKind::Index(_)
-            | DeclKind::Import(_) => {
+            | DeclKind::Import(_)
+            | DeclKind::Include(_) => {
                 continue;
             }
         };
@@ -213,7 +214,8 @@ fn collect_local_declarations(
             | DeclKind::UnionType(_)
             | DeclKind::Fn(_)
             | DeclKind::Index(_)
-            | DeclKind::Import(_) => {
+            | DeclKind::Import(_)
+            | DeclKind::Include(_) => {
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
@@ -254,7 +256,8 @@ fn collect_local_declarations(
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
             | DeclKind::Index(_)
-            | DeclKind::Import(_) => {}
+            | DeclKind::Import(_)
+            | DeclKind::Include(_) => {}
             DeclKind::Assert(a) => {
                 // Collect all expressions from the assert body for validation
                 let body_exprs: Vec<&Expr> = match &a.body {
@@ -565,6 +568,7 @@ fn validate_attributes(
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
+                        DeclKind::Include(_) => "include",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::Hidden.as_str().to_string(),
@@ -588,6 +592,7 @@ fn validate_attributes(
                         DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
                         DeclKind::Import(_) => Some("import"),
+                        DeclKind::Include(_) => Some("include"),
                     };
                     if let Some(kind) = kind {
                         return Err(GraphcalError::InvalidAssumesTarget {
@@ -659,6 +664,7 @@ fn validate_attributes(
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
+                        DeclKind::Include(_) => "include",
                     };
                     return Err(GraphcalError::InvalidExpectedFailTarget {
                         kind: kind.to_string(),
@@ -670,9 +676,9 @@ fn validate_attributes(
                     // Recognized but semantics deferred — no validation needed
                 }
                 AttributeName::AllowDefaults => {
-                    // #[allow_defaults] is only valid on import declarations
+                    // #[allow_defaults] is only valid on include declarations
                     let kind = match &decl.kind {
-                        DeclKind::Import(_) => continue,
+                        DeclKind::Include(_) => continue,
                         DeclKind::Param(_) => "param",
                         DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
@@ -685,6 +691,7 @@ fn validate_attributes(
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
+                        DeclKind::Import(_) => "import",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),
@@ -737,6 +744,7 @@ fn validate_attributes(
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
+                        DeclKind::Include(_) => "include",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::Derive.as_str().to_string(),
