@@ -24,6 +24,7 @@
   "linspace"
   "import"
   "include"
+  "dag"
   "as"
   "let"
   "if"
@@ -117,6 +118,9 @@
 
 ; include nasa/rocket(params) { delta_v }
 (include_declaration path: (bare_module_path) @module)
+
+; dag my_pipeline { ... }
+(dag_declaration name: (identifier) @function)
 
 ; Casing heuristics for import items:
 ; ALL_CAPS → constant, PascalCase → type, else → variable

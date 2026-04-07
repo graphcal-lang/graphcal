@@ -965,6 +965,88 @@
     }
   },
   {
+    "type": "dag_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "assert_declaration",
+          "named": true
+        },
+        {
+          "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "dag_declaration",
+          "named": true
+        },
+        {
+          "type": "dimension_declaration",
+          "named": true
+        },
+        {
+          "type": "figure_declaration",
+          "named": true
+        },
+        {
+          "type": "fn_declaration",
+          "named": true
+        },
+        {
+          "type": "import_declaration",
+          "named": true
+        },
+        {
+          "type": "include_declaration",
+          "named": true
+        },
+        {
+          "type": "index_declaration",
+          "named": true
+        },
+        {
+          "type": "layer_declaration",
+          "named": true
+        },
+        {
+          "type": "node_declaration",
+          "named": true
+        },
+        {
+          "type": "param_declaration",
+          "named": true
+        },
+        {
+          "type": "plot_declaration",
+          "named": true
+        },
+        {
+          "type": "type_declaration",
+          "named": true
+        },
+        {
+          "type": "unit_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "dim_expr",
     "named": true,
     "fields": {},
@@ -5251,6 +5333,10 @@
           "named": true
         },
         {
+          "type": "dag_declaration",
+          "named": true
+        },
+        {
           "type": "dimension_declaration",
           "named": true
         },
@@ -7283,6 +7369,10 @@
   },
   {
     "type": "const",
+    "named": false
+  },
+  {
+    "type": "dag",
     "named": false
   },
   {

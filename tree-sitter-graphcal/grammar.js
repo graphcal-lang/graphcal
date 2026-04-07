@@ -50,6 +50,7 @@ module.exports = grammar({
       $.index_declaration,
       $.import_declaration,
       $.include_declaration,
+      $.dag_declaration,
       $.assert_declaration,
       $.plot_declaration,
       $.figure_declaration,
@@ -358,6 +359,16 @@ module.exports = grammar({
       field("name", $.identifier),
       ":",
       field("value", $._expr),
+    ),
+
+    // dag name { declarations... }
+    dag_declaration: $ => seq(
+      repeat($.attribute),
+      "dag",
+      field("name", $.identifier),
+      "{",
+      repeat($._declaration),
+      "}",
     ),
 
     // Bare module path: nasa/rocket, nasa/orbital/transfer

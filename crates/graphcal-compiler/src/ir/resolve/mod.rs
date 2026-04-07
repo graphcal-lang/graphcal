@@ -174,7 +174,8 @@ fn collect_local_declarations(
             | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
-            | DeclKind::Include(_) => {
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_) => {
                 continue;
             }
         };
@@ -215,7 +216,8 @@ fn collect_local_declarations(
             | DeclKind::Fn(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
-            | DeclKind::Include(_) => {
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_) => {
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
@@ -257,7 +259,8 @@ fn collect_local_declarations(
             | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
-            | DeclKind::Include(_) => {}
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_) => {}
             DeclKind::Assert(a) => {
                 // Collect all expressions from the assert body for validation
                 let body_exprs: Vec<&Expr> = match &a.body {
@@ -569,6 +572,7 @@ fn validate_attributes(
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
+                        DeclKind::Dag(_) => "dag",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::Hidden.as_str().to_string(),
@@ -593,6 +597,7 @@ fn validate_attributes(
                         DeclKind::Index(_) => Some("cat/range"),
                         DeclKind::Import(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
+                        DeclKind::Dag(_) => Some("dag"),
                     };
                     if let Some(kind) = kind {
                         return Err(GraphcalError::InvalidAssumesTarget {
@@ -665,6 +670,7 @@ fn validate_attributes(
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
+                        DeclKind::Dag(_) => "dag",
                     };
                     return Err(GraphcalError::InvalidExpectedFailTarget {
                         kind: kind.to_string(),
@@ -692,6 +698,7 @@ fn validate_attributes(
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
+                        DeclKind::Dag(_) => "dag",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),
@@ -745,6 +752,7 @@ fn validate_attributes(
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
+                        DeclKind::Dag(_) => "dag",
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::Derive.as_str().to_string(),

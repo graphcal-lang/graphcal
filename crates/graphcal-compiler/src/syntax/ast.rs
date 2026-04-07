@@ -73,6 +73,7 @@ pub enum DeclKind {
     Index(IndexDecl),
     Import(ImportDecl),
     Include(IncludeDecl),
+    Dag(DagDecl),
     Assert(AssertDecl),
     Plot(PlotDecl),
     Figure(FigureDecl),
@@ -301,6 +302,20 @@ pub struct IncludeDecl {
     pub param_bindings: Vec<ParamBinding>,
     /// The kind of include (selective or module).
     pub kind: ImportKind,
+}
+
+/// Inline DAG declaration: `dag name { ... }`
+///
+/// The body contains declarations (same as file-level). Semantics are not yet
+/// implemented — this phase only parses the syntax.
+#[derive(Debug, Clone)]
+pub struct DagDecl {
+    /// The DAG name (must be `lower_snake_case`).
+    pub name: Spanned<DeclName>,
+    /// Declarations inside the DAG block.
+    pub body: Vec<Declaration>,
+    /// Span covering the entire `dag name { ... }` block.
+    pub span: Span,
 }
 
 /// A param binding in a module instantiation: `name: expr`.
@@ -1156,6 +1171,14 @@ pub fn desugar_tuple_matches(file: &mut File) {
                 for field in &mut l.fields {
                     desugar_expr(&mut field.value);
                 }
+            }
+            DeclKind::Dag(d) => {
+                // Recursively desugar declarations inside the dag block
+                let mut inner_file = File {
+                    declarations: std::mem::take(&mut d.body),
+                };
+                desugar_tuple_matches(&mut inner_file);
+                d.body = inner_file.declarations;
             }
             DeclKind::BaseDimension(_)
             | DeclKind::Dimension(_)
