@@ -43,7 +43,6 @@ module.exports = grammar({
     _declaration: $ => choice(
       $.param_declaration,
       $.node_declaration,
-      $.const_declaration,
       $.dimension_declaration,
       $.unit_declaration,
       $.type_declaration,
@@ -104,20 +103,11 @@ module.exports = grammar({
     ),
 
     // node v_exhaust: Velocity = @isp * G0;
+    // const node G0: Acceleration = 9.80665 m/s^2;
     node_declaration: $ => seq(
       repeat($.attribute),
+      optional("const"),
       "node",
-      field("name", $.identifier),
-      optional(seq(":", field("type", $.type_expr))),
-      "=",
-      field("value", $._expr),
-      ";",
-    ),
-
-    // const G0: Acceleration = 9.80665 m/s^2;
-    const_declaration: $ => seq(
-      repeat($.attribute),
-      "const",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
       "=",
@@ -136,7 +126,9 @@ module.exports = grammar({
 
     // unit m: Length;
     // unit km: Length = 1000 m;
+    // const unit km: Length = 1000 m;
     unit_declaration: $ => seq(
+      optional("const"),
       "unit",
       field("name", $.identifier),
       ":",

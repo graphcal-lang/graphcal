@@ -38,7 +38,7 @@ values (Phase 1) and can accept/return structs (Phase 2).
 - [ ] **Higher-order functions:** Explicitly not supported. Functions cannot be
       passed as arguments. Lambda syntax only exists in `scan`/`map`.
 - [ ] **Overloading:** Not supported. Use generics instead.
-- [ ] **Zero-argument functions:** Warning suggesting `const` instead?
+- [ ] **Zero-argument functions:** Warning suggesting `const node` instead?
 - [ ] **Local `fn` inside node bodies:** Allowed or forbidden? Recommendation: forbidden
       for simplicity. All `fn` declarations are top-level.
 

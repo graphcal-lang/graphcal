@@ -64,7 +64,7 @@ TypeDecl     = "type" IDENT "{" FieldList "}"
 FieldList    = (Field ",")* Field ","?        // trailing comma allowed
 Field        = IDENT ":" TypeExpr
 
-// Extended node/const with block body
+// Extended node/const node with block body
 NodeDecl     = "node" IDENT (":" TypeExpr)? "=" (Expr ";" | Block)
 Block        = "{" Statement* Expr "}"
 Statement    = LetBinding
@@ -110,7 +110,7 @@ type TransferResult {
 
 param parking_alt: Length = 200 km;
 param target_alt: Length = 35786 km;
-const GM_earth = 398600.4418 km^3/s^2;
+const node GM_earth = 398600.4418 km^3/s^2;
 
 node transfer: TransferResult = {
     let r1 = @R_earth + @parking_alt;
@@ -151,4 +151,4 @@ node bad2 = Pair { a: 1.0 kg, b: 2.0 s };
 - [ ] Should empty structs be allowed? `type Empty {}`
 - [ ] Should struct construction require all fields, or can some be optional
       (with defaults)? Recommendation: require all fields for now.
-- [ ] Can a `const` be a struct? E.g., `const earth = Planet { mass: 5.97e24 kg, radius: 6371 km };`
+- [ ] Can a `const node` be a struct? E.g., `const node earth = Planet { mass: 5.97e24 kg, radius: 6371 km };`

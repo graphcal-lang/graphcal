@@ -8,8 +8,8 @@ type TransferResult {
     total_dv: Velocity,
 }
 
-const R_EARTH: Length = 6371.0 km;
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 // Non-generic function: orbital velocity
 fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);

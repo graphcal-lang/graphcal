@@ -1,6 +1,6 @@
 # Phase 0: Scalar Graph
 
-> `param` + `node` + `const` with `f64` only. Single file. CLI evaluation.
+> `param` + `node` + `const node` with `f64` only. Single file. CLI evaluation.
 
 ## Goal
 
@@ -28,7 +28,7 @@ These open questions from the aspect docs must be resolved before implementing P
 
 ### From [02-syntax-design](../02-syntax-design.md) (subset)
 
-- [x] **Semicolon rule:** Every top-level declaration (`param`, `node`, `const`)
+- [x] **Semicolon rule:** Every top-level declaration (`param`, `node`, `const node`)
       ends with `;`. Block bodies are deferred to Phase 2.
 - [x] **Numeric literals:** Support `_` separators (`200_000`) and scientific
       notation (`3.98e5`).
@@ -41,17 +41,17 @@ These open questions from the aspect docs must be resolved before implementing P
       in Phase 0.
 - [x] **Built-in functions:** `sqrt`, `exp`, `ln`, `abs`, `sin`, `cos`, `tan`,
       `asin`, `acos`, `atan2`, `min`, `max`, `floor`, `ceil`.
-      Built-in constants: `PI`, `E` (UPPER_SNAKE_CASE, consistent with `const` casing).
+      Built-in constants: `PI`, `E` (UPPER_SNAKE_CASE, consistent with `const node` casing).
 
 ### From [08-scoping](../08-scoping.md)
 
 - [x] **`@` for `param`/`node` references only:** `@name` references graph scope
-      (`param` and `node` declarations). `const` values are referenced by bare
-      `UPPER_SNAKE_CASE` names without `@`, because `const` is evaluated at compile
+      (`param` and `node` declarations). `const node` values are referenced by bare
+      `UPPER_SNAKE_CASE` names without `@`, because `const node` is evaluated at compile
       time and is not part of the runtime DAG. In Phase 0, bare `lower_snake_case`
       names in expressions are always errors (no `let` bindings yet).
 - [x] **Duplicate name detection:** `param x = 1; node x = 2;` is a compile error.
-      Names must be unique across all `param`, `node`, and `const` declarations.
+      Names must be unique across all `param`, `node`, and `const node` declarations.
 
 ### From [17-error-messages](../17-error-messages.md)
 
@@ -68,7 +68,7 @@ These open questions from the aspect docs must be resolved before implementing P
 
 ### Casing rules (compiler-enforced)
 
-- [x] **`const`:** `UPPER_SNAKE_CASE` (e.g., `const G0 = 9.80665;`). Compile error
+- [x] **`const node`:** `UPPER_SNAKE_CASE` (e.g., `const node G0 = 9.80665;`). Compile error
       if not UPPER_SNAKE_CASE.
 - [x] **`param`:** `lower_snake_case` (e.g., `param dry_mass = 1200.0;`). Compile error
       if not lower_snake_case.
@@ -82,35 +82,35 @@ These casing rules enable unambiguous bare-name resolution at every reference si
 | Syntax | Meaning | Example |
 | --- | --- | --- |
 | `@name` | Graph reference (`param` or `node`) | `@dry_mass`, `@v_exhaust` |
-| `NAME` | Compile-time `const` or built-in constant | `G0`, `PI` |
+| `NAME` | Compile-time `const node` or built-in constant | `G0`, `PI` |
 | `name(...)` | Function call (built-in for Phase 0) | `sqrt(2.0)`, `ln(@mass_ratio)` |
 
-### `const` semantics
+### `const node` semantics
 
-- [x] **Compile-time evaluation:** `const` declarations are evaluated before the
-      runtime DAG. A `const` **cannot** reference `@` (graph scope). It can only
+- [x] **Compile-time evaluation:** `const node` declarations are evaluated before the
+      runtime DAG. A `const node` **cannot** reference `@` (graph scope). It can only
       reference:
   - Literal values (`42.0`, `9.80665`)
-  - Other `const` names (bare UPPER_SNAKE_CASE)
+  - Other `const node` names (bare UPPER_SNAKE_CASE)
   - Built-in constants (`PI`, `E`)
   - Built-in function calls applied to the above (`sqrt(2.0)`)
   - In later phases: user-defined pure functions (`fn`)
-- [x] **`const` dependency resolution:** `const` declarations are topologically
-      sorted among themselves. Cycles among `const`s are compile errors.
+- [x] **`const node` dependency resolution:** `const node` declarations are topologically
+      sorted among themselves. Cycles among `const node`s are compile errors.
 
 ## Two-Phase Evaluation Model
 
 Phase 0 uses a two-phase evaluation:
 
-1. **Compile-time phase:** Topologically sort and evaluate all `const` declarations.
-   `const` expressions may only reference other `const`s, built-in constants, and
+1. **Compile-time phase:** Topologically sort and evaluate all `const node` declarations.
+   `const node` expressions may only reference other `const node`s, built-in constants, and
    built-in functions. The result is a set of resolved constant values.
 
 2. **Runtime phase:** Build the DAG from `param` and `node` declarations, with
-   resolved `const` values inlined. Topologically sort and evaluate in order.
+   resolved `const node` values inlined. Topologically sort and evaluate in order.
 
 This separation is invisible to the user in Phase 0 (everything runs at once),
-but establishes the correct semantics for later phases where `const` values can
+but establishes the correct semantics for later phases where `const node` values can
 be inlined by the compiler and are not affected by scenario overrides.
 
 ## Syntax Supported in Phase 0
@@ -120,7 +120,7 @@ File          = Declaration*
 Declaration   = ParamDecl | NodeDecl | ConstDecl | Comment
 ParamDecl     = "param" LOWER_IDENT "=" Expr ";"
 NodeDecl      = "node"  LOWER_IDENT "=" Expr ";"
-ConstDecl     = "const" UPPER_IDENT "=" ConstExpr ";"
+ConstDecl     = "const" "node" UPPER_IDENT "=" ConstExpr ";"
 Comment       = "//" <anything until newline>
 
 (* Runtime expressions — used in param/node *)
@@ -135,7 +135,7 @@ UnaryExpr     = ("-" | "!") UnaryExpr | PowerExpr
 PowerExpr     = Atom ("^" UnaryExpr)?          (* right-associative *)
 Atom          = NUMBER | GRAPH_REF | CONST_REF | FnCall | "(" Expr ")" | BOOL
 
-(* Const expressions — used in const declarations, no @ allowed *)
+(* Const expressions — used in const node declarations, no @ allowed *)
 ConstExpr     = ConstConditional | ConstOrExpr
 ConstConditional = "if" ConstExpr "{" ConstExpr "}" "else" "{" ConstExpr "}"
 ConstOrExpr   = ConstAndExpr ("||" ConstAndExpr)*
@@ -183,8 +183,8 @@ UPPER_IDENT   = [A-Z][A-Z0-9_]*
 | Component | Description |
 | --- | --- |
 | **Parser** | `.gcl` file -> AST (single file) |
-| **Name resolver** | Resolve `@` references and bare const references, detect duplicates, detect cycles, enforce casing rules |
-| **Const evaluator** | Topologically sort `const` declarations, evaluate compile-time expressions |
+| **Name resolver** | Resolve `@` references and bare const node references, detect duplicates, detect cycles, enforce casing rules |
+| **Const evaluator** | Topologically sort `const node` declarations, evaluate compile-time expressions |
 | **DAG builder** | AST -> `petgraph` DAG (params and nodes only, consts inlined) |
 | **Evaluator** | Topological sort, evaluate `f64` arithmetic |
 | **CLI** | `graphcal eval <file>` prints all values; `--format json` for machine-readable output |
@@ -212,7 +212,7 @@ Everything not listed above. Specifically:
 param dry_mass = 1200.0;
 param fuel_mass = 2800.0;
 param isp = 320.0;
-const G0 = 9.80665;
+const node G0 = 9.80665;
 
 node v_exhaust = @isp * G0;
 node mass_ratio = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -234,10 +234,10 @@ delta_v      = 3783.277
 
 ```gcl
 // constants.gcl
-const G0 = 9.80665;
-const TWO_G0 = 2.0 * G0;
-const HALF_PI = PI / 2.0;
-const SQRT2 = sqrt(2.0);
+const node G0 = 9.80665;
+const node TWO_G0 = 2.0 * G0;
+const node HALF_PI = PI / 2.0;
+const node SQRT2 = sqrt(2.0);
 
 param radius = 100.0;
 node circumference = 2.0 * PI * @radius;
@@ -279,18 +279,18 @@ node b = @a + 1.0;
 param x = 1.0;
 node x = 2.0;
 
-// error[graphcal::P0xx]: @ not allowed in const expression
-const BAD = @some_param * 2.0;
+// error[graphcal::P0xx]: @ not allowed in const node expression
+const node BAD = @some_param * 2.0;
 
-// error[graphcal::P0xx]: const name must be UPPER_SNAKE_CASE
-const bad_name = 42.0;
+// error[graphcal::P0xx]: const node name must be UPPER_SNAKE_CASE
+const node bad_name = 42.0;
 
 // error[graphcal::P0xx]: param name must be lower_snake_case
 param BadParam = 42.0;
 
-// error[graphcal::G001]: cyclic dependency among consts
-const A = B + 1.0;
-const B = A + 1.0;
+// error[graphcal::G001]: cyclic dependency among const nodes
+const node A = B + 1.0;
+const node B = A + 1.0;
 ```
 
 ## Open Questions

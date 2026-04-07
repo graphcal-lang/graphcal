@@ -282,14 +282,14 @@ mod tests {
     #[test]
     fn parse_fn_mixed_with_other_decls() {
         let source = r"
-        const TWO: Dimensionless = 2.0;
+        const node TWO: Dimensionless = 2.0;
         fn double(x: Dimensionless) -> Dimensionless = x * TWO;
         param val: Dimensionless = 5.0;
         node result: Dimensionless = double(@val);
     ";
         let file = Parser::new(source).parse_file().unwrap();
         assert_eq!(file.declarations.len(), 4);
-        assert!(matches!(file.declarations[0].kind, DeclKind::Const(_)));
+        assert!(matches!(&file.declarations[0].kind, DeclKind::Node(n) if n.is_const));
         assert!(matches!(file.declarations[1].kind, DeclKind::Fn(_)));
         assert!(matches!(file.declarations[2].kind, DeclKind::Param(_)));
         assert!(matches!(file.declarations[3].kind, DeclKind::Node(_)));

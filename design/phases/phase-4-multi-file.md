@@ -68,7 +68,7 @@ structs, functions) work. Phase 4 adds the organizational layer.
 
 ### Visibility
 
-- [ ] **Public-by-default:** Top-level `param`, `node`, `const`, `type`, `fn`
+- [ ] **Public-by-default:** Top-level `param`, `node`, `const node`, `type`, `fn`
       are importable by other files. Confirm.
 - [ ] **`private` keyword:** `private node _helper = ...;` hides from other files.
       Does `private` apply to `type`, `fn`, `dimension`, `unit` as well?
@@ -147,9 +147,9 @@ project mission {
 // prelude.graph
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
-const G0: Acceleration = 9.80665 m/s^2;
-const R_earth: Length = 6371 km;
-const GM_earth = 398600.4418 km^3/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
+const node R_earth: Length = 6371 km;
+const node GM_earth = 398600.4418 km^3/s^2;
 ```
 
 ```gcl

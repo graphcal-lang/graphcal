@@ -12,7 +12,7 @@ spreadsheet-like tabular computation while being type-safe and unambiguous.
 
 This phase subsumes the original "1D tables" and "N-dim tables" designs into
 a single unified mechanism. There is no `table` keyword — "tables" are simply
-co-indexed `param`/`node`/`const` declarations.
+co-indexed `param`/`node`/`const node` declarations.
 
 ## Prerequisites
 
@@ -192,7 +192,7 @@ param duration: Time[Maneuver] = {
 
 param dry_mass: Mass = 1200 kg;
 param isp: SpecificImpulse = 320 s;
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 node v_exhaust: Velocity = @isp * @G0;
 
 // for comprehension: compute fuel for each maneuver
@@ -328,8 +328,8 @@ node bad3: Velocity = @delta_v[Maneuver::Landing];
 - [ ] **Struct-indexed values:** Can a struct be indexed? E.g.,
       `node result: TransferResult[Maneuver] = for m: Maneuver { ... }`.
       (Recommendation: yes, `T` in `T[I]` can be any value type.)
-- [ ] **`for` in const expressions:** Can `const` use `for`? This would mean
-      `const X: Dimensionless[I] = for i: I { ... }` — the index is known at
+- [ ] **`for` in const node expressions:** Can `const node` use `for`? This would mean
+      `const node X: Dimensionless[I] = for i: I { ... }` — the index is known at
       compile time, so this is statically evaluable. (Recommendation: yes.)
 - [ ] **Empty indexes:** Is `cat Empty {}` valid? If so, what does
       `sum(for e: Empty { ... })` return? (Recommendation: disallow empty indexes.)

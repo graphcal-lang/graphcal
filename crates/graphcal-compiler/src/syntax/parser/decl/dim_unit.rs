@@ -29,6 +29,22 @@ impl Parser<'_> {
 
     pub(super) fn parse_unit_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Unit)?;
+        self.parse_unit_decl_inner(start_span, false)
+    }
+
+    pub(super) fn parse_const_unit(
+        &mut self,
+        const_span: crate::syntax::span::Span,
+    ) -> Result<Declaration, ParseError> {
+        let (_, _unit_span) = self.expect(Token::Unit)?;
+        self.parse_unit_decl_inner(const_span, true)
+    }
+
+    fn parse_unit_decl_inner(
+        &mut self,
+        start_span: crate::syntax::span::Span,
+        is_const: bool,
+    ) -> Result<Declaration, ParseError> {
         let name = self.parse_any_ident()?.into_spanned::<UnitName>();
         self.expect(Token::Colon)?;
         let dim_type = self.parse_dim_expr()?;
@@ -49,6 +65,7 @@ impl Parser<'_> {
                 name,
                 dim_type,
                 definition,
+                is_const,
             }),
             span,
         })

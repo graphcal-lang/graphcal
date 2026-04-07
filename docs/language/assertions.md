@@ -187,8 +187,8 @@ Assertions:
 #### Rules
 
 - Arguments must reference `assert` declarations. Referencing a `param`, `node`,
-  `const`, or nonexistent name is a compile error (A005).
-- Valid on `node` and `param` declarations. Using `#[assumes]` on `const` is an
+  `const node`, or nonexistent name is a compile error (A005).
+- Valid on `node` and `param` declarations. Using `#[assumes]` on `const node` is an
   error (A006) because constants do not depend on runtime values.
 - Multiple assertions can be listed: `#[assumes(a, b, c)]`.
 - Cross-file: you can import an assert via `import` and reference it in
@@ -214,7 +214,7 @@ assert x_greater = @x > @y;
 #### Constraints
 
 - Valid only on `assert` declarations. Using `#[expected_fail]` on `param`,
-  `node`, `const`, etc. is a compile error (A008).
+  `node`, `const node`, etc. is a compile error (A008).
 - Evaluation errors (e.g., division by zero) are never inverted -- they remain
   errors regardless of `#[expected_fail]`.
 
@@ -307,7 +307,7 @@ node ratio: Dimensionless = @limit / 2.0;
 | A003 | Cannot reference assert with `@` sigil |
 | A004 | Assert body must evaluate to `Bool` |
 | A005 | Unknown assert in `#[assumes(...)]` |
-| A006 | `#[assumes]` on invalid declaration kind (e.g., `const`) |
+| A006 | `#[assumes]` on invalid declaration kind (e.g., `const node`) |
 | A007 | Unknown attribute name |
 | A008 | `#[expected_fail]` on invalid declaration kind (not `assert`) |
 | A009 | Invalid argument in `#[expected_fail(...)]` |

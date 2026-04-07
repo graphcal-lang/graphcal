@@ -1,2 +1,2 @@
 // Bad const casing: const must be UPPER_SNAKE_CASE
-const bad_name: Dimensionless = 1.0;
+const node bad_name: Dimensionless = 1.0;

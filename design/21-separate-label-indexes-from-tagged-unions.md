@@ -139,7 +139,7 @@ Expression-level:
   Label(IndexName)   -- not a ValueType or DeclType; exists only in expressions
 ```
 
-`Label(IndexName)` is an **expression-level type** — it exists within the type checker and at runtime, but cannot appear in type annotations for `param`, `node`, or `const` declarations. You cannot write `node m: Maneuver = Maneuver::Departure;`. Labels arise as loop variables in `for` comprehensions, function parameters, `let` bindings, and intermediate values in expressions (comparisons, match scrutinees, index access arguments). It supports:
+`Label(IndexName)` is an **expression-level type** — it exists within the type checker and at runtime, but cannot appear in type annotations for `param`, `node`, or `const node` declarations. You cannot write `node m: Maneuver = Maneuver::Departure;`. Labels arise as loop variables in `for` comprehensions, function parameters, `let` bindings, and intermediate values in expressions (comparisons, match scrutinees, index access arguments). It supports:
 
 | Operation | `Label(I)` | `TaggedUnion` |
 | --- | --- | --- |

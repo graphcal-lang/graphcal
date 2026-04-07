@@ -85,7 +85,7 @@ type Vec3<D: Dim, Frame: Type> derive(Add, Sub, Neg) {
 
 ### Level 3: DeclType
 
-What can appear in type annotations of `param`, `node`, and `const` declarations. Either a ValueType (one value) or an indexed collection of ValueTypes.
+What can appear in type annotations of `param`, `node`, and `const node` declarations. Either a ValueType (one value) or an indexed collection of ValueTypes.
 
 ```gcl
 param dry_mass: Mass = 1200 kg;                         // ValueType
@@ -137,7 +137,7 @@ Named index labels are proper runtime values within expressions:
 - **Pattern match:** `match m { Maneuver::Departure => ..., ... }` works.
 - **Use in struct fields:** `type Config { phase: Phase, maneuver: Maneuver }` works.
 
-However, labels cannot be the type of a `param`, `node`, or `const` declaration — they exist only within expression contexts.
+However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
 
 **Why not just use `type`?** A regular fieldless tagged union (`type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`. This prevents accidentally using marker types (like `type ECI {}`) as collection axes. If you just need a fieldless enum without collection semantics, use `type`.
 

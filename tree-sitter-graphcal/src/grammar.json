@@ -23,10 +23,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "const_declaration"
-        },
-        {
-          "type": "SYMBOL",
           "name": "dimension_declaration"
         },
         {
@@ -330,36 +326,11 @@
           }
         },
         {
-          "type": "STRING",
-          "value": "node"
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
-        },
-        {
           "type": "CHOICE",
           "members": [
             {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": ":"
-                },
-                {
-                  "type": "FIELD",
-                  "name": "type",
-                  "content": {
-                    "type": "SYMBOL",
-                    "name": "type_expr"
-                  }
-                }
-              ]
+              "type": "STRING",
+              "value": "const"
             },
             {
               "type": "BLANK"
@@ -368,35 +339,7 @@
         },
         {
           "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "FIELD",
-          "name": "value",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_expr"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ";"
-        }
-      ]
-    },
-    "const_declaration": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "REPEAT",
-          "content": {
-            "type": "SYMBOL",
-            "name": "attribute"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "const"
+          "value": "node"
         },
         {
           "type": "FIELD",
@@ -498,6 +441,18 @@
     "unit_declaration": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "const"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
         {
           "type": "STRING",
           "value": "unit"

@@ -66,18 +66,18 @@ fn assert_results_equal(original: &EvalResult, shuffled: &EvalResult) {
     assert_eq!(
         original.consts.len(),
         shuffled.consts.len(),
-        "const count mismatch"
+        "const node count mismatch"
     );
     for (name, val) in &original.consts {
         let shuffled_val = &shuffled
             .consts
             .iter()
             .find(|(n, _)| n == name)
-            .unwrap_or_else(|| panic!("const `{name}` missing in shuffled result"))
+            .unwrap_or_else(|| panic!("const node `{name}` missing in shuffled result"))
             .1;
         assert!(
             val == shuffled_val,
-            "const `{name}` differs: {val:?} vs {shuffled_val:?}"
+            "const node `{name}` differs: {val:?} vs {shuffled_val:?}"
         );
     }
 
@@ -130,7 +130,7 @@ fn forward_ref_derived_dimension() {
     let source = r"
         dimension Acceleration = Velocity / Time;
         dimension Velocity = Length / Time;
-        const G0: Acceleration = 9.80665 m/s^2;
+        const node G0: Acceleration = 9.80665 m/s^2;
     ";
     compile_and_eval(source).expect("forward-ref derived dimension must compile and evaluate");
 }
@@ -141,7 +141,7 @@ fn forward_ref_unit() {
     let source = r"
         unit km_custom: Length = 1000 m_base;
         unit m_base: Length;
-        const DIST: Length = 5.0 km_custom;
+        const node DIST: Length = 5.0 km_custom;
     ";
     compile_and_eval(source).expect("forward-ref unit must compile and evaluate");
 }

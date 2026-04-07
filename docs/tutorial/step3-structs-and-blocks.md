@@ -29,8 +29,8 @@ A `type` with a single set of fields defines a struct. Each field has a name and
 Complex calculations can use block expressions with `let` bindings for intermediate values:
 
 ```
-const R_EARTH: Length = 6371.0 km;
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
@@ -85,8 +85,8 @@ type TransferResult {
     tof: Time,
 }
 
-const R_EARTH: Length = 6371.0 km;
-const GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node R_EARTH: Length = 6371.0 km;
+const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;

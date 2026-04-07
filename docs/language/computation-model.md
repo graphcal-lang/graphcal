@@ -14,7 +14,7 @@ Every top-level declaration belongs to one of four kinds:
 |------|---------|-----------|---------|
 | Parameter | `param` | User-supplied input, optionally with a default value | Yes |
 | Node | `node` | Computed value derived from other values | Yes |
-| Constant | `const` | Compile-time immutable value | No |
+| Constant | `const node` | Compile-time immutable value | No |
 | Assertion | `assert` | Post-evaluation boolean check | No |
 
 ### Parameters
@@ -47,10 +47,10 @@ Nodes are computed values. Their expressions can reference parameters, other nod
 ### Constants
 
 ```
-const G0: Acceleration = 9.80665 m/s^2;
+const node G0: Acceleration = 9.80665 m/s^2;
 ```
 
-Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes (the `@` sigil is prohibited in `const` expressions).
+Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes (the `@` sigil is prohibited in `const node` expressions).
 
 ### Assertions
 
@@ -76,7 +76,7 @@ The `@` prefix is the central scoping mechanism:
 |---------|-------------|
 | `node` expression | Yes |
 | `param` default value | No |
-| `const` expression | No |
+| `const node` expression | No |
 | `fn` body | No |
 | `let` binding (in a `node` block) | Yes |
 | `let` binding (in a `fn` block) | No |
@@ -114,7 +114,7 @@ Graphcal enforces naming conventions at parse time:
 |-------------|-----------|---------|
 | `param` | `lower_snake_case` | `dry_mass` |
 | `node` | `lower_snake_case` | `total_dv` |
-| `const` | `UPPER_SNAKE_CASE` | `G0`, `MARGIN_FACTOR` |
+| `const node` | `UPPER_SNAKE_CASE` | `G0`, `MARGIN_FACTOR` |
 | `assert` | `lower_snake_case` | `fuel_positive` |
 | `fn` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |

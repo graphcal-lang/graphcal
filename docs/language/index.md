@@ -29,7 +29,7 @@ The language has a layered type system:
 
     ---
 
-    DAG semantics, `param`/`node`/`const`, the `@`-sigil.
+    DAG semantics, `param`/`node`/`const node`, the `@`-sigil.
 
     [:octicons-arrow-right-24: Computation model](computation-model.md)
 

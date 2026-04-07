@@ -8,7 +8,7 @@ valid in all later phases.
 ## Dependency Graph
 
 ```
-Phase 0: Scalar Graph (f64, param/node/const, @, single file)
+Phase 0: Scalar Graph (f64, param/node/const node, @, single file)
     |
 Phase 1: Dimensions & Units
     |
@@ -39,7 +39,7 @@ Phase 6: Scenarios & CLI Workflow
 
 | Phase | File | Adds |
 | --- | --- | --- |
-| [0](./phase-0-scalar-graph.md) | Scalar Graph | `param`/`node`/`const`, `@`, `f64`, single file |
+| [0](./phase-0-scalar-graph.md) | Scalar Graph | `param`/`node`/`const node`, `@`, `f64`, single file |
 | [1](./phase-1-dimensions-and-units.md) | Dimensions & Units | `dimension`, `unit`, `->`, type annotations |
 | [2](./phase-2-structs.md) | Structs & Multi-Line Nodes | `type` (single-variant), block bodies, `let` |
 | [3](./phase-3-pure-functions.md) | Pure Functions | `fn`, `<D: Dim>`, stdlib math |
