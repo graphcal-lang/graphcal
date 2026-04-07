@@ -1116,10 +1116,10 @@ fn parse_dag_empty_body() {
 #[test]
 fn parse_dag_with_declarations() {
     let file = Parser::new(
-        r#"dag rocket {
+        "dag rocket {
             param thrust: Force;
             node accel: Acceleration = @thrust / 1000.0 kg;
-        }"#,
+        }",
     )
     .parse_file()
     .unwrap();
@@ -1148,10 +1148,10 @@ fn parse_dag_name_must_be_lower_snake_case() {
 #[test]
 fn parse_dag_with_attributes() {
     let file = Parser::new(
-        r#"#[hidden]
+        "#[hidden]
         dag my_dag {
             param x: Dimensionless;
-        }"#,
+        }",
     )
     .parse_file()
     .unwrap();
@@ -1164,11 +1164,11 @@ fn parse_dag_with_attributes() {
 #[test]
 fn parse_nested_dag() {
     let file = Parser::new(
-        r#"dag outer {
+        "dag outer {
             dag inner {
                 param x: Dimensionless;
             }
-        }"#,
+        }",
     )
     .parse_file()
     .unwrap();
