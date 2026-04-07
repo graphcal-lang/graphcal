@@ -1294,6 +1294,10 @@
               {
                 "type": "SYMBOL",
                 "name": "bare_module_path"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "parent_scope_path"
               }
             ]
           }
@@ -1419,6 +1423,14 @@
               {
                 "type": "SYMBOL",
                 "name": "bare_module_path"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "dag_ref_path"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "parent_scope_path"
               }
             ]
           }
@@ -1661,6 +1673,35 @@
               {
                 "type": "SYMBOL",
                 "name": "identifier"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "dag_ref_path": {
+      "type": "SYMBOL",
+      "name": "identifier"
+    },
+    "parent_scope_path": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": ".."
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "/"
+              },
+              {
+                "type": "STRING",
+                "value": ".."
               }
             ]
           }

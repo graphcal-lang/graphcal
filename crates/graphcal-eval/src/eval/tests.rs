@@ -1712,3 +1712,88 @@ fn assert_indexed_len(val: &crate::eval::types::Value, expected_len: usize, name
         panic!("{name} should be Indexed, got {val:?}");
     }
 }
+
+// ---- Inline DAG tests (Phase 5) ----
+
+#[test]
+fn inline_dag_basic_selective() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_basic/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let val = find_value(&result, "final_result");
+    assert!((val - 20.0).abs() < 1e-10, "expected 20.0, got {val}");
+}
+
+#[test]
+fn inline_dag_import_parent_scope() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_import_parent/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // Orbital velocity at 400 km: sqrt(GM / (R + h))
+    // GM = 3.986004418e14, R = 6371000, h = 400000
+    let expected = (3.986_004_418e14_f64 / (6_371_000.0 + 400_000.0)).sqrt();
+    let val = find_value(&result, "result");
+    assert!(
+        (val - expected).abs() < 0.01,
+        "expected {expected}, got {val}"
+    );
+}
+
+#[test]
+fn inline_dag_namespace_multi_instantiation() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_namespace/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let doubled = find_value(&result, "doubled_result");
+    let tripled = find_value(&result, "tripled_result");
+    assert!(
+        (doubled - 20.0).abs() < 1e-10,
+        "expected 20.0, got {doubled}"
+    );
+    assert!(
+        (tripled - 30.0).abs() < 1e-10,
+        "expected 30.0, got {tripled}"
+    );
+}
+
+#[test]
+fn inline_dag_recursive_error() {
+    // Direct recursion: dag includes itself.
+    let source = "
+dag recursive {
+    param x: Dimensionless;
+    include recursive(x: 1.0) { result };
+    node result: Dimensionless = @x;
+}
+include recursive(x: 1.0) { result };
+";
+    let result = compile_and_eval(source);
+    assert!(result.is_err(), "recursive DAG should fail");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(
+        err_msg.contains("recursive DAG instantiation"),
+        "error should mention recursive DAG: {err_msg}"
+    );
+}
+
+#[test]
+fn inline_dag_from_source() {
+    // Test inline DAG from in-memory source.
+    let source = "
+dimension Velocity = Length / Time;
+
+dag add_velocities {
+    param a: Velocity;
+    param b: Velocity;
+    node sum: Velocity = @a + @b;
+}
+
+param v1: Velocity = 10.0 m/s;
+param v2: Velocity = 5.0 m/s;
+include add_velocities(a: @v1, b: @v2) { sum as total };
+node result: Velocity = @total;
+";
+    let result = compile_and_eval(source).unwrap();
+    let val = find_value(&result, "result");
+    assert!((val - 15.0).abs() < 1e-10, "expected 15.0, got {val}");
+}

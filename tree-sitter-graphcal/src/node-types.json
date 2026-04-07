@@ -1047,6 +1047,21 @@
     }
   },
   {
+    "type": "dag_ref_path",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "dim_expr",
     "named": true,
     "fields": {},
@@ -2399,6 +2414,10 @@
             "named": true
           },
           {
+            "type": "parent_scope_path",
+            "named": true
+          },
+          {
             "type": "string_literal",
             "named": true
           }
@@ -2486,6 +2505,14 @@
         "types": [
           {
             "type": "bare_module_path",
+            "named": true
+          },
+          {
+            "type": "dag_ref_path",
+            "named": true
+          },
+          {
+            "type": "parent_scope_path",
             "named": true
           },
           {
@@ -4499,6 +4526,11 @@
         }
       ]
     }
+  },
+  {
+    "type": "parent_scope_path",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "parenthesized_expr",
@@ -7261,6 +7293,10 @@
   },
   {
     "type": ".",
+    "named": false
+  },
+  {
+    "type": "..",
     "named": false
   },
   {

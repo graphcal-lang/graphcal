@@ -297,7 +297,7 @@ module.exports = grammar({
     import_declaration: $ => seq(
       repeat($.attribute),
       "import",
-      field("path", choice($.string_literal, $.bare_module_path)),
+      field("path", choice($.string_literal, $.bare_module_path, $.parent_scope_path)),
       choice(
         // Selective import: { name1, name2 as alias }
         seq(
@@ -321,10 +321,11 @@ module.exports = grammar({
     // include "./rocket.gcl"(dry_mass: 800.0 kg) as stage_1;   -- module include
     // include "./rocket.gcl" { delta_v };                        -- include without params
     // include nasa/rocket(dry_mass: 800.0 kg) as stage;          -- bare module path
+    // include my_dag(x: 1.0) { result };                          -- inline DAG reference
     include_declaration: $ => seq(
       repeat($.attribute),
       "include",
-      field("path", choice($.string_literal, $.bare_module_path)),
+      field("path", choice($.string_literal, $.bare_module_path, $.dag_ref_path, $.parent_scope_path)),
       optional(field("param_bindings", $.include_param_bindings)),
       choice(
         // Selective: { name1, name2 as alias }
@@ -376,6 +377,17 @@ module.exports = grammar({
     bare_module_path: $ => seq(
       $.identifier,
       repeat1(seq("/", $.identifier)),
+    ),
+
+    // Inline DAG reference path: a single identifier (e.g., `my_dag`)
+    // Used in `include` to reference inline DAG definitions.
+    dag_ref_path: $ => $.identifier,
+
+    // Parent scope path: `..` or `../..` etc.
+    // Used in `import` inside DAG blocks to access the enclosing scope.
+    parent_scope_path: $ => seq(
+      "..",
+      repeat(seq("/", "..")),
     ),
 
     // Import item with optional alias: name or name as alias

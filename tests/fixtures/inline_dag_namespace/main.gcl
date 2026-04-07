@@ -1,0 +1,17 @@
+// Inline DAG with namespace (module) import.
+dimension Velocity = Length / Time;
+
+dag scale {
+    param factor: Dimensionless;
+    param v: Velocity;
+    node result: Velocity = @v * @factor;
+}
+
+param speed: Velocity = 10.0 m/s;
+
+// Module import — access members with ::
+include scale(factor: 2.0, v: @speed) as doubled;
+include scale(factor: 3.0, v: @speed) as tripled;
+
+node doubled_result: Velocity = @doubled::result;
+node tripled_result: Velocity = @tripled::result;

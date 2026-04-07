@@ -14,7 +14,10 @@ impl Parser<'_> {
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
-        let path = self.parse_import_path()?;
+        // `import` requires 2-segment module paths (e.g., `package/module`),
+        // but also accepts `..` for parent scope access inside DAGs.
+        // Single-segment paths are only valid for `include` (inline DAG names).
+        let path = self.parse_import_path(2)?;
 
         // Reject param bindings on `import` — use `include` for DAG instantiation.
         if self.lexer.peek() == Some(&Token::LParen) {
@@ -47,7 +50,8 @@ impl Parser<'_> {
     pub(super) fn parse_include_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Include)?;
 
-        let path = self.parse_import_path()?;
+        // `include` allows 1-segment module paths for inline DAG references.
+        let path = self.parse_import_path(1)?;
 
         // Optional param bindings: `(name: expr, ...)`
         let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
@@ -79,8 +83,14 @@ impl Parser<'_> {
 
     // --- shared helpers ---
 
-    /// Parse an import/include path: string literal or bare module path.
-    fn parse_import_path(&mut self) -> Result<crate::syntax::ast::ImportPath, ParseError> {
+    /// Parse an import/include path: string literal, bare module path, or `..` parent scope.
+    ///
+    /// `min_segments` controls the minimum number of segments for bare module paths.
+    /// `import` requires 2 (e.g., `package/module`), `include` allows 1 (for inline DAG names).
+    fn parse_import_path(
+        &mut self,
+        min_segments: usize,
+    ) -> Result<crate::syntax::ast::ImportPath, ParseError> {
         match self.lexer.peek() {
             Some(Token::StringLiteral) => {
                 let (_, span) = self.advance()?;
@@ -89,6 +99,35 @@ impl Parser<'_> {
                 Ok(crate::syntax::ast::ImportPath::FilePath {
                     path: path_str,
                     span,
+                })
+            }
+            Some(Token::DotDot) => {
+                // Parent scope path: `..` or `../..` or `../../..`
+                let (_, start_span) = self.advance()?;
+                let mut levels: u32 = 1;
+                let mut end_span = start_span;
+
+                // Parse additional `/..` pairs for deeper traversal.
+                // After `..`, only `/..` is valid for continued parent traversal.
+                while self.lexer.peek() == Some(&Token::Slash) {
+                    self.lexer.next_token(); // consume `/`
+                    if self.lexer.peek() == Some(&Token::DotDot) {
+                        let (_, span) = self.advance()?;
+                        levels += 1;
+                        end_span = span;
+                    } else if let Some(tok) = self.lexer.peek() {
+                        // `/` followed by something other than `..` — parse error
+                        let tok_str = tok.to_string();
+                        let (_, span) = self.advance()?;
+                        return Err(self.unexpected_token("`..` after `/`", &tok_str, span));
+                    } else {
+                        return Err(self.unexpected_eof("`..` after `/`"));
+                    }
+                }
+
+                Ok(crate::syntax::ast::ImportPath::ParentScope {
+                    levels,
+                    span: start_span.merge(end_span),
                 })
             }
             Some(Token::Ident) => {
@@ -104,8 +143,8 @@ impl Parser<'_> {
                     segments.push(seg);
                 }
 
-                // Require at least two segments (e.g., `nasa/rocket`, not just `nasa`)
-                if segments.len() < 2 {
+                // Enforce minimum segment count
+                if segments.len() < min_segments {
                     let found = self
                         .lexer
                         .peek()
@@ -127,9 +166,9 @@ impl Parser<'_> {
             Some(tok) => {
                 let tok_str = tok.to_string();
                 let (_, span) = self.advance()?;
-                Err(self.unexpected_token("a string literal or module path", &tok_str, span))
+                Err(self.unexpected_token("a string literal, module path, or `..`", &tok_str, span))
             }
-            None => Err(self.unexpected_eof("a string literal or module path")),
+            None => Err(self.unexpected_eof("a string literal, module path, or `..`")),
         }
     }
 

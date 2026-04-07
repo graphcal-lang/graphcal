@@ -139,6 +139,8 @@ pub enum Token {
     At,
     #[token(":")]
     Colon,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
 
@@ -221,6 +223,7 @@ impl std::fmt::Display for Token {
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
             Self::Colon => write!(f, ":"),
+            Self::DotDot => write!(f, ".."),
             Self::Dot => write!(f, "."),
             Self::Underscore => write!(f, "_"),
             Self::Ident => write!(f, "identifier"),
@@ -829,6 +832,29 @@ mod tests {
         let mut lexer = Token::lexer("dagger");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "dagger");
+    }
+
+    #[test]
+    fn lex_dotdot() {
+        let tokens = lex_tokens("import .. { X };");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Import,
+                Token::DotDot,
+                Token::LBrace,
+                Token::Ident,
+                Token::RBrace,
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_dot_vs_dotdot() {
+        // `..` should lex as DotDot, `.` as Dot
+        let tokens = lex_tokens(".. . ..");
+        assert_eq!(tokens, vec![Token::DotDot, Token::Dot, Token::DotDot]);
     }
 
     #[test]
