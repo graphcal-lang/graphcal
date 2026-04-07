@@ -114,9 +114,9 @@ fn parse_const_node_with_type() {
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Node(n) if n.is_const => {
-            assert_eq!(n.name.value.as_str(), "G0");
-            assert!(matches!(n.type_ann.kind, TypeExprKind::Dimensionless));
+        DeclKind::ConstNode(c) => {
+            assert_eq!(c.name.value.as_str(), "G0");
+            assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
         }
         _ => panic!("expected const node"),
     }
@@ -294,6 +294,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
         .map(|d| match &d.kind {
             DeclKind::Param(p) => p.name.value.as_str(),
             DeclKind::Node(n) => n.name.value.as_str(),
+            DeclKind::ConstNode(c) => c.name.value.as_str(),
             DeclKind::Dimension(d) => d.name.value.as_str(),
             DeclKind::Unit(u) => u.name.value.as_str(),
             DeclKind::Type(t) => t.name.value.as_str(),

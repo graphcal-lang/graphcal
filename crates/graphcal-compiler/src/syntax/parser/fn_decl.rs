@@ -289,7 +289,7 @@ mod tests {
     ";
         let file = Parser::new(source).parse_file().unwrap();
         assert_eq!(file.declarations.len(), 4);
-        assert!(matches!(&file.declarations[0].kind, DeclKind::Node(n) if n.is_const));
+        assert!(matches!(file.declarations[0].kind, DeclKind::ConstNode(_)));
         assert!(matches!(file.declarations[1].kind, DeclKind::Fn(_)));
         assert!(matches!(file.declarations[2].kind, DeclKind::Param(_)));
         assert!(matches!(file.declarations[3].kind, DeclKind::Node(_)));

@@ -145,7 +145,8 @@ fn collect_local_declarations(
         // Dimension and Unit declarations are handled by the registry, not the resolver
         let (name, name_span, is_const) = match &decl.kind {
             DeclKind::Param(p) => (p.name.value.to_string(), p.name.span, false),
-            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, n.is_const),
+            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
+            DeclKind::ConstNode(c) => (c.name.value.to_string(), c.name.span, true),
             DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
             DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
             DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
@@ -195,7 +196,7 @@ fn collect_local_declarations(
         // Track source order and assert names
         let category = match &decl.kind {
             DeclKind::Param(_) => DeclCategory::Param,
-            DeclKind::Node(n) if n.is_const => DeclCategory::Const,
+            DeclKind::ConstNode(_) => DeclCategory::Const,
             DeclKind::Node(_) => DeclCategory::Node,
             DeclKind::Assert(_) => {
                 assert_names.insert(name.clone());
@@ -430,22 +431,22 @@ fn collect_local_declarations(
                     span: decl.span,
                 });
             }
-            DeclKind::Node(n) if n.is_const => {
-                check_no_graph_refs(&n.value, src)?;
-                check_no_variant_literals(&n.value, "const node", src)?;
+            DeclKind::ConstNode(c) => {
+                check_no_graph_refs(&c.value, src)?;
+                check_no_variant_literals(&c.value, "const node", src)?;
                 let deps = extract_const_refs(
-                    &n.value,
+                    &c.value,
                     &all_const_names,
                     builtin_consts,
                     builtin_fns,
                     &all_user_fn_names,
                     src,
                 )?;
-                let cname = n.name.value.to_string();
+                let cname = c.name.value.to_string();
                 const_deps.insert(cname.clone(), deps);
                 consts.push(ResolvedConstEntry {
                     name: cname,
-                    expr: n.value.clone(),
+                    expr: c.value.clone(),
                     span: decl.span,
                 });
             }
@@ -527,7 +528,7 @@ fn validate_attributes(
         let decl_name = match &decl.kind {
             DeclKind::Param(p) => Some(p.name.value.to_string()),
             DeclKind::Node(n) => Some(n.name.value.to_string()),
-            // const nodes are covered by DeclKind::Node below
+            DeclKind::ConstNode(c) => Some(c.name.value.to_string()),
             DeclKind::Assert(a) => Some(a.name.value.to_string()),
             DeclKind::Plot(p) => Some(p.name.value.to_string()),
             DeclKind::Figure(f) => Some(f.name.value.to_string()),
@@ -550,7 +551,7 @@ fn validate_attributes(
                     let kind = match &decl.kind {
                         DeclKind::Plot(_) => continue,
                         DeclKind::Param(_) => "param",
-                        DeclKind::Node(n) if n.is_const => "const node",
+                        DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Figure(_) => "figure",
@@ -572,7 +573,7 @@ fn validate_attributes(
                 AttributeName::Assumes => {
                     // #[assumes] is only valid on non-const node and param
                     let kind = match &decl.kind {
-                        DeclKind::Node(n) if n.is_const => Some("const node"),
+                        DeclKind::ConstNode(_) => Some("const node"),
                         DeclKind::Param(_) | DeclKind::Node(_) => None,
                         DeclKind::Assert(_) => Some("assert"),
                         DeclKind::Plot(_) => Some("plot"),
@@ -644,7 +645,7 @@ fn validate_attributes(
                             continue;
                         }
                         DeclKind::Param(_) => "param",
-                        DeclKind::Node(n) if n.is_const => "const node",
+                        DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
@@ -670,7 +671,7 @@ fn validate_attributes(
                     let kind = match &decl.kind {
                         DeclKind::Import(_) => continue,
                         DeclKind::Param(_) => "param",
-                        DeclKind::Node(n) if n.is_const => "const node",
+                        DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Plot(_) => "plot",
@@ -722,7 +723,7 @@ fn validate_attributes(
                         }
                         DeclKind::UnionType(_) => "union type",
                         DeclKind::Param(_) => "param",
-                        DeclKind::Node(n) if n.is_const => "const node",
+                        DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Plot(_) => "plot",

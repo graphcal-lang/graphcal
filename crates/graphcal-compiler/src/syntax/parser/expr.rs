@@ -917,7 +917,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(c) if c.is_const => match &c.value.kind {
+            DeclKind::ConstNode(c) => match &c.value.kind {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 9.80665).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 2);

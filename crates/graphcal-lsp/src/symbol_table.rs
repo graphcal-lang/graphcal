@@ -284,6 +284,9 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
         match &decl.kind {
             DeclKind::Param(p) => collect_param_decl(p, decl.span, &mut table, &mut scopes),
             DeclKind::Node(n) => collect_node_decl(n, decl.span, &mut table, &mut scopes),
+            DeclKind::ConstNode(c) => {
+                collect_const_node_decl(c, decl.span, &mut table, &mut scopes);
+            }
             DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, &mut table),
             DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
             DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
@@ -382,16 +385,11 @@ fn collect_node_decl(
     scopes: &mut ScopeStack,
 ) {
     let name = n.name.value.to_string();
-    let category = if n.is_const {
-        SymbolCategory::Const
-    } else {
-        SymbolCategory::Node
-    };
     table.definitions.insert(
         SymbolKey::TopLevel(name.clone()),
         DefinitionInfo {
             name,
-            category,
+            category: SymbolCategory::Node,
             name_span: n.name.span,
             decl_span,
             type_description: None,
@@ -400,6 +398,28 @@ fn collect_node_decl(
     );
     collect_type_expr_refs(&n.type_ann, table);
     collect_expr_refs(&n.value, table, scopes);
+}
+
+fn collect_const_node_decl(
+    c: &graphcal_compiler::syntax::ast::ConstNodeDecl,
+    decl_span: Span,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    let name = c.name.value.to_string();
+    table.definitions.insert(
+        SymbolKey::TopLevel(name.clone()),
+        DefinitionInfo {
+            name,
+            category: SymbolCategory::Const,
+            name_span: c.name.span,
+            decl_span,
+            type_description: None,
+            detail: None,
+        },
+    );
+    collect_type_expr_refs(&c.type_ann, table);
+    collect_expr_refs(&c.value, table, scopes);
 }
 
 fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
