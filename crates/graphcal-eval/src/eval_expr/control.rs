@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::ast::{Expr, LetBinding, MatchArm};
+use graphcal_compiler::syntax::ast::{Expr, MatchArm};
 
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;
@@ -26,22 +26,6 @@ pub(super) fn eval_if(
     } else {
         eval_expr(else_branch, values, local_values, ctx)
     }
-}
-
-/// Evaluate a block expression (`{ let x = ...; ... expr }`).
-pub(super) fn eval_block(
-    stmts: &[LetBinding],
-    body: &Expr,
-    values: &HashMap<String, RuntimeValue>,
-    local_values: &HashMap<String, RuntimeValue>,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let mut block_locals = local_values.clone();
-    for binding in stmts {
-        let val = eval_expr(&binding.value, values, &block_locals, ctx)?;
-        block_locals.insert(binding.name.name.clone(), val);
-    }
-    eval_expr(body, values, &block_locals, ctx)
 }
 
 /// Evaluate a `match` expression.

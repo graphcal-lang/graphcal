@@ -5,6 +5,7 @@ expression: formatted
 // format_edge_cases.gcl -- Edge cases for formatter: long lines, deep nesting, complex expressions
 dimension Velocity = Length / Time;
 dimension Acceleration = Length / Time^2;
+dimension Frequency = Time^-1;
 dimension GravParam = Length^3 / Time^2;
 
 type Eci;
@@ -128,25 +129,35 @@ node combined_metric: Dimensionless = (@phase_priority[Phase::Launch] + @phase_p
 node cumulative_priority: Dimensionless[Phase] = scan(@phase_priority, 0.0, |acc, val| acc + val);
 
 // Unfold with complex body
-node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| {
-    let dt = t - prev_t;
-    let rate = 0.5 Hz;
-    @decay[prev_t] * (1.0 - rate * dt)
-});
+const node DECAY_RATE: Frequency = 0.5 Hz;
+node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.0 - DECAY_RATE * (t - prev_t)));
 
-// Block expression as node value
-node complex_result: Velocity = {
-    let r1 = R_EARTH + 200.0 km;
-    let r2 = R_EARTH + 35786.0 km;
-    let v1 = sqrt(GM_EARTH / r1);
-    let v2 = sqrt(GM_EARTH / r2);
-    let a_transfer = (r1 + r2) / 2.0;
-    let v_transfer_at_r1 = sqrt(GM_EARTH * (2.0 / r1 - 1.0 / a_transfer));
-    let dv1 = v_transfer_at_r1 - v1;
-    let v_transfer_at_r2 = sqrt(GM_EARTH * (2.0 / r2 - 1.0 / a_transfer));
-    let dv2 = v2 - v_transfer_at_r2;
-    dv1 + dv2
-};
+// DAG for complex result computation
+dag compute_complex_result {
+import .. { GM_EARTH, R_EARTH };
+    
+    node r1: Length = R_EARTH + 200.0 km;
+    
+    node r2: Length = R_EARTH + 35786.0 km;
+    
+    node v1: Velocity = sqrt(GM_EARTH / @r1);
+    
+    node v2: Velocity = sqrt(GM_EARTH / @r2);
+    
+    node a_transfer: Length = (@r1 + @r2) / 2.0;
+    
+    node v_transfer_at_r1: Velocity = sqrt(GM_EARTH * (2.0 / @r1 - 1.0 / @a_transfer));
+    
+    node dv1: Velocity = @v_transfer_at_r1 - @v1;
+    
+    node v_transfer_at_r2: Velocity = sqrt(GM_EARTH * (2.0 / @r2 - 1.0 / @a_transfer));
+    
+    node dv2: Velocity = @v2 - @v_transfer_at_r2;
+    
+    node result: Velocity = @dv1 + @dv2;
+}
+
+include compute_complex_result { result as complex_result };
 
 // Aggregations with complex for expressions
 node total_dv_all_phases: Velocity = sum(for p: Phase, m: Maneuver { @maneuver_dv[p, m] });

@@ -1,4 +1,4 @@
-use crate::syntax::ast::{Declaration, GenericConstraint, GenericParam, LetBinding};
+use crate::syntax::ast::{Declaration, GenericConstraint, GenericParam};
 use crate::syntax::names::GenericParamName;
 use crate::syntax::token::Token;
 
@@ -86,18 +86,5 @@ impl Parser<'_> {
         }
         self.expect(Token::Gt)?;
         Ok(params)
-    }
-
-    /// Parse the contents of a block: `let` bindings followed by a final expression.
-    /// Shared between block expressions and function block bodies.
-    pub(super) fn parse_block_contents(
-        &mut self,
-    ) -> Result<(Vec<LetBinding>, crate::syntax::ast::Expr), ParseError> {
-        let mut stmts = Vec::new();
-        while self.lexer.peek() == Some(&Token::Let) {
-            stmts.push(self.parse_let_binding()?);
-        }
-        let expr = self.parse_expr()?;
-        Ok((stmts, expr))
     }
 }

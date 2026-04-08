@@ -2039,13 +2039,12 @@ mod tests {
 
     #[test]
     fn type_resolve_hohmann() {
+        // hohmann.gcl now uses DAG+include, which requires include expansion
+        // at a higher phase. Single-file TIR resolution correctly rejects the
+        // unknown graph ref `@transfer` that the include would create.
         let source = include_str!("../../../../tests/fixtures/hohmann.gcl");
-        let tir = parse_and_type_resolve(source).unwrap();
-        // transfer should be a struct type
-        let transfer_type = &tir.resolved_decl_types[&ScopedName::local("transfer")];
-        assert!(
-            matches!(transfer_type, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
-        );
+        let err = parse_and_type_resolve(source).unwrap_err();
+        assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }
 
     #[test]

@@ -1,44 +1,15 @@
 use crate::syntax::ast::TypeExpr;
 use crate::syntax::ast::{
-    Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, LetBinding, MatchArm, MatchPattern,
-    NatExpr, PatternBinding, TupleMatchArm,
+    Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr,
+    PatternBinding, TupleMatchArm,
 };
-use crate::syntax::names::{DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName};
+use crate::syntax::names::{FieldName, IndexName, Spanned, StructTypeName, VariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
-use super::expr::token_to_comparison_op;
 use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case};
 
 impl Parser<'_> {
-    // --- Block and let binding parsing ---
-
-    /// Parse a let binding: `let IDENT (: TypeExpr)? = Expr ;`
-    pub(super) fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {
-        let (_, let_span) = self.expect(Token::Let)?;
-        let name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
-
-        // Optional type annotation
-        let type_ann = if self.lexer.peek() == Some(&Token::Colon) {
-            self.lexer.next_token(); // consume ':'
-            Some(self.parse_type_expr()?)
-        } else {
-            None
-        };
-
-        self.expect(Token::Eq)?;
-        let value = self.parse_expr()?;
-        let (_, semi_span) = self.expect(Token::Semicolon)?;
-        let span = let_span.merge(semi_span);
-
-        Ok(LetBinding {
-            name,
-            type_ann,
-            value,
-            span,
-        })
-    }
-
     // --- Match expression ---
 
     /// Parse a match expression:
@@ -517,85 +488,6 @@ impl Parser<'_> {
             span,
         })
     }
-
-    // --- Block disambiguation helpers ---
-
-    /// Parse a block expression after `{` has been consumed.
-    pub(super) fn parse_block_after_open_brace(
-        &mut self,
-        start_span: Span,
-    ) -> Result<Expr, ParseError> {
-        let (stmts, expr) = self.parse_block_contents()?;
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = start_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Block {
-                stmts,
-                expr: Box::new(expr),
-            },
-            span,
-        })
-    }
-
-    /// Parse a block expression after `{` and a `PascalCase` ident have been consumed.
-    /// The ident was consumed during map literal disambiguation but turned out not
-    /// to be a map literal (no `::` followed). Reconstruct parsing state.
-    pub(super) fn parse_block_after_open_brace_and_ident(
-        &mut self,
-        start_span: Span,
-        ident_name: &str,
-        ident_span: Span,
-    ) -> Result<Expr, ParseError> {
-        // The consumed PascalCase ident is the start of an expression in the block.
-        // It could be a struct construction (PascalCase { ... }) or a ConstRef.
-        let first_expr = if is_pascal_case(ident_name) && self.lexer.peek() == Some(&Token::LBrace)
-        {
-            self.parse_struct_construction(Spanned::new(
-                StructTypeName::new(ident_name),
-                ident_span,
-            ))?
-        } else {
-            // Treat as ConstRef (UPPER_SNAKE_CASE or PascalCase used as const)
-            Expr {
-                kind: ExprKind::ConstRef(Spanned::new(DeclName::new(ident_name), ident_span)),
-                span: ident_span,
-            }
-        };
-        let expr = self.continue_parsing_expr(first_expr)?;
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = start_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Block {
-                stmts: vec![],
-                expr: Box::new(expr),
-            },
-            span,
-        })
-    }
-
-    /// Continue parsing an expression from an already-parsed left-hand side.
-    /// Handles postfix operations and binary operators.
-    pub(super) fn continue_parsing_expr(&mut self, expr: Expr) -> Result<Expr, ParseError> {
-        // Handle postfix (field access, index access)
-        let mut expr = self.apply_postfix(expr)?;
-        // Handle binary operators (comparison, arithmetic, logical).
-        // Check for comparison operators (==, !=, <, >, <=, >=).
-        let op = self.lexer.peek().and_then(token_to_comparison_op);
-        if let Some(op) = op {
-            self.lexer.next_token();
-            let rhs = self.parse_expr()?;
-            let span = expr.span.merge(rhs.span);
-            expr = Expr {
-                kind: ExprKind::BinOp {
-                    op,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                },
-                span,
-            };
-        }
-        Ok(expr)
-    }
 }
 
 #[cfg(test)]
@@ -622,89 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_block_simple() {
-        let source = "node x: Dimensionless = { let a = 1.0; a + 2.0 };";
-        let file = Parser::new(source).parse_file().unwrap();
-        assert_eq!(file.declarations.len(), 1);
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { stmts, expr } => {
-                    assert_eq!(stmts.len(), 1);
-                    assert_eq!(stmts[0].name.name, "a");
-                    assert!(stmts[0].type_ann.is_none());
-                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
-                }
-                other => panic!("expected Block, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_block_multiple_lets() {
-        let source = "node x: Dimensionless = { let r1 = @a + @b; let r2 = @c; r1 + r2 };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { stmts, expr } => {
-                    assert_eq!(stmts.len(), 2);
-                    assert_eq!(stmts[0].name.name, "r1");
-                    assert_eq!(stmts[1].name.name, "r2");
-                    assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
-                }
-                other => panic!("expected Block, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_block_let_with_type_ann() {
-        let source = "node x: Dimensionless = { let a: Dimensionless = 1.0; a };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { stmts, .. } => {
-                    assert_eq!(stmts.len(), 1);
-                    assert!(stmts[0].type_ann.is_some());
-                }
-                other => panic!("expected Block, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_block_no_lets() {
-        let source = "node x: Dimensionless = { 1.0 + 2.0 };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { stmts, .. } => {
-                    assert_eq!(stmts.len(), 0);
-                }
-                other => panic!("expected Block, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_local_ref() {
-        let source = "node x: Dimensionless = { let a = 1.0; a };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { expr, .. } => {
-                    assert!(matches!(&expr.kind, ExprKind::LocalRef(ident) if ident.name == "a"));
-                }
-                other => panic!("expected Block, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
     fn parse_struct_construction_explicit_fields() {
         let source = "node t: Dimensionless = TransferResult { dv1: @a + @b, dv2: @c };";
         let file = Parser::new(source).parse_file().unwrap();
@@ -721,30 +530,6 @@ mod tests {
                     assert!(fields[1].value.is_some());
                 }
                 other => panic!("expected StructConstruction, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_struct_construction_shorthand() {
-        let source =
-            "node t: Dimensionless = { let dv1 = @a; let dv2 = @b; TransferResult { dv1, dv2 } };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::Block { expr, .. } => match &expr.kind {
-                    ExprKind::StructConstruction {
-                        type_name, fields, ..
-                    } => {
-                        assert_eq!(type_name.value.as_str(), "TransferResult");
-                        assert_eq!(fields.len(), 2);
-                        assert!(fields[0].value.is_none());
-                        assert!(fields[1].value.is_none());
-                    }
-                    other => panic!("expected StructConstruction, got {other:?}"),
-                },
-                other => panic!("expected Block, got {other:?}"),
             },
             _ => panic!("expected node"),
         }
@@ -926,8 +711,7 @@ mod tests {
 
     #[test]
     fn parse_unfold_expression() {
-        let source =
-            "node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });";
+        let source = "node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {

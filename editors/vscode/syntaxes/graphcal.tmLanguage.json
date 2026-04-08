@@ -25,7 +25,6 @@
     { "include": "#dag-declaration" },
     { "include": "#include-declaration" },
     { "include": "#import-declaration" },
-    { "include": "#let-binding" },
     { "include": "#for-binding" },
     { "include": "#as-keyword" },
     { "include": "#control-keywords" },
@@ -366,14 +365,6 @@
     "as-keyword": {
       "match": "\\b(as)\\b",
       "name": "keyword.operator.as.graphcal"
-    },
-
-    "let-binding": {
-      "match": "\\b(let)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
-      "captures": {
-        "1": { "name": "keyword.other.let.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
-      }
     },
 
     "for-binding": {

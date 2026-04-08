@@ -7,7 +7,4 @@ index Step = linspace(0.0 s, 1.0 s, step: 0.25 s);
 param k: Frequency = 2.0 Hz;
 param y0: Dimensionless = 10.0;
 
-node y: Dimensionless[Step] = unfold(@y0, |prev_t, t| {
-    let dt = t - prev_t;
-    @y[prev_t] * (1.0 - @k * dt)
-});
+node y: Dimensionless[Step] = unfold(@y0, |prev_t, t| @y[prev_t] * (1.0 - @k * (t - prev_t)));

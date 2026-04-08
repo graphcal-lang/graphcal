@@ -1,6 +1,0 @@
-// error: duplicate let binding in a block
-node x: Dimensionless = {
-    let a = 1.0;
-    let a = 2.0;
-    a
-};

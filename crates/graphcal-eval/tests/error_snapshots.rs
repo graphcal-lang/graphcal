@@ -158,13 +158,6 @@ fn error_struct_field_dim_mismatch() {
 }
 
 #[test]
-fn error_duplicate_let() {
-    let source = include_str!("../../../tests/fixtures/errors/duplicate_let.gcl");
-    let rendered = render_error(source, "duplicate_let.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn error_missing_struct_field() {
     let source = include_str!("../../../tests/fixtures/errors/missing_struct_field.gcl");
     let rendered = render_error(source, "missing_struct_field.gcl");

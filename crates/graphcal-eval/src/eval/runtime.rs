@@ -1004,9 +1004,7 @@ fn extract_dimension_from_expr(
         ExprKind::ForComp { body, .. } => {
             extract_dimension_from_expr(body, declared_types, registry)
         }
-        ExprKind::IndexAccess { expr: inner, .. }
-        | ExprKind::Convert { expr: inner, .. }
-        | ExprKind::Block { expr: inner, .. } => {
+        ExprKind::IndexAccess { expr: inner, .. } | ExprKind::Convert { expr: inner, .. } => {
             extract_dimension_from_expr(inner, declared_types, registry)
         }
         ExprKind::BinOp { lhs, .. } => {

@@ -26,7 +26,6 @@
   "include"
   "dag"
   "as"
-  "let"
   "if"
   "else"
   "match"
@@ -241,12 +240,6 @@
 ; Pattern binding name (shorthand): { thrust }
 ; Pattern binding with rename: { name: binding }
 (pattern_binding name: (identifier) @property)
-
-; ---------------------------------------------------------------
-; Let bindings
-; ---------------------------------------------------------------
-
-(let_binding name: (identifier) @variable)
 
 ; ---------------------------------------------------------------
 ; For comprehension

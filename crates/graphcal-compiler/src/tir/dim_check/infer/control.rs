@@ -1,19 +1,17 @@
-//! Type inference for control flow: If, Block, Match.
+//! Type inference for control flow: If, Match.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{Expr, LetBinding, MatchArm};
+use crate::syntax::ast::{Expr, MatchArm};
 use crate::syntax::names::{FieldName, IndexName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
 
-use super::super::helpers::{
-    check_arm_types_match, declared_to_inferred, format_inferred_type, resolve_field_type,
-};
+use super::super::helpers::{check_arm_types_match, format_inferred_type, resolve_field_type};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
@@ -74,71 +72,6 @@ pub(super) fn infer_if(
     }
 
     Ok(then_type)
-}
-
-/// Infer the type of a block expression (let bindings + final expression).
-pub(super) fn infer_block(
-    stmts: &[LetBinding],
-    body: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
-    local_types: &HashMap<String, InferredType>,
-    registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let mut block_locals = local_types.clone();
-    for binding in stmts {
-        // Check for duplicate let bindings
-        if let Some(existing) = block_locals.get(&binding.name.name) {
-            // Find the span of the first binding (search stmts processed so far)
-            let first_span = stmts
-                .iter()
-                .find(|b| b.name.name == binding.name.name && b.span != binding.span)
-                .map_or(binding.span, |b| b.name.span);
-            let _ = existing; // suppress unused warning
-            return Err(GraphcalError::DuplicateLetBinding {
-                name: binding.name.name.clone(),
-                src: src.clone(),
-                duplicate: binding.name.span.into(),
-                first: first_span.into(),
-            });
-        }
-
-        let rhs_type = infer_type(
-            &binding.value,
-            declared_types,
-            &block_locals,
-            registry,
-            builtin_fns,
-            src,
-        )?;
-
-        // If type annotation provided, check it matches
-        if let Some(type_ann) = &binding.type_ann {
-            let resolved =
-                crate::tir::tir::resolve_type_expr(type_ann, registry, &[], &[], &[], src)?;
-            let ann_type = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
-            let ann_inferred = declared_to_inferred(&ann_type);
-            if ann_inferred != rhs_type {
-                return Err(GraphcalError::DimensionMismatchInAnnotation {
-                    declared: format_inferred_type(&ann_inferred, registry),
-                    inferred: format_inferred_type(&rhs_type, registry),
-                    src: src.clone(),
-                    span: type_ann.span.into(),
-                });
-            }
-        }
-
-        block_locals.insert(binding.name.name.clone(), rhs_type);
-    }
-    infer_type(
-        body,
-        declared_types,
-        &block_locals,
-        registry,
-        builtin_fns,
-        src,
-    )
 }
 
 /// Infer the type of a match expression.

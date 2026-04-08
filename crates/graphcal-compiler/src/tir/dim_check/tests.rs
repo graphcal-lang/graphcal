@@ -522,21 +522,6 @@ node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };";
 
 // --- Block let-binding type annotation mismatch ---
 
-#[test]
-fn check_block_let_type_mismatch() {
-    let source = "\
-param x: Length = 1.0 m;
-node y: Dimensionless = {
-let a: Time = @x;
-1.0
-};";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
-        "got: {err:?}"
-    );
-}
-
 // --- types_match wildcard: mismatched kinds ---
 
 #[test]
@@ -731,21 +716,6 @@ node bad: Length = (1.0 foobar) -> m;";
 
 // --- Error propagation through block binding ---
 
-#[test]
-fn check_block_error_in_binding() {
-    // Error inside a let-binding value
-    let source = "\
-node bad: Dimensionless = {
-let a = 1.0 foobar;
-1.0
-};";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
-        "got: {err:?}"
-    );
-}
-
 // --- Error propagation through field access inner expression ---
 
 #[test]
@@ -851,17 +821,6 @@ Stage::Second: 2.0,
 }
 
 // --- Block let-binding with valid type annotation ---
-
-#[test]
-fn check_block_let_type_annotation_ok() {
-    let source = "\
-param x: Length = 1.0 m;
-node y: Length = {
-let a: Length = @x;
-a
-};";
-    check(source).unwrap();
-}
 
 // -----------------------------------------------------------------------
 // Fin(N) type: loop variable bounds checking

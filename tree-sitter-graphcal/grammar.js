@@ -1056,7 +1056,6 @@ module.exports = grammar({
       $.graph_ref,
       $.struct_construction,
       $.map_literal,
-      $.block_expr,
       $.parenthesized_expr,
       $.qualified_variant,
       $.identifier,
@@ -1134,24 +1133,7 @@ module.exports = grammar({
       field("value", $._expr),
     ),
 
-    // { let r1 = ...; let r2 = ...; expr }
-    block_expr: $ => seq(
-      "{",
-      repeat($.let_binding),
-      field("value", $._expr),
-      "}",
-    ),
-
-    let_binding: $ => seq(
-      "let",
-      field("name", $.identifier),
-      optional(seq(":", field("type", $.type_expr))),
-      "=",
-      field("value", $._expr),
-      ";",
-    ),
-
-    // A brace-delimited body used by if/for (single expression, no let bindings)
+    // A brace-delimited body used by if/for (single expression)
     brace_body: $ => seq(
       "{",
       field("value", $._expr),

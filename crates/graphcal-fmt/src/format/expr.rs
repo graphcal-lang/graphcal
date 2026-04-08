@@ -1,5 +1,5 @@
 use graphcal_compiler::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, LetBinding, MapEntry, MatchArm,
+    BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, MapEntry, MatchArm,
     MatchPattern, PatternBinding, TupleMatchArm, TypeExpr, UnaryOp,
 };
 use graphcal_compiler::syntax::names::{IndexName, Spanned};
@@ -111,13 +111,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         } => format_expr(fmt, inner)
             .append(RcDoc::text(" as "))
             .append(format_type_expr_inline(target_type)),
-        ExprKind::Block { stmts, expr: tail } => {
-            let body = format_block_body(fmt, stmts, tail);
-            RcDoc::text("{")
-                .append(RcDoc::hardline().append(body).nest(INDENT))
-                .append(RcDoc::hardline())
-                .append(RcDoc::text("}"))
-        }
         ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),
@@ -317,39 +310,6 @@ pub fn format_if(
         .append(RcDoc::text("}"));
 
     multi_line.flat_alt(single_line).group()
-}
-
-pub fn format_block_body(
-    fmt: &mut Formatter<'_>,
-    stmts: &[LetBinding],
-    tail: &Expr,
-) -> RcDoc<'static> {
-    let mut docs: Vec<RcDoc<'static>> = Vec::new();
-    for stmt in stmts {
-        // Drain leading comments before this let binding
-        let leading = fmt.drain_comments_before(stmt.span.offset());
-        let stmt_doc = format_let_binding(fmt, stmt);
-        // Drain trailing comment on the same line
-        let stmt_end = stmt.span.offset() + stmt.span.len();
-        let trailing = fmt.drain_trailing_comment(stmt_end);
-        docs.push(prepend_comments(leading, stmt_doc.append(trailing)));
-    }
-    // Drain leading comments before the tail expression
-    let leading = fmt.drain_comments_before(tail.span.offset());
-    docs.push(prepend_comments(leading, format_expr(fmt, tail)));
-    RcDoc::intersperse(docs, RcDoc::hardline())
-}
-
-pub fn format_let_binding(fmt: &mut Formatter<'_>, lb: &LetBinding) -> RcDoc<'static> {
-    let mut doc = RcDoc::text("let ").append(RcDoc::text(lb.name.name.clone()));
-    if let Some(ref ta) = lb.type_ann {
-        doc = doc
-            .append(RcDoc::text(": "))
-            .append(format_type_expr_inline(ta));
-    }
-    doc.append(RcDoc::text(" = "))
-        .append(format_expr(fmt, &lb.value))
-        .append(RcDoc::text(";"))
 }
 
 pub fn format_struct_construction(
