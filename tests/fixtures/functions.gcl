@@ -13,20 +13,20 @@ const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 // Non-generic DAG: orbital velocity
 dag orbital_velocity {
-    param gm: GravParam;
+    pub param gm: GravParam;
     
-    param r: Length;
+    pub param r: Length;
     
     node v: Velocity = sqrt(@gm / @r);
 }
 
 // DAG with multiple internal nodes: Hohmann transfer delta-v
 dag hohmann_dv {
-    param gm: GravParam;
+    pub param gm: GravParam;
     
-    param r1: Length;
+    pub param r1: Length;
     
-    param r2: Length;
+    pub param r2: Length;
     
     import .. { TransferResult };
     

@@ -360,3 +360,111 @@ fn resolve_derive_unknown_op_is_rejected() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(matches!(err, GraphcalError::EvalError { .. }));
 }
+
+// --- Visibility tests ---
+
+#[test]
+fn resolve_required_param_must_be_pub() {
+    let source = r"
+        param x: Dimensionless;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "param"));
+}
+
+#[test]
+fn resolve_required_index_must_be_pub() {
+    let source = r"
+        index Phase;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "index"));
+}
+
+#[test]
+fn resolve_pub_required_param_ok() {
+    let source = r"
+        pub param x: Dimensionless;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_pub_required_index_ok() {
+    let source = r"
+        pub index Phase;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_private_in_public_dim() {
+    let source = r"
+        dim Velocity = Length / Time;
+        pub param speed: Velocity = 10.0 m/s;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
+    );
+}
+
+#[test]
+fn resolve_private_in_public_ok_when_dim_is_pub() {
+    let source = r"
+        pub dim Velocity = Length / Time;
+        pub param speed: Velocity = 10.0 m/s;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_private_in_public_ok_for_builtin_dims() {
+    // Built-in dimensions (Length, Time, etc.) don't need to be `pub`.
+    let source = r"
+        pub param distance: Length = 1.0 m;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_private_in_public_index_in_type() {
+    let source = r"
+        pub index Phase = { Alpha, Beta };
+        index Step = { Xray, Yankee };
+        pub node costs: Dimensionless[Phase, Step] = { Phase::Alpha: { Step::Xray: 1.0, Step::Yankee: 2.0 }, Phase::Beta: { Step::Xray: 3.0, Step::Yankee: 4.0 } };
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    // May get PubIndexVariantLiteral or VariantLiteralInNonRebindable before PrivateInPublic.
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name == "Step")
+            || matches!(err, GraphcalError::PubIndexVariantLiteral { .. })
+            || matches!(err, GraphcalError::VariantLiteralInNonRebindable { .. }),
+        "expected PrivateInPublic or variant literal error, got: {err:?}"
+    );
+}
+
+#[test]
+fn resolve_pub_names_collected() {
+    let source = r"
+        pub dim Velocity = Length / Time;
+        pub dim Acceleration = Length / Time^2;
+        pub const node g0: Acceleration = 9.80665 m/s^2;
+        node speed: Velocity = 10.0 m/s;
+    ";
+    let resolved = parse_and_resolve(source).unwrap();
+    assert!(resolved.pub_names.contains("Velocity"));
+    assert!(resolved.pub_names.contains("Acceleration"));
+    assert!(resolved.pub_names.contains("g0"));
+    assert!(!resolved.pub_names.contains("speed"));
+}
+
+#[test]
+fn resolve_non_pub_private_param_ok() {
+    // Non-pub params can reference private dims freely.
+    let source = r"
+        dim Velocity = Length / Time;
+        param speed: Velocity = 10.0 m/s;
+    ";
+    parse_and_resolve(source).unwrap();
+}

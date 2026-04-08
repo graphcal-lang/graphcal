@@ -470,3 +470,26 @@ fn error_required_index_standalone() {
     let rendered = render_error(source, "required_index_standalone.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// --- Visibility errors ---
+
+#[test]
+fn error_required_param_not_pub() {
+    let source = include_str!("../../../tests/fixtures/errors/required_param_not_pub.gcl");
+    let rendered = render_error(source, "required_param_not_pub.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_required_index_not_pub() {
+    let source = include_str!("../../../tests/fixtures/errors/required_index_not_pub.gcl");
+    let rendered = render_error(source, "required_index_not_pub.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_private_in_public() {
+    let source = include_str!("../../../tests/fixtures/errors/private_in_public.gcl");
+    let rendered = render_error(source, "private_in_public.gcl");
+    insta::assert_snapshot!(rendered);
+}

@@ -2,7 +2,7 @@
 dim Velocity = Length / Time;
 
 dag double_speed {
-    param v: Velocity;
+    pub param v: Velocity;
 
     node result: Velocity = @v * 2.0;
 }

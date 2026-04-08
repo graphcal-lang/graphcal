@@ -319,4 +319,8 @@ pub struct ResolvedFile {
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
     pub expected_fail: HashMap<String, ExpectedFail>,
+    /// Names of all declarations marked `pub` in this file (values + type-system).
+    pub pub_names: HashSet<String>,
+    /// Non-fatal warnings collected during resolution (e.g., deprecated `#[hidden]`).
+    pub warnings: Vec<crate::registry::error::GraphcalError>,
 }

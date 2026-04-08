@@ -33,7 +33,10 @@ pub(crate) use names::is_lower_snake_case;
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
-use scope::{check_no_assert_graph_refs, check_no_runtime_graph_refs, check_no_variant_literals};
+use scope::{
+    check_no_assert_graph_refs, check_no_pub_index_variant_literals, check_no_runtime_graph_refs,
+    check_no_variant_literals,
+};
 
 /// Known attribute names in the language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +99,7 @@ struct CollectedDeclarations {
     source_order: Vec<(String, DeclCategory)>,
     user_fn_names: HashSet<String>,
     assert_names: HashSet<String>,
+    pub_names: HashSet<String>,
 }
 
 /// Collect all local declarations, check for duplicates and casing violations.
@@ -127,6 +131,72 @@ fn collect_local_declarations(
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut source_order = Vec::new();
     let mut assert_names: HashSet<String> = HashSet::new();
+
+    // Collect names of all `pub` declarations (including type-system declarations).
+    let mut pub_names: HashSet<String> = HashSet::new();
+    for decl in &file.declarations {
+        if !decl.is_pub {
+            continue;
+        }
+        let name = match &decl.kind {
+            DeclKind::Param(p) => p.name.value.to_string(),
+            DeclKind::Node(n) => n.name.value.to_string(),
+            DeclKind::ConstNode(c) => c.name.value.to_string(),
+            DeclKind::Assert(a) => a.name.value.to_string(),
+            DeclKind::BaseDimension(d) => d.name.value.to_string(),
+            DeclKind::Dimension(d) => d.name.value.to_string(),
+            DeclKind::Unit(u) => u.name.value.to_string(),
+            DeclKind::Index(idx) => idx.name.value.to_string(),
+            DeclKind::Type(t) => t.name.value.to_string(),
+            DeclKind::UnionType(u) => u.name.value.to_string(),
+            DeclKind::Plot(p) => p.name.value.to_string(),
+            DeclKind::Figure(f) => f.name.value.to_string(),
+            DeclKind::Layer(l) => l.name.value.to_string(),
+            DeclKind::Dag(d) => d.name.value.to_string(),
+            DeclKind::Import(_) | DeclKind::Include(_) => continue,
+        };
+        pub_names.insert(name);
+    }
+
+    // Validate: required params and indexes must be `pub`.
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Param(p) if p.value.is_none() && !decl.is_pub => {
+                return Err(GraphcalError::RequiredItemMustBePub {
+                    kind: "param".to_string(),
+                    name: p.name.value.to_string(),
+                    src: src.clone(),
+                    span: p.name.span.into(),
+                });
+            }
+            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub => {
+                return Err(GraphcalError::RequiredItemMustBePub {
+                    kind: "index".to_string(),
+                    name: idx.name.value.to_string(),
+                    src: src.clone(),
+                    span: idx.name.span.into(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Collect pub index names with concrete variants (for variant-literal restriction).
+    let pub_index_names: HashSet<String> = file
+        .declarations
+        .iter()
+        .filter_map(|decl| {
+            if !decl.is_pub {
+                return None;
+            }
+            if let DeclKind::Index(idx) = &decl.kind
+                && !idx.kind.is_required()
+            {
+                return Some(idx.name.value.to_string());
+            }
+            None
+        })
+        .collect();
 
     // Build combined user function names (imported + local) for reference checking
     let all_user_fn_names = imported_user_fns.clone();
@@ -372,6 +442,8 @@ fn collect_local_declarations(
                 let pname = p.name.value.to_string();
                 if let Some(ref value) = p.value {
                     check_no_assert_graph_refs(value, &assert_names, src)?;
+                    // Check for variant literals of pub indexes in param defaults.
+                    check_no_pub_index_variant_literals(value, &pub_index_names, src)?;
                     let (graph_refs, _const_refs) = extract_all_refs(
                         value,
                         &all_runtime_names,
@@ -448,6 +520,7 @@ fn collect_local_declarations(
         source_order,
         user_fn_names: HashSet::new(),
         assert_names,
+        pub_names,
     })
 }
 
@@ -472,6 +545,7 @@ fn build_name_sets(
 struct ValidatedAttributes {
     assumes_map: HashMap<String, Vec<String>>,
     expected_fail_map: HashMap<String, ExpectedFail>,
+    warnings: Vec<GraphcalError>,
 }
 
 /// Validate attributes and build `assumes_map` / `expected_fail_map`.
@@ -483,6 +557,7 @@ fn validate_attributes(
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
+    let mut warnings: Vec<GraphcalError> = Vec::new();
 
     for decl in &file.declarations {
         let decl_name = match &decl.kind {
@@ -506,9 +581,15 @@ fn validate_attributes(
 
             match attr_name {
                 AttributeName::Hidden => {
-                    // #[hidden] is only valid on plot declarations
+                    // #[hidden] is deprecated — emit warning and continue for plots.
                     let kind = match &decl.kind {
-                        DeclKind::Plot(_) => continue,
+                        DeclKind::Plot(_) => {
+                            warnings.push(GraphcalError::DeprecatedHiddenAttribute {
+                                src: src.clone(),
+                                span: attr.span.into(),
+                            });
+                            continue;
+                        }
                         DeclKind::Param(_) => "param",
                         DeclKind::ConstNode(_) => "const node",
                         DeclKind::Node(_) => "node",
@@ -718,7 +799,124 @@ fn validate_attributes(
     Ok(ValidatedAttributes {
         assumes_map,
         expected_fail_map,
+        warnings,
     })
+}
+
+/// Validate that `pub` declarations do not reference private type-system items in their
+/// type annotations (Rust's E0446 "private type in public interface").
+///
+/// Checks dimension names, index names, and struct type names in the type annotations
+/// of pub params, nodes, and const nodes. References to prelude dimensions (Length, etc.)
+/// and built-in types (Bool, Int, Dimensionless, Datetime) are always allowed.
+fn validate_private_in_public(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+    pub_names: &HashSet<String>,
+) -> Result<(), GraphcalError> {
+    use crate::syntax::ast::{IndexExpr, TypeExprKind};
+
+    // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
+    let mut local_type_names: HashMap<String, Span> = HashMap::new();
+    for decl in &file.declarations {
+        let (name, span) = match &decl.kind {
+            DeclKind::BaseDimension(d) => (d.name.value.to_string(), d.name.span),
+            DeclKind::Dimension(d) => (d.name.value.to_string(), d.name.span),
+            DeclKind::Index(idx) => (idx.name.value.to_string(), idx.name.span),
+            DeclKind::Type(t) => (t.name.value.to_string(), t.name.span),
+            DeclKind::UnionType(u) => (u.name.value.to_string(), u.name.span),
+            _ => continue,
+        };
+        local_type_names.insert(name, span);
+    }
+
+    // If there are no local type-system names, nothing to check.
+    if local_type_names.is_empty() {
+        return Ok(());
+    }
+
+    // Recursively collect type-system references from a `TypeExpr`.
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
+    fn collect_type_refs(type_expr: &crate::syntax::ast::TypeExpr, refs: &mut Vec<(String, Span)>) {
+        match &type_expr.kind {
+            TypeExprKind::DimExpr(dim_expr) => {
+                for item in &dim_expr.terms {
+                    refs.push((item.term.name.name.clone(), item.term.span));
+                }
+            }
+            TypeExprKind::Indexed { base, indexes } => {
+                collect_type_refs(base, refs);
+                for idx in indexes {
+                    if let IndexExpr::Name(ident) = idx {
+                        refs.push((ident.name.clone(), ident.span));
+                    }
+                }
+            }
+            TypeExprKind::TypeApplication { name, type_args } => {
+                refs.push((name.name.clone(), name.span));
+                for arg in type_args {
+                    collect_type_refs(arg, refs);
+                }
+            }
+            TypeExprKind::Dimensionless
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime => {}
+        }
+    }
+
+    for decl in &file.declarations {
+        if !decl.is_pub {
+            continue;
+        }
+
+        let (kind, name, type_ann) = match &decl.kind {
+            DeclKind::Param(p) => ("param", p.name.value.to_string(), &p.type_ann),
+            DeclKind::Node(n) => ("node", n.name.value.to_string(), &n.type_ann),
+            DeclKind::ConstNode(c) => ("const node", c.name.value.to_string(), &c.type_ann),
+            _ => continue,
+        };
+
+        let mut refs = Vec::new();
+        collect_type_refs(type_ann, &mut refs);
+
+        for (ref_name, ref_span) in refs {
+            // Only flag if the name is a local declaration and is not pub.
+            if local_type_names.contains_key(&ref_name) && !pub_names.contains(&ref_name) {
+                let ref_kind = match &file
+                    .declarations
+                    .iter()
+                    .find(|d| match &d.kind {
+                        DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
+                        DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
+                        DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
+                        DeclKind::Type(t) => t.name.value.as_str() == ref_name,
+                        DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
+                        _ => false,
+                    })
+                    .map(|d| &d.kind)
+                {
+                    Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
+                    Some(DeclKind::Index(_)) => "index",
+                    Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
+                    _ => "item",
+                };
+                return Err(GraphcalError::PrivateInPublic {
+                    pub_kind: kind.to_string(),
+                    pub_name: name,
+                    ref_kind: ref_kind.to_string(),
+                    ref_name,
+                    src: src.clone(),
+                    ref_span: ref_span.into(),
+                    pub_span: decl.span.into(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Declarations imported from other files, to be injected into the resolve scope.
@@ -908,6 +1106,9 @@ pub(crate) fn resolve_with_imports(
     // Validate attributes and build assumes_map / expected_fail_map
     let validated = validate_attributes(file, src, &all_assert_names)?;
 
+    // Validate private-in-public: pub declarations must not reference private type-system items
+    validate_private_in_public(file, src, &local.pub_names)?;
+
     Ok(ResolvedFile {
         consts: all_consts,
         params: all_params,
@@ -922,6 +1123,8 @@ pub(crate) fn resolve_with_imports(
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
+        pub_names: local.pub_names,
+        warnings: validated.warnings,
     })
 }
 
@@ -983,6 +1186,9 @@ pub(crate) fn resolve_with_imported_values(
     // Validate attributes and build assumes_map / expected_fail_map
     let validated = validate_attributes(file, src, &all_assert_names)?;
 
+    // Validate private-in-public: pub declarations must not reference private type-system items
+    validate_private_in_public(file, src, &local.pub_names)?;
+
     Ok(ResolvedFile {
         consts: local.consts,
         params: local.params,
@@ -997,5 +1203,7 @@ pub(crate) fn resolve_with_imported_values(
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
+        pub_names: local.pub_names,
+        warnings: validated.warnings,
     })
 }
