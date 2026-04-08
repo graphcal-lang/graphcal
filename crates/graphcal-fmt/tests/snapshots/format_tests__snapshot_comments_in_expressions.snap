@@ -46,7 +46,7 @@ param mass_2d: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
 
 // DAG with comments (replaces block-body function)
 dag compute {
-param v: Velocity;
+    param v: Velocity;
     
     node a: Velocity = @v * // compute first intermediate
     2.0;

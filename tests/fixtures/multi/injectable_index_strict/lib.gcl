@@ -1,4 +1,7 @@
 // lib.gcl -- library with a default named index
 index Phase = { Alpha, Beta };
 
-param x: Dimensionless[Phase] = { Phase::Alpha: 1.0, Phase::Beta: 2.0 };
+param x: Dimensionless[Phase] = {
+    Phase::Alpha: 1.0,
+    Phase::Beta: 2.0,
+};

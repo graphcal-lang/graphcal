@@ -3,7 +3,9 @@ dim Velocity = Length / Time;
 
 dag scale {
     param factor: Dimensionless;
+
     param v: Velocity;
+
     node result: Velocity = @v * @factor;
 }
 
