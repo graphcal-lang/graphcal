@@ -77,7 +77,7 @@ The language has a layered type system:
 
     ---
 
-    Operators, precedence, `if`/`else`, blocks, `let`.
+    Operators, precedence, `if`/`else`, literals.
 
     [:octicons-arrow-right-24: Expressions](expressions.md)
 

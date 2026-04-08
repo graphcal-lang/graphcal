@@ -67,8 +67,9 @@ The `@` prefix is the central scoping mechanism:
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
 | `@name` | Parameter or node in the graph | `node` expressions, `dag` block bodies |
+| `@module::name` | Qualified graph reference | Same as above |
 | `NAME` | Constant or built-in constant | Everywhere |
-| `name` | Local variable (`let` binding) | Block bodies |
+| `name` | Local variable (loop variable, match binding) | Expression bodies |
 
 ### Where `@` Is Allowed
 
@@ -78,7 +79,6 @@ The `@` prefix is the central scoping mechanism:
 | `param` default value | No |
 | `const node` expression | No |
 | `dag` block body (inside `node` expressions) | Yes |
-| `let` binding (in a `node` block) | Yes |
 
 ## Evaluation Order
 

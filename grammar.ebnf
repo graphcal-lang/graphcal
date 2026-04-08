@@ -34,154 +34,58 @@ KEYWORD
    | "else"
    | "true"
    | "false"
+   | "base"
    | "dim"
    | "unit"
    | "type"
-   | "let"
-   | "fn"
-   | "cat"
-   | "range"
+   | "index"
    | "for"
    | "import"
+   | "include"
+   | "dag"
    | "match"
    | "as"
-   | "assert";
+   | "assert"
+   | "plot"
+   | "figure"
+   | "layer"
+   | "table";
 
-(* The following identifiers are contextual keywords — they are parsed
+(* The following identifiers are contextual keywords -- they are parsed
    as keywords only in specific syntactic positions and are otherwise
-   valid identifiers: "scan", "unfold", "derive", "step". *)
+   valid identifiers: "scan", "unfold", "step", "linspace", "range",
+   "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
+   "tick", "min", "max", "Dim", "Index", "Nat", "Type",
+   "Dimensionless", "Bool", "Int", "Datetime". *)
 (* --- Identifiers --- *)
 LETTER
-   = "a"
-   | "b"
-   | "c"
-   | "d"
-   | "e"
-   | "f"
-   | "g"
-   | "h"
-   | "i"
-   | "j"
-   | "k"
-   | "l"
-   | "m"
-   | "n"
-   | "o"
-   | "p"
-   | "q"
-   | "r"
-   | "s"
-   | "t"
-   | "u"
-   | "v"
-   | "w"
-   | "x"
-   | "y"
-   | "z"
-   | "A"
-   | "B"
-   | "C"
-   | "D"
-   | "E"
-   | "F"
-   | "G"
-   | "H"
-   | "I"
-   | "J"
-   | "K"
-   | "L"
-   | "M"
-   | "N"
-   | "O"
-   | "P"
-   | "Q"
-   | "R"
-   | "S"
-   | "T"
-   | "U"
-   | "V"
-   | "W"
-   | "X"
-   | "Y"
-   | "Z";
+   = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
+   | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r"
+   | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+   | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I"
+   | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R"
+   | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z";
 
 UPPER_LETTER
-   = "A"
-   | "B"
-   | "C"
-   | "D"
-   | "E"
-   | "F"
-   | "G"
-   | "H"
-   | "I"
-   | "J"
-   | "K"
-   | "L"
-   | "M"
-   | "N"
-   | "O"
-   | "P"
-   | "Q"
-   | "R"
-   | "S"
-   | "T"
-   | "U"
-   | "V"
-   | "W"
-   | "X"
-   | "Y"
-   | "Z";
+   = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I"
+   | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R"
+   | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z";
 
 LOWER_LETTER
-   = "a"
-   | "b"
-   | "c"
-   | "d"
-   | "e"
-   | "f"
-   | "g"
-   | "h"
-   | "i"
-   | "j"
-   | "k"
-   | "l"
-   | "m"
-   | "n"
-   | "o"
-   | "p"
-   | "q"
-   | "r"
-   | "s"
-   | "t"
-   | "u"
-   | "v"
-   | "w"
-   | "x"
-   | "y"
-   | "z";
+   = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
+   | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r"
+   | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z";
 
 DIGIT
-   = "0"
-   | "1"
-   | "2"
-   | "3"
-   | "4"
-   | "5"
-   | "6"
-   | "7"
-   | "8"
-   | "9";
+   = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
 IDENT
-   = LETTER, { LETTER
-   | DIGIT
-   | "_" };
+   = LETTER, { LETTER | DIGIT | "_" };
 
 (* Casing conventions enforced by the parser:
    - lower_snake_case: starts with a lowercase letter, contains only
      lowercase letters, digits, and underscores.
-     Used for: param, node, fn names, field names, local variables.
+     Used for: param, node, dag names, field names, local variables.
    - UPPER_SNAKE_CASE: starts with an uppercase letter, contains only
      uppercase letters, digits, and underscores.
      Used for: const node names, built-in constants (PI, E).
@@ -192,35 +96,26 @@ IDENT
      PascalCase or UPPER_SNAKE_CASE).
      Used for: indexed type parameters. *)
 lower_snake_case_ident
-   = LOWER_LETTER, { LOWER_LETTER
-   | DIGIT
-   | "_" };
+   = LOWER_LETTER, { LOWER_LETTER | DIGIT | "_" };
 
 upper_snake_case_ident
-   = UPPER_LETTER, { UPPER_LETTER
-   | DIGIT
-   | "_" };
+   = UPPER_LETTER, { UPPER_LETTER | DIGIT | "_" };
 
 (* PascalCase is not expressible purely in EBNF; the semantic
    constraint is: starts with an uppercase letter and contains at
    least one lowercase letter. *)
 pascal_case_ident
-   = IDENT;
+   = IDENT;  (* with PascalCase constraint *)
 
-(* with PascalCase constraint *)
 uppercase_starting_ident
-   = IDENT;
+   = IDENT;  (* starts with uppercase letter *)
 
-(* starts with uppercase letter *)
 (* --- Numeric literals --- *)
 DIGIT_SEQ
-   = DIGIT, { DIGIT
-   | "_" };
+   = DIGIT, { DIGIT | "_" };
 
 NUMBER
-   = DIGIT_SEQ, [ ".", DIGIT_SEQ ], [ ( "e"
-   | "E" ), [ "+"
-   | "-" ], DIGIT_SEQ ];
+   = DIGIT_SEQ, [ ".", DIGIT_SEQ ], [ ( "e" | "E" ), [ "+" | "-" ], DIGIT_SEQ ];
 
 (* An integer literal is a NUMBER with no decimal point and no
    exponent. Integer literals cannot be followed by a unit expression;
@@ -247,6 +142,8 @@ STRING_LITERAL
 (* Separators:  ";"  ","  ":"  "."                         *)
 (* Reference:   "@"                                         *)
 (* Wildcard:    "_"                                         *)
+(* Parent:      ".."                                        *)
+(* Slash:       "/"   (bare module paths)                   *)
 (* ================================================================== *)
 (* 2. Source File                                                     *)
 (* ================================================================== *)
@@ -260,7 +157,20 @@ declaration
    = { attribute }, declaration_kind;
 
 attribute
-   = "#", "[", IDENT, [ "(", IDENT, { ",", IDENT }, [ "," ], ")" ], "]";
+   = "#", "[", IDENT, [ "(", [ attribute_arg_list ], ")" ], "]";
+
+attribute_arg_list
+   = attribute_arg, { ",", attribute_arg }, [ "," ];
+
+attribute_arg
+   = attribute_path
+   | attribute_group;
+
+attribute_path
+   = IDENT, { "::", IDENT };
+
+attribute_group
+   = "(", attribute_arg, { ",", attribute_arg }, [ "," ], ")";
 
 declaration_kind
    = param_decl
@@ -269,30 +179,41 @@ declaration_kind
    | dimension_decl
    | unit_decl
    | type_decl
-   | fn_decl
-   | cat_decl
-   | range_decl
+   | index_decl
    | import_decl
-   | assert_decl;
+   | include_decl
+   | dag_decl
+   | assert_decl
+   | plot_decl
+   | figure_decl
+   | layer_decl;
 
-(* --- param, node, const node --- *)
-(* All three require an explicit type annotation. *)
+(* --- param --- *)
+(* Params may have a default value or be required (no `= expr`).
+   Required params must be bound via `--set`, `--input`, or include
+   param bindings. *)
 param_decl
-   = "param", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
+   = "param", lower_snake_case_ident, [ ":", type_expr ], [ "=", expr ], ";";
 
+(* --- node, const node --- *)
 node_decl
-   = "node", lower_snake_case_ident, ":", type_expr, "=", expr, ";";
+   = "node", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
 
 const_decl
-   = "const", "node", upper_snake_case_ident, ":", type_expr, "=", expr, ";";
+   = "const", "node", upper_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
 
 (* --- dimension --- *)
+(* Two forms:
+   1. Base dimension:    base dim Length;
+   2. Derived dimension: dim Velocity = Length / Time; *)
 dimension_decl
-   = "dim", IDENT, [ "=", dim_expr ], ";";
+   = "base", "dim", IDENT, ";"
+   | "dim", IDENT, "=", dim_expr, ";";
 
 (* --- unit --- *)
+(* Optionally prefixed with `const` for compile-time-only units. *)
 unit_decl
-   = "unit", IDENT, ":", dim_expr, [ "=", unit_def ], ";";
+   = [ "const" ], "unit", IDENT, ":", dim_expr, [ "=", unit_def ], ";";
 
 unit_def
    = unit_scale, unit_expr;
@@ -306,15 +227,15 @@ unit_scale
 (* --- type --- *)
 (* Three forms of type declaration:
    1. Unit type (no fields):       type Eci;
-   2. Struct type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
+   2. Record type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
    3. Union type (sum of types):   type ManeuverKind = Impulsive | LowThrust;
 *)
 type_decl
-   = "type", pascal_case_ident, [ generic_params ], [ derive_clause ], type_decl_body;
+   = "type", pascal_case_ident, [ generic_params ], type_decl_body;
 
 type_decl_body
    = ";"                                              (* unit type *)
-   | "{", [ field_list ], "}"                         (* struct type *)
+   | "{", [ field_list ], "}"                         (* record type *)
    | "=", union_member_list, ";";                     (* union type *)
 
 field_list
@@ -329,7 +250,13 @@ field_decl
    data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
 
 union_member_list
-   = pascal_case_ident, { "|", pascal_case_ident };
+   = union_member, { "|", union_member };
+
+union_member
+   = pascal_case_ident, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
+
+(* Union members can carry type arguments for generic unions:
+   type Result<D: Dim> = Ok<D> | Err; *)
 
 generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";
@@ -340,150 +267,230 @@ generic_param
 generic_constraint
    = "Dim"
    | "Index"
+   | "Nat"
    | "Type";
 
-(* "Dim", "Index", and "Type" are contextual keywords here. *)
-derive_clause
-   = "derive", "(", derive_op, { ",", derive_op }, [ "," ], ")";
+(* "Dim", "Index", "Nat", and "Type" are contextual keywords here. *)
 
-derive_op
-   = "Add"
-   | "Sub"
-   | "Neg";
+(* --- index --- *)
+(* Four forms of index declaration:
+   1. Named (categorical):  index Maneuver = { Departure, Correction, Insertion };
+   2. Linspace (range):     index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
+   3. Required named:       index Foo;
+   4. Required range:       index Foo: Time;
+*)
+index_decl
+   = "index", pascal_case_ident, "=",
+     "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}", ";"
+   | "index", pascal_case_ident, "=",
+     "linspace", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";"
+   | "index", pascal_case_ident, ";"
+   | "index", pascal_case_ident, ":", dim_expr, ";";
 
-(* --- fn --- *)
-(* Functions are declarations, not values — there is no function type
-   in the type system. No higher-order functions. scan's |acc, val|
-   body and for's bindings are special syntax, not function values.
-   Functions can accept and return DeclTypes (ValueTypes or indexed
-   types). Named index labels are passable as arguments because they
-   are ValueTypes. *)
-fn_decl
-   = "fn", lower_snake_case_ident, [ generic_params ], "(", [ fn_param_list ], ")", "->", type_expr, fn_body;
+(* "step" and "linspace" are contextual keywords.
+   Required indexes must be bound via parameterized include. *)
 
-fn_param_list
-   = fn_param, { ",", fn_param }, [ "," ];
-
-fn_param
-   = lower_snake_case_ident, ":", type_expr;
-
-fn_body
-   = "=", expr, ";" (* short form *)
-   | "{", { let_binding }, expr, "}";
-
-(* block form *)
-(* --- cat and range --- *)
-(* An index declares a finite, ordered set of labels usable as
-   collection axes in T[I]. A cat (categorical) index declares a
-   finite set of named labels registered as a collection axis — its
-   labels are ValueTypes that can be passed to functions, stored in
-   variables, and pattern-matched. A range index generates scalar
-   labels from a range; its loop variable acts as a Scalar(Dim). Both
-   flavors share the same type constructor T[I] and consumption
-   interface (for, indexing, aggregation, scan). *)
-cat_decl
-   = "cat", pascal_case_ident, "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}";
-
-range_decl
-   = "range", pascal_case_ident, "(", expr, ",", expr, ",", "step", ":", expr, ")", ";";
-
-(* "step" is a contextual keyword here.
-   Note: cat has no trailing semicolon; range does. *)
 (* --- import --- *)
-(* Import paths can be either a quoted string (file path) or a bare
-   module path (slash-separated identifiers). File paths are resolved
-   relative to the importing file. Bare module paths require a
-   graphcal.toml manifest with [package].name; the first segment must
-   match the package name, and the path resolves to
-   <project_root>/<source_dir>/<seg0>/<seg1>/.../<segN>.gcl.
+(* Import brings definitions (types, dimensions, units, constants)
+   from another file into the current scope. No param bindings --
+   for DAG instantiation with param bindings, use `include`.
 
-   Six forms (three non-instantiated, three instantiated):
-   1. Selective import:               import "./file.gcl" { name1, name2 };
-   2. Module import:                  import "./file.gcl";
-   3. Module with alias:              import "./file.gcl" as alias;
-   4. Instantiated selective import:  import "./file.gcl"(p: expr) { name1 };
-   5. Instantiated module import:     import "./file.gcl"(p: expr);
-   6. Instantiated module with alias: import "./file.gcl"(p: expr) as alias;
+   Import paths can be:
+   - Quoted string (file path): "./file.gcl"
+   - Bare module path: nasa/rocket
+   - Parent scope path: .. or ../.. (inside dag blocks)
 
-   Bare module path examples:
-   7. Bare selective:                 import nasa/rocket { delta_v };
-   8. Bare module:                    import nasa/rocket;
-   9. Bare module with alias:         import nasa/rocket as r;
-  10. Bare instantiated:              import nasa/rocket(dry_mass: 800 kg) as r;
-
-   Module imports bring the entire file in as a namespace. Members are
-   accessed via "::" (e.g., constants::G0, @params::dry_mass).
-   The module name defaults to the filename stem (for file paths) or
-   the last segment (for bare module paths), which must be a valid
-   lower_snake_case identifier; use "as" to override.
-   Instantiated imports supply param bindings that override the
-   dependency's param defaults. The binding expressions are evaluated
-   in the importer's scope and may use @refs. The dependency's
-   computation graph is inlined into the importer's DAG with all
-   declarations prefixed by the module alias. Instantiated imports
-   require either a selective import or a module alias (bare module
-   import without alias is not allowed). *)
+   Three forms:
+   1. Selective import:   import "./file.gcl" { name1, name2 as alias };
+   2. Module import:      import "./file.gcl";
+   3. Module with alias:  import "./file.gcl" as alias;
+*)
 import_decl
-   = "import", import_path, [ import_param_bindings ], import_body;
+   = "import", import_path, import_body;
 
 import_path
-   = STRING_LITERAL                                                    (* file path *)
+   = STRING_LITERAL
    | lower_snake_case_ident, "/", lower_snake_case_ident,
-     { "/", lower_snake_case_ident };                                  (* bare module path *)
-
-import_param_bindings
-   = "(", import_param_binding, { ",", import_param_binding }, [ "," ], ")";
-
-import_param_binding
-   = lower_snake_case_ident, ":", expr;
+     { "/", lower_snake_case_ident }
+   | "..", { "/", ".." };
 
 import_body
-   = "{", import_item, { ",", import_item }, [ "," ], "}", ";"   (* selective *)
-   | "as", lower_snake_case_ident, ";"                             (* module with alias *)
-   | ";";                                                          (* module, name from filename *)
+   = "{", [ import_item_list ], "}", ";"
+   | "as", lower_snake_case_ident, ";"
+   | ";";
+
+import_item_list
+   = import_item, { ",", import_item }, [ "," ];
 
 import_item
-   = IDENT, [ "as", IDENT ];
+   = { attribute }, IDENT, [ "as", IDENT ];
+
+(* --- include --- *)
+(* Include instantiates a DAG (inline or from file) with optional
+   param bindings, embedding the computation graph.
+
+   Include paths can be:
+   - Quoted string (file path): "./rocket.gcl"
+   - Bare module path: nasa/rocket
+   - Inline DAG name: my_dag
+   - Parent scope path: .. or ../.. (inside dag blocks)
+
+   Three forms (same as import, but with optional param bindings):
+   1. Selective:       include "./rocket.gcl"(dry_mass: 800 kg) { delta_v };
+   2. Module:          include "./rocket.gcl"(dry_mass: 800 kg);
+   3. Module w/ alias: include "./rocket.gcl"(dry_mass: 800 kg) as stage_1;
+*)
+include_decl
+   = "include", include_path, [ include_param_bindings ], import_body;
+
+include_path
+   = STRING_LITERAL
+   | lower_snake_case_ident, "/", lower_snake_case_ident,
+     { "/", lower_snake_case_ident }
+   | lower_snake_case_ident
+   | "..", { "/", ".." };
+
+include_param_bindings
+   = "(", include_param_binding, { ",", include_param_binding }, [ "," ], ")";
+
+include_param_binding
+   = lower_snake_case_ident, ":", expr;
+
+(* --- dag --- *)
+(* DAG blocks define reusable, parameterized computation. They
+   contain the same declarations as a file (params, nodes, imports,
+   etc.) and are instantiated via `include`. *)
+dag_decl
+   = "dag", lower_snake_case_ident, "{", { declaration }, "}";
 
 (* --- assert --- *)
 assert_decl
    = "assert", lower_snake_case_ident, "=", assert_body, ";";
 
 assert_body
-   = expr (* exact assertion *)
-   | expr, "~=", expr, "+/-", unary_expr, [ "%" ];
+   = expr                                                 (* exact assertion *)
+   | expr, "~=", expr, "+/-", unary_expr, [ "%" ];       (* tolerance assertion *)
 
-(* tolerance assertion *)
+(* --- plot --- *)
+(* Plot declarations produce Vega-Lite chart specifications.
+   They specify a mark type, encoding channels, and optional
+   properties. *)
+plot_decl
+   = "plot", lower_snake_case_ident, "=",
+     "{", [ plot_body_field, { ",", plot_body_field }, [ "," ] ], "}", ";";
+
+plot_body_field
+   = mark_field
+   | encode_field
+   | plot_field;
+
+mark_field
+   = "mark", ":", mark_type,
+     [ "{", [ plot_field, { ",", plot_field }, [ "," ] ], "}" ];
+
+mark_type
+   = "point" | "line" | "bar" | "area" | "rect" | "tick";
+
+encode_field
+   = "encode", ":",
+     "{", [ encode_channel, { ",", encode_channel }, [ "," ] ], "}";
+
+encode_channel
+   = IDENT, ":", expr;
+
+plot_field
+   = IDENT, ":", expr;
+
+(* --- figure --- *)
+(* Figure declarations group multiple plots into a combined chart
+   with side-by-side subplots (tiling). *)
+figure_decl
+   = "figure", lower_snake_case_ident, "=",
+     "{", [ figure_field, { ",", figure_field }, [ "," ] ], "}", ";";
+
+figure_field
+   = figure_plots_field
+   | figure_named_field;
+
+figure_plots_field
+   = "plots", ":", "[", [ IDENT, { ",", IDENT }, [ "," ] ], "]";
+
+figure_named_field
+   = IDENT, ":", expr;
+
+(* --- layer --- *)
+(* Layer declarations overlay multiple plots on the same axes
+   (shared coordinate space). *)
+layer_decl
+   = "layer", lower_snake_case_ident, "=",
+     "{", [ layer_field, { ",", layer_field }, [ "," ] ], "}", ";";
+
+layer_field
+   = layer_plots_field
+   | layer_named_field;
+
+layer_plots_field
+   = "plots", ":", "[", [ IDENT, { ",", IDENT }, [ "," ] ], "]";
+
+layer_named_field
+   = IDENT, ":", expr;
+
 (* ================================================================== *)
 (* 4. Type Expressions                                                *)
 (* ================================================================== *)
-(* The type system has three levels (see design/20-type-system-
-   stratification.md):
-   Level 1 — Primitive:  Scalar(Dim) | Int | Bool
-   Level 2 — ValueType:  Primitive | Struct | Union
-   Level 3 — DeclType:   ValueType | Indexed(ValueType, [Index])
+(* The type system has three levels:
+   Level 1 -- Primitive:  Scalar(Dim) | Int | Bool | Datetime
+   Level 2 -- ValueType:  Primitive | Struct | Union
+   Level 3 -- DeclType:   ValueType | Indexed(ValueType, [Index])
 
-   type_expr corresponds to DeclType: a value_type optionally indexed.
-   type_expr_base corresponds to ValueType (without indexing).
+   type_expr corresponds to DeclType: a value_type optionally indexed
+   or constrained.
+   type_expr_base corresponds to ValueType (without indexing/constraints).
    Struct fields must be ValueTypes (type_expr_base), not DeclTypes.
-   param, node, const node, and fn parameter/return annotations use DeclType
-   (type_expr). *)
+   param, node, const node annotations use DeclType (type_expr). *)
 type_expr
-   = type_expr_base, [ "[", uppercase_starting_ident, { ",", uppercase_starting_ident }, "]" ];
+   = type_expr_base, [ type_constraints ], [ "[", index_expr_list, "]" ]
+   | type_expr_base, [ "[", index_expr_list, "]" ];
 
-(* The bracketed suffix lifts a ValueType into an indexed DeclType.
-   T[I] is a total map from index labels to values of type T.
-   T[I, J] is a flat product-key map (not nested). Axis order is
-   significant: T[I, J] and T[J, I] are different types. *)
 type_expr_base
    = "Dimensionless"
    | "Bool"
    | "Int"
+   | "Datetime"
    | type_application
    | dim_expr;
 
+(* Domain constraints restrict the valid value range of a type:
+   Mass(min: 100 kg, max: 2000 kg) *)
+type_constraints
+   = "(", type_constraint, { ",", type_constraint }, [ "," ], ")";
+
+type_constraint
+   = ( "min" | "max" ), ":", expr;
+
+(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC> *)
 type_application
    = pascal_case_ident, "<", type_expr, { ",", type_expr }, [ "," ], ">";
+
+(* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N] *)
+index_expr_list
+   = index_expr, { ",", index_expr };
+
+index_expr
+   = nat_add_expr
+   | nat_mul_expr
+   | IDENT
+   | NAT_LITERAL;
+
+nat_add_expr
+   = ( IDENT | NAT_LITERAL | nat_mul_expr ), "+",
+     ( IDENT | NAT_LITERAL | nat_mul_expr );
+
+nat_mul_expr
+   = ( IDENT | NAT_LITERAL ), "*", ( IDENT | NAT_LITERAL );
+
+NAT_LITERAL
+   = DIGIT, { DIGIT };
 
 (* ================================================================== *)
 (* 5. Dimension and Unit Expressions                                  *)
@@ -491,22 +498,19 @@ type_application
 (* --- Dimension expressions --- *)
 (* Used in type annotations and dimension declarations. *)
 dim_expr
-   = dim_term, { ( "*"
-   | "/" ), dim_term };
+   = dim_term, { ( "*" | "/" ), dim_term };
 
 dim_term
    = IDENT, [ "^", signed_integer ]
    | "(", dim_expr, ")", [ "^", signed_integer ];
 
 signed_integer
-   = [ "-" ], NUMBER;
+   = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
 
-(* Must be an integer (no decimal point or exponent). *)
 (* --- Unit expressions --- *)
 (* Used in unit declarations, unit literals, and conversion targets. *)
 unit_expr
-   = unit_term, { ( "*"
-   | "/" ), unit_term };
+   = unit_term, { ( "*" | "/" ), unit_term };
 
 unit_term
    = IDENT, [ "^", signed_integer ]
@@ -548,25 +552,16 @@ comparison_expr
    = additive_expr, [ comparison_op, additive_expr ];
 
 comparison_op
-   = "=="
-   | "!="
-   | "<"
-   | ">"
-   | "<="
-   | ">=";
+   = "==" | "!=" | "<" | ">" | "<=" | ">=";
 
 additive_expr
-   = multiplicative_expr, { ( "+"
-   | "-" ), multiplicative_expr };
+   = multiplicative_expr, { ( "+" | "-" ), multiplicative_expr };
 
 multiplicative_expr
-   = unary_expr, { ( "*"
-   | "/"
-   | "%" ), unary_expr };
+   = unary_expr, { ( "*" | "/" | "%" ), unary_expr };
 
 unary_expr
-   = ( "-"
-   | "!" ), unary_expr
+   = ( "-" | "!" ), unary_expr
    | power_expr;
 
 power_expr
@@ -577,15 +572,12 @@ postfix_expr
    = atom, { postfix_op };
 
 postfix_op
-   = ".", IDENT (* field access *)
-   | "[", index_arg, { ",", index_arg }, [ "," ], "]";
+   = ".", IDENT                                           (* field access *)
+   | "[", index_arg, { ",", index_arg }, [ "," ], "]";   (* index access *)
 
-(* index access *)
 index_arg
-   = pascal_case_ident, "::", pascal_case_ident (* qualified: Index::Variant *)
-   | lower_snake_case_ident;
+   = expr;
 
-(* loop variable *)
 (* ================================================================== *)
 (* 7. Atoms                                                           *)
 (* ================================================================== *)
@@ -594,14 +586,13 @@ atom
    | integer_literal
    | bool_literal
    | graph_ref
-   | const_ref
    | local_ref
    | fn_call
+   | qualified_fn_call
    | variant_literal
    | struct_construction
    | map_literal
    | table_expr
-   | block_expr
    | paren_expr
    | match_expr
    | for_expr
@@ -620,28 +611,45 @@ integer_literal
 (* NUMBER must NOT contain a decimal point or exponent.
    Integer literals cannot be followed by a unit expression. *)
 bool_literal
-   = "true"
-   | "false";
+   = "true" | "false";
 
 (* --- References --- *)
 graph_ref
    = "@", [ lower_snake_case_ident, "::" ], lower_snake_case_ident;
 
-(* @name — local graph ref.  @module::name — qualified graph ref. *)
-const_ref
-   = [ lower_snake_case_ident, "::" ], upper_snake_case_ident;
+(* @name -- local graph ref.  @module::name -- qualified graph ref.
+   Const refs (UPPER_SNAKE_CASE) and qualified const refs
+   (module::NAME) are parsed as bare identifiers and resolved
+   during name resolution. *)
 
-(* NAME — local const node ref.  module::NAME — qualified const node ref.
-   Includes built-in constants PI and E. *)
 local_ref
    = lower_snake_case_ident;
 
-(* Reference to a let binding or function parameter. *)
+(* Reference to a loop variable, match binding, or include alias. *)
+
 (* --- Function call --- *)
 fn_call
-   = [ lower_snake_case_ident, "::" ], lower_snake_case_ident, "(", [ expr, { ",", expr }, [ "," ] ], ")";
+   = lower_snake_case_ident,
+     [ "<", generic_arg_list, ">" ],
+     "(", [ expr_list ], ")";
 
-(* fn(args) — local call.  module::fn(args) — qualified call. *)
+qualified_fn_call
+   = lower_snake_case_ident, "::", lower_snake_case_ident,
+     [ "<", generic_arg_list, ">" ],
+     "(", [ expr_list ], ")";
+
+(* fn(args) -- local call.  module::fn(args) -- qualified call.
+   Optional turbofish syntax: fn<Type>(args), fn<3>(args). *)
+
+generic_arg_list
+   = generic_arg, { ",", generic_arg }, [ "," ];
+
+generic_arg
+   = type_expr
+   | NUMBER;
+
+expr_list
+   = expr, { ",", expr }, [ "," ];
 
 (* --- Variant literal --- *)
 variant_literal
@@ -650,10 +658,10 @@ variant_literal
 (* Qualified index variant reference, e.g., Maneuver::Departure. *)
 (* --- Struct construction --- *)
 struct_construction
-   = pascal_case_ident, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ], "{", [ field_init, { ",", field_init }, [ "," ] ], "}";
+   = pascal_case_ident,
+     [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
+     "{", [ field_init, { ",", field_init }, [ "," ] ], "}";
 
-(* A bare PascalCase identifier without braces is also a valid
-   construction (a unit type with no fields). *)
 field_init
    = lower_snake_case_ident, [ ":", expr ];
 
@@ -677,7 +685,8 @@ single_key_entry
    = pascal_case_ident, "::", pascal_case_ident, ":", expr;
 
 tuple_key_entry
-   = "(", pascal_case_ident, "::", pascal_case_ident, { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
+   = "(", pascal_case_ident, "::", pascal_case_ident,
+     { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
 
 (* --- Table expression (syntax sugar, desugars to map_literal) --- *)
 table_expr
@@ -709,13 +718,6 @@ table_data_row_1d
 qualified_variant
    = pascal_case_ident, "::", pascal_case_ident;
 
-(* --- Block expression --- *)
-block_expr
-   = "{", { let_binding }, expr, "}";
-
-let_binding
-   = "let", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
-
 (* --- Parenthesized expression --- *)
 paren_expr
    = "(", expr, ")";
@@ -723,7 +725,8 @@ paren_expr
 (* --- Match expression --- *)
 match_expr
    = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}"
-   | "match", "(", expr, ",", expr, { ",", expr }, ")", "{", [ tuple_match_arm, { ",", tuple_match_arm }, [ "," ] ], "}";
+   | "match", "(", expr, ",", expr, { ",", expr }, ")",
+     "{", [ tuple_match_arm, { ",", tuple_match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;
@@ -735,66 +738,73 @@ tuple_match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = pascal_case_ident, "::", pascal_case_ident (* qualified: Index::Variant *)
-   | pascal_case_ident, [ "{", pattern_binding, { ",", pattern_binding }, [ "," ], "}" ];
+   = pascal_case_ident, "::", pascal_case_ident           (* qualified: Index::Variant *)
+   | pascal_case_ident,
+     [ "{", [ pattern_binding_list ], "}" ];              (* union variant *)
+
+pattern_binding_list
+   = pattern_binding, { ",", pattern_binding }, [ "," ];
+
+pattern_binding
+   = IDENT, ":", "_"                                      (* wildcard *)
+   | IDENT, ":", IDENT                                    (* rename *)
+   | IDENT;                                               (* shorthand *)
 
 tuple_match_pattern
    = "_"
    | "(", expr, ",", expr, { ",", expr }, ")";
 
-pattern_binding
-   = IDENT, [ ":", ( "_"
-   | IDENT ) ];
-
-(* Without the colon, the field name is used as the binding name
-   (shorthand). With ": _", the field is matched but not bound.
-   With ": name", the field is bound to a different name. *)
 (* ================================================================== *)
 (* 9. For, Scan, and Unfold Expressions                               *)
 (* ================================================================== *)
 for_expr
-   = "for", for_binding, { ",", for_binding }, "{", [ "(", lower_snake_case_ident, { ",", lower_snake_case_ident }, ")", "=>" ], expr, "}";
+   = "for", for_binding, { ",", for_binding },
+     "{", [ "(", lower_snake_case_ident,
+     { ",", lower_snake_case_ident }, ")", "=>" ], expr, "}";
 
 for_binding
-   = lower_snake_case_ident, ":", pascal_case_ident;
+   = lower_snake_case_ident, ":", for_binding_index;
+
+for_binding_index
+   = pascal_case_ident                                    (* named index *)
+   | "range", "(", nat_expr, ")";                         (* nat range *)
+
+(* "range" is a contextual keyword in for bindings.
+   The argument to range() is a nat expression: a literal, an
+   identifier (generic Nat param), or a compound expression. *)
+nat_expr
+   = NAT_LITERAL
+   | IDENT
+   | nat_expr, "+", nat_expr
+   | nat_expr, "*", nat_expr;
 
 scan_expr
-   = "scan", "(", expr, ",", expr, ",", "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|", expr, ")";
+   = "scan", "(", expr, ",", expr, ",",
+     "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|",
+     expr, ")";
 
 (* scan(source, init, |acc, val| body)
    Folds over an indexed value, accumulating a result. *)
 unfold_expr
-   = "unfold", "(", expr, ",", "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|", expr, ")";
+   = "unfold", "(", expr, ",",
+     "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|",
+     expr, ")";
 
 (* unfold(init, |prev, curr| body)
    Generates an indexed value from an initial value. *)
 
 (* ================================================================== *)
-
 (* 10. Precedence and Associativity Summary                           *)
-
 (* ================================================================== *)
-
 (* Precedence  Operator(s)                Associativity               *)
-
 (* ---------  --------------------------  -----------                 *)
-
 (* 0 (lowest) ->  as                      n/a (mutually exclusive)    *)
-
 (* 1          if/else                     right                       *)
-
 (* 2          ||                          left                        *)
-
 (* 3          &&                          left                        *)
-
 (* 4          == != < > <= >=             non-chaining                *)
-
 (* 5          + -                         left                        *)
-
 (* 6          * / %                       left                        *)
-
 (* 7          - ! (unary, prefix)         right                       *)
-
 (* 8          ^                           right                       *)
-
 (* 9 (highest) . [] (postfix)            left                        *)
