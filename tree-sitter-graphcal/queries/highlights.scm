@@ -16,7 +16,7 @@
   "node"
   "const"
   "base"
-  "dimension"
+  "dim"
   "unit"
   "type"
 

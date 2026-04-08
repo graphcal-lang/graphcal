@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // shared/constants.gcl -- Physical constants and custom units
-dimension GravParam = Length^3 / Time^2;
+dim GravParam = Length^3 / Time^2;
 
 unit km_s: Velocity = 1000 m/s;
 unit MJ: Energy = 1e6 J;

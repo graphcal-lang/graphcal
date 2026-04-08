@@ -1,5 +1,5 @@
 // main.gcl -- instantiated import: override one param, selective import
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 #[allow_defaults]
 include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };

@@ -115,7 +115,7 @@ Graphcal enforces naming conventions at parse time:
 | `assert` | `lower_snake_case` | `fuel_positive` |
 | `dag` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |
-| `dimension` | `PascalCase` | `Velocity` |
+| `dim` | `PascalCase` | `Velocity` |
 | `index` | `PascalCase` | `Maneuver` |
 | `unit` | (various) | `km`, `kN`, `MPa` |
 

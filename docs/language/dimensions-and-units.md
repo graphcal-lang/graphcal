@@ -32,11 +32,11 @@ Plus the special dimension `Dimensionless` (the identity element).
 Define derived dimensions using algebraic expressions:
 
 ```
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
-dimension Force = Mass * Length / Time^2;
-dimension Energy = Mass * Length^2 / Time^2;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
+dim Force = Mass * Length / Time^2;
+dim Energy = Mass * Length^2 / Time^2;
+dim GravParam = Length^3 / Time^2;
 ```
 
 The allowed operations are:
@@ -51,16 +51,16 @@ Exponents are integer or rational literals.
 
 ### User-Defined Base Dimensions
 
-Declare a new base dimension with the `base dimension` syntax:
+Declare a new base dimension with the `base dim` syntax:
 
 ```
-base dimension Information;
+base dim Information;
 ```
 
 Then build derived dimensions from it:
 
 ```
-dimension Bandwidth = Information / Time;
+dim Bandwidth = Information / Time;
 ```
 
 ### Dimension Algebra Rules
@@ -112,7 +112,7 @@ A base unit declaration (`unit bit: Information;` with no `= ...`) defines the c
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
 
 ```
-base dimension Money;
+base dim Money;
 unit USD: Money;
 
 param usd_per_eur: Dimensionless = 1.08;

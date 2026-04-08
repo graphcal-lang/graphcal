@@ -420,13 +420,13 @@ pub struct ConstNodeDecl {
     pub value: Expr,
 }
 
-/// Base dimension declaration: `base dimension Length;`
+/// Base dimension declaration: `base dim Length;`
 #[derive(Debug, Clone)]
 pub struct BaseDimDecl {
     pub name: Spanned<DimName>,
 }
 
-/// Derived dimension declaration: `dimension Velocity = Length / Time;`
+/// Derived dimension declaration: `dim Velocity = Length / Time;`
 #[derive(Debug, Clone)]
 pub struct DimDecl {
     pub name: Spanned<DimName>,

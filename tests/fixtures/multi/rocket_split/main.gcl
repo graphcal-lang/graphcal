@@ -2,7 +2,7 @@
 import "./constants.gcl" { G0 };
 include "./params.gcl" { dry_mass, fuel_mass, isp };
 
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 node v_exhaust: Velocity = @isp * G0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;

@@ -1,5 +1,5 @@
 // error: unknown field access on struct
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type Transfer {
     dv1: Velocity,

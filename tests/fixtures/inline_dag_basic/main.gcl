@@ -1,5 +1,5 @@
 // Basic inline DAG test: define a DAG and include it.
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 dag double_speed {
     param v: Velocity;

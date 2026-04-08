@@ -1473,7 +1473,7 @@ fn topo_sort_derived_dims<'a>(
     }
 
     // Add edges: if dim A references dim B (and B is a *different* file-local dim), add A → B.
-    // Self-references (e.g., `dimension Mass = Mass;` aliasing a prelude dimension) are
+    // Self-references (e.g., `dim Mass = Mass;` aliasing a prelude dimension) are
     // excluded — they resolve against the existing registry during registration.
     for d in dims {
         let self_name = d.name.value.as_str();

@@ -1,5 +1,5 @@
 // main.gcl -- two instantiations of the same file with different params
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 #[allow_defaults]
 include "./rocket.gcl"(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;

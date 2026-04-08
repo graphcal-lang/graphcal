@@ -7,7 +7,7 @@ use super::super::{ParseError, Parser};
 impl Parser<'_> {
     // --- dimension and unit declarations ---
 
-    /// Parse `base dimension Name;`
+    /// Parse `base dim Name;`
     pub(super) fn parse_base_dimension_decl(
         &mut self,
         base_span: crate::syntax::span::Span,
@@ -23,7 +23,7 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse `dimension Name = DimExpr;` (derived dimensions only)
+    /// Parse `dim Name = DimExpr;` (derived dimensions only)
     pub(super) fn parse_dimension_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dimension)?;
         let name = self.parse_any_ident()?.into_spanned::<DimName>();

@@ -124,7 +124,7 @@ fn parse_const_node_with_type() {
 
 #[test]
 fn parse_base_dimension() {
-    let file = Parser::new("base dimension Length;").parse_file().unwrap();
+    let file = Parser::new("base dim Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::BaseDimension(d) => {
             assert_eq!(d.name.value.as_str(), "Length");
@@ -135,7 +135,7 @@ fn parse_base_dimension() {
 
 #[test]
 fn parse_derived_dimension() {
-    let file = Parser::new("dimension Velocity = Length / Time;")
+    let file = Parser::new("dim Velocity = Length / Time;")
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
@@ -273,7 +273,7 @@ fn parse_error_standalone_const() {
 #[test]
 fn parse_orbital_milestone_syntax() {
     let source = r"
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;
@@ -414,7 +414,7 @@ fn parse_type_decl_with_dim_expr_field() {
 #[test]
 fn parse_type_decl_mixed_with_other_decls() {
     let source = r"
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 type TransferResult { dv1: Velocity, dv2: Velocity }
 param alt: Length = 400.0 km;
 ";

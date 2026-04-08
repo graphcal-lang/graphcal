@@ -1,7 +1,7 @@
 // Required index declarations — must be bound via parameterized import.
 // This file cannot be evaluated standalone.
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
 
 // Required named index (no variants specified)
 index Phase;

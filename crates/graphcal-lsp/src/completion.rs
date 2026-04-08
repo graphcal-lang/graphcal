@@ -13,7 +13,7 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
     "const",
     "fn",
     "type",
-    "dimension",
+    "dim",
     "unit",
     "cat",
     "range",

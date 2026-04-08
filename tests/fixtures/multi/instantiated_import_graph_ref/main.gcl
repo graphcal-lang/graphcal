@@ -1,5 +1,5 @@
 // main.gcl -- binding uses @ref from importer's scope
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 param my_mass: Mass = 800.0 kg;
 

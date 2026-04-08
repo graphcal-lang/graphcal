@@ -413,7 +413,7 @@
         },
         {
           "type": "STRING",
-          "value": "dimension"
+          "value": "dim"
         },
         {
           "type": "FIELD",

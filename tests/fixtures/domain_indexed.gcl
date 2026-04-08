@@ -1,5 +1,5 @@
 // domain_indexed.gcl -- indexed param with constrained base type (element-wise)
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Arrival };
 

@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // variant_match.gcl -- Match expressions on loop variables (index variants)
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 

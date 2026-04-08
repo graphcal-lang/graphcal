@@ -77,7 +77,7 @@ The syntax is `include "path"/dag_name(params) { outputs }`.
 
 The `import` and `include` keywords serve different purposes:
 
-- **`import`** brings compile-time definitions into scope: `const`, `type`, `dimension`, `unit`, `index`, `dag`
+- **`import`** brings compile-time definitions into scope: `const`, `type`, `dim`, `unit`, `index`, `dag`
 - **`include`** instantiates a DAG (inline or from a file) into the current computation graph
 
 ```

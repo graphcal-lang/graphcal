@@ -23,7 +23,7 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const node`, `base dimension`, `dimension`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
+        let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -50,12 +50,12 @@ impl Parser<'_> {
                     Some(_) => {
                         let (tok, span) = self.advance()?;
                         Err(self.unexpected_token(
-                            "`dimension` after `base`",
+                            "`dim` after `base`",
                             &tok.to_string(),
                             span,
                         ))
                     }
-                    None => Err(self.unexpected_eof("`dimension` after `base`")),
+                    None => Err(self.unexpected_eof("`dim` after `base`")),
                 }
             }
             Some(Token::Dimension) => self.parse_dimension_decl(),

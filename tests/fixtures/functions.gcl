@@ -1,6 +1,6 @@
 // functions.gcl -- Phase 6 milestone: DAG blocks replace user-defined functions
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
     dv1: Velocity,

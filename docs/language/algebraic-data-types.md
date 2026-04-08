@@ -11,7 +11,7 @@ Graphcal uses `type` declarations for structs, unit types, and union types.
 A `type` with a single set of fields defines a struct:
 
 ```
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type TransferResult {
     dv1: Velocity,
@@ -63,7 +63,7 @@ Unit types are useful as marker types for phantom type parameters (e.g., referen
 Union types combine multiple existing types into a sum type. First, define each member as its own type, then combine them with the `=` and `|` syntax:
 
 ```
-dimension Force = Mass * Length / Time^2;
+dim Force = Mass * Length / Time^2;
 
 type Impulsive { delta_v: Velocity }
 type LowThrust { thrust: Force, duration: Time }

@@ -1,6 +1,6 @@
 // tagged_union_param.gcl -- Tagged union as a param (for JSON input testing)
-dimension Velocity = Length / Time;
-dimension Force = Mass * Length / Time^2;
+dim Velocity = Length / Time;
+dim Force = Mass * Length / Time^2;
 
 type Impulsive {
     delta_v: Velocity,

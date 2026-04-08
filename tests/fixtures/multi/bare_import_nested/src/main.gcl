@@ -1,5 +1,5 @@
 include nasa/orbital/transfer { transfer_dv };
 
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 node dv: Velocity = @transfer_dv;

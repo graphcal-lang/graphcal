@@ -226,7 +226,7 @@ fn is_declaration_keyword(input: &str) -> bool {
         "param"
             | "node"
             | "const"
-            | "dimension"
+            | "dim"
             | "unit"
             | "index"
             | "type"

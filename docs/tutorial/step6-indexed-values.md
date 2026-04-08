@@ -19,7 +19,7 @@ index Maneuver = { Departure, Correction, Insertion };
 Use `[IndexName]` to declare an indexed parameter:
 
 ```
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
@@ -81,7 +81,7 @@ This produces:
 ## Complete Example
 
 ```
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 

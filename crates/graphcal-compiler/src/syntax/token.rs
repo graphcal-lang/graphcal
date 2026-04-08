@@ -21,7 +21,7 @@ pub enum Token {
     False,
     #[token("base")]
     Base,
-    #[token("dimension")]
+    #[token("dim")]
     Dimension,
     #[token("unit")]
     Unit,
@@ -166,7 +166,7 @@ impl std::fmt::Display for Token {
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
             Self::Base => write!(f, "base"),
-            Self::Dimension => write!(f, "dimension"),
+            Self::Dimension => write!(f, "dim"),
             Self::Unit => write!(f, "unit"),
             Self::Type => write!(f, "type"),
             Self::Fn => write!(f, "fn"),
@@ -451,7 +451,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dimension unit type fn index for import include dag match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dim unit type fn index for import include dag match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn lex_dimension_decl() {
-        let tokens = lex_tokens("dimension Velocity = Length / Time;");
+        let tokens = lex_tokens("dim Velocity = Length / Time;");
         assert_eq!(
             tokens,
             vec![

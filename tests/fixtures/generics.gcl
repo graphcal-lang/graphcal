@@ -1,5 +1,5 @@
 // generics.gcl -- Generic structs with phantom type parameters
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 // Marker types for reference frames
 type Eci;
