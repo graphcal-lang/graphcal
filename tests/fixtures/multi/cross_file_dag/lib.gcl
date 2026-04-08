@@ -1,5 +1,5 @@
 // lib.gcl -- defines a reusable DAG
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 const node SPEED_OF_SOUND: Velocity = 343.0 m/s;
 

@@ -1,6 +1,6 @@
 // comments_in_expressions.gcl -- Comments inside expressions should stay in place
-dimension Velocity = Length / Time;
-dimension Mass = Mass;
+dim Velocity = Length / Time;
+dim Mass = Mass;
 
 index Maneuver = { Departure, Correction, Insertion };
 index Phase = { Launch, Cruise, Arrival };

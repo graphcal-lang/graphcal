@@ -9,8 +9,8 @@ Graphcal replaces the spreadsheets and simulation tools that engineers reluctant
 
 ```gcl
 // rocket.gcl
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
 
 param dry_mass: Mass = 1200 kg;
 param fuel_mass: Mass = 2800 kg;
@@ -78,12 +78,12 @@ node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
 You can also define your own base dimensions and units for domain-specific quantities:
 
 ```gcl
-base dimension Information;         // new base dimension
+base dim Information;         // new base dimension
 unit bit: Information;              // base unit
 unit byte: Information = 8.0 bit;   // derived unit
 unit kB: Information = 1000.0 byte;
 
-dimension Bandwidth = Information / Time;
+dim Bandwidth = Information / Time;
 
 param storage: Information = 500.0 kB;
 param rate: Bandwidth = 100.0 bit / s;
@@ -499,8 +499,8 @@ When both `--set` and `--input` are provided, `--set` takes precedence for the s
 
 ```gcl
 // hohmann.gcl
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
     dv1: Velocity,
@@ -555,8 +555,8 @@ tof_hours         = 5.256557 hour
 
 ```gcl
 // maneuver.gcl
-dimension Velocity = Length / Time;
-dimension Force = Mass * Length / Time^2;
+dim Velocity = Length / Time;
+dim Force = Mass * Length / Time^2;
 
 type Impulsive { delta_v: Velocity }
 type LowThrust { thrust: Force, duration: Time }
@@ -580,7 +580,7 @@ node fuel_proxy: Force = match @maneuver {
 
 ```gcl
 // frames.gcl
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type Eci;
 type Body;
@@ -613,7 +613,7 @@ node dv_neg: Vec3<Velocity, Eci> = -@dv_a;
 
 ```gcl
 // indexed.gcl
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 
@@ -649,7 +649,7 @@ cumulative_dv[Insertion]  = 4410 m/s
 
 ```gcl
 // decay.gcl
-dimension Frequency = Time^-1;
+dim Frequency = Time^-1;
 
 index Step = linspace(0.0 s, 1.0 s, step: 0.25 s);
 
@@ -670,12 +670,12 @@ node y: Dimensionless[Step] = unfold(
 
 ```gcl
 // information.gcl
-base dimension Information;
+base dim Information;
 unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
 
-dimension Bandwidth = Information / Time;
+dim Bandwidth = Information / Time;
 
 param storage: Information = 500.0 kB;
 param rate: Bandwidth = 100.0 bit / s;
@@ -686,7 +686,7 @@ node transfer_time: Time = @storage / @rate;
 
 ```gcl
 // constants.gcl
-dimension Acceleration = Length / Time^2;
+dim Acceleration = Length / Time^2;
 const node G0: Acceleration = 9.80665 m/s^2;
 ```
 
@@ -702,7 +702,7 @@ param isp: Time = 320 s;
 import "./constants.gcl" { G0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 node v_exhaust: Velocity = @isp * G0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;

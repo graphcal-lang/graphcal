@@ -35,7 +35,7 @@ enum ts_symbol_identifiers {
   anon_sym_const = 13,
   anon_sym_node = 14,
   anon_sym_base = 15,
-  anon_sym_dimension = 16,
+  anon_sym_dim = 16,
   anon_sym_unit = 17,
   anon_sym_type = 18,
   anon_sym_LBRACE = 19,
@@ -274,7 +274,7 @@ static const char * const ts_symbol_names[] = {
   [anon_sym_const] = "const",
   [anon_sym_node] = "node",
   [anon_sym_base] = "base",
-  [anon_sym_dimension] = "dimension",
+  [anon_sym_dim] = "dim",
   [anon_sym_unit] = "unit",
   [anon_sym_type] = "type",
   [anon_sym_LBRACE] = "{",
@@ -513,7 +513,7 @@ static const TSSymbol ts_symbol_map[] = {
   [anon_sym_const] = anon_sym_const,
   [anon_sym_node] = anon_sym_node,
   [anon_sym_base] = anon_sym_base,
-  [anon_sym_dimension] = anon_sym_dimension,
+  [anon_sym_dim] = anon_sym_dim,
   [anon_sym_unit] = anon_sym_unit,
   [anon_sym_type] = anon_sym_type,
   [anon_sym_LBRACE] = anon_sym_LBRACE,
@@ -800,7 +800,7 @@ static const TSSymbolMetadata ts_symbol_metadata[] = {
     .visible = true,
     .named = false,
   },
-  [anon_sym_dimension] = {
+  [anon_sym_dim] = {
     .visible = true,
     .named = false,
   },
@@ -4365,44 +4365,44 @@ static bool ts_lex_keywords(TSLexer *lexer, TSStateId state) {
       ACCEPT_TOKEN(anon_sym_dag);
       END_STATE();
     case 71:
-      if (lookahead == 'e') ADVANCE(109);
+      ACCEPT_TOKEN(anon_sym_dim);
       END_STATE();
     case 72:
-      if (lookahead == 'e') ADVANCE(110);
+      if (lookahead == 'e') ADVANCE(109);
       END_STATE();
     case 73:
-      if (lookahead == 'o') ADVANCE(111);
+      if (lookahead == 'o') ADVANCE(110);
       END_STATE();
     case 74:
-      if (lookahead == 's') ADVANCE(112);
+      if (lookahead == 's') ADVANCE(111);
       END_STATE();
     case 75:
-      if (lookahead == 'u') ADVANCE(113);
+      if (lookahead == 'u') ADVANCE(112);
       END_STATE();
     case 76:
       ACCEPT_TOKEN(anon_sym_for);
       END_STATE();
     case 77:
-      if (lookahead == 'o') ADVANCE(114);
+      if (lookahead == 'o') ADVANCE(113);
       END_STATE();
     case 78:
-      if (lookahead == 'l') ADVANCE(115);
+      if (lookahead == 'l') ADVANCE(114);
       END_STATE();
     case 79:
-      if (lookahead == 'e') ADVANCE(116);
+      if (lookahead == 'e') ADVANCE(115);
       END_STATE();
     case 80:
-      if (lookahead == 'e') ADVANCE(117);
+      if (lookahead == 'e') ADVANCE(116);
       END_STATE();
     case 81:
-      if (lookahead == 'e') ADVANCE(118);
-      if (lookahead == 's') ADVANCE(119);
+      if (lookahead == 'e') ADVANCE(117);
+      if (lookahead == 's') ADVANCE(118);
       END_STATE();
     case 82:
-      if (lookahead == 'k') ADVANCE(120);
+      if (lookahead == 'k') ADVANCE(119);
       END_STATE();
     case 83:
-      if (lookahead == 'c') ADVANCE(121);
+      if (lookahead == 'c') ADVANCE(120);
       END_STATE();
     case 84:
       ACCEPT_TOKEN(anon_sym_max);
@@ -4411,58 +4411,58 @@ static bool ts_lex_keywords(TSLexer *lexer, TSStateId state) {
       ACCEPT_TOKEN(anon_sym_min);
       END_STATE();
     case 86:
-      if (lookahead == 'e') ADVANCE(122);
+      if (lookahead == 'e') ADVANCE(121);
       END_STATE();
     case 87:
-      if (lookahead == 'a') ADVANCE(123);
+      if (lookahead == 'a') ADVANCE(122);
       END_STATE();
     case 88:
-      if (lookahead == 't') ADVANCE(124);
+      if (lookahead == 't') ADVANCE(123);
       END_STATE();
     case 89:
-      if (lookahead == 'n') ADVANCE(125);
+      if (lookahead == 'n') ADVANCE(124);
       END_STATE();
     case 90:
-      if (lookahead == 'g') ADVANCE(126);
+      if (lookahead == 'g') ADVANCE(125);
       END_STATE();
     case 91:
-      if (lookahead == 't') ADVANCE(127);
+      if (lookahead == 't') ADVANCE(126);
       END_STATE();
     case 92:
-      if (lookahead == 'n') ADVANCE(128);
+      if (lookahead == 'n') ADVANCE(127);
       END_STATE();
     case 93:
-      if (lookahead == 'p') ADVANCE(129);
+      if (lookahead == 'p') ADVANCE(128);
       END_STATE();
     case 94:
-      if (lookahead == 'l') ADVANCE(130);
+      if (lookahead == 'l') ADVANCE(129);
       END_STATE();
     case 95:
-      if (lookahead == 'k') ADVANCE(131);
+      if (lookahead == 'k') ADVANCE(130);
       END_STATE();
     case 96:
-      if (lookahead == 'e') ADVANCE(132);
+      if (lookahead == 'e') ADVANCE(131);
       END_STATE();
     case 97:
-      if (lookahead == 'e') ADVANCE(133);
+      if (lookahead == 'e') ADVANCE(132);
       END_STATE();
     case 98:
-      if (lookahead == 'o') ADVANCE(134);
+      if (lookahead == 'o') ADVANCE(133);
       END_STATE();
     case 99:
-      if (lookahead == 't') ADVANCE(135);
+      if (lookahead == 't') ADVANCE(134);
       END_STATE();
     case 100:
       ACCEPT_TOKEN(sym_bool_type);
       END_STATE();
     case 101:
-      if (lookahead == 't') ADVANCE(136);
+      if (lookahead == 't') ADVANCE(135);
       END_STATE();
     case 102:
-      if (lookahead == 'n') ADVANCE(137);
+      if (lookahead == 'n') ADVANCE(136);
       END_STATE();
     case 103:
-      if (lookahead == 'x') ADVANCE(138);
+      if (lookahead == 'x') ADVANCE(137);
       END_STATE();
     case 104:
       ACCEPT_TOKEN(anon_sym_Type);
@@ -4471,232 +4471,214 @@ static bool ts_lex_keywords(TSLexer *lexer, TSStateId state) {
       ACCEPT_TOKEN(anon_sym_area);
       END_STATE();
     case 106:
-      if (lookahead == 'r') ADVANCE(139);
+      if (lookahead == 'r') ADVANCE(138);
       END_STATE();
     case 107:
       ACCEPT_TOKEN(anon_sym_base);
       END_STATE();
     case 108:
-      if (lookahead == 't') ADVANCE(140);
+      if (lookahead == 't') ADVANCE(139);
       END_STATE();
     case 109:
-      if (lookahead == 'n') ADVANCE(141);
-      END_STATE();
-    case 110:
       ACCEPT_TOKEN(anon_sym_else);
       END_STATE();
+    case 110:
+      if (lookahead == 'd') ADVANCE(140);
+      END_STATE();
     case 111:
-      if (lookahead == 'd') ADVANCE(142);
+      if (lookahead == 'e') ADVANCE(141);
       END_STATE();
     case 112:
-      if (lookahead == 'e') ADVANCE(143);
+      if (lookahead == 'r') ADVANCE(142);
       END_STATE();
     case 113:
-      if (lookahead == 'r') ADVANCE(144);
+      if (lookahead == 'r') ADVANCE(143);
       END_STATE();
     case 114:
-      if (lookahead == 'r') ADVANCE(145);
+      if (lookahead == 'u') ADVANCE(144);
       END_STATE();
     case 115:
-      if (lookahead == 'u') ADVANCE(146);
+      if (lookahead == 'x') ADVANCE(145);
       END_STATE();
     case 116:
-      if (lookahead == 'x') ADVANCE(147);
+      if (lookahead == 'r') ADVANCE(146);
       END_STATE();
     case 117:
-      if (lookahead == 'r') ADVANCE(148);
-      END_STATE();
-    case 118:
       ACCEPT_TOKEN(anon_sym_line);
       END_STATE();
-    case 119:
-      if (lookahead == 'p') ADVANCE(149);
+    case 118:
+      if (lookahead == 'p') ADVANCE(147);
       END_STATE();
-    case 120:
+    case 119:
       ACCEPT_TOKEN(anon_sym_mark);
       END_STATE();
-    case 121:
-      if (lookahead == 'h') ADVANCE(150);
+    case 120:
+      if (lookahead == 'h') ADVANCE(148);
       END_STATE();
-    case 122:
+    case 121:
       ACCEPT_TOKEN(anon_sym_node);
       END_STATE();
+    case 122:
+      if (lookahead == 'm') ADVANCE(149);
+      END_STATE();
     case 123:
-      if (lookahead == 'm') ADVANCE(151);
+      ACCEPT_TOKEN(anon_sym_plot);
+      if (lookahead == 's') ADVANCE(150);
       END_STATE();
     case 124:
-      ACCEPT_TOKEN(anon_sym_plot);
-      if (lookahead == 's') ADVANCE(152);
+      if (lookahead == 't') ADVANCE(151);
       END_STATE();
     case 125:
-      if (lookahead == 't') ADVANCE(153);
+      if (lookahead == 'e') ADVANCE(152);
       END_STATE();
     case 126:
-      if (lookahead == 'e') ADVANCE(154);
-      END_STATE();
-    case 127:
       ACCEPT_TOKEN(anon_sym_rect);
       END_STATE();
-    case 128:
+    case 127:
       ACCEPT_TOKEN(anon_sym_scan);
       END_STATE();
-    case 129:
+    case 128:
       ACCEPT_TOKEN(anon_sym_step);
       END_STATE();
-    case 130:
-      if (lookahead == 'e') ADVANCE(155);
+    case 129:
+      if (lookahead == 'e') ADVANCE(153);
       END_STATE();
-    case 131:
+    case 130:
       ACCEPT_TOKEN(anon_sym_tick);
       END_STATE();
-    case 132:
+    case 131:
       ACCEPT_TOKEN(anon_sym_true);
       END_STATE();
-    case 133:
+    case 132:
       ACCEPT_TOKEN(anon_sym_type);
       END_STATE();
-    case 134:
-      if (lookahead == 'l') ADVANCE(156);
+    case 133:
+      if (lookahead == 'l') ADVANCE(154);
       END_STATE();
-    case 135:
+    case 134:
       ACCEPT_TOKEN(anon_sym_unit);
       END_STATE();
+    case 135:
+      if (lookahead == 'i') ADVANCE(155);
+      END_STATE();
     case 136:
-      if (lookahead == 'i') ADVANCE(157);
+      if (lookahead == 's') ADVANCE(156);
       END_STATE();
     case 137:
-      if (lookahead == 's') ADVANCE(158);
-      END_STATE();
-    case 138:
       ACCEPT_TOKEN(anon_sym_Index);
       END_STATE();
-    case 139:
-      if (lookahead == 't') ADVANCE(159);
+    case 138:
+      if (lookahead == 't') ADVANCE(157);
       END_STATE();
-    case 140:
+    case 139:
       ACCEPT_TOKEN(anon_sym_const);
       END_STATE();
+    case 140:
+      if (lookahead == 'e') ADVANCE(158);
+      END_STATE();
     case 141:
-      if (lookahead == 's') ADVANCE(160);
-      END_STATE();
-    case 142:
-      if (lookahead == 'e') ADVANCE(161);
-      END_STATE();
-    case 143:
       ACCEPT_TOKEN(anon_sym_false);
       END_STATE();
+    case 142:
+      if (lookahead == 'e') ADVANCE(159);
+      END_STATE();
+    case 143:
+      if (lookahead == 't') ADVANCE(160);
+      END_STATE();
     case 144:
-      if (lookahead == 'e') ADVANCE(162);
+      if (lookahead == 'd') ADVANCE(161);
       END_STATE();
     case 145:
-      if (lookahead == 't') ADVANCE(163);
-      END_STATE();
-    case 146:
-      if (lookahead == 'd') ADVANCE(164);
-      END_STATE();
-    case 147:
       ACCEPT_TOKEN(anon_sym_index);
       END_STATE();
-    case 148:
+    case 146:
       ACCEPT_TOKEN(anon_sym_layer);
       END_STATE();
-    case 149:
-      if (lookahead == 'a') ADVANCE(165);
+    case 147:
+      if (lookahead == 'a') ADVANCE(162);
       END_STATE();
-    case 150:
+    case 148:
       ACCEPT_TOKEN(anon_sym_match);
       END_STATE();
-    case 151:
+    case 149:
       ACCEPT_TOKEN(anon_sym_param);
       END_STATE();
-    case 152:
+    case 150:
       ACCEPT_TOKEN(anon_sym_plots);
       END_STATE();
-    case 153:
+    case 151:
       ACCEPT_TOKEN(anon_sym_point);
       END_STATE();
-    case 154:
+    case 152:
       ACCEPT_TOKEN(anon_sym_range);
       END_STATE();
-    case 155:
+    case 153:
       ACCEPT_TOKEN(anon_sym_table);
       END_STATE();
+    case 154:
+      if (lookahead == 'd') ADVANCE(163);
+      END_STATE();
+    case 155:
+      if (lookahead == 'm') ADVANCE(164);
+      END_STATE();
     case 156:
-      if (lookahead == 'd') ADVANCE(166);
+      if (lookahead == 'i') ADVANCE(165);
       END_STATE();
     case 157:
-      if (lookahead == 'm') ADVANCE(167);
-      END_STATE();
-    case 158:
-      if (lookahead == 'i') ADVANCE(168);
-      END_STATE();
-    case 159:
       ACCEPT_TOKEN(anon_sym_assert);
       END_STATE();
-    case 160:
-      if (lookahead == 'i') ADVANCE(169);
-      END_STATE();
-    case 161:
+    case 158:
       ACCEPT_TOKEN(anon_sym_encode);
       END_STATE();
-    case 162:
+    case 159:
       ACCEPT_TOKEN(anon_sym_figure);
       END_STATE();
-    case 163:
+    case 160:
       ACCEPT_TOKEN(anon_sym_import);
       END_STATE();
-    case 164:
-      if (lookahead == 'e') ADVANCE(170);
+    case 161:
+      if (lookahead == 'e') ADVANCE(166);
       END_STATE();
-    case 165:
-      if (lookahead == 'c') ADVANCE(171);
+    case 162:
+      if (lookahead == 'c') ADVANCE(167);
       END_STATE();
-    case 166:
+    case 163:
       ACCEPT_TOKEN(anon_sym_unfold);
       END_STATE();
-    case 167:
-      if (lookahead == 'e') ADVANCE(172);
+    case 164:
+      if (lookahead == 'e') ADVANCE(168);
       END_STATE();
-    case 168:
-      if (lookahead == 'o') ADVANCE(173);
+    case 165:
+      if (lookahead == 'o') ADVANCE(169);
       END_STATE();
-    case 169:
-      if (lookahead == 'o') ADVANCE(174);
-      END_STATE();
-    case 170:
+    case 166:
       ACCEPT_TOKEN(anon_sym_include);
       END_STATE();
-    case 171:
-      if (lookahead == 'e') ADVANCE(175);
+    case 167:
+      if (lookahead == 'e') ADVANCE(170);
       END_STATE();
-    case 172:
+    case 168:
       ACCEPT_TOKEN(sym_datetime_type);
       END_STATE();
-    case 173:
-      if (lookahead == 'n') ADVANCE(176);
+    case 169:
+      if (lookahead == 'n') ADVANCE(171);
       END_STATE();
-    case 174:
-      if (lookahead == 'n') ADVANCE(177);
-      END_STATE();
-    case 175:
+    case 170:
       ACCEPT_TOKEN(anon_sym_linspace);
       END_STATE();
-    case 176:
-      if (lookahead == 'l') ADVANCE(178);
+    case 171:
+      if (lookahead == 'l') ADVANCE(172);
       END_STATE();
-    case 177:
-      ACCEPT_TOKEN(anon_sym_dimension);
+    case 172:
+      if (lookahead == 'e') ADVANCE(173);
       END_STATE();
-    case 178:
-      if (lookahead == 'e') ADVANCE(179);
+    case 173:
+      if (lookahead == 's') ADVANCE(174);
       END_STATE();
-    case 179:
-      if (lookahead == 's') ADVANCE(180);
+    case 174:
+      if (lookahead == 's') ADVANCE(175);
       END_STATE();
-    case 180:
-      if (lookahead == 's') ADVANCE(181);
-      END_STATE();
-    case 181:
+    case 175:
       ACCEPT_TOKEN(sym_dimensionless);
       END_STATE();
     default:
@@ -6213,7 +6195,7 @@ static const uint16_t ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT] = {
     [anon_sym_const] = ACTIONS(1),
     [anon_sym_node] = ACTIONS(1),
     [anon_sym_base] = ACTIONS(1),
-    [anon_sym_dimension] = ACTIONS(1),
+    [anon_sym_dim] = ACTIONS(1),
     [anon_sym_unit] = ACTIONS(1),
     [anon_sym_type] = ACTIONS(1),
     [anon_sym_LBRACE] = ACTIONS(1),
@@ -6312,7 +6294,7 @@ static const uint16_t ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT] = {
     [anon_sym_const] = ACTIONS(11),
     [anon_sym_node] = ACTIONS(13),
     [anon_sym_base] = ACTIONS(15),
-    [anon_sym_dimension] = ACTIONS(17),
+    [anon_sym_dim] = ACTIONS(17),
     [anon_sym_unit] = ACTIONS(19),
     [anon_sym_type] = ACTIONS(21),
     [anon_sym_index] = ACTIONS(23),
@@ -14758,7 +14740,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(243), 1,
       anon_sym_base,
     ACTIONS(246), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(249), 1,
       anon_sym_unit,
     ACTIONS(252), 1,
@@ -14815,7 +14797,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(15), 1,
       anon_sym_base,
     ACTIONS(17), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(19), 1,
       anon_sym_unit,
     ACTIONS(21), 1,
@@ -14871,7 +14853,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(15), 1,
       anon_sym_base,
     ACTIONS(17), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(19), 1,
       anon_sym_unit,
     ACTIONS(21), 1,
@@ -14927,7 +14909,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(15), 1,
       anon_sym_base,
     ACTIONS(17), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(19), 1,
       anon_sym_unit,
     ACTIONS(21), 1,
@@ -14983,7 +14965,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(15), 1,
       anon_sym_base,
     ACTIONS(17), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(19), 1,
       anon_sym_unit,
     ACTIONS(21), 1,
@@ -15039,7 +15021,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(15), 1,
       anon_sym_base,
     ACTIONS(17), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
     ACTIONS(19), 1,
       anon_sym_unit,
     ACTIONS(21), 1,
@@ -25482,7 +25464,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25504,7 +25486,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25526,7 +25508,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25548,7 +25530,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25570,7 +25552,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25592,7 +25574,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25614,7 +25596,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25636,7 +25618,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25658,7 +25640,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25680,7 +25662,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25702,7 +25684,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25724,7 +25706,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25746,7 +25728,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25768,7 +25750,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25790,7 +25772,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25812,7 +25794,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25834,7 +25816,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25856,7 +25838,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25878,7 +25860,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25900,7 +25882,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25922,7 +25904,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25944,7 +25926,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25966,7 +25948,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -25988,7 +25970,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26010,7 +25992,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26032,7 +26014,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26054,7 +26036,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26076,7 +26058,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26098,7 +26080,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26120,7 +26102,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26142,7 +26124,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26164,7 +26146,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26186,7 +26168,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26208,7 +26190,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26230,7 +26212,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26252,7 +26234,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26274,7 +26256,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26296,7 +26278,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26318,7 +26300,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26340,7 +26322,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26362,7 +26344,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26384,7 +26366,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26406,7 +26388,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26428,7 +26410,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26450,7 +26432,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26472,7 +26454,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26494,7 +26476,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26516,7 +26498,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26538,7 +26520,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26560,7 +26542,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26582,7 +26564,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26604,7 +26586,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26626,7 +26608,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26648,7 +26630,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26670,7 +26652,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26692,7 +26674,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26714,7 +26696,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26736,7 +26718,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26758,7 +26740,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26780,7 +26762,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26802,7 +26784,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26824,7 +26806,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26846,7 +26828,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26868,7 +26850,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26890,7 +26872,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26912,7 +26894,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26934,7 +26916,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26956,7 +26938,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -26978,7 +26960,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27000,7 +26982,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27022,7 +27004,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27044,7 +27026,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27066,7 +27048,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27088,7 +27070,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27110,7 +27092,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27132,7 +27114,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27154,7 +27136,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27176,7 +27158,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27198,7 +27180,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27220,7 +27202,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27242,7 +27224,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27264,7 +27246,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27286,7 +27268,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27308,7 +27290,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27330,7 +27312,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27352,7 +27334,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27374,7 +27356,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27396,7 +27378,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27418,7 +27400,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27440,7 +27422,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27462,7 +27444,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27484,7 +27466,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27506,7 +27488,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27528,7 +27510,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27550,7 +27532,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27572,7 +27554,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27594,7 +27576,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27616,7 +27598,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27638,7 +27620,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27660,7 +27642,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27682,7 +27664,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27704,7 +27686,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27726,7 +27708,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27748,7 +27730,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27770,7 +27752,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27792,7 +27774,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27814,7 +27796,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27836,7 +27818,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27858,7 +27840,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27880,7 +27862,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27902,7 +27884,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27924,7 +27906,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27946,7 +27928,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27968,7 +27950,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -27990,7 +27972,7 @@ static const uint16_t ts_small_parse_table[] = {
       anon_sym_const,
       anon_sym_node,
       anon_sym_base,
-      anon_sym_dimension,
+      anon_sym_dim,
       anon_sym_unit,
       anon_sym_type,
       anon_sym_RBRACE,
@@ -34625,7 +34607,7 @@ static const uint16_t ts_small_parse_table[] = {
     ACTIONS(3), 1,
       sym_line_comment,
     ACTIONS(2802), 1,
-      anon_sym_dimension,
+      anon_sym_dim,
   [35882] = 2,
     ACTIONS(3), 1,
       sym_line_comment,

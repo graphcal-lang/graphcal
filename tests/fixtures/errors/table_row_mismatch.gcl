@@ -1,4 +1,4 @@
-dimension Mass = Mass;
+dim Mass = Mass;
 
 index Phase = { Launch, Cruise, Arrival };
 index Maneuver = { Departure, Correction, Insertion };

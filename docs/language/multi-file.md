@@ -6,7 +6,7 @@ icon: material/file-multiple
 
 Graphcal supports splitting projects across multiple files using `import` and `include` declarations. Import paths can be either **file paths** (quoted strings) or **module paths** (bare identifiers).
 
-- **`import`** brings compile-time definitions into scope: `const`, `type`, `dimension`, `unit`, `index`, `dag`
+- **`import`** brings compile-time definitions into scope: `const`, `type`, `dim`, `unit`, `index`, `dag`
 - **`include`** instantiates a DAG (inline or from a file) into the current computation graph
 
 There are two import styles: **selective imports** and **module imports**.
@@ -21,7 +21,7 @@ import "./path/to/file.gcl" { name1, name2 };
 
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
-- All compile-time declarations can be imported: `const node`, `dimension`, `unit`, `type`, `index`, `dag`
+- All compile-time declarations can be imported: `const node`, `dim`, `unit`, `type`, `index`, `dag`
 
 ## Module Imports
 
@@ -155,7 +155,7 @@ node diff: Velocity = @velocity_a - @velocity_b;
 | Declaration | How to Import | How to Reference |
 |-------------|--------------|-----------------|
 | `const node` | `import "..." { NAME }` | `NAME` |
-| `dimension` | `import "..." { DimName }` | `DimName` |
+| `dim` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
 | `index` | `import "..." { IndexName }` | `IndexName` |

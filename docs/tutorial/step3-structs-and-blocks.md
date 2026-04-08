@@ -11,8 +11,8 @@ In this step, you'll learn to group related values into struct types and use blo
 When a calculation produces multiple related values, you can group them into a struct:
 
 ```
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
     dv1: Velocity,
@@ -75,8 +75,8 @@ node tof_hours: Time = @transfer.tof -> hour;
 Here is the complete Hohmann transfer example:
 
 ```
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
     dv1: Velocity,

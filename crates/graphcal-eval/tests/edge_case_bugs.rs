@@ -592,7 +592,7 @@ fn unit_scale_km_squared() {
     // 1 km^2 = 1e6 m^2
     // A value of 5.0 km^2 should be 5e6 m^2 internally
     let source = r#"
-dimension Area = Length^2;
+dim Area = Length^2;
 unit km2: Area = 1e6 m^2;
 param x: Area = 5.0 km2;
 "#;
@@ -764,7 +764,7 @@ fn to_int_rejects_out_of_range() {
 #[test]
 fn fn_call_trailing_comma() {
     let source = r#"
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 node result: Dimensionless = max(1.0, 2.0,);
 "#;
     let result = compile_and_eval(source).unwrap();

@@ -1,5 +1,5 @@
 // main.gcl -- instantiated module import (access everything via prefix)
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 #[allow_defaults]
 include "./rocket.gcl"(dry_mass: 800.0 kg) as r;

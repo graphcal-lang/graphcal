@@ -6812,7 +6812,7 @@
     "named": true
   },
   {
-    "type": "dimension",
+    "type": "dim",
     "named": false
   },
   {

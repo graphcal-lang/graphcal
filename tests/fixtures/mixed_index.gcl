@@ -1,6 +1,6 @@
 // mixed_index.gcl -- Mixed range + label indexes
-dimension Velocity = Length / Time;
-dimension Acceleration = Velocity / Time;
+dim Velocity = Length / Time;
+dim Acceleration = Velocity / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 

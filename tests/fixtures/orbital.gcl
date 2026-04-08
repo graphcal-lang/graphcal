@@ -1,5 +1,5 @@
 // orbital.gcl -- Phase 1 milestone test
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;

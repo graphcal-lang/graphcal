@@ -223,16 +223,7 @@ fn is_declaration_keyword(input: &str) -> bool {
     }
     matches!(
         first_word,
-        "param"
-            | "node"
-            | "const"
-            | "dimension"
-            | "unit"
-            | "index"
-            | "type"
-            | "fn"
-            | "assert"
-            | "import"
+        "param" | "node" | "const" | "dim" | "unit" | "index" | "type" | "fn" | "assert" | "import"
     )
 }
 

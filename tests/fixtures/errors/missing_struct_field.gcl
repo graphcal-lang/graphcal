@@ -1,5 +1,5 @@
 // error: missing fields in struct construction
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type Transfer {
     dv1: Velocity,

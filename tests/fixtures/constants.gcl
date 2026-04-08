@@ -1,6 +1,6 @@
 // constants.gcl -- const cross-reference test with units
-dimension Acceleration = Length / Time^2;
-dimension Area = Length^2;
+dim Acceleration = Length / Time^2;
+dim Area = Length^2;
 
 const node G0: Acceleration = 9.80665 m/s^2;
 const node TWO_G0: Acceleration = 2.0 * G0;

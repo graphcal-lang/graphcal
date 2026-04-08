@@ -1,6 +1,6 @@
 // Module import with alias
 import "./constants.gcl" as c;
 
-dimension Acceleration = Length / Time^2;
+dim Acceleration = Length / Time^2;
 
 node g: Acceleration = c::G0;

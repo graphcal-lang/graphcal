@@ -8,16 +8,7 @@ use crate::symbol_table::SymbolCategory;
 
 /// Top-level declaration keywords.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "param",
-    "node",
-    "const",
-    "fn",
-    "type",
-    "dimension",
-    "unit",
-    "cat",
-    "range",
-    "import",
+    "param", "node", "const", "fn", "type", "dim", "unit", "cat", "range", "import",
 ];
 
 /// Built-in type keywords available in type annotation position.

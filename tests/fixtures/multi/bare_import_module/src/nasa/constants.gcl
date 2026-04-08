@@ -1,2 +1,2 @@
-dimension Acceleration = Length / Time^2;
+dim Acceleration = Length / Time^2;
 const node G0: Acceleration = 9.80665 m/s^2;

@@ -236,16 +236,16 @@ fn parse_error_returns_none() {
 
 #[test]
 fn format_dimension_decl() {
-    let source = "dimension Velocity = Length / Time;\n";
+    let source = "dim Velocity = Length / Time;\n";
     let formatted = format_source(source).unwrap();
-    assert_eq!(formatted, "dimension Velocity = Length / Time;\n");
+    assert_eq!(formatted, "dim Velocity = Length / Time;\n");
 }
 
 #[test]
 fn format_base_dimension() {
-    let source = "base dimension Length;\n";
+    let source = "base dim Length;\n";
     let formatted = format_source(source).unwrap();
-    assert_eq!(formatted, "base dimension Length;\n");
+    assert_eq!(formatted, "base dim Length;\n");
 }
 
 #[test]

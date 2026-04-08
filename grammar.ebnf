@@ -34,7 +34,7 @@ KEYWORD
    | "else"
    | "true"
    | "false"
-   | "dimension"
+   | "dim"
    | "unit"
    | "type"
    | "let"
@@ -288,7 +288,7 @@ const_decl
 
 (* --- dimension --- *)
 dimension_decl
-   = "dimension", IDENT, [ "=", dim_expr ], ";";
+   = "dim", IDENT, [ "=", dim_expr ], ";";
 
 (* --- unit --- *)
 unit_decl

@@ -1,7 +1,7 @@
 // range_index.gcl -- Range index and unfold
-dimension Frequency = Time^-1;
+dim Frequency = Time^-1;
 
-// A range index with time dimension
+// A range index with time dim
 index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 // Growth rate (1/s)

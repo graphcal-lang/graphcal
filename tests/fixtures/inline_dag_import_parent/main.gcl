@@ -1,6 +1,6 @@
 // Inline DAG with import .. for parent scope access.
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 const node GM: GravParam = 3.986004418e14 m^3/s^2;
 const node R_EARTH: Length = 6371000.0 m;

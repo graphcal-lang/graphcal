@@ -3,13 +3,13 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // generics.gcl -- Generic structs with phantom type parameters
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 // Marker types for reference frames
 type Eci;
 type Body;
 
-// Generic struct with dimension param and phantom type param
+// Generic struct with dim param and phantom type param
 type Vec3<D: Dim, F: Type> {
     x: D,
     y: D,
