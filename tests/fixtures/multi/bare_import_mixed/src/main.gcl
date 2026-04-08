@@ -2,7 +2,7 @@
 import nasa/constants { G0 };
 include "./local_params.gcl" { isp };
 
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
 
 node v_exhaust: Velocity = @isp * G0;

@@ -129,16 +129,16 @@ fn format_value_decl(
     header.append(val).append(RcDoc::text(";"))
 }
 
-/// `base dimension Name;`
+/// `base dim Name;`
 fn format_base_dim_decl(d: &BaseDimDecl) -> RcDoc<'static> {
-    RcDoc::text("base dimension ")
+    RcDoc::text("base dim ")
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(";"))
 }
 
-/// `dimension Name = DimExpr;`
+/// `dim Name = DimExpr;`
 fn format_dim_decl(_fmt: &Formatter<'_>, d: &DimDecl) -> RcDoc<'static> {
-    RcDoc::text("dimension ")
+    RcDoc::text("dim ")
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(" = "))
         .append(format_dim_expr_inline(&d.definition))

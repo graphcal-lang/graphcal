@@ -1,5 +1,5 @@
 // variant_comparison.gcl -- Comparing loop variables to index variant literals
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 

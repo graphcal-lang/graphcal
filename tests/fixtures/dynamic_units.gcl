@@ -1,6 +1,6 @@
 // Dynamic unit definitions: conversion factors from runtime values.
 // Example: currency exchange rates.
-base dimension Money;
+base dim Money;
 unit USD: Money;
 
 // Exchange rate as a param (can be overridden)

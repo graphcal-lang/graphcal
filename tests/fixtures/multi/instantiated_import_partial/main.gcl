@@ -1,5 +1,5 @@
 // main.gcl -- partial override: only override dry_mass, keep other defaults
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 #[allow_defaults]
 include "./rocket.gcl"(dry_mass: 800.0 kg) as r;

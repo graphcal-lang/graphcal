@@ -1,6 +1,6 @@
 // indexed.gcl -- Phase 5 milestone: indexed values
-dimension Velocity = Length / Time;
-dimension Mass = Mass;
+dim Velocity = Length / Time;
+dim Mass = Mass;
 
 index Maneuver = { Departure, Correction, Insertion };
 

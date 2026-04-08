@@ -1,5 +1,5 @@
-// error: field dimension mismatch in struct construction
-dimension Velocity = Length / Time;
+// error: field dim mismatch in struct construction
+dim Velocity = Length / Time;
 
 type Pair {
     a: Length,

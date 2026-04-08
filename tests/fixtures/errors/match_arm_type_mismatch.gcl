@@ -1,5 +1,5 @@
 // Error: match arms return different types
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type Impulsive {
     delta_v: Velocity,

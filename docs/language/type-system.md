@@ -427,7 +427,7 @@ The compiler determines the dimension of the result of each arithmetic operation
 Examples:
 
 - `Length * Length` = `Length^2`
-- `Length / Time` = `Velocity` (if `dimension Velocity = Length / Time;`)
+- `Length / Time` = `Velocity` (if `dim Velocity = Length / Time;`)
 - `Length / Length` = `Dimensionless`
 - `(Mass * Length / Time^2) * (Length / Time)` = `Mass * Length^2 / Time^3`
 

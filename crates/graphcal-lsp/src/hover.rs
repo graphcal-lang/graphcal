@@ -40,7 +40,7 @@ fn format_hover(def: &DefinitionInfo) -> String {
             format!("```graphcal\nconst {}: {type_str}\n```", def.name)
         }
         SymbolCategory::Dimension => {
-            let fallback = format!("dimension {}", def.name);
+            let fallback = format!("dim {}", def.name);
             let desc = def.type_description.as_deref().unwrap_or(&fallback);
             format!("```graphcal\n{desc}\n```")
         }

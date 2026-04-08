@@ -1,5 +1,5 @@
 // Error: field access on multi-variant type (should use match instead)
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 type Impulsive {
     delta_v: Velocity,

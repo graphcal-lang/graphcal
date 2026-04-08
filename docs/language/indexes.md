@@ -21,7 +21,7 @@ Labels follow `PascalCase` convention and are namespaced by the index: `Maneuver
 Annotate a type with `[IndexName]` to create an indexed value:
 
 ```
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,

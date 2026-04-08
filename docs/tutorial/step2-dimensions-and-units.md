@@ -15,8 +15,8 @@ The [Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter) w
 Create `rocket.gcl`:
 
 ```
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
 
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
@@ -46,10 +46,10 @@ Graphcal has 7 built-in base dimensions: `Length`, `Time`, `Mass`, `Temperature`
 You define derived dimensions using algebraic expressions over base dimensions:
 
 ```
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
-dimension Force = Mass * Length / Time^2;
-dimension Energy = Mass * Length^2 / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
+dim Force = Mass * Length / Time^2;
+dim Energy = Mass * Length^2 / Time^2;
 ```
 
 ## Using Units
@@ -118,23 +118,23 @@ produces a compile-time error because you cannot add `Mass` and `Length`.
 You can define entirely new base dimensions for domain-specific quantities:
 
 ```
-base dimension Information;
+base dim Information;
 unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
 
-dimension Bandwidth = Information / Time;
+dim Bandwidth = Information / Time;
 
 param storage: Information = 500.0 kB;
 param rate: Bandwidth = 100.0 bit / s;
 node transfer_time: Time = @storage / @rate;
 ```
 
-A `base dimension Information;` declaration creates a new base dimension.
+A `base dim Information;` declaration creates a new base dimension.
 
 ## What You Learned
 
-- **`dimension`** declarations for derived and custom base dimensions
+- **`dim`** declarations for derived and custom base dimensions
 - **Unit annotations** on numeric literals (`1200.0 kg`)
 - **`unit`** declarations for custom units
 - **`->`** operator for unit conversion

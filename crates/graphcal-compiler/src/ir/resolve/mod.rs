@@ -516,7 +516,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
 
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -541,7 +541,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => Some("figure"),
                         DeclKind::Layer(_) => Some("layer"),
 
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dimension"),
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dim"),
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
@@ -614,7 +614,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
 
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -643,7 +643,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
 
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
                         DeclKind::Index(_) => "cat/range",
@@ -697,7 +697,7 @@ fn validate_attributes(
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
 
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",

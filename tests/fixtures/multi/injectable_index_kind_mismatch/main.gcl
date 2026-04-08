@@ -1,5 +1,5 @@
 // main.gcl -- tries to bind a named index to a range (should fail)
-base dimension Time;
+base dim Time;
 index TimeStep = linspace(0.0, 1.0, step: 0.5);
 
 #[allow_defaults]

@@ -2,7 +2,7 @@
 // are rejected. When both axes are label indexes, use tuple keys instead.
 // Note: nesting IS allowed when the inner index is a range index, e.g.,
 //   { Maneuver::Departure: for t: TimeStep { ... }, ... }
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 index Phase = { Coast, Burn };

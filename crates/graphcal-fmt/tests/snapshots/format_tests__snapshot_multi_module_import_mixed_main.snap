@@ -6,8 +6,8 @@ expression: formatted
 import "./constants.gcl" { G0 };
 include "./params.gcl";
 
-dimension Acceleration = Length / Time^2;
-dimension Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
 
 node v_exhaust: Velocity = @params::isp * G0;
 node mass_ratio: Dimensionless = (@params::dry_mass + @params::fuel_mass) / @params::dry_mass;

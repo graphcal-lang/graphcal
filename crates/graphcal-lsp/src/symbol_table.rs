@@ -1335,7 +1335,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     def_mut.type_description = Some(format!(
-                        "dimension {name} = {}",
+                        "dim {name} = {}",
                         registry.dimensions.format_dimension(dim)
                     ));
                 }

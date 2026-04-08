@@ -1,6 +1,6 @@
 // table_literal.gcl -- Table literal syntax sugar tests
-dimension Velocity = Length / Time;
-dimension Mass = Mass;
+dim Velocity = Length / Time;
+dim Mass = Mass;
 
 index Maneuver = { Departure, Correction, Insertion };
 index Phase = { Launch, Cruise, Arrival };

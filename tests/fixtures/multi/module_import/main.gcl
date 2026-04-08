@@ -1,6 +1,6 @@
 // Module import: import entire file as a module namespace
 import "./constants.gcl";
 
-dimension Acceleration = Length / Time^2;
+dim Acceleration = Length / Time^2;
 
 node g: Acceleration = constants::G0;

@@ -117,11 +117,11 @@ module.exports = grammar({
       ";",
     ),
 
-    // base dimension Length;
-    // dimension Velocity = Length / Time;
+    // base dim Length;
+    // dim Velocity = Length / Time;
     dimension_declaration: $ => seq(
       optional("base"),
-      "dimension",
+      "dim",
       field("name", $.identifier),
       optional(seq("=", field("definition", $.dim_expr))),
       ";",

@@ -11,8 +11,8 @@ In this step, you'll write reusable computation using `dag` blocks and learn how
 A `dag` block defines a reusable sub-DAG with its own parameters and nodes. It uses the same `param`/`node`/`@` syntax you already know:
 
 ```
-dimension Velocity = Length / Time;
-dimension GravParam = Length^3 / Time^2;
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
 
 const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 

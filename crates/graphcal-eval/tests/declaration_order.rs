@@ -128,8 +128,8 @@ fn assert_results_equal(original: &EvalResult, shuffled: &EvalResult) {
 #[test]
 fn forward_ref_derived_dimension() {
     let source = r"
-        dimension Acceleration = Velocity / Time;
-        dimension Velocity = Length / Time;
+        dim Acceleration = Velocity / Time;
+        dim Velocity = Length / Time;
         const node G0: Acceleration = 9.80665 m/s^2;
     ";
     compile_and_eval(source).expect("forward-ref derived dimension must compile and evaluate");
@@ -150,9 +150,9 @@ fn forward_ref_unit() {
 #[test]
 fn forward_ref_derived_dimension_chain() {
     let source = r"
-        dimension Jerk = Acceleration / Time;
-        dimension Acceleration = Velocity / Time;
-        dimension Velocity = Length / Time;
+        dim Jerk = Acceleration / Time;
+        dim Acceleration = Velocity / Time;
+        dim Velocity = Length / Time;
         param j: Jerk = 1.0 m/s^3;
     ";
     compile_and_eval(source).expect("chained forward-ref dimensions must compile and evaluate");

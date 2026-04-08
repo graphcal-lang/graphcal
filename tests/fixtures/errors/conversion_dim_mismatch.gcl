@@ -1,3 +1,3 @@
-// error: conversion target has wrong dimension
+// error: conversion target has wrong dim
 param alt: Length = 400.0 km;
 node bad: Length = @alt -> s;

@@ -1,5 +1,5 @@
 // Inline DAG with namespace (module) import.
-dimension Velocity = Length / Time;
+dim Velocity = Length / Time;
 
 dag scale {
     param factor: Dimensionless;

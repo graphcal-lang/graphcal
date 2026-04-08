@@ -636,7 +636,7 @@ impl RegistryBuilder {
 
     // -- Mutation methods (only on builder) --
 
-    /// Register a new base dimension (`base dimension Foo;`).
+    /// Register a new base dimension (`base dim Foo;`).
     ///
     /// The caller provides the [`BaseDimId`] which encodes the dimension's
     /// identity (prelude name or user-defined file+name).

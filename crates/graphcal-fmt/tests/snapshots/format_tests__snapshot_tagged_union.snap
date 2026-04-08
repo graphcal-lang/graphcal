@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // tagged_union.gcl -- Union types and match expressions
-dimension Velocity = Length / Time;
-dimension Force = Mass * Length / Time^2;
+dim Velocity = Length / Time;
+dim Force = Mass * Length / Time^2;
 
 // Record types (members of the union)
 type Impulsive {

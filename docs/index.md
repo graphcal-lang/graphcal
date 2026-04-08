@@ -11,8 +11,8 @@ Graphcal is a **type-safe, unit-aware, Git-friendly reactive programming languag
 The Tsiolkovsky rocket equation in Graphcal:
 
 ```
-dimension Velocity = Length / Time;
-dimension Acceleration = Length / Time^2;
+dim Velocity = Length / Time;
+dim Acceleration = Length / Time^2;
 
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
