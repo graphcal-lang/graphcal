@@ -1,5 +1,5 @@
-// main.gcl -- diamond import: both left and right import shared
-import "./left.gcl" { doubled };
-import "./right.gcl" { tripled };
+// main.gcl -- diamond include: both left and right include shared
+include "./left.gcl" { doubled };
+include "./right.gcl" { tripled };
 
 node total: Dimensionless = @doubled + @tripled;

@@ -39,11 +39,6 @@ fn format_hover(def: &DefinitionInfo) -> String {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
             format!("```graphcal\nconst {}: {type_str}\n```", def.name)
         }
-        SymbolCategory::Function => {
-            let fallback = format!("fn {}", def.name);
-            let sig = def.type_description.as_deref().unwrap_or(&fallback);
-            format!("```graphcal\n{sig}\n```")
-        }
         SymbolCategory::Dimension => {
             let fallback = format!("dimension {}", def.name);
             let desc = def.type_description.as_deref().unwrap_or(&fallback);

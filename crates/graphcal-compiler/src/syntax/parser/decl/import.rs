@@ -19,6 +19,15 @@ impl Parser<'_> {
         // Single-segment paths are only valid for `include` (inline DAG names).
         let path = self.parse_import_path(2)?;
 
+        // Reject cross-file DAG paths on `import` — use `include` for DAG instantiation.
+        if path.is_cross_file_dag() {
+            return Err(self.unexpected_token(
+                "a file path or module path (`import` cannot reference cross-file DAGs; use `include` for DAG instantiation)",
+                &format!("\"...\"/{}", path.display_path().rsplit('/').next().unwrap_or("")),
+                path.span(),
+            ));
+        }
+
         // Reject param bindings on `import` — use `include` for DAG instantiation.
         if self.lexer.peek() == Some(&Token::LParen) {
             let (_, span) = self.advance()?;
@@ -96,6 +105,19 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 let raw = self.lexer.slice_at(span);
                 let path_str = raw[1..raw.len() - 1].to_string();
+
+                // Check for cross-file DAG path: `"./file.gcl"/dag_name`
+                if self.lexer.peek() == Some(&Token::Slash) {
+                    self.lexer.next_token(); // consume `/`
+                    let dag_ident = self.parse_any_ident()?;
+                    let full_span = span.merge(dag_ident.span);
+                    return Ok(crate::syntax::ast::ImportPath::CrossFileDag {
+                        file_path: path_str,
+                        dag_name: dag_ident,
+                        span: full_span,
+                    });
+                }
+
                 Ok(crate::syntax::ast::ImportPath::FilePath {
                     path: path_str,
                     span,

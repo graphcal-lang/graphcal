@@ -11,7 +11,7 @@ use miette::NamedSource;
 
 use crate::syntax::ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{DimName, FnName, GenericParamName, IndexName, StructTypeName};
+use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
 
 use crate::ir::ir::IR;
@@ -555,29 +555,6 @@ pub enum ResolvedIndex {
 }
 
 // ---------------------------------------------------------------------------
-// Resolved function signature
-// ---------------------------------------------------------------------------
-
-/// A resolved function signature (with generic placeholders).
-#[derive(Debug, Clone)]
-pub struct ResolvedFnSig {
-    pub generic_dim_params: Vec<GenericParamName>,
-    pub generic_index_params: Vec<GenericParamName>,
-    pub generic_nat_params: Vec<GenericParamName>,
-    /// Generic params in declaration order (for turbofish matching).
-    pub generic_params_ordered: Vec<crate::registry::registry::FnGenericParam>,
-    pub params: Vec<ResolvedFnParam>,
-    pub return_type: ResolvedTypeExpr,
-}
-
-/// A resolved function parameter.
-#[derive(Debug, Clone)]
-pub struct ResolvedFnParam {
-    pub name: String,
-    pub resolved_type: ResolvedTypeExpr,
-}
-
-// ---------------------------------------------------------------------------
 // Resolved domain constraints
 // ---------------------------------------------------------------------------
 
@@ -609,7 +586,7 @@ pub struct ResolvedDomainConstraint {
 /// every declaration and function signature.
 #[derive(Debug)]
 pub struct TIR {
-    /// The type/unit/dimension/index/struct/function registry.
+    /// The type/unit/dimension/index/struct registry.
     pub registry: Registry,
     /// Const declarations in source order.
     pub consts: Vec<crate::ir::ir::ConstEntry>,
@@ -631,8 +608,6 @@ pub struct TIR {
     pub const_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// User-defined function declarations.
-    pub functions: Vec<crate::ir::ir::FunctionEntry>,
     /// Set of all assert names.
     pub assert_names: std::collections::HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
@@ -641,8 +616,6 @@ pub struct TIR {
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
-    /// Resolved function signatures (with generic placeholders).
-    pub resolved_fn_sigs: HashMap<FnName, ResolvedFnSig>,
     /// Resolved domain constraints for declarations that have them.
     pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
@@ -693,20 +666,14 @@ impl TIR {
 /// Resolve all type annotations in an `IR`, producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic
-/// params in scope. For each function, resolves parameter types and return
-/// type with the function's own generic params in scope.
+/// params in scope.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
 /// dimension, struct, or index.
-#[expect(
-    clippy::too_many_lines,
-    reason = "type resolution requires handling many declaration kinds"
-)]
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
-    let mut resolved_fn_sigs = HashMap::new();
 
     let no_generic_params: &[GenericParamName] = &[];
 
@@ -745,64 +712,6 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
-    // Resolve function signatures from the registry (which has FnDef with TypeExpr).
-    for fn_def in ir.registry.functions.all_functions() {
-        let dim_params: Vec<GenericParamName> = fn_def
-            .generic_params
-            .iter()
-            .filter(|g| g.constraint == crate::registry::registry::FnGenericConstraint::Dim)
-            .map(|g| g.name.clone())
-            .collect();
-        let index_params: Vec<GenericParamName> = fn_def
-            .generic_params
-            .iter()
-            .filter(|g| g.constraint == crate::registry::registry::FnGenericConstraint::Index)
-            .map(|g| g.name.clone())
-            .collect();
-        let nat_params: Vec<GenericParamName> = fn_def
-            .generic_params
-            .iter()
-            .filter(|g| g.constraint == crate::registry::registry::FnGenericConstraint::Nat)
-            .map(|g| g.name.clone())
-            .collect();
-
-        let mut resolved_params = Vec::with_capacity(fn_def.params.len());
-        for p in &fn_def.params {
-            let resolved = resolve_type_expr(
-                &p.type_expr,
-                &ir.registry,
-                &dim_params,
-                &index_params,
-                &nat_params,
-                src,
-            )?;
-            resolved_params.push(ResolvedFnParam {
-                name: p.name.clone(),
-                resolved_type: resolved,
-            });
-        }
-        let return_type = resolve_type_expr(
-            &fn_def.return_type_expr,
-            &ir.registry,
-            &dim_params,
-            &index_params,
-            &nat_params,
-            src,
-        )?;
-
-        resolved_fn_sigs.insert(
-            fn_def.name.clone(),
-            ResolvedFnSig {
-                generic_dim_params: dim_params,
-                generic_index_params: index_params,
-                generic_nat_params: nat_params,
-                generic_params_ordered: fn_def.generic_params.clone(),
-                params: resolved_params,
-                return_type,
-            },
-        );
-    }
-
     Ok(TIR {
         registry: ir.registry,
         consts: ir.consts,
@@ -815,12 +724,10 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         runtime_deps: ir.runtime_deps,
         const_deps: ir.const_deps,
         source_order: ir.source_order,
-        functions: ir.functions,
         assert_names: ir.assert_names,
         assumes_map: ir.assumes_map,
         expected_fail: ir.expected_fail,
         resolved_decl_types,
-        resolved_fn_sigs,
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
     })
@@ -2122,43 +2029,12 @@ mod tests {
     }
 
     #[test]
-    fn type_resolve_functions() {
-        let source = include_str!("../../../../tests/fixtures/functions.gcl");
-        let tir = parse_and_type_resolve(source).unwrap();
-        // Functions should have resolved signatures
-        assert!(tir.resolved_fn_sigs.contains_key("orbital_velocity"));
-        let lerp_sig = &tir.resolved_fn_sigs[&FnName::new("lerp")];
-        // lerp<D: Dim> has one generic dim param
-        assert_eq!(lerp_sig.generic_dim_params.len(), 1);
-        assert_eq!(lerp_sig.generic_dim_params[0].as_str(), "D");
-        // lerp params: a: D, b: D, t: Dimensionless
-        assert_eq!(lerp_sig.params.len(), 3);
-        assert!(matches!(
-            &lerp_sig.params[0].resolved_type,
-            ResolvedTypeExpr::GenericDimParam(name, _) if name.as_str() == "D"
-        ));
-        assert_eq!(
-            lerp_sig.params[2].resolved_type,
-            ResolvedTypeExpr::Dimensionless
-        );
-        // return type: D
-        assert!(matches!(
-            &lerp_sig.return_type,
-            ResolvedTypeExpr::GenericDimParam(name, _) if name.as_str() == "D"
-        ));
-    }
-
-    #[test]
     fn type_resolve_indexed() {
         let source = include_str!("../../../../tests/fixtures/indexed.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // delta_v should be Velocity[Maneuver]
         let dv_type = &tir.resolved_decl_types[&ScopedName::local("delta_v")];
         assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
-        // total generic fn should have resolved sig
-        let total_sig = &tir.resolved_fn_sigs[&FnName::new("total")];
-        assert_eq!(total_sig.generic_dim_params.len(), 1);
-        assert_eq!(total_sig.generic_index_params.len(), 1);
     }
 
     #[test]

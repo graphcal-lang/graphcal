@@ -403,6 +403,20 @@ fn resolve_import_path<F: FileSystemReader>(
                 span: (*span).into(),
             }))
         }
+        ImportPath::CrossFileDag {
+            file_path, span, ..
+        } => {
+            // Cross-file DAG paths resolve the file component to a canonical path.
+            // The DAG name is resolved at eval time.
+            let full_path = parent_dir.join(file_path);
+            fs.canonicalize(&full_path).map_err(|_| {
+                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                    path: file_path.clone(),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
+            })
+        }
     }
 }
 

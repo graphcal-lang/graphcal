@@ -167,9 +167,7 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                     SymbolCategory::Const | SymbolCategory::BuiltinConst => {
                         Some(CompletionItemKind::CONSTANT)
                     }
-                    SymbolCategory::Function | SymbolCategory::BuiltinFn => {
-                        Some(CompletionItemKind::FUNCTION)
-                    }
+                    SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
                     _ => None,
                 }?;
                 Some(CompletionItem {
@@ -189,7 +187,6 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
             .filter_map(|(_, imported)| {
                 let kind = match imported.definition.category {
                     SymbolCategory::Const => Some(CompletionItemKind::CONSTANT),
-                    SymbolCategory::Function => Some(CompletionItemKind::FUNCTION),
                     _ => None,
                 }?;
                 Some(CompletionItem {

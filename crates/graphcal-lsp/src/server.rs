@@ -193,7 +193,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions: HashMap::new(),
                 diagnostics: compile_error_to_diagnostics(&e, text),
                 eval_values: HashMap::new(),
-                fn_signatures: build_fn_signatures(None),
+                fn_signatures: build_fn_signatures(),
                 import_decls: Vec::new(),
             };
         }
@@ -209,7 +209,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
             let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
-            let fn_signatures = build_fn_signatures(Some(&tir));
+            let fn_signatures = build_fn_signatures();
             let import_decls = collect_import_decl_info(root_ast);
             let (diagnostics, eval_values) = run_eval_from_project(&project, text);
 
@@ -236,7 +236,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 imported_definitions,
                 diagnostics,
                 eval_values: HashMap::new(),
-                fn_signatures: build_fn_signatures(None),
+                fn_signatures: build_fn_signatures(),
                 import_decls,
             }
         }
@@ -279,9 +279,8 @@ fn collect_import_decl_info(ast: &graphcal_compiler::syntax::ast::File) -> Vec<I
 
 /// Build structured function signatures for Signature Help.
 ///
-/// Combines builtin function signatures (always available) with user-defined
-/// function signatures from the TIR (when available).
-fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String, FnSignatureInfo> {
+/// Returns builtin function signatures (always available).
+fn build_fn_signatures() -> HashMap<String, FnSignatureInfo> {
     let mut sigs = HashMap::new();
 
     // Builtin functions — always available.
@@ -296,26 +295,6 @@ fn build_fn_signatures(tir: Option<&graphcal_eval::tir::TIR>) -> HashMap<String,
                 parameters: params,
             },
         );
-    }
-
-    // User-defined functions — from TIR resolved signatures.
-    if let Some(tir) = tir {
-        let registry = &tir.registry;
-        for (fn_name, sig) in &tir.resolved_fn_sigs {
-            let label = symbol_table::format_fn_signature(fn_name.as_str(), sig, registry);
-            let param_strs: Vec<String> = sig
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
-                .collect();
-            sigs.insert(
-                fn_name.as_str().to_string(),
-                FnSignatureInfo {
-                    label,
-                    parameters: param_strs,
-                },
-            );
-        }
     }
 
     sigs

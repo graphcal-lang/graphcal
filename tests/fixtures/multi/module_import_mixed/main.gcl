@@ -1,6 +1,6 @@
-// Mixed: selective import and module import from different files
+// Mixed: selective import and module include from different files
 import "./constants.gcl" { G0 };
-import "./params.gcl";
+include "./params.gcl";
 
 dimension Acceleration = Length / Time^2;
 dimension Velocity = Length / Time;

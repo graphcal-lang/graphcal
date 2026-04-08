@@ -64,7 +64,5 @@ node departure_dv: Velocity = @departure_maneuver;
 // Scan: cumulative delta-v
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
 
-// Generic function with index constraint
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-
-node total_check: Velocity = total(@delta_v);
+// Total via sum (replaces generic fn total<D, I>)
+node total_check: Velocity = sum(for m: Maneuver { @delta_v[m] });

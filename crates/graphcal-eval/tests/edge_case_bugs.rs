@@ -764,28 +764,27 @@ fn to_int_rejects_out_of_range() {
 #[test]
 fn fn_call_trailing_comma() {
     let source = r#"
-fn add(a: Dimensionless, b: Dimensionless) -> Dimensionless = a + b;
-node result: Dimensionless = add(1.0, 2.0,);
+dimension Velocity = Length / Time;
+node result: Dimensionless = max(1.0, 2.0,);
 "#;
     let result = compile_and_eval(source).unwrap();
     let val = find_value(&result, "result");
     assert!(
-        (val - 3.0).abs() < f64::EPSILON,
-        "add(1.0, 2.0,) should be 3.0 but got {val}"
+        (val - 2.0).abs() < f64::EPSILON,
+        "max(1.0, 2.0,) should be 2.0 but got {val}"
     );
 }
 
 #[test]
 fn fn_call_single_arg_trailing_comma() {
     let source = r#"
-fn identity(x: Dimensionless) -> Dimensionless = x;
-node result: Dimensionless = identity(42.0,);
+node result: Dimensionless = abs(-42.0,);
 "#;
     let result = compile_and_eval(source).unwrap();
     let val = find_value(&result, "result");
     assert!(
         (val - 42.0).abs() < f64::EPSILON,
-        "identity(42.0,) should be 42.0 but got {val}"
+        "abs(-42.0,) should be 42.0 but got {val}"
     );
 }
 

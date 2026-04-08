@@ -1,14 +1,14 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
-    Encoding, FieldDecl, FigureDecl, FnBody, FnDecl, FnParam, GenericConstraint, GenericParam,
-    ImportDecl, IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding,
-    ParamDecl, PlotDecl, TypeDecl, TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
+    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
 };
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, format_block_body, format_dim_expr_inline, format_expr,
-    format_type_expr_inline, format_unit_expr_inline,
+    Formatter, INDENT, format_dim_expr_inline, format_expr, format_type_expr_inline,
+    format_unit_expr_inline,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,6 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
         DeclKind::UnionType(d) => format_union_type_decl(fmt, d),
-        DeclKind::Fn(d) => format_fn_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
         DeclKind::Include(d) => format_include_decl(fmt, d),
@@ -245,60 +244,6 @@ fn format_single_field_decl(f: &FieldDecl) -> RcDoc<'static> {
         .append(format_type_expr_inline(&f.type_ann))
 }
 
-/// `fn name<...>(...) -> RetType = expr;` or `fn name<...>(...) -> RetType { ... }`
-fn format_fn_decl(fmt: &mut Formatter<'_>, d: &FnDecl) -> RcDoc<'static> {
-    let mut header = RcDoc::text("fn ").append(RcDoc::text(d.name.value.as_str().to_string()));
-
-    if !d.generic_params.is_empty() {
-        header = header.append(format_generic_params(&d.generic_params));
-    }
-
-    // Parameters
-    let params = format_fn_params(&d.params);
-    header = header.append(params);
-
-    // Return type
-    header = header
-        .append(RcDoc::text(" -> "))
-        .append(format_type_expr_inline(&d.return_type));
-
-    match &d.body {
-        FnBody::Short(expr) => header
-            .append(RcDoc::text(" = "))
-            .append(format_expr(fmt, expr))
-            .append(RcDoc::text(";")),
-        FnBody::Block { stmts, expr } => {
-            let body = format_block_body(fmt, stmts, expr);
-            header
-                .append(RcDoc::text(" {"))
-                .append(RcDoc::hardline().append(body).nest(INDENT))
-                .append(RcDoc::hardline())
-                .append(RcDoc::text("}"))
-        }
-    }
-}
-
-fn format_fn_params(params: &[FnParam]) -> RcDoc<'static> {
-    if params.is_empty() {
-        return RcDoc::text("()");
-    }
-    let param_docs: Vec<RcDoc<'static>> = params
-        .iter()
-        .map(|p| {
-            RcDoc::text(p.name.name.clone())
-                .append(RcDoc::text(": "))
-                .append(format_type_expr_inline(&p.type_ann))
-        })
-        .collect();
-
-    let sep = RcDoc::text(",").append(RcDoc::line());
-    let inner = RcDoc::intersperse(param_docs, sep);
-
-    RcDoc::text("(")
-        .append(inner.nest(INDENT).group())
-        .append(RcDoc::text(")"))
-}
-
 fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
     let param_docs: Vec<RcDoc<'static>> = params
         .iter()
@@ -436,6 +381,11 @@ fn format_import_or_include_path(
             }
             RcDoc::text(format!("{keyword} {path_str}"))
         }
+        graphcal_compiler::syntax::ast::ImportPath::CrossFileDag {
+            file_path,
+            dag_name,
+            ..
+        } => RcDoc::text(format!("{keyword} \"{file_path}\"/{}", dag_name.name)),
     }
 }
 

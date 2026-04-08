@@ -274,66 +274,24 @@ node doubled: Dimensionless[3] = for i: range(3) { @v[i] * 2.0 };
 
 The loop variable `i` has type `Int` and can be used to index into nat-range-indexed values.
 
-### Generic Functions with Nat Parameters
+### Nat Parameters in DAG Blocks
 
-Functions can be generic over nat range sizes with `N: Nat`:
-
-```
-fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
-    for j: range(N), i: range(M) { a[i, j] };
-
-fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
-    sum(for i: range(N) { a[i] * b[i] });
-```
-
-When calling a generic function, `Nat` parameters are inferred from the argument shapes. Two nat ranges are equal if and only if their sizes are equal — `range(3)` and `range(4)` are different indexes.
+DAG blocks can work with nat range indexed values. Two nat ranges are equal if and only if their sizes are equal -- `range(3)` and `range(4)` are different indexes.
 
 ### Nat Arithmetic (Addition)
 
-`Nat` expressions support addition, enabling functions that relate input and output sizes:
+`Nat` expressions support addition, enabling size relationships:
 
 ```
-// drop_last: takes a vector of size N + 1, returns a vector of size N
-fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
-    for i: range(N) { v[i] };
-
 param v4: Dimensionless[4] = for i: range(4) { 1.0 };
-node v3: Dimensionless[3] = drop_last(@v4);
-// The compiler solves N + 1 = 4 to deduce N = 3
+node v3: Dimensionless[3] = for i: range(3) { @v4[i] };
 ```
 
-Addition works in both type position (`D[N + 1]`) and for-range bindings (`range(N + 1)`):
-
-```
-fn pad_zero<N: Nat>(v: Dimensionless[N]) -> Dimensionless[N + 1] =
-    for i: range(N + 1) { if i < N { v[i] } else { 0.0 } };
-```
-
-`Nat` expressions are normalized to a canonical form and compared structurally. Subtraction is not supported — instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+`Nat` expressions are normalized to a canonical form and compared structurally. Subtraction is not supported -- instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
 
 ### Nat Arithmetic (Multiplication)
 
-`Nat` expressions also support multiplication, enabling functions that relate sizes through products — useful for reshape, flatten, and Kronecker product patterns:
-
-```
-// Flatten a matrix into a vector
-fn flatten<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[M * N] =
-    for k: range(M * N) { a[k / N, k % N] };
-
-param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
-node flat: Dimensionless[6] = flatten(@mat);
-// The compiler solves M = 2, N = 3 from the argument, then M * N = 6
-```
-
-Multiplication binds tighter than addition, so `M + N * P` is parsed as `M + (N * P)`. Mixed expressions are normalized to canonical polynomial form:
-
-```
-// Flatten and pad with a trailing zero
-fn flatten_and_pad<M: Nat, N: Nat>(a: Dimensionless[M, N]) -> Dimensionless[M * N + 1] =
-    for k: range(M * N + 1) {
-        if k < M * N { a[k / N, k % N] } else { 0.0 }
-    };
-```
+`Nat` expressions also support multiplication. Multiplication binds tighter than addition, so `M + N * P` is parsed as `M + (N * P)`. Mixed expressions are normalized to canonical polynomial form.
 
 ### Expression-Based Indexing
 
@@ -341,26 +299,16 @@ Index arguments can be arbitrary integer expressions, not just loop variables. T
 
 ```
 // Finite differences: values[i + 1] - values[i]
-fn diff<N: Nat, D: Dim>(values: D[N + 1], dt: Time) -> (D / Time)[N] =
-    for i: range(N) { (values[i + 1] - values[i]) / dt };
+param values: Velocity[4] = for i: range(4) { 1.0 m/s };
+node diffs: Velocity[3] = for i: range(3) { @values[i + 1] - @values[i] };
 ```
 
-The compiler statically verifies bounds when possible. In the example above, `i` has type `Fin(N)` (values in `[0, N)`), so `i + 1` is guaranteed to be less than `N + 1` — matching the size of `values`.
+The compiler statically verifies bounds when possible.
 
 Expression-based indexing supports:
 
-- **Addition with literals**: `v[i + 1]`, `v[i + 2]` — bounds are checked at compile time
-- **Arbitrary integer expressions**: `v[some_expr]` — evaluated at runtime
-
-```
-// Shift left by k positions
-fn shift_left<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
-    for i: range(N) { v[i + 1] };
-
-// Shift left by 2 positions
-fn shift_left_by2<N: Nat, D: Dim>(v: D[N + 2]) -> D[N] =
-    for i: range(N) { v[i + 2] };
-```
+- **Addition with literals**: `v[i + 1]`, `v[i + 2]` -- bounds are checked at compile time
+- **Arbitrary integer expressions**: `v[some_expr]` -- evaluated at runtime
 
 ### Composing Nat Ranges with Named Indexes
 
@@ -418,14 +366,12 @@ node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| {
 
 This is useful for time-stepping simulations and discrete dynamic systems.
 
-## Index Generics
+## Aggregation Over Any Index
 
-Functions can be generic over indexes:
+Use aggregation functions directly on indexed values:
 
 ```
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-
-node total_dv: Velocity = total(@delta_v);
+node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 ```
 
-`<I: Index>` declares an index type parameter, allowing the function to work with any index.
+Built-in aggregation functions (`sum`, `min`, `max`, `mean`, `count`) work with any index type.

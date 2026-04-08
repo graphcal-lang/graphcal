@@ -137,78 +137,6 @@ fn check_power_with_literal() {
     check(source).unwrap();
 }
 
-// --- User-defined function tests ---
-
-#[test]
-fn check_non_generic_fn_call() {
-    let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam y: Length = 2.0 m;\nnode z: Length = add_lengths(@x, @y);";
-    check(source).unwrap();
-}
-
-#[test]
-fn check_non_generic_fn_dim_mismatch() {
-    let source = "fn add_lengths(a: Length, b: Length) -> Length = a + b;\nparam x: Length = 1.0 m;\nparam t: Time = 1.0 s;\nnode z: Length = add_lengths(@x, @t);";
-    let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
-}
-
-#[test]
-fn check_non_generic_fn_return_type() {
-    // Function returns Velocity but we annotate as Length
-    let source = "fn speed(d: Length, t: Time) -> Velocity = d / t;\nparam d: Length = 10.0 m;\nparam t: Time = 2.0 s;\nnode v: Length = speed(@d, @t);";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
-        "got: {err:?}"
-    );
-}
-
-#[test]
-fn check_generic_fn_call() {
-    let source = "fn double<D: Dim>(x: D) -> D = x + x;\nparam alt: Length = 100.0 km;\nnode doubled: Length = double(@alt);";
-    check(source).unwrap();
-}
-
-#[test]
-fn check_generic_fn_multi_param() {
-    let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100.0 km;\nparam y: Length = 200.0 km;\nnode mid: Length = lerp(@x, @y, 0.5);";
-    check(source).unwrap();
-}
-
-#[test]
-fn check_generic_fn_consistency_error() {
-    // a: D binds D=Length, b: D expects Length but gets Time
-    let source = "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;\nparam x: Length = 100.0 km;\nparam t: Time = 1.0 s;\nnode bad: Length = lerp(@x, @t, 0.5);";
-    let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
-}
-
-#[test]
-fn check_generic_fn_infers_return_type() {
-    // Return type D should be inferred as Velocity
-    let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Velocity = identity(@v);";
-    check(source).unwrap();
-}
-
-#[test]
-fn check_generic_fn_wrong_annotation() {
-    // identity returns Velocity (D=Velocity) but annotation says Length
-    let source = "fn identity<D: Dim>(x: D) -> D = x;\nparam v: Velocity = 10.0 m / s;\nnode w: Length = identity(@v);";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
-        "got: {err:?}"
-    );
-}
-
-#[test]
-fn check_fn_wrong_arity() {
-    let source =
-        "fn f(a: Length) -> Length = a;\nparam x: Length = 1.0 m;\nnode y: Length = f(@x, @x);";
-    let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::WrongArity { .. }));
-}
-
 #[test]
 fn check_fn_unknown_function() {
     let source = "param x: Length = 1.0 m;\nnode y: Length = no_such_fn(@x);";
@@ -406,39 +334,6 @@ fn check_unknown_index_in_type_annotation() {
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::UnknownIndex { .. }),
-        "got: {err:?}"
-    );
-}
-
-#[test]
-fn check_generic_index_fn() {
-    // fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-    let source = "\
-index Maneuver = { Departure, Correction, Insertion };
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
-};
-node total_dv: Velocity = total(@dv);";
-    check(source).unwrap();
-}
-
-#[test]
-fn check_generic_index_fn_wrong_return() {
-    let source = "\
-index Maneuver = { Departure, Correction, Insertion };
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
-};
-node bad: Length = total(@dv);";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
         "got: {err:?}"
     );
 }
@@ -906,20 +801,6 @@ node bad: Dimensionless = sum(1.0 foobar);";
     );
 }
 
-// --- Error propagation through generic fn args ---
-
-#[test]
-fn check_generic_fn_error_in_arg() {
-    let source = "\
-fn identity<D: Dim>(x: D) -> D = x;
-node bad: Dimensionless = identity(1.0 foobar);";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
-        "got: {err:?}"
-    );
-}
-
 // --- Error propagation through scan source/init ---
 
 #[test]
@@ -1035,15 +916,5 @@ fn fin_arithmetic_with_int() {
     // to_float(i) -> Dimensionless (via Int coercion)
     let source = "\
 node v: Dimensionless[3] = for i: range(3) { to_float(i) };";
-    check(source).unwrap();
-}
-
-#[test]
-fn fin_generic_drop_last() {
-    // Generic fn where Fin(N) indexes into D[N+1] — N <= N+1 — safe
-    let source = "\
-fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] = for i: range(N) { v[i] };
-param v4: Dimensionless[4] = for i: range(4) { 1.0 };
-node v3: Dimensionless[3] = drop_last(@v4);";
     check(source).unwrap();
 }

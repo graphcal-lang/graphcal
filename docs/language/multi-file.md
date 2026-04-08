@@ -4,7 +4,12 @@ icon: material/file-multiple
 
 # Multi-File Projects
 
-Graphcal supports splitting projects across multiple files using `import` declarations. Import paths can be either **file paths** (quoted strings) or **module paths** (bare identifiers). There are two import styles: **selective imports** and **module imports**.
+Graphcal supports splitting projects across multiple files using `import` and `include` declarations. Import paths can be either **file paths** (quoted strings) or **module paths** (bare identifiers).
+
+- **`import`** brings compile-time definitions into scope: `const`, `type`, `dimension`, `unit`, `index`, `dag`
+- **`include`** instantiates a DAG (inline or from a file) into the current computation graph
+
+There are two import styles: **selective imports** and **module imports**.
 
 ## Selective Imports
 
@@ -16,7 +21,7 @@ import "./path/to/file.gcl" { name1, name2 };
 
 - The path is a **string literal** relative to the importing file
 - Braces list the specific names to import
-- All top-level declarations can be imported: `param`, `node`, `const node`, `dimension`, `unit`, `type`, `index`, `fn`
+- All compile-time declarations can be imported: `const node`, `dimension`, `unit`, `type`, `index`, `dag`
 
 ## Module Imports
 
@@ -38,7 +43,6 @@ import "./lib.gcl";
 
 node g: Acceleration = constants::G0;           // qualified const node
 node total: Mass = @params::dry_mass;           // qualified graph ref
-node y: Dimensionless = lib::double(@x);        // qualified fn call
 ```
 
 Module imports only resolve declarations that are actually referenced via `::` in the importing file. Unreferenced declarations are not imported.
@@ -114,7 +118,7 @@ File paths and module paths can be used in the same project:
 
 ```
 import nasa/constants { G0 };
-import "./local_helpers.gcl" { my_fn };
+import "./local_helpers.gcl" { HelperType };
 ```
 
 ### Project layout example
@@ -146,29 +150,38 @@ node diff: Velocity = @velocity_a - @velocity_b;
 
 ### Selective imports
 
+`import` is restricted to compile-time items:
+
 | Declaration | How to Import | How to Reference |
 |-------------|--------------|-----------------|
-| `param` | `import "..." { name }` | `@name` |
-| `node` | `import "..." { name }` | `@name` |
 | `const node` | `import "..." { NAME }` | `NAME` |
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
 | `index` | `import "..." { IndexName }` | `IndexName` |
-| `fn` | `import "..." { fn_name }` | `fn_name(...)` |
+| `dag` | `import "..." { dag_name }` | Used with `include dag_name(...)` |
 
-Imported `param` and `node` declarations are referenced with `@` just like local ones.
+Runtime values (`param`, `node`) are not imported directly. To use values from another file's DAG, use `include` with a DAG path (see [Cross-File DAG Inclusion](#cross-file-dag-inclusion)).
 
 ### Module imports
 
 | Declaration | How to Reference |
 |-------------|-----------------|
-| `param` | `@module::name` |
-| `node` | `@module::name` |
 | `const node` | `module::NAME` |
-| `fn` | `module::fn_name(...)` |
 
 Dimension, unit, type, and index declarations cannot currently be referenced via module-qualified syntax. To use types or dimensions from another file, use selective imports.
+
+### Cross-File DAG Inclusion
+
+To instantiate a DAG from another file, use `include` with a DAG path:
+
+```
+include "./lib/orbital.gcl"/hohmann_transfer(gm: GM_EARTH, r1: @r1, r2: @r2) {
+    total_dv,
+}
+```
+
+The syntax is `include "path"/dag_name(param: value, ...) { output as alias, ... }`.
 
 ## When to Use Each Style
 
@@ -375,13 +388,13 @@ project/
 
 ### Library / Application
 
-For reusable functions:
+For reusable DAG blocks:
 
 ```
 project/
   lib/
-    orbital.gcl   -- reusable orbital mechanics functions
-    thermal.gcl   -- thermal analysis functions
+    orbital.gcl   -- reusable orbital mechanics DAG blocks
+    thermal.gcl   -- thermal analysis DAG blocks
   main.gcl        -- application-specific graph
 ```
 

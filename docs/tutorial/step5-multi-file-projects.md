@@ -75,7 +75,7 @@ import "./path/to/file.gcl" { name1, name2 };
 ```
 
 - The path is **relative** to the file containing the `import` declaration
-- The braces list the names to import (constants, params, nodes, types, dimensions, units, indexes, functions)
+- The braces list the names to import (constants, types, dimensions, units, indexes, DAG blocks)
 - Imported params and nodes are referenced with `@` just like local ones
 
 ## Import Aliasing
@@ -93,14 +93,12 @@ You can import any top-level declaration:
 
 | Declaration | Import | Reference |
 |-------------|--------|-----------|
-| `param` | `import "..." { name }` | `@name` |
-| `node` | `import "..." { name }` | `@name` |
 | `const node` | `import "..." { NAME }` | `NAME` |
 | `dimension` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
 | `index` | `import "..." { IndexName }` | `IndexName` |
-| `fn` | `import "..." { fn_name }` | `fn_name(...)` |
+| `dag` | `import "..." { dag_name }` | Used with `include dag_name(...)` |
 
 ## Circular Import Detection
 

@@ -44,16 +44,20 @@ param mass_2d: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
     Arrival:    0.0 kg,     0.0 kg, 4000.0 kg; // arrival phase
 };
 
-// Block body with comments before let bindings
-fn compute(v: Velocity) -> Velocity {
-    // compute first intermediate
-    let a = v * 2.0;
-    // compute second intermediate
-    let b = a + 1.0 m/s;
-    // return result
-    b
+// DAG with comments (replaces block-body function)
+dag compute {
+param v: Velocity;
+    
+    node a: Velocity = @v * // compute first intermediate
+    2.0;
+    
+    node b: Velocity = @a + // compute second intermediate
+    1.0 m/s;
+    
+    node result: Velocity = @b;
 }
 
+// final result
 // Variant-specific scaling extracted to param (variant literals not allowed in nodes)
 param scale: Dimensionless[Maneuver] = {
     // main engine burn

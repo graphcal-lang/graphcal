@@ -10,9 +10,9 @@ import "./shared/constants.gcl" { G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON, GravPa
 
 import "./shared/indexes.gcl" { MissionPhase, Subsystem };
 
-import "./subsystems/propulsion.gcl" { isp, dry_mass, fuel_mass, v_exhaust, total_mass, mass_ratio, total_delta_v };
+include "./subsystems/propulsion.gcl" { isp, dry_mass, fuel_mass, v_exhaust, total_mass, mass_ratio, total_delta_v };
 
-import "./subsystems/power.gcl" { solar_array_power, battery_capacity_wh, power_margin };
+include "./subsystems/power.gcl" { solar_array_power, battery_capacity_wh, power_margin };
 
 // --- Delta-V budget per mission phase ---
 param dv_budget: Velocity[MissionPhase] = table[MissionPhase] {

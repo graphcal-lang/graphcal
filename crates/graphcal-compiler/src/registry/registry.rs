@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::syntax::ast::{
-    DimExpr, Expr, FnBody, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+    DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
 use crate::syntax::names::{
-    DimName, FieldName, FnName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
+    DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
 };
-use crate::syntax::span::Span;
-
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -166,42 +164,6 @@ impl TypeDef {
     pub const fn is_unit(&self) -> bool {
         matches!(self.kind, TypeDefKind::Unit)
     }
-}
-
-/// A user-defined function parameter.
-#[derive(Debug, Clone)]
-pub struct FnParamDef {
-    pub name: String,
-    pub type_expr: TypeExpr,
-}
-
-/// A generic parameter on a user-defined function, with its constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FnGenericConstraint {
-    /// `D: Dim` — the generic stands for a dimension.
-    Dim,
-    /// `I: Index` — the generic stands for an index.
-    Index,
-    /// `N: Nat` — the generic stands for a natural number (type-level).
-    Nat,
-}
-
-/// A generic parameter with name and constraint.
-#[derive(Debug, Clone)]
-pub struct FnGenericParam {
-    pub name: GenericParamName,
-    pub constraint: FnGenericConstraint,
-}
-
-/// A user-defined function stored in the registry.
-#[derive(Debug, Clone)]
-pub struct FnDef {
-    pub name: FnName,
-    pub generic_params: Vec<FnGenericParam>,
-    pub params: Vec<FnParamDef>,
-    pub return_type_expr: TypeExpr,
-    pub body: FnBody,
-    pub span: Span,
 }
 
 /// The kind of an index: either named variants or a numeric range.
@@ -591,25 +553,6 @@ impl TypeRegistry {
     }
 }
 
-/// Function registry: maps function names to `FnDef`.
-#[derive(Debug)]
-pub struct FunctionRegistry {
-    functions: HashMap<FnName, FnDef>,
-}
-
-impl FunctionRegistry {
-    /// Look up a user-defined function by name.
-    #[must_use]
-    pub fn get_function(&self, name: &str) -> Option<&FnDef> {
-        self.functions.get(name)
-    }
-
-    /// Iterate over all user-defined functions.
-    pub fn all_functions(&self) -> impl Iterator<Item = &FnDef> {
-        self.functions.values()
-    }
-}
-
 /// Index registry: maps index names to `IndexDef`.
 #[derive(Debug)]
 pub struct IndexRegistry {
@@ -642,7 +585,6 @@ pub struct Registry {
     pub dimensions: DimensionRegistry,
     pub units: UnitRegistry,
     pub types: TypeRegistry,
-    pub functions: FunctionRegistry,
     pub indexes: IndexRegistry,
 }
 
@@ -663,7 +605,6 @@ pub struct RegistryBuilder {
     units: HashMap<UnitName, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
     type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
-    functions: HashMap<FnName, FnDef>,
     indexes: HashMap<IndexName, IndexDef>,
 }
 
@@ -686,9 +627,6 @@ impl RegistryBuilder {
             types: TypeRegistry {
                 types: self.types,
                 type_to_unions: self.type_to_unions,
-            },
-            functions: FunctionRegistry {
-                functions: self.functions,
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
@@ -769,11 +707,6 @@ impl RegistryBuilder {
             }
         }
         self.types.insert(def.name.clone(), def);
-    }
-
-    /// Register a user-defined function.
-    pub fn register_function(&mut self, def: FnDef) {
-        self.functions.insert(def.name.clone(), def);
     }
 
     /// Register an index definition.

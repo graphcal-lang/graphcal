@@ -186,13 +186,6 @@ fn error_recursive_fn() {
 }
 
 #[test]
-fn error_fn_generic_dim_mismatch() {
-    let source = include_str!("../../../tests/fixtures/errors/fn_generic_dim_mismatch.gcl");
-    let rendered = render_error(source, "fn_generic_dim_mismatch.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn error_unknown_dimension() {
     let source = include_str!("../../../tests/fixtures/errors/unknown_dimension.gcl");
     let rendered = render_error(source, "unknown_dimension.gcl");

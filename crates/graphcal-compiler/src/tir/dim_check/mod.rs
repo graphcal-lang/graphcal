@@ -5,7 +5,7 @@ use miette::NamedSource;
 
 use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{FnName, IndexName, StructTypeName};
+use crate::syntax::names::{IndexName, StructTypeName};
 
 use crate::registry::time_scale::TimeScale;
 use crate::tir::tir::NatLinearForm;
@@ -13,7 +13,6 @@ use crate::tir::tir::NatLinearForm;
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
-use crate::tir::tir::ResolvedFnSig;
 
 pub(crate) use helpers::format_inferred_type;
 use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
@@ -112,7 +111,6 @@ pub fn check_dimensions_tir(
             &empty_locals,
             &tir.registry,
             builtin_fns,
-            &tir.resolved_fn_sigs,
             src,
         )?;
 
@@ -137,7 +135,6 @@ pub fn check_dimensions_tir(
             &empty_locals,
             &tir.registry,
             builtin_fns,
-            &tir.resolved_fn_sigs,
             src,
         )?;
 
@@ -165,7 +162,6 @@ pub fn check_dimensions_tir(
             &empty_locals,
             &tir.registry,
             builtin_fns,
-            &tir.resolved_fn_sigs,
             src,
         )?;
 
@@ -191,7 +187,6 @@ pub fn check_dimensions_tir(
                     &empty_locals,
                     &tir.registry,
                     builtin_fns,
-                    &tir.resolved_fn_sigs,
                     src,
                 )?;
                 let is_bool = is_bool_type(&inferred);
@@ -215,7 +210,6 @@ pub fn check_dimensions_tir(
                     &empty_locals,
                     &tir.registry,
                     builtin_fns,
-                    &tir.resolved_fn_sigs,
                     src,
                 )?;
                 let expected_type = infer_type(
@@ -224,7 +218,6 @@ pub fn check_dimensions_tir(
                     &empty_locals,
                     &tir.registry,
                     builtin_fns,
-                    &tir.resolved_fn_sigs,
                     src,
                 )?;
                 let tolerance_type = infer_type(
@@ -233,7 +226,6 @@ pub fn check_dimensions_tir(
                     &empty_locals,
                     &tir.registry,
                     builtin_fns,
-                    &tir.resolved_fn_sigs,
                     src,
                 )?;
 
@@ -304,7 +296,6 @@ pub fn check_override_dimension(
     param_name: &str,
     declared_types: &HashMap<String, DeclaredType>,
     registry: &Registry,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
@@ -317,7 +308,6 @@ pub fn check_override_dimension(
         &empty_locals,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
 

@@ -13,8 +13,8 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use crate::syntax::ast::{
-    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, FnDecl, IndexDeclKind, LayerDecl,
-    PlotDecl, TypeExpr,
+    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
+    TypeExpr,
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{DeclName, DimName, FnName};
@@ -22,7 +22,7 @@ use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 use crate::ir::resolve::{
-    DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
+    DeclCategory, ExpectedFail, ImportedValueNames, resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
@@ -97,14 +97,6 @@ pub struct LayerEntry {
     pub span: Span,
 }
 
-/// A function declaration.
-#[derive(Debug, Clone)]
-pub struct FunctionEntry {
-    pub name: ScopedName,
-    pub decl: FnDecl,
-    pub span: Span,
-}
-
 /// Intermediate Representation produced by [`lower`].
 ///
 /// Contains everything downstream stages need:
@@ -112,7 +104,6 @@ pub struct FunctionEntry {
 /// - Declarations (consts, params, nodes) with their expressions
 /// - Dependency graphs for const and runtime evaluation ordering
 /// - Source-order tracking for deterministic output
-/// - User-defined function declarations
 #[derive(Debug)]
 pub struct IR {
     /// The type/unit/dimension/index/struct/function registry.
@@ -137,8 +128,6 @@ pub struct IR {
     pub const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// User-defined function declarations.
-    pub functions: Vec<FunctionEntry>,
     /// Set of all assert names.
     pub assert_names: HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
@@ -232,10 +221,7 @@ pub(crate) fn lower_to_builder(
         &resolved.nodes,
     );
 
-    // Step 3: Register user-defined functions
-    register_functions(&resolved, &mut builder, src)?;
-
-    // Step 4: Extract type annotations from the AST and pair with resolved declarations.
+    // Step 3: Extract type annotations from the AST and pair with resolved declarations.
     let mut type_anns = extract_type_annotations(ast);
     // Also extract type annotations from imported declarations.
     for (name, type_ann, _, _) in &imported.consts {
@@ -357,15 +343,6 @@ pub(crate) fn lower_to_builder(
             .into_iter()
             .map(|(name, cat)| (ScopedName::local(name), cat))
             .collect(),
-        functions: resolved
-            .functions
-            .into_iter()
-            .map(|entry| FunctionEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-            })
-            .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -434,10 +411,7 @@ pub fn lower_to_builder_with_imported_values(
         &resolved.nodes,
     );
 
-    // Step 3: Register user-defined functions (including imported functions)
-    register_functions(&resolved, &mut builder, src)?;
-
-    // Step 4: Extract type annotations from local declarations only.
+    // Step 3: Extract type annotations from local declarations only.
     let mut type_anns = extract_type_annotations(ast);
 
     let consts = resolved
@@ -549,15 +523,6 @@ pub fn lower_to_builder_with_imported_values(
             .into_iter()
             .map(|(name, cat)| (ScopedName::local(name), cat))
             .collect(),
-        functions: resolved
-            .functions
-            .into_iter()
-            .map(|entry| FunctionEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-            })
-            .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -597,8 +562,6 @@ pub struct UnfrozenIR {
     const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// User-defined function declarations.
-    pub functions: Vec<FunctionEntry>,
     assert_names: HashSet<ScopedName>,
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     expected_fail: HashMap<ScopedName, ExpectedFail>,
@@ -621,7 +584,6 @@ impl UnfrozenIR {
             runtime_deps: self.runtime_deps,
             const_deps: self.const_deps,
             source_order: self.source_order,
-            functions: self.functions,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
@@ -894,34 +856,6 @@ impl UnfrozenIR {
                 span: entry.span,
             });
             self.source_order.push((prefixed, DeclCategory::Layer));
-        }
-
-        // Merge functions
-        for mut entry in dep.functions {
-            match &mut entry.decl.body {
-                crate::syntax::ast::FnBody::Short(e) => {
-                    substitute_index_names(e, index_bindings);
-                    prefix_expr_refs(e, prefix, dep_names);
-                }
-                crate::syntax::ast::FnBody::Block { stmts, expr } => {
-                    for stmt in stmts {
-                        substitute_index_names(&mut stmt.value, index_bindings);
-                        prefix_expr_refs(&mut stmt.value, prefix, dep_names);
-                    }
-                    substitute_index_names(expr, index_bindings);
-                    prefix_expr_refs(expr, prefix, dep_names);
-                }
-            }
-            for param in &mut entry.decl.params {
-                substitute_type_expr_index_names(&mut param.type_ann, index_bindings);
-            }
-            substitute_type_expr_index_names(&mut entry.decl.return_type, index_bindings);
-            let prefixed = entry.name.with_prefix(prefix);
-            self.functions.push(FunctionEntry {
-                name: prefixed,
-                decl: entry.decl,
-                span: entry.span,
-            });
         }
 
         // Merge assumes_map and expected_fail
@@ -1200,7 +1134,6 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
                     ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
                     ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
                     ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
-                    ExprKind::QualifiedFnCall { .. } => self.visit_qualified_fn_call_mut(expr),
 
                     ExprKind::BinOp { lhs, rhs, .. } => {
                         self.visit_expr_mut(lhs)?;
@@ -1516,23 +1449,6 @@ fn register_declarations_impl(
             DeclKind::ConstNode(d) => {
                 collect_nat_ranges_from_type_expr(&d.type_ann, registry);
                 collect_nat_ranges_from_expr(&d.value, registry);
-            }
-            DeclKind::Fn(d) => {
-                for p in &d.params {
-                    collect_nat_ranges_from_type_expr(&p.type_ann, registry);
-                }
-                collect_nat_ranges_from_type_expr(&d.return_type, registry);
-                match &d.body {
-                    crate::syntax::ast::FnBody::Short(expr) => {
-                        collect_nat_ranges_from_expr(expr, registry);
-                    }
-                    crate::syntax::ast::FnBody::Block { stmts, expr } => {
-                        for stmt in stmts {
-                            collect_nat_ranges_from_expr(&stmt.value, registry);
-                        }
-                        collect_nat_ranges_from_expr(expr, registry);
-                    }
-                }
             }
             _ => {}
         }
@@ -2274,64 +2190,6 @@ fn lower_range_index(
     })
 }
 
-/// Register user-defined functions from a [`ResolvedFile`] into the registry builder.
-fn register_functions(
-    resolved: &ResolvedFile,
-    registry: &mut RegistryBuilder,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    for entry in &resolved.functions {
-        registry.register_function(registry::FnDef {
-            name: FnName::new(&entry.name),
-            generic_params: entry
-                .decl
-                .generic_params
-                .iter()
-                .map(|g| {
-                    let constraint = match g.constraint {
-                        crate::syntax::ast::GenericConstraint::Dim => {
-                            registry::FnGenericConstraint::Dim
-                        }
-                        crate::syntax::ast::GenericConstraint::Index => {
-                            registry::FnGenericConstraint::Index
-                        }
-                        crate::syntax::ast::GenericConstraint::Nat => {
-                            registry::FnGenericConstraint::Nat
-                        }
-                        crate::syntax::ast::GenericConstraint::Type => {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "internal: `Type` constraint is not valid on function generic parameter `{}`",
-                                    g.name.value
-                                ),
-                                src: src.clone(),
-                                span: g.name.span.into(),
-                            });
-                        }
-                    };
-                    Ok(registry::FnGenericParam {
-                        name: g.name.value.clone(),
-                        constraint,
-                    })
-                })
-                .collect::<Result<Vec<_>, GraphcalError>>()?,
-            params: entry
-                .decl
-                .params
-                .iter()
-                .map(|p| registry::FnParamDef {
-                    name: p.name.name.clone(),
-                    type_expr: p.type_ann.clone(),
-                })
-                .collect(),
-            return_type_expr: entry.decl.return_type.clone(),
-            body: entry.decl.body.clone(),
-            span: entry.span,
-        });
-    }
-    Ok(())
-}
-
 /// Extract a map of type annotations from const/param/node declarations.
 fn extract_type_annotations(ast: &File) -> HashMap<String, TypeExpr> {
     let mut type_anns = HashMap::new();
@@ -2391,20 +2249,6 @@ mod tests {
         assert_eq!(ir.consts.len(), 4);
         assert_eq!(ir.params.len(), 1);
         assert_eq!(ir.nodes.len(), 2);
-    }
-
-    #[test]
-    fn lower_functions() {
-        let source = include_str!("../../../../tests/fixtures/functions.gcl");
-        let ir = parse_and_lower(source).unwrap();
-        assert!(!ir.functions.is_empty());
-        // Functions should be registered in the registry
-        assert!(
-            ir.registry
-                .functions
-                .get_function("orbital_velocity")
-                .is_some()
-        );
     }
 
     #[test]

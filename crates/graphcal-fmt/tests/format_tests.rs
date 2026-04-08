@@ -83,7 +83,6 @@ idempotency_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 idempotency_test!(idempotent_required_indexes, "required_indexes.gcl");
-idempotency_test!(idempotent_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -158,7 +157,6 @@ roundtrip_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 roundtrip_test!(roundtrip_required_indexes, "required_indexes.gcl");
-roundtrip_test!(roundtrip_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -510,7 +508,6 @@ snapshot_test!(
     "comments_in_expressions.gcl"
 );
 snapshot_test!(snapshot_required_indexes, "required_indexes.gcl");
-snapshot_test!(snapshot_expr_index, "expr_index.gcl");
 
 // ---------------------------------------------------------------------------
 // Fixture: comments_in_expressions.gcl
@@ -615,6 +612,28 @@ snapshot_test!(
 snapshot_test!(
     snapshot_multi_module_import_fn_lib,
     "multi/module_import_fn/lib.gcl"
+);
+
+// cross_file_dag: cross-file DAG paths
+idempotency_test!(
+    idempotent_multi_cross_file_dag_main,
+    "multi/cross_file_dag/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_cross_file_dag_lib,
+    "multi/cross_file_dag/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_cross_file_dag_main,
+    "multi/cross_file_dag/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_cross_file_dag_main,
+    "multi/cross_file_dag/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_cross_file_dag_lib,
+    "multi/cross_file_dag/lib.gcl"
 );
 
 // module_import_graph_ref: qualified @-references
@@ -992,14 +1011,14 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 #[test]
 fn preserves_comment_in_block_let() {
     let source = r"
-fn f(x: Dimensionless) -> Dimensionless {
+node result: Dimensionless = {
     // before a
-    let a = x * 2.0;
+    let a = 2.0;
     // before b
     let b = a + 1.0;
     // before result
     b
-}
+};
 ";
     let formatted = format_source(source).unwrap();
     assert!(

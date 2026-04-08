@@ -96,21 +96,26 @@ fn eval_functions_text_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
-    // Output: consts (R_EARTH, GM_EARTH), params (parking_alt, target_alt),
-    // nodes (v_parking, transfer.{dv1,dv2,total_dv}, midpoint_alt, v_check)
-    // Functions produce no output rows.
-    assert_eq!(lines.len(), 10, "lines: {lines:?}");
+    // Output: consts, params, DAG internal nodes (prefixed), and aliased nodes.
+    // DAG includes produce prefixed internal nodes (e.g., orbital_velocity::gm).
+    assert_eq!(lines.len(), 26, "lines: {lines:?}");
     assert!(lines[0].contains("R_EARTH"));
     assert!(lines[1].contains("GM_EARTH"));
     assert!(lines[2].contains("parking_alt"));
     assert!(lines[3].contains("target_alt"));
-    assert!(lines[4].contains("v_parking"));
+    assert!(lines[4].contains("midpoint_alt"));
+    assert!(lines[5].contains("v_check"));
+    // orbital_velocity include (first)
+    assert!(lines[6].contains("orbital_velocity::gm"));
+    assert!(lines[9].contains("v_parking"));
+    // hohmann_dv include
+    assert!(lines[10].contains("hohmann_dv::gm"));
     // transfer struct expands to 3 field lines
-    assert!(lines[5].contains("transfer.dv1"));
-    assert!(lines[6].contains("transfer.dv2"));
-    assert!(lines[7].contains("transfer.total_dv"));
-    assert!(lines[8].contains("midpoint_alt"));
-    assert!(lines[9].contains("v_check"));
+    assert!(lines.iter().any(|l| l.contains("transfer.dv1")));
+    assert!(lines.iter().any(|l| l.contains("transfer.dv2")));
+    assert!(lines.iter().any(|l| l.contains("transfer.total_dv")));
+    // ov2 namespace include
+    assert!(lines.iter().any(|l| l.contains("ov2::v")));
 }
 
 #[test]

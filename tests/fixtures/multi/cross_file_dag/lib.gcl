@@ -1,0 +1,12 @@
+// lib.gcl -- defines a reusable DAG
+dimension Velocity = Length / Time;
+
+const node SPEED_OF_SOUND: Velocity = 343.0 m/s;
+
+dag double_speed {
+    import .. { SPEED_OF_SOUND };
+
+    param v: Velocity;
+    node result: Velocity = @v * 2.0;
+    node mach: Dimensionless = @v / SPEED_OF_SOUND;
+}

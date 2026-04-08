@@ -1,3 +1,4 @@
-import "./lib.gcl" { value, always_fails };
+include "./lib.gcl" { value };
+import "./lib.gcl" { always_fails };
 
 node result: Dimensionless = @value + 1.0;

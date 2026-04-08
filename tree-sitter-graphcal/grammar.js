@@ -46,7 +46,7 @@ module.exports = grammar({
       $.dimension_declaration,
       $.unit_declaration,
       $.type_declaration,
-      $.fn_declaration,
+
       $.index_declaration,
       $.import_declaration,
       $.include_declaration,
@@ -243,28 +243,6 @@ module.exports = grammar({
 
     variant: $ => $.identifier,
 
-    // fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
-    // fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult { ... }
-    fn_declaration: $ => seq(
-      "fn",
-      field("name", $.identifier),
-      optional(field("generics", $.generic_params)),
-      "(",
-      optional(seq(
-        $.fn_param,
-        repeat(seq(",", $.fn_param)),
-        optional(","),
-      )),
-      ")",
-      "->",
-      field("return_type", $.type_expr),
-      choice(
-        // Short form: = expr;
-        seq("=", field("body", $._expr), ";"),
-        // Block form: { let ...; expr }
-        field("body", $.block_expr),
-      ),
-    ),
 
     generic_params: $ => seq(
       "<",
@@ -283,11 +261,6 @@ module.exports = grammar({
 
     generic_constraint: $ => choice("Dim", "Index", "Nat", "Type"),
 
-    fn_param: $ => seq(
-      field("name", $.identifier),
-      ":",
-      field("type", $.type_expr),
-    ),
 
     // import "./path.gcl" { name1, name2 as alias2 };  -- selective import
     // import "./path.gcl";                               -- module import (name from filename)

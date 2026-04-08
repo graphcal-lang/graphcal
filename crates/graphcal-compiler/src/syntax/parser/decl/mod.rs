@@ -23,7 +23,7 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        let expected = "`param`, `node`, `const node`, `base dimension`, `dimension`, `unit`, `type`, `fn`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
+        let expected = "`param`, `node`, `const node`, `base dimension`, `dimension`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
             Some(Token::Node) => self.parse_node(),
@@ -61,7 +61,7 @@ impl Parser<'_> {
             Some(Token::Dimension) => self.parse_dimension_decl(),
             Some(Token::Unit) => self.parse_unit_decl(),
             Some(Token::Type) => self.parse_type_decl(),
-            Some(Token::Fn) => self.parse_fn_decl(),
+            Some(Token::Fn) => return self.parse_fn_error(),
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Import) => self.parse_import_decl(),
             Some(Token::Include) => self.parse_include_decl(),

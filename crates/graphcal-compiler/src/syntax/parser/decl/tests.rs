@@ -297,7 +297,6 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Dimension(d) => d.name.value.as_str(),
             DeclKind::Unit(u) => u.name.value.as_str(),
             DeclKind::Type(t) => t.name.value.as_str(),
-            DeclKind::Fn(f) => f.name.value.as_str(),
             DeclKind::Index(i) => i.name.value.as_str(),
             DeclKind::Import(_) => "<import>",
             DeclKind::Include(_) => "<include>",

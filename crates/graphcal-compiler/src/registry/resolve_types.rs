@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::ast::{AssertBody, Expr, FigureDecl, FnDecl, LayerDecl, PlotDecl};
+use crate::syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::syntax::names::{IndexName, VariantName};
 use crate::syntax::span::Span;
 
@@ -182,8 +182,6 @@ pub struct ImportedValueNames {
     pub param_names: Vec<(ScopedName, Span)>,
     /// Imported node names.
     pub node_names: Vec<(ScopedName, Span)>,
-    /// Imported function declarations (still need AST for compilation).
-    pub functions: Vec<ResolvedFunctionEntry>,
     /// Imported assert names (for `#[assumes]` validation).
     pub assert_names: Vec<(String, Span)>,
 }
@@ -275,14 +273,6 @@ pub struct ResolvedLayerEntry {
     pub span: Span,
 }
 
-/// A resolved function declaration.
-#[derive(Debug, Clone)]
-pub struct ResolvedFunctionEntry {
-    pub name: String,
-    pub decl: FnDecl,
-    pub span: Span,
-}
-
 /// A single expected-fail key: a list of `(IndexName, VariantName)` pairs.
 ///
 /// - Length 1 for single-index assertions: `[("Mode", "Boost")]`
@@ -321,8 +311,6 @@ pub struct ResolvedFile {
     pub const_deps: HashMap<String, HashSet<String>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(String, DeclCategory)>,
-    /// User-defined function declarations.
-    pub functions: Vec<ResolvedFunctionEntry>,
     /// Set of all assert names (for checking `@assert_name` errors).
     pub assert_names: HashSet<String>,
     /// Mapping from assert name to the list of declarations that assume it.

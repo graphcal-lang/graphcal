@@ -22,6 +22,7 @@ pub fn document_links(analysis: &AnalysisResult, uri: &Url) -> Option<Vec<Docume
     for import_decl in &analysis.import_decls {
         let import_path = match &import_decl.path {
             ImportPath::FilePath { path, .. } => root_dir.join(path),
+            ImportPath::CrossFileDag { file_path, .. } => root_dir.join(file_path),
             // Bare module paths require manifest resolution which is not
             // available in the LSP document-link context yet. Skip them.
             ImportPath::ModulePath { .. } | ImportPath::ParentScope { .. } => continue,

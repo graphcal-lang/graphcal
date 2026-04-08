@@ -8,7 +8,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
-use graphcal_compiler::syntax::names::{DeclName, FnName, Spanned};
+use graphcal_compiler::syntax::names::{DeclName, Spanned};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
@@ -54,6 +54,10 @@ fn derive_module_name_from_import_path(
             // they bring items directly into scope.
             Ok("parent".to_string())
         }
+        ImportPath::CrossFileDag { dag_name, .. } => {
+            // Cross-file DAG paths use the DAG name as the module name.
+            Ok(dag_name.name.clone())
+        }
     }
 }
 
@@ -92,43 +96,12 @@ impl ExprVisitorMut for QualifiedRefRewriter {
         };
         Ok(())
     }
-
-    fn visit_qualified_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        // First recurse into args
-        if let ExprKind::QualifiedFnCall { args, .. } = &mut expr.kind {
-            for arg in args {
-                self.visit_expr_mut(arg)?;
-            }
-        }
-        // Then rewrite the node itself
-        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
-        expr.kind = match old_kind {
-            ExprKind::QualifiedFnCall {
-                module,
-                name,
-                type_args,
-                args,
-            } => {
-                let flat = FnName::new(format!("{}::{}", module.name, name.value));
-                ExprKind::FnCall {
-                    name: Spanned {
-                        value: flat,
-                        span: name.span,
-                    },
-                    type_args,
-                    args,
-                }
-            }
-            other => other,
-        };
-        Ok(())
-    }
 }
 
 /// Rewrite qualified references to flat names in-place.
 ///
 /// Replaces `QualifiedGraphRef { module: "m", name: "x" }` with `GraphRef("m::x")`,
-/// `QualifiedConstRef` with `ConstRef`, and `QualifiedFnCall` with `FnCall`.
+/// and `QualifiedConstRef` with `ConstRef`.
 pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
     let mut rewriter = QualifiedRefRewriter;
     let _ = rewriter.visit_expr_mut(expr);
@@ -150,8 +123,6 @@ struct EvaluatedFile {
     assertions: HashMap<DeclName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
-    /// Functions declared in this file.
-    functions: Vec<graphcal_compiler::ir::ir::FunctionEntry>,
 }
 
 impl EvaluatedFile {
@@ -245,6 +216,10 @@ struct ImportContext<'a> {
 /// Builds import bindings, lowers to IR, applies overrides, and type-resolves to TIR.
 /// Both [`evaluate_project_perfile`] and [`compile_to_tir_project_perfile`] call this
 /// for each file in the project.
+#[expect(
+    clippy::too_many_lines,
+    reason = "import processing, inline DAG handling, and cross-file DAG handling form a cohesive pipeline"
+)]
 fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_path: &Path,
@@ -280,7 +255,7 @@ fn compile_single_file_in_project(
     // Check for recursive DAG instantiation.
     check_dag_recursion(&dag_definitions, file_src)?;
 
-    // Process all import declarations (non-instantiated, compile-time items).
+    // Process all import declarations (non-instantiated, compile-time items only).
     for (_decl, import_decl, import_canonical) in loaded_file.imports_with_paths() {
         let import_canonical = import_canonical.to_path_buf();
         process_non_instantiated_import(
@@ -291,12 +266,18 @@ fn compile_single_file_in_project(
             file_src,
             evaluated_files,
             &mut ctx,
+            true, // is_import: enforce const-only
         )?;
     }
 
     // Process all include declarations (file-based DAG instantiation).
-    // Inline DAG includes (single-segment module paths matching a dag name) are handled below.
+    // Inline DAG includes (single-segment module paths matching a dag name) and
+    // cross-file DAG includes are handled below.
     for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+        // Skip cross-file DAG includes — handled in the next section.
+        if include_decl.path.is_cross_file_dag() {
+            continue;
+        }
         let include_canonical = include_canonical.to_path_buf();
         if include_decl.param_bindings.is_empty() {
             process_non_instantiated_import(
@@ -307,6 +288,7 @@ fn compile_single_file_in_project(
                 file_src,
                 evaluated_files,
                 &mut ctx,
+                false, // is_import: include allows runtime items
             )?;
         } else {
             process_instantiated_include(
@@ -350,6 +332,63 @@ fn compile_single_file_in_project(
             &loaded_file.ast,
             file_src,
             &mut ctx,
+            false, // same-file DAG
+        )?;
+    }
+
+    // Process cross-file DAG includes (include "./file.gcl"/dag_name(...) { ... }).
+    // These reference inline DAG definitions in other files.
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+        let ImportPath::CrossFileDag { dag_name, .. } = &include_decl.path else {
+            continue;
+        };
+
+        let include_canonical = include_canonical.to_path_buf();
+
+        // Find the target file's AST from the project.
+        let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!(
+                    "cross-file DAG target file not found in project: {}",
+                    include_canonical.display()
+                ),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            })
+        })?;
+
+        // Find the named DAG definition in the target file's AST.
+        let target_dag_def = target_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name.name => Some(dag),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: format!(
+                        "DAG `{}` not found in file `{}`",
+                        dag_name.name,
+                        include_canonical.display()
+                    ),
+                    src: file_src.clone(),
+                    span: dag_name.span.into(),
+                })
+            })?;
+
+        // Reuse the same inline DAG processing, but with the target file's AST
+        // for parent scope resolution.
+        process_inline_dag_include(
+            target_dag_def,
+            &dag_name.name,
+            include_decl,
+            decl,
+            &target_loaded.ast,
+            file_src,
+            &mut ctx,
+            true, // cross-file DAG
         )?;
     }
 
@@ -536,7 +575,6 @@ fn process_instantiated_include<'a>(
                 }
                 DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
                 DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
-                DeclKind::Fn(f) if f.name.value.as_str() == binding_name => Some("fn"),
                 _ => None,
             });
         if let Some(kind) = actual_kind {
@@ -725,9 +763,18 @@ fn process_instantiated_include<'a>(
 ///
 /// Creates a virtual File from the DAG body, validates bindings against it,
 /// and defers for IR merging.
+///
+/// When `is_cross_file` is `true`, const node declarations from the parent scope
+/// (`import ..`) are included directly in the DAG body rather than being registered
+/// as external imported names. This is necessary because the parent file's const
+/// values are not available in the importing file's IR.
 #[expect(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "needs access to DAG def, include decl, parent AST, and cross-file flag"
 )]
 fn process_inline_dag_include(
     dag_def: &graphcal_compiler::syntax::ast::DagDecl,
@@ -737,6 +784,7 @@ fn process_inline_dag_include(
     parent_ast: &graphcal_compiler::syntax::ast::File,
     file_src: &NamedSource<Arc<String>>,
     ctx: &mut ImportContext<'_>,
+    is_cross_file: bool,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::ast::ImportKind;
 
@@ -772,14 +820,28 @@ fn process_inline_dag_include(
     for body_decl in &dag_def.body {
         match &body_decl.kind {
             DeclKind::Import(import_decl) if import_decl.path.is_parent_scope() => {
-                // Process `import .. { ... }` — bring parent scope items into DAG scope.
-                process_parent_scope_import(
-                    &import_decl.kind,
-                    parent_ast,
-                    file_src,
-                    &mut dag_imported_names,
-                    &mut dag_parent_type_decls,
-                )?;
+                if is_cross_file {
+                    // For cross-file DAGs, resolve parent scope items and include
+                    // const declarations directly in the DAG body (since the parent
+                    // file's values are not in the importing file's IR).
+                    process_cross_file_parent_scope_import(
+                        &import_decl.kind,
+                        parent_ast,
+                        file_src,
+                        &mut dag_body_decls,
+                        &mut dag_parent_type_decls,
+                    )?;
+                } else {
+                    // For same-file DAGs, register names for resolution; the actual
+                    // values are available in the parent file's IR.
+                    process_parent_scope_import(
+                        &import_decl.kind,
+                        parent_ast,
+                        file_src,
+                        &mut dag_imported_names,
+                        &mut dag_parent_type_decls,
+                    )?;
+                }
             }
             _ => {
                 dag_body_decls.push(body_decl.clone());
@@ -1058,8 +1120,86 @@ fn process_parent_scope_import(
     Ok(())
 }
 
+/// Process `import .. { ... }` declarations inside a cross-file DAG body.
+///
+/// Unlike same-file DAGs where parent scope const values are available in the
+/// importing file's IR, cross-file DAGs must include the parent const declarations
+/// directly in the DAG body. Type-system declarations are handled via the
+/// `dag_parent_type_decls` mechanism as usual.
+fn process_cross_file_parent_scope_import(
+    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
+    parent_ast: &graphcal_compiler::syntax::ast::File,
+    file_src: &NamedSource<Arc<String>>,
+    dag_body_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
+    dag_parent_type_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
+) -> Result<(), CompileError> {
+    let names = match import_kind {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => names,
+        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
+                src: file_src.clone(),
+                span: (0..0).into(),
+            }));
+        }
+    };
+
+    for import_item in names {
+        let orig_name = &import_item.name.name;
+
+        // Find the declaration in the parent scope.
+        let parent_decl = parent_ast.declarations.iter().find(|d| match &d.kind {
+            DeclKind::ConstNode(c) => c.name.value.as_str() == orig_name,
+            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
+            DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
+            DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
+            DeclKind::Type(t) => t.name.value.as_str() == orig_name,
+            DeclKind::UnionType(t) => t.name.value.as_str() == orig_name,
+            DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
+            DeclKind::Dag(dag) => dag.name.value.as_str() == orig_name,
+            _ => false,
+        });
+
+        let parent_decl = parent_decl.ok_or_else(|| {
+            CompileError::Eval(GraphcalError::ImportNameNotFound {
+                name: orig_name.clone(),
+                file_path: "..".to_string(),
+                src: file_src.clone(),
+                span: import_item.name.span.into(),
+            })
+        })?;
+
+        match &parent_decl.kind {
+            DeclKind::ConstNode(_) => {
+                // Include const declarations directly in the DAG body so they
+                // become part of the DAG's IR and get merged with prefixing.
+                dag_body_decls.push(parent_decl.clone());
+            }
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::UnionType(_)
+            | DeclKind::Index(_) => {
+                dag_parent_type_decls.push(parent_decl.clone());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Process a non-instantiated import or include (no param bindings), importing values and
 /// type-system declarations from the already-evaluated dependency.
+///
+/// When `is_import` is `true`, only compile-time items (consts, dims, units, types, indexes,
+/// dags, assertions) are allowed. Runtime items (params, non-const nodes) trigger an error
+/// advising the user to use `include` instead.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "import processing needs all these context parameters"
+)]
 fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_canonical: &PathBuf,
@@ -1068,6 +1208,7 @@ fn process_non_instantiated_import<'a>(
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
+    is_import: bool,
 ) -> Result<(), CompileError> {
     let dep = evaluated_files.get(import_canonical).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
@@ -1095,9 +1236,16 @@ fn process_non_instantiated_import<'a>(
                     &mut ctx.imported_values,
                     Some(&mut ctx.imported_source_order),
                 ) {
-                    SelectiveImportResult::Const
-                    | SelectiveImportResult::Runtime
-                    | SelectiveImportResult::Function => {}
+                    SelectiveImportResult::Const => {}
+                    SelectiveImportResult::Runtime => {
+                        if is_import {
+                            return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
+                                name: orig_name.clone(),
+                                src: file_src.clone(),
+                                span: import_item.name.span.into(),
+                            }));
+                        }
+                    }
                     SelectiveImportResult::Assert => {
                         // Assert is already evaluated in the dep file.
                         // We just need to make the name visible for #[assumes].
@@ -1154,6 +1302,7 @@ fn process_non_instantiated_import<'a>(
                 &mut ctx.imported_names,
                 &mut ctx.imported_values,
                 Some(&mut ctx.imported_source_order),
+                is_import,
             );
             // Import all type-system declarations from dep's registry.
             ctx.extra_registry_builders.push(&dep.registry);
@@ -1165,8 +1314,8 @@ fn process_non_instantiated_import<'a>(
 /// Rewrite qualified references in the AST when module imports are present.
 ///
 /// If there are no module imports, returns a borrowed reference to the original AST.
-/// Otherwise, clones the AST and rewrites `QualifiedGraphRef`, `QualifiedConstRef`,
-/// and `QualifiedFnCall` to their flat counterparts.
+/// Otherwise, clones the AST and rewrites `QualifiedGraphRef` and `QualifiedConstRef`
+/// to their flat counterparts.
 fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::syntax::ast::File,
     module_map: &HashMap<String, (PathBuf, Span)>,
@@ -1196,15 +1345,6 @@ fn rewrite_qualified_refs_in_ast<'a>(
                     rewrite_qualified_refs(actual);
                     rewrite_qualified_refs(expected);
                     rewrite_qualified_refs(tolerance);
-                }
-            },
-            DeclKind::Fn(f) => match &mut f.body {
-                graphcal_compiler::syntax::ast::FnBody::Short(e) => rewrite_qualified_refs(e),
-                graphcal_compiler::syntax::ast::FnBody::Block { stmts, expr } => {
-                    for stmt in stmts {
-                        rewrite_qualified_refs(&mut stmt.value);
-                    }
-                    rewrite_qualified_refs(expr);
                 }
             },
             _ => {}
@@ -1294,7 +1434,6 @@ fn lower_and_finalize(
 
     // Type-resolve, check dimensions.
     let tir = crate::tir::type_resolve(ir, file_src)?;
-    crate::fn_check::check_no_recursion(&tir.registry.functions, file_src)?;
     crate::dim_check::check_dimensions_tir(&tir, file_src)?;
 
     let declared_types = tir.build_declared_types(file_src)?;
@@ -1305,7 +1444,6 @@ fn lower_and_finalize(
             override_name.as_str(),
             &declared_types,
             &tir.registry,
-            &tir.resolved_fn_sigs,
             file_src,
         )?;
     }
@@ -1377,10 +1515,6 @@ fn process_deferred_instantiated_imports(
         let mut dep_names: HashSet<String> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
             dep_names.insert(name.member().to_string());
-        }
-        // Also include function names.
-        for fn_entry in &dep_unfrozen.functions {
-            dep_names.insert(fn_entry.name.member().to_string());
         }
 
         // Merge the dependency's IR into the importer's IR.
@@ -1455,9 +1589,6 @@ fn process_deferred_inline_dag_includes(
         let mut dep_names: HashSet<String> = HashSet::new();
         for (name, _) in &dag_unfrozen.source_order {
             dep_names.insert(name.member().to_string());
-        }
-        for fn_entry in &dag_unfrozen.functions {
-            dep_names.insert(fn_entry.name.member().to_string());
         }
 
         // Merge the DAG's IR into the importer's IR.
@@ -1639,17 +1770,15 @@ enum SelectiveImportResult {
     Const,
     /// A runtime value (param/node) was found and registered.
     Runtime,
-    /// A function was found and registered.
-    Function,
     /// An assert was found (caller must handle assert-specific registration).
     Assert,
-    /// The name was not found in the evaluated file's values or functions.
+    /// The name was not found in the evaluated file's values.
     NotFound,
 }
 
 /// Look up a single selective import item in an `EvaluatedFile` and register it.
 ///
-/// Handles `const_values`, values (params/nodes), and functions.
+/// Handles `const_values` and values (params/nodes).
 /// Returns what was found so the caller can handle assert and type-system fallbacks.
 fn import_selective_item(
     dep: &EvaluatedFile,
@@ -1690,19 +1819,6 @@ fn import_selective_item(
         }
         imported_values.insert(scoped, (rv.clone(), dt));
         SelectiveImportResult::Runtime
-    } else if let Some(fn_entry) = dep
-        .functions
-        .iter()
-        .find(|entry| entry.name.member() == orig_name)
-    {
-        imported_names.functions.push(
-            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
-                name: local_name.to_string(),
-                decl: fn_entry.decl.clone(),
-                span: fn_entry.span,
-            },
-        );
-        SelectiveImportResult::Function
     } else if dep.has_assert(orig_name) {
         SelectiveImportResult::Assert
     } else {
@@ -1712,8 +1828,12 @@ fn import_selective_item(
 
 /// Import all values from an `EvaluatedFile` under a module prefix.
 ///
-/// Registers `const_values`, values (params/nodes), and functions with qualified
+/// Registers `const_values` and values (params/nodes) with qualified
 /// `ScopedName::Qualified` names.
+///
+/// When `const_only` is `true`, only `const_values` are imported; runtime values
+/// (params/nodes) are silently skipped. This is used for `import` statements which
+/// only allow compile-time items.
 fn import_module_values(
     dep: &EvaluatedFile,
     module_name: &str,
@@ -1721,6 +1841,7 @@ fn import_module_values(
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
+    const_only: bool,
 ) {
     // Sort keys for deterministic ordering — HashMap iteration is arbitrary.
     let mut const_keys: Vec<&String> = dep.const_values.keys().collect();
@@ -1746,6 +1867,12 @@ fn import_module_values(
         }
         imported_values.insert(scoped, (rv.clone(), dt));
     }
+
+    // Skip runtime values when const_only is true (import semantics).
+    if const_only {
+        return;
+    }
+
     let mut value_keys: Vec<&String> = dep.values.keys().collect();
     value_keys.sort();
     for name in value_keys {
@@ -1768,16 +1895,6 @@ fn import_module_values(
             source_order.push((scoped.clone(), DeclCategory::Param));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
-    }
-    for fn_entry in &dep.functions {
-        let flat = format!("{module_name}::{}", fn_entry.name);
-        imported_names.functions.push(
-            graphcal_compiler::registry::resolve_types::ResolvedFunctionEntry {
-                name: flat,
-                decl: fn_entry.decl.clone(),
-                span: fn_entry.span,
-            },
-        );
     }
 }
 
@@ -1817,6 +1934,7 @@ fn build_dep_imported_values(
             dep_src,
             &mut imported_names,
             &mut imported_values,
+            true, // is_import: skip runtime items
         );
     }
 
@@ -1849,6 +1967,7 @@ fn build_dep_imported_values(
             dep_src,
             &mut imported_names,
             &mut imported_values,
+            false, // is_import: include allows runtime items
         );
     }
 
@@ -1856,6 +1975,8 @@ fn build_dep_imported_values(
 }
 
 /// Helper: import values from a dependency according to the import kind.
+///
+/// When `is_import` is `true`, runtime values are skipped (import semantics).
 fn build_dep_import_values_for_kind(
     import_path: &ImportPath,
     import_kind: &graphcal_compiler::syntax::ast::ImportKind,
@@ -1863,13 +1984,14 @@ fn build_dep_import_values_for_kind(
     dep_src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    is_import: bool,
 ) {
     match import_kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
-                let _ = import_selective_item(
+                let result = import_selective_item(
                     trans_dep,
                     orig_name,
                     &local_name,
@@ -1878,6 +2000,16 @@ fn build_dep_import_values_for_kind(
                     imported_values,
                     None,
                 );
+                // For transitive import dependencies, skip runtime items silently
+                // (the dep file was already validated; we just don't propagate runtime values
+                // through import chains).
+                if is_import && matches!(result, SelectiveImportResult::Runtime) {
+                    // Runtime item was registered by import_selective_item;
+                    // remove it since import doesn't allow runtime items.
+                    let scoped = ScopedName::Local(local_name);
+                    imported_values.remove(&scoped);
+                    imported_names.param_names.retain(|(s, _)| *s != scoped);
+                }
             }
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
@@ -1896,6 +2028,7 @@ fn build_dep_import_values_for_kind(
                 imported_names,
                 imported_values,
                 None,
+                is_import,
             );
         }
     }
@@ -1929,7 +2062,6 @@ fn evaluate_and_store_file(
                 .map(|(name, result, span)| (name, (result, span)))
                 .collect(),
             registry: compiled.tir.registry,
-            functions: compiled.tir.functions,
         },
     );
     Ok(())
@@ -2452,11 +2584,6 @@ fn merge_registry_into_builder(
     for type_def in dep_registry.types.all_types() {
         builder.register_type(type_def.clone());
     }
-
-    // Import functions.
-    for fn_def in dep_registry.functions.all_functions() {
-        builder.register_function(fn_def.clone());
-    }
 }
 
 /// Validate and apply parameter overrides to an IR.
@@ -2711,8 +2838,7 @@ fn check_dag_recursion(
     Ok(())
 }
 
-/// selective import name is not found among the dependency's evaluated values
-/// or functions.
+/// selective import name is not found among the dependency's evaluated values.
 pub(super) fn file_has_declaration(
     file: &graphcal_compiler::syntax::ast::File,
     name: &str,
@@ -2721,7 +2847,6 @@ pub(super) fn file_has_declaration(
         DeclKind::Param(p) => p.name.value.as_str() == name,
         DeclKind::Node(n) => n.name.value.as_str() == name,
         DeclKind::ConstNode(c) => c.name.value.as_str() == name,
-        DeclKind::Fn(f) => f.name.value.as_str() == name,
         DeclKind::Assert(a) => a.name.value.as_str() == name,
         DeclKind::BaseDimension(d) => d.name.value.as_str() == name,
         DeclKind::Dimension(d) => d.name.value.as_str() == name,

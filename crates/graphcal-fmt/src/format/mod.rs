@@ -9,7 +9,7 @@ use pretty::RcDoc;
 
 // Re-export the public entry point
 pub use decl::format_decl;
-pub use expr::{format_block_body, format_expr};
+pub use expr::format_expr;
 pub use type_expr::{format_dim_expr_inline, format_type_expr_inline, format_unit_expr_inline};
 
 pub const INDENT: isize = 4;

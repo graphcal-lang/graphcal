@@ -1,4 +1,4 @@
-// Error: graph reference @ is not allowed in function bodies
+// Error: fn keyword is no longer supported
 param x: Length = 1.0 m;
 
 fn bad_fn(a: Length) -> Length = a + @x;

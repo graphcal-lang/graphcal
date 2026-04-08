@@ -969,6 +969,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot import runtime item `{name}`; use `include` for runtime nodes and params")]
+    #[diagnostic(
+        code(graphcal::M020),
+        help(
+            "`import` only allows compile-time items (const, dimension, unit, type, index, dag); use `include` for runtime nodes and params"
+        )
+    )]
+    ImportRuntimeItem {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("runtime item cannot be imported")]
+        span: SourceSpan,
+    },
+
     // --- Domain constraint errors ---
     #[error("unknown timezone `{timezone}`")]
     #[diagnostic(

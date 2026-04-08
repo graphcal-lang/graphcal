@@ -1,6 +1,6 @@
-// main.gcl -- rocket equation using imported constants and params
+// main.gcl -- rocket equation using imported constants and included params
 import "./constants.gcl" { G0 };
-import "./params.gcl" { dry_mass, fuel_mass, isp };
+include "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dimension Velocity = Length / Time;
 
