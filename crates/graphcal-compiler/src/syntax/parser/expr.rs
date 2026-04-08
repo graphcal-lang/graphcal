@@ -557,7 +557,7 @@ impl Parser<'_> {
                 span: call_span,
             })
         } else {
-            // Bare lowercase identifier -> LocalRef (let binding reference)
+            // Bare lowercase identifier -> LocalRef (loop variable, function parameter, etc.)
             // Semantic validation happens in resolve/dim_check.
             Ok(Expr {
                 kind: ExprKind::LocalRef(crate::syntax::ast::Ident { name, span }),
@@ -566,21 +566,20 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a brace-delimited expression (map literal or block).
+    /// Parse a brace-delimited expression (map literal).
+    ///
+    /// Block expressions (`{ let ...; expr }`) are no longer supported.
     fn parse_brace_expr(&mut self) -> Result<Expr, ParseError> {
-        // Disambiguate: map literal vs block expression
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
         if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
             let text = self.lexer.slice_at(ident_span);
             if is_pascal_case(text) {
-                // Could be map literal (PascalCase :: ...) or struct in block
-                // Save the ident text to check further
+                // Could be map literal (PascalCase :: Variant : expr)
                 let saved_text = text.to_string();
                 // Consume the ident to peek at what's next
                 let (_, saved_span) = self.advance()?;
                 if self.lexer.peek() == Some(&Token::ColonColon) {
-                    // Could be map literal or VariantLiteral in block.
                     // Consume `::` and variant, then check next token.
                     self.lexer.next_token(); // consume '::'
                     let variant_ident =
@@ -593,43 +592,47 @@ impl Parser<'_> {
                             variant_ident.into_spanned::<VariantName>(),
                         )
                     } else {
-                        // Block containing a VariantLiteral expression
-                        let variant_span = variant_ident.span;
-                        let variant = variant_ident.into_spanned::<VariantName>();
-                        let full_span = saved_span.merge(variant_span);
-                        let first_expr = Expr {
-                            kind: ExprKind::VariantLiteral {
-                                index: Spanned::new(IndexName::new(saved_text), saved_span),
-                                variant,
-                            },
-                            span: full_span,
-                        };
-                        let expr = self.continue_parsing_expr(first_expr)?;
-                        let (_, end_span) = self.expect(Token::RBrace)?;
-                        let span = start_span.merge(end_span);
-                        Ok(Expr {
-                            kind: ExprKind::Block {
-                                stmts: vec![],
-                                expr: Box::new(expr),
-                            },
-                            span,
-                        })
+                        let found = self
+                            .lexer
+                            .peek()
+                            .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+                        Err(self.unexpected_token(
+                            "`:` after variant in map literal",
+                            &found,
+                            start_span,
+                        ))
                     }
                 } else {
-                    // Not a map literal — reparse as block with already-consumed tokens
-                    // The consumed ident is the start of an expression in the block
-                    self.parse_block_after_open_brace_and_ident(start_span, &saved_text, saved_span)
+                    // PascalCase ident not followed by `::` — not a map literal
+                    Err(self.unexpected_token(
+                        "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                        &saved_text,
+                        start_span,
+                    ))
                 }
             } else {
-                // lowercase ident or other — block expression
-                self.parse_block_after_open_brace(start_span)
+                // lowercase ident — block expressions are no longer supported
+                let found = self.lexer.slice_at(ident_span).to_string();
+                Err(self.unexpected_token(
+                    "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                    &found,
+                    start_span,
+                ))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
-            // Not an ident after { — could be `{ let ...` or `{ expr }`
-            self.parse_block_after_open_brace(start_span)
+            // Block expressions are no longer supported
+            let found = self
+                .lexer
+                .peek()
+                .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+            Err(self.unexpected_token(
+                "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                &found,
+                start_span,
+            ))
         }
     }
 

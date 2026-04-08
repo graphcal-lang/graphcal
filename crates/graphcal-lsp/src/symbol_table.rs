@@ -18,7 +18,6 @@ use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExprScopeKind {
-    Block,
     For,
     Scan,
     Unfold,
@@ -58,7 +57,6 @@ impl std::fmt::Display for SymbolKey {
                 local,
             } => {
                 let kind_str = match kind {
-                    ExprScopeKind::Block => "block",
                     ExprScopeKind::For => "for",
                     ExprScopeKind::Scan => "scan",
                     ExprScopeKind::Unfold => "unfold",
@@ -787,36 +785,6 @@ fn collect_expr_refs(
             collect_expr_refs(expr, table, scopes);
             collect_type_expr_refs(target_type, table);
         }
-        ExprKind::Block { stmts, expr } => {
-            scopes.push();
-            let scope_offset = expr.span.offset();
-            for stmt in stmts {
-                collect_expr_refs(&stmt.value, table, scopes);
-                let lname = stmt.name.name.clone();
-                let key = SymbolKey::ExprScoped {
-                    kind: ExprScopeKind::Block,
-                    offset: scope_offset,
-                    local: lname.clone(),
-                };
-                table.definitions.insert(
-                    key.clone(),
-                    DefinitionInfo {
-                        name: lname.clone(),
-                        category: SymbolCategory::LocalVar,
-                        name_span: stmt.name.span,
-                        decl_span: stmt.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                scopes.insert(lname, key);
-                if let Some(type_ann) = &stmt.type_ann {
-                    collect_type_expr_refs(type_ann, table);
-                }
-            }
-            collect_expr_refs(expr, table, scopes);
-            scopes.pop();
-        }
         ExprKind::FieldAccess { expr, field } => {
             collect_expr_refs(expr, table, scopes);
             // Field reference -- target is approximate without type info.
@@ -1538,12 +1506,12 @@ mod tests {
         );
         assert_eq!(
             SymbolKey::ExprScoped {
-                kind: ExprScopeKind::Block,
+                kind: ExprScopeKind::For,
                 offset: 42,
                 local: "temp".to_string()
             }
             .to_string(),
-            "block@42::temp"
+            "for@42::temp"
         );
     }
 

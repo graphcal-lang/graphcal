@@ -283,21 +283,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("duplicate `let` binding `{name}`")]
-    #[diagnostic(
-        code(graphcal::S001),
-        help("each `let` binding must have a unique name within a block")
-    )]
-    DuplicateLetBinding {
-        name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("duplicate binding here")]
-        duplicate: SourceSpan,
-        #[label("first defined here")]
-        first: SourceSpan,
-    },
-
     #[error("unknown struct type `{name}`")]
     #[diagnostic(
         code(graphcal::S002),
@@ -379,7 +364,9 @@ pub enum GraphcalError {
     #[error("unknown local variable `{name}`")]
     #[diagnostic(
         code(graphcal::S008),
-        help("local variables must be defined with `let` before use")
+        help(
+            "local variables are introduced by `for`, `scan`, `unfold`, `match`, or function parameters"
+        )
     )]
     UnknownLocalRef {
         name: String,

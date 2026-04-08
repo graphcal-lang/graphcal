@@ -33,6 +33,6 @@ node total_v: Velocity[TimeStep] = for t: TimeStep { sum(for m: Maneuver { @v_fo
 node max_v: Velocity[Maneuver] = for m: Maneuver { max(for t: TimeStep { @v_for[m, t] }) };
 
 // Scan over the outermost (label) axis
-node cumulative_max: Velocity[Maneuver] = scan(@max_v, 0.0 m/s, |acc, val| {
+node cumulative_max: Velocity[Maneuver] = scan(@max_v, 0.0 m/s, |acc, val|
     if val > acc { val } else { acc }
-});
+);

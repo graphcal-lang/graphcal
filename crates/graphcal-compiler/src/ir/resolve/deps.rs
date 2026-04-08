@@ -190,28 +190,6 @@ fn collect_const_refs(
             src,
             deps,
         ),
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                collect_const_refs(
-                    &stmt.value,
-                    all_const_names,
-                    builtin_consts,
-                    builtin_fns,
-                    user_fn_names,
-                    src,
-                    deps,
-                )?;
-            }
-            collect_const_refs(
-                expr,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                deps,
-            )
-        }
         ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
             collect_const_refs(
                 expr,
@@ -569,32 +547,6 @@ fn collect_all_refs(
             graph_refs,
             const_refs,
         ),
-        ExprKind::Block { stmts, expr } => {
-            for stmt in stmts {
-                collect_all_refs(
-                    &stmt.value,
-                    all_runtime_names,
-                    all_const_names,
-                    builtin_consts,
-                    builtin_fns,
-                    user_fn_names,
-                    src,
-                    graph_refs,
-                    const_refs,
-                )?;
-            }
-            collect_all_refs(
-                expr,
-                all_runtime_names,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                graph_refs,
-                const_refs,
-            )
-        }
         ExprKind::FieldAccess { expr, .. } | ExprKind::IndexAccess { expr, .. } => {
             collect_all_refs(
                 expr,

@@ -202,16 +202,6 @@ fn resolve_wrong_arity_in_node() {
 }
 
 #[test]
-fn resolve_const_with_block_expr() {
-    let resolved =
-        parse_and_resolve("const node A: Dimensionless = { let x = 1.0; let y = 2.0; x + y };")
-            .unwrap();
-    assert_eq!(resolved.consts.len(), 1);
-    let a_deps = &resolved.const_deps["A"];
-    assert!(a_deps.is_empty());
-}
-
-#[test]
 fn resolve_const_with_if_else() {
     let resolved =
         parse_and_resolve("const node A: Dimensionless = if 1.0 > 0.0 { 1.0 } else { 0.0 };")
@@ -223,17 +213,6 @@ fn resolve_const_with_if_else() {
 fn resolve_const_with_unary_op() {
     let resolved = parse_and_resolve("const node A: Dimensionless = -42.0;").unwrap();
     assert_eq!(resolved.consts.len(), 1);
-}
-
-#[test]
-fn resolve_node_with_block() {
-    let resolved = parse_and_resolve(
-        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = { let a = @x; a + 1.0 };",
-    )
-    .unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
-    let y_deps = &resolved.runtime_deps["y"];
-    assert!(y_deps.contains("x"));
 }
 
 #[test]
@@ -343,7 +322,7 @@ fn resolve_unfold_self_edge_excluded() {
     // extract_all_refs should exclude this self-edge from runtime_deps.
     let source = r"
         index TimeStep = { First, Second, Third };
-        node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| { @x[prev_t] * 2.0 });
+        node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);
     ";
     let resolved = parse_and_resolve(source).unwrap();
     let x_deps = &resolved.runtime_deps["x"];

@@ -68,8 +68,6 @@ pub(crate) trait ExprVisitor {
                 Ok(())
             }
 
-            ExprKind::Block { stmts, expr: body } => self.visit_block(expr, stmts, body),
-
             ExprKind::StructConstruction { fields, .. } => {
                 self.visit_struct_construction(expr, fields)
             }
@@ -150,18 +148,6 @@ pub(crate) trait ExprVisitor {
     /// Called for `Convert`, `DisplayTimezone`, `AsCast`, `FieldAccess`, `IndexAccess`.
     fn visit_single_child(&mut self, _expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
         self.visit_expr(inner)
-    }
-
-    fn visit_block(
-        &mut self,
-        _expr: &Expr,
-        stmts: &[crate::syntax::ast::LetBinding],
-        body: &Expr,
-    ) -> Result<(), Self::Error> {
-        for stmt in stmts {
-            self.visit_expr(&stmt.value)?;
-        }
-        self.visit_expr(body)
     }
 
     fn visit_struct_construction(
@@ -294,12 +280,6 @@ pub trait ExprVisitorMut {
                     }
                 }
                 Ok(())
-            }
-            ExprKind::Block { stmts, expr: body } => {
-                for stmt in stmts {
-                    self.visit_expr_mut(&mut stmt.value)?;
-                }
-                self.visit_expr_mut(body)
             }
             ExprKind::StructConstruction { fields, .. } => {
                 for field in fields {

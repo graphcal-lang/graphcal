@@ -832,13 +832,8 @@ pub enum ExprKind {
         expr: Box<Expr>,
         target_type: TypeExpr,
     },
-    /// Local variable reference (bare name in block scope): `r1`, `dv1`
+    /// Local variable reference (loop variable, function parameter, match binding, etc.)
     LocalRef(Ident),
-    /// Block expression: `{ let a = ...; let b = ...; expr }`
-    Block {
-        stmts: Vec<LetBinding>,
-        expr: Box<Expr>,
-    },
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
     FieldAccess {
         expr: Box<Expr>,
@@ -917,16 +912,6 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
-}
-
-/// A `let` binding inside a block body.
-#[derive(Debug, Clone)]
-pub struct LetBinding {
-    pub name: Ident,
-    /// Optional type annotation: `let r1: Length = ...`
-    pub type_ann: Option<TypeExpr>,
-    pub value: Expr,
-    pub span: Span,
 }
 
 /// A single key in a map literal entry: `Index::Variant`
@@ -1223,12 +1208,6 @@ fn desugar_expr(expr: &mut Expr) {
         | ExprKind::AsCast { expr: inner, .. }
         | ExprKind::FieldAccess { expr: inner, .. }
         | ExprKind::IndexAccess { expr: inner, .. } => desugar_expr(inner),
-        ExprKind::Block { stmts, expr: body } => {
-            for s in stmts {
-                desugar_expr(&mut s.value);
-            }
-            desugar_expr(body);
-        }
         ExprKind::StructConstruction { fields, .. } => {
             for f in fields {
                 if let Some(v) = &mut f.value {

@@ -243,16 +243,6 @@ pub(super) fn infer_type_with_owner(
             src,
         ),
 
-        ExprKind::Block { stmts, expr: body } => control::infer_block(
-            stmts,
-            body,
-            declared_types,
-            local_types,
-            registry,
-            builtin_fns,
-            src,
-        ),
-
         ExprKind::Match {
             scrutinee, arms, ..
         } => control::infer_match(

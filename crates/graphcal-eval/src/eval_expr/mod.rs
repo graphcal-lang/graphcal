@@ -166,9 +166,6 @@ pub fn eval_expr(
             local_values,
             ctx,
         ),
-        ExprKind::Block { stmts, expr: body } => {
-            control::eval_block(stmts, body, values, local_values, ctx)
-        }
         ExprKind::Match { scrutinee, arms } => {
             control::eval_match(expr, scrutinee, arms, values, local_values, ctx)
         }

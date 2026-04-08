@@ -1031,40 +1031,6 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 }
 
 #[test]
-fn preserves_comment_in_block_let() {
-    let source = r"
-node result: Dimensionless = {
-    // before a
-    let a = 2.0;
-    // before b
-    let b = a + 1.0;
-    // before result
-    b
-};
-";
-    let formatted = format_source(source).unwrap();
-    assert!(
-        formatted.contains("// before a"),
-        "Comment before let binding lost: {formatted}"
-    );
-    assert!(
-        formatted.contains("// before b"),
-        "Comment before second let binding lost: {formatted}"
-    );
-    assert!(
-        formatted.contains("// before result"),
-        "Comment before tail expression lost: {formatted}"
-    );
-    // Order check
-    let a_comment = formatted.find("// before a").unwrap();
-    let a_let = formatted.find("let a").unwrap();
-    assert!(
-        a_comment < a_let,
-        "Comment should appear before its let binding: {formatted}"
-    );
-}
-
-#[test]
 fn preserves_comment_in_match_arms() {
     let source = r"
 index Phase = { Coast, Burn };

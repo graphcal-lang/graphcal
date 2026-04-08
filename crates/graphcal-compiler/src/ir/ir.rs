@@ -1153,12 +1153,6 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
                     | ExprKind::DisplayTimezone { expr: inner, .. }
                     | ExprKind::AsCast { expr: inner, .. }
                     | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
-                    ExprKind::Block { stmts, expr: body } => {
-                        for stmt in stmts {
-                            self.visit_expr_mut(&mut stmt.value)?;
-                        }
-                        self.visit_expr_mut(body)
-                    }
                     ExprKind::StructConstruction { fields, .. } => {
                         for field in fields {
                             if let Some(val) = &mut field.value {
@@ -2260,9 +2254,12 @@ mod tests {
 
     #[test]
     fn lower_hohmann() {
+        // hohmann.gcl now uses DAG+include, which requires include expansion
+        // at a higher phase. Single-file IR lowering correctly rejects the
+        // unknown graph ref `@transfer` that the include would create.
         let source = include_str!("../../../../tests/fixtures/hohmann.gcl");
-        let ir = parse_and_lower(source).unwrap();
-        assert!(ir.registry.types.get_type("TransferResult").is_some());
+        let err = parse_and_lower(source).unwrap_err();
+        assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }
 
     #[test]

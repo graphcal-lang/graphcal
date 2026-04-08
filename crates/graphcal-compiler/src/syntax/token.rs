@@ -27,8 +27,6 @@ pub enum Token {
     Unit,
     #[token("type")]
     Type,
-    #[token("let")]
-    Let,
     #[token("fn")]
     Fn,
     #[token("index")]
@@ -171,7 +169,6 @@ impl std::fmt::Display for Token {
             Self::Dimension => write!(f, "dimension"),
             Self::Unit => write!(f, "unit"),
             Self::Type => write!(f, "type"),
-            Self::Let => write!(f, "let"),
             Self::Fn => write!(f, "fn"),
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
@@ -454,7 +451,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dimension unit type let fn index for import include dag match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dimension unit type fn index for import include dag match as assert table plot figure scan unfold linspace step",
         );
         assert_eq!(
             tokens,
@@ -468,7 +465,6 @@ mod tests {
                 Token::Dimension,
                 Token::Unit,
                 Token::Type,
-                Token::Let,
                 Token::Fn,
                 Token::Index,
                 Token::For,
@@ -649,25 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn lex_let_binding() {
-        let tokens = lex_tokens("let r1 = @x + @y;");
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Let,
-                Token::Ident,
-                Token::Eq,
-                Token::At,
-                Token::Ident,
-                Token::Plus,
-                Token::At,
-                Token::Ident,
-                Token::Semicolon,
-            ]
-        );
-    }
-
-    #[test]
     fn lex_dot_field_access() {
         let tokens = lex_tokens("@transfer.dv1");
         assert_eq!(
@@ -682,14 +659,6 @@ mod tests {
         let mut lexer = Token::lexer("typedef");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "typedef");
-    }
-
-    #[test]
-    fn lex_identifier_starting_with_let() {
-        // "letter" should be Ident, not Let + "ter"
-        let mut lexer = Token::lexer("letter");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "letter");
     }
 
     // Phase 3 specific tests
