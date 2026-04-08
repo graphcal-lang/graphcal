@@ -1,0 +1,2 @@
+// This param is private (no `pub` keyword).
+param secret: Dimensionless = 42.0;

@@ -13,7 +13,8 @@ The Graphcal LSP server (`graphcal lsp`) provides:
 | Feature | Description |
 |---------|-------------|
 | **Inlay hints** | Computed param and node values displayed inline next to each declaration |
-| **Diagnostics** | Real-time error reporting: parse errors, dimension mismatches, unknown references |
+| **Diagnostics** | Real-time error reporting: parse errors, dimension mismatches, unknown references, visibility violations |
+| **Code actions** | Quick fixes for common errors (e.g., "Add `pub`" for visibility violations) |
 | **Go to definition** | Jump from a reference to its declaration |
 | **Hover** | Show type, dimension, and unit information |
 | **Find references** | Locate all usages of a declaration |

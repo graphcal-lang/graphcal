@@ -1,5 +1,6 @@
 //! Graphcal Language Server Protocol implementation.
 
+mod code_actions;
 mod completion;
 mod convert;
 mod cursor_context;

@@ -146,6 +146,52 @@ import "./file_b.gcl" { velocity as velocity_b };
 node diff: Velocity = @velocity_a - @velocity_b;
 ```
 
+## Visibility (`pub`)
+
+Declarations are **private by default**. Only declarations marked with the `pub` keyword are visible to other files:
+
+```
+pub param dry_mass: Mass = 1200.0 kg;   // visible to importers
+param internal: Mass = 500.0 kg;        // private — not importable
+```
+
+Attempting to import a private item produces error `V001`:
+
+```
+// ERROR: cannot import private item `internal` from `./lib.gcl`
+include "./lib.gcl" { internal };
+```
+
+### Required items must be `pub`
+
+Required params (no default value) and required indexes form the public interface of a file — they **must** be declared `pub`. Omitting `pub` on a required item is error `V002`:
+
+```
+// ERROR: required param must be declared `pub`
+param dry_mass: Mass;
+
+// OK
+pub param dry_mass: Mass;
+```
+
+### Private-in-public
+
+A `pub` declaration must not reference private type-system items (`dim`, `type`, `index`, `base dim`) in its type annotation. This prevents exposing types that importers cannot see. Violating this rule is error `V003`:
+
+```
+dim Velocity = Length / Time;
+// ERROR: `pub param` references private dim `Velocity`
+pub param speed: Velocity = 10.0 m/s;
+
+// Fix: make the dim public too
+pub dim Velocity = Length / Time;
+pub param speed: Velocity = 10.0 m/s;
+```
+
+### `pub` indexes and variant literals
+
+When an index is declared `pub`, its variant literals cannot be used in the defining file's expressions. This is because importers may override the index variants via parameterized imports. Use `param` declarations for variant-specific values instead. Violating this rule is error `V004`.
+
 ## What Can Be Imported
 
 ### Selective imports
@@ -245,17 +291,17 @@ A library declares a [required index](indexes.md#required-indexes):
 
 ```
 // lib/budget.gcl
-index Phase;
+pub index Phase;
 
-param cost: Dimensionless[Phase];
-node total: Dimensionless = sum(for p: Phase { @cost[p] });
+pub param cost: Dimensionless[Phase];
+pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
 The importer binds it to a concrete index:
 
 ```
 // main.gcl
-index MyPhase = { Design, Build, Test };
+pub index MyPhase = { Design, Build, Test };
 
 import "./lib/budget.gcl"(
     Phase: MyPhase,
@@ -319,8 +365,8 @@ A param declared without a default value is **required** — it must be provided
 
 ```
 // library: rocket_engine.gcl
-param dry_mass: Mass;                     // required — must be provided
-param isp: Velocity = 320.0 s;           // optional — has default
+pub param dry_mass: Mass;                     // required — must be provided
+pub param isp: Velocity = 320.0 s;           // optional — has default
 
 node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -411,14 +457,14 @@ project/
 
 ```
 // lib/rocket.gcl
-param dry_mass: Mass;     // required
-param fuel_mass: Mass;    // required
-param isp: Time = 320 s;  // optional default
+pub param dry_mass: Mass;     // required
+pub param fuel_mass: Mass;    // required
+pub param isp: Time = 320 s;  // optional default
 
-const node g0: Acceleration = 9.80665 m/s^2;
-node v_exhaust: Velocity = @isp * @g0;
-node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
-node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
+pub const node g0: Acceleration = 9.80665 m/s^2;
+pub node v_exhaust: Velocity = @isp * @g0;
+pub node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```
@@ -442,15 +488,15 @@ project/
 
 ```
 // lib/budget.gcl
-index Phase;
+pub index Phase;
 
-param cost: Dimensionless[Phase];
-node total: Dimensionless = sum(for p: Phase { @cost[p] });
+pub param cost: Dimensionless[Phase];
+pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
 ```
 // main.gcl
-index ProjectPhase = { Design, Build, Test };
+pub index ProjectPhase = { Design, Build, Test };
 
 import "./lib/budget.gcl"(
     Phase: ProjectPhase,
