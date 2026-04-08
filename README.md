@@ -833,7 +833,7 @@ Graphcal is designed to eventually support:
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
 - **Spreadsheet import/export** -- maintain `.gcl` source, domain experts keep their Excel
 
-See the [design documents](design/README.md) for details.
+See the [GitHub issues](https://github.com/shunichironomura/graphcal/issues) for details.
 
 ## Project Structure
 
@@ -844,7 +844,7 @@ graphcal/
     graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
     graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
     graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, go-to-def, hover
-  design/            # language design documents
+  grammar.ebnf       # formal grammar (source of truth for tree-sitter/TextMate grammars)
   tests/fixtures/    # .gcl test files (single-file and multi-file)
 ```
 

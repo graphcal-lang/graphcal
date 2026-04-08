@@ -13,10 +13,8 @@
 
 - The user-facing documentation is in the `docs/` directory. The `docs/index.md` is the main entry point for users.
   - It is a Zensical site, so you can run it locally with `zensical serve` in the project root and open `http://localhost:8000` in the browser.
-- The language design documents are in the `design/` directory. The `design/README.md` has links to all the design docs.
-  - Some ideas on features are documented in `.design/IDEAS.md`.
-  - The implementation phases are in `design/phases/` directory and summarized in `design/phases/README.md`.
-  - `design/codebase-reading-guide.md` has information for new contributors to understand the codebase.
+- The formal grammar is in `grammar.ebnf` at the repository root. It serves as the source of truth referenced by tree-sitter and TextMate grammars.
+- Design ideas and feature proposals are tracked as GitHub issues.
 - The detailed discussion file can be found in `.local/` directory. Note that these are raw notes and may contain incomplete or obsolete information.
 
 ## Implementation Guidelines
