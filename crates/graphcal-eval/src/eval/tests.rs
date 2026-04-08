@@ -351,55 +351,6 @@ fn eval_generics_milestone() {
     assert!((total_dv - 300.0).abs() < 0.01, "total_dv = {total_dv}");
 }
 
-#[test]
-fn eval_functions_milestone() {
-    let source = include_str!("../../../../tests/fixtures/functions.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // v_parking: orbital velocity at LEO (R_EARTH + 200 km)
-    // sqrt(GM_EARTH / (R_EARTH + 200 km)) = sqrt(3.986004418e14 / 6571000)
-    let v_parking = find_value(&result, "v_parking");
-    assert!(
-        v_parking > 7700.0 && v_parking < 7800.0,
-        "v_parking = {v_parking}"
-    );
-
-    // v_check should equal v_parking (same computation via fn-calling-fn)
-    let v_check = find_value(&result, "v_check");
-    assert!(
-        (v_check - v_parking).abs() < 1e-6,
-        "v_check = {v_check}, v_parking = {v_parking}"
-    );
-
-    // midpoint_alt: lerp(200 km, 35786 km, 0.5) = 17993 km -> 17993000 m SI
-    let midpoint = find_value(&result, "midpoint_alt");
-    assert!(
-        (midpoint - 17_993_000.0).abs() < 1.0,
-        "midpoint_alt = {midpoint}"
-    );
-
-    // transfer: Hohmann LEO-to-GEO, total_dv ~3935 m/s
-    let transfer_entry = result
-        .nodes
-        .iter()
-        .find(|(n, _)| n.as_str() == "transfer")
-        .unwrap();
-    match transfer_entry.1.as_ref().unwrap() {
-        Value::Struct {
-            type_name, fields, ..
-        } => {
-            assert_eq!(type_name.as_str(), "TransferResult");
-            assert_eq!(fields.len(), 3);
-            let total_dv = fields["total_dv"].si_value().unwrap();
-            assert!(
-                total_dv > 3900.0 && total_dv < 4000.0,
-                "total_dv = {total_dv}"
-            );
-        }
-        _ => panic!("expected struct for transfer"),
-    }
-}
-
 /// Helper: find a named value and return it (for indexed value tests).
 fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
@@ -770,15 +721,6 @@ fn project_module_import_graph_ref() {
         (total - 4000.0).abs() < f64::EPSILON,
         "total_mass = {total}, expected 4000.0"
     );
-}
-
-#[test]
-fn project_module_import_fn_call() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/multi/module_import_fn/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
-    let y = find_value(&result, "y");
-    assert!((y - 42.0).abs() < f64::EPSILON, "y = {y}, expected 42.0");
 }
 
 #[test]
@@ -1451,268 +1393,6 @@ fn project_injectable_index_expected_fail() {
     );
 }
 
-#[test]
-fn eval_nat_range() {
-    use crate::eval::types::Value;
-
-    let source = include_str!("../../../../tests/fixtures/nat_range.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // v_doubled: for i: range(3) { @v[i] * 2.0 }, v = [1,1,1] → [2,2,2]
-    let v_doubled = result
-        .nodes
-        .iter()
-        .find(|(n, _)| n.as_str() == "v_doubled")
-        .unwrap()
-        .1
-        .as_ref()
-        .unwrap();
-    if let Value::Indexed { entries, .. } = v_doubled {
-        assert_eq!(entries.len(), 3, "v_doubled should have 3 entries");
-        for (_k, v) in entries {
-            if let Value::Scalar { si_value, .. } = v {
-                assert!((*si_value - 2.0).abs() < 1e-10);
-            } else {
-                panic!("v_doubled entry should be Scalar");
-            }
-        }
-    } else {
-        panic!("v_doubled should be Indexed");
-    }
-
-    // mat32: transpose of 2x3 matrix → 3x2 matrix
-    let mat32 = result
-        .nodes
-        .iter()
-        .find(|(n, _)| n.as_str() == "mat32")
-        .unwrap()
-        .1
-        .as_ref()
-        .unwrap();
-    if let Value::Indexed { entries, .. } = mat32 {
-        assert_eq!(entries.len(), 3, "mat32 outer should have 3 entries (N=3)");
-        for (_k, inner) in entries {
-            if let Value::Indexed {
-                entries: inner_entries,
-                ..
-            } = inner
-            {
-                assert_eq!(
-                    inner_entries.len(),
-                    2,
-                    "mat32 inner should have 2 entries (M=2)"
-                );
-            } else {
-                panic!("mat32 inner should be Indexed");
-            }
-        }
-    } else {
-        panic!("mat32 should be Indexed");
-    }
-
-    // dot_result: sum(1m * 2 for 3) = 6m
-    let dot_result = find_value(&result, "dot_result");
-    assert!(
-        (dot_result - 6.0).abs() < 1e-10,
-        "dot_result = {dot_result}"
-    );
-}
-
-#[test]
-fn eval_nat_range_level1() {
-    use crate::eval::types::Value;
-
-    let source = include_str!("../../../../tests/fixtures/nat_range_level1.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // --- eye3: 3x3 identity matrix ---
-    let eye3 = find_entry(&result, "eye3");
-    if let Value::Indexed { entries, .. } = &eye3 {
-        assert_eq!(entries.len(), 3, "eye3 should have 3 rows");
-        for (row_idx, (_k, row)) in entries.iter().enumerate() {
-            if let Value::Indexed { entries: cols, .. } = row {
-                assert_eq!(cols.len(), 3, "eye3 row should have 3 columns");
-                for (col_idx, (_ck, val)) in cols.iter().enumerate() {
-                    let expected = if row_idx == col_idx { 1.0 } else { 0.0 };
-                    let actual = val.si_value().unwrap();
-                    assert!(
-                        (actual - expected).abs() < 1e-10,
-                        "eye3[{row_idx},{col_idx}] = {actual}, expected {expected}"
-                    );
-                }
-            } else {
-                panic!("eye3 row should be Indexed");
-            }
-        }
-    } else {
-        panic!("eye3 should be Indexed");
-    }
-
-    // --- mat_ab: matmul of 2x3 * 3x2 all-ones → 2x2 matrix with all entries = 3.0 ---
-    let mat_ab = find_entry(&result, "mat_ab");
-    if let Value::Indexed { entries, .. } = &mat_ab {
-        assert_eq!(entries.len(), 2, "mat_ab should have 2 rows");
-        for (_k, row) in entries {
-            if let Value::Indexed { entries: cols, .. } = row {
-                assert_eq!(cols.len(), 2, "mat_ab row should have 2 columns");
-                for (_ck, val) in cols {
-                    let v = val.si_value().unwrap();
-                    assert!((v - 3.0).abs() < 1e-10, "mat_ab entry = {v}, expected 3.0");
-                }
-            } else {
-                panic!("mat_ab row should be Indexed");
-            }
-        }
-    } else {
-        panic!("mat_ab should be Indexed");
-    }
-
-    // --- trace_eye3: trace of 3x3 identity = 3.0 ---
-    let trace_val = find_value(&result, "trace_eye3");
-    assert!(
-        (trace_val - 3.0).abs() < 1e-10,
-        "trace_eye3 = {trace_val}, expected 3.0"
-    );
-}
-
-#[test]
-fn eval_nat_range_level2() {
-    use crate::eval::types::Value;
-
-    // Helper: extract a 1D indexed value as a Vec<f64>
-    fn extract_1d(val: &Value) -> Vec<f64> {
-        match val {
-            Value::Indexed { entries, .. } => {
-                entries.iter().map(|(_, v)| v.si_value().unwrap()).collect()
-            }
-            other => panic!("expected Indexed, got {other:?}"),
-        }
-    }
-
-    let source = include_str!("../../../../tests/fixtures/nat_range_level2.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // --- flat6: flatten of 2x3 all-ones matrix → 6-element vector of 1.0 ---
-    let flat6 = find_entry(&result, "flat6");
-    let flat6_vals = extract_1d(&flat6);
-    assert_eq!(flat6_vals.len(), 6, "flat6 should have 6 elements");
-    for (i, v) in flat6_vals.iter().enumerate() {
-        assert!((v - 1.0).abs() < 1e-10, "flat6[{i}] = {v}, expected 1.0");
-    }
-
-    // --- v6: repeat_twice of [2,2,2] → [2,2,2,2,2,2] ---
-    let v6 = find_entry(&result, "v6");
-    let v6_vals = extract_1d(&v6);
-    assert_eq!(v6_vals.len(), 6, "v6 should have 6 elements");
-    for (i, v) in v6_vals.iter().enumerate() {
-        assert!((v - 2.0).abs() < 1e-10, "v6[{i}] = {v}, expected 2.0");
-    }
-
-    // --- mv: matmul_vec of 2x3 all-ones * 3-vector of 2.0 → [6.0, 6.0] ---
-    let mv = find_entry(&result, "mv");
-    let mv_vals = extract_1d(&mv);
-    assert_eq!(mv_vals.len(), 2, "mv should have 2 elements");
-    for (i, v) in mv_vals.iter().enumerate() {
-        assert!((v - 6.0).abs() < 1e-10, "mv[{i}] = {v}, expected 6.0");
-    }
-
-    // --- padded5: flatten_and_pad of 2x2 all-ones → [1, 1, 1, 1, 0] ---
-    let padded5 = find_entry(&result, "padded5");
-    let padded5_vals = extract_1d(&padded5);
-    assert_eq!(padded5_vals.len(), 5, "padded5 should have 5 elements");
-    let expected_padded = [1.0, 1.0, 1.0, 1.0, 0.0];
-    for (i, (v, e)) in padded5_vals.iter().zip(expected_padded.iter()).enumerate() {
-        assert!((v - e).abs() < 1e-10, "padded5[{i}] = {v}, expected {e}");
-    }
-}
-
-#[test]
-fn eval_turbofish() {
-    use crate::eval::types::Value;
-
-    let source = include_str!("../../../../tests/fixtures/turbofish.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // --- eye3: 3x3 identity matrix via turbofish ---
-    let eye3 = find_entry(&result, "eye3");
-    if let Value::Indexed { entries, .. } = &eye3 {
-        assert_eq!(entries.len(), 3, "eye3 should have 3 rows");
-        for (row_idx, (_, row_val)) in entries.iter().enumerate() {
-            if let Value::Indexed { entries: cols, .. } = row_val {
-                assert_eq!(cols.len(), 3, "each row should have 3 columns");
-                for (col_idx, (_, v)) in cols.iter().enumerate() {
-                    let expected = if row_idx == col_idx { 1.0 } else { 0.0 };
-                    if let Value::Scalar { si_value: s, .. } = v {
-                        assert!(
-                            (s - expected).abs() < 1e-10,
-                            "eye3[{row_idx},{col_idx}] = {s}, expected {expected}"
-                        );
-                    } else {
-                        panic!("eye3 entry should be Scalar");
-                    }
-                }
-            } else {
-                panic!("eye3 row should be Indexed");
-            }
-        }
-    } else {
-        panic!("eye3 should be Indexed, got {eye3:?}");
-    }
-
-    // --- scaled: scale_all<3> with explicit turbofish ---
-    let scaled = find_entry(&result, "scaled");
-    if let Value::Indexed { entries, .. } = &scaled {
-        assert_eq!(entries.len(), 3);
-        for (_, v) in entries {
-            if let Value::Scalar { si_value: s, .. } = v {
-                assert!(
-                    (s - 20.0).abs() < 1e-10,
-                    "scaled entry = {s}, expected 20.0"
-                );
-            } else {
-                panic!("scaled entry should be Scalar");
-            }
-        }
-    } else {
-        panic!("scaled should be Indexed, got {scaled:?}");
-    }
-}
-
-#[test]
-fn eval_expr_index() {
-    let source = include_str!("../../../../tests/fixtures/expr_index.gcl");
-    let result = compile_and_eval(source).unwrap();
-
-    // velocities: diff([10,10,10,10] m, 1 s) → [0,0,0] m/s
-    let vel = find_entry(&result, "velocities");
-    assert_indexed_len(&vel, 3, "velocities");
-
-    // w4: shift_left([1,1,1,1,1] m) → [1,1,1,1] m
-    let w4 = find_entry(&result, "w4");
-    assert_indexed_len(&w4, 4, "w4");
-
-    // x4: shift_left_by2([2,2,2,2,2,2]) → [2,2,2,2]
-    let x4 = find_entry(&result, "x4");
-    assert_indexed_len(&x4, 4, "x4");
-
-    // diffs: finite_diff_3([1,1,1,1]) → [0,0,0]
-    let diffs = find_entry(&result, "diffs");
-    assert_indexed_len(&diffs, 3, "diffs");
-}
-
-fn assert_indexed_len(val: &crate::eval::types::Value, expected_len: usize, name: &str) {
-    if let crate::eval::types::Value::Indexed { entries, .. } = val {
-        assert_eq!(
-            entries.len(),
-            expected_len,
-            "{name} should have {expected_len} entries, got {}",
-            entries.len()
-        );
-    } else {
-        panic!("{name} should be Indexed, got {val:?}");
-    }
-}
-
 // ---- Inline DAG tests (Phase 5) ----
 
 #[test]
@@ -1796,4 +1476,41 @@ node result: Velocity = @total;
     let result = compile_and_eval(source).unwrap();
     let val = find_value(&result, "result");
     assert!((val - 15.0).abs() < 1e-10, "expected 15.0, got {val}");
+}
+
+// ---- Cross-file DAG tests (Phase 6.10) ----
+
+#[test]
+fn cross_file_dag_selective() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/cross_file_dag/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+
+    // double_speed doubles the input: 200.0 * 2.0 = 400.0
+    let doubled = find_value(&result, "final_result");
+    assert!(
+        (doubled - 400.0).abs() < 1e-10,
+        "expected 400.0, got {doubled}"
+    );
+
+    // mach = 200.0 / 343.0 (SPEED_OF_SOUND imported via `import ..` in the DAG)
+    let mach = find_value(&result, "final_mach");
+    let expected_mach = 200.0 / 343.0;
+    assert!(
+        (mach - expected_mach).abs() < 1e-10,
+        "expected {expected_mach}, got {mach}"
+    );
+}
+
+// ---- Bare module path DAG reference tests ----
+
+#[test]
+fn bare_module_dag_ref() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_dag_ref/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+
+    // double DAG: 21.0 * 2.0 = 42.0
+    let answer = find_value(&result, "answer");
+    assert!((answer - 42.0).abs() < 1e-10, "expected 42.0, got {answer}");
 }

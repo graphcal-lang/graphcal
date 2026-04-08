@@ -2,7 +2,7 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// Module import: qualified graph refs with @
-import "./params.gcl";
+// Module include: qualified graph refs with @
+include "./params.gcl";
 
 node total_mass: Mass = @params::dry_mass + @params::fuel_mass;

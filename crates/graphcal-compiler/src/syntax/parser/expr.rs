@@ -470,10 +470,6 @@ impl Parser<'_> {
     }
 
     /// Parse an identifier-based expression (const ref, struct, variant, fn call, qualified ref, etc.).
-    #[expect(
-        clippy::too_many_lines,
-        reason = "naturally long due to many identifier-based expression forms including turbofish"
-    )]
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
@@ -536,36 +532,8 @@ impl Parser<'_> {
                     },
                     span: full_span,
                 })
-            } else if is_lower_snake_case(&member)
-                && (self.lexer.peek() == Some(&Token::LParen)
-                    || (self.lexer.peek() == Some(&Token::Lt)
-                        && self.is_type_args_followed_by_paren()))
-            {
-                // module::fn_name(args...) or module::fn_name<TypeArgs>(args...)
-                let type_args = if self.lexer.peek() == Some(&Token::Lt) {
-                    self.parse_generic_arg_list()?
-                } else {
-                    vec![]
-                };
-                self.lexer.next_token(); // consume '('
-                let args = self.parse_arg_list()?;
-                let (_, rparen_span) = self.expect(Token::RParen)?;
-                let call_span = span.merge(rparen_span);
-                Ok(Expr {
-                    kind: ExprKind::QualifiedFnCall {
-                        module: crate::syntax::ast::Ident { name, span },
-                        name: Spanned::new(FnName::new(member), member_ident.span),
-                        type_args,
-                        args,
-                    },
-                    span: call_span,
-                })
             } else {
-                Err(self.unexpected_token(
-                    "a CONST_NAME or function_name after `::`",
-                    &member,
-                    member_ident.span,
-                ))
+                Err(self.unexpected_token("a CONST_NAME after `::`", &member, member_ident.span))
             }
         } else if self.lexer.peek() == Some(&Token::LParen)
             || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
@@ -1384,48 +1352,6 @@ mod tests {
                 assert_eq!(name.value.as_str(), "G0");
             }
             other => panic!("expected QualifiedConstRef, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_qualified_fn_call() {
-        let file = Parser::new("node x: Dimensionless = lib::compute(1.0, 2.0);")
-            .parse_file()
-            .unwrap();
-        let decl = &file.declarations[0].kind;
-        let DeclKind::Node(node) = decl else {
-            panic!("expected Node");
-        };
-        match &node.value.kind {
-            ExprKind::QualifiedFnCall {
-                module, name, args, ..
-            } => {
-                assert_eq!(module.name, "lib");
-                assert_eq!(name.value.as_str(), "compute");
-                assert_eq!(args.len(), 2);
-            }
-            other => panic!("expected QualifiedFnCall, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_qualified_fn_call_no_args() {
-        let file = Parser::new("node x: Dimensionless = lib::get_value();")
-            .parse_file()
-            .unwrap();
-        let decl = &file.declarations[0].kind;
-        let DeclKind::Node(node) = decl else {
-            panic!("expected Node");
-        };
-        match &node.value.kind {
-            ExprKind::QualifiedFnCall {
-                module, name, args, ..
-            } => {
-                assert_eq!(module.name, "lib");
-                assert_eq!(name.value.as_str(), "get_value");
-                assert_eq!(args.len(), 0);
-            }
-            other => panic!("expected QualifiedFnCall, got {other:?}"),
         }
     }
 

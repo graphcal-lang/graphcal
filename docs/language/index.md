@@ -19,7 +19,7 @@ The language has a layered type system:
 | 3 | [Units](dimensions-and-units.md) | Value-level scaling factors attached to dimensions |
 | 4 | [Algebraic Data Types](algebraic-data-types.md) | Structs, union types, pattern matching |
 | 5 | [Indexes](indexes.md) | Finite label sets for collections |
-| 6 | [Functions](functions.md) | Pure functions with dimension and index generics |
+| 6 | [DAG Blocks](functions.md) | Reusable computation via `dag` blocks and `include` |
 
 ## Reference Pages
 
@@ -65,13 +65,13 @@ The language has a layered type system:
 
     [:octicons-arrow-right-24: Indexes](indexes.md)
 
-- :material-function:{ .lg .middle } **Functions**
+- :material-function:{ .lg .middle } **DAG Blocks**
 
     ---
 
-    Pure functions, dimension generics, index generics.
+    Reusable computation via `dag` blocks and `include`.
 
-    [:octicons-arrow-right-24: Functions](functions.md)
+    [:octicons-arrow-right-24: DAG Blocks](functions.md)
 
 - :material-code-parentheses:{ .lg .middle } **Expressions**
 

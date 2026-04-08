@@ -6,7 +6,6 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#attribute" },
-    { "include": "#fn-declaration" },
     { "include": "#type-declaration" },
     { "include": "#base-dimension-declaration" },
     { "include": "#dimension-declaration" },
@@ -33,7 +32,6 @@
     { "include": "#generic-params" },
     { "include": "#return-type" },
     { "include": "#type-annotation" },
-    { "include": "#qualified-fn-call" },
     { "include": "#fn-call" },
     { "include": "#graph-ref" },
     { "include": "#qualified-const-ref" },
@@ -62,14 +60,6 @@
       },
       "endCaptures": {
         "0": { "name": "punctuation.definition.string.end.graphcal" }
-      }
-    },
-
-    "fn-declaration": {
-      "match": "\\b(fn)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
-      "captures": {
-        "1": { "name": "keyword.declaration.fn.graphcal" },
-        "2": { "name": "entity.name.function.graphcal" }
       }
     },
 
@@ -313,8 +303,7 @@
         { "include": "#numbers" },
         { "include": "#booleans" },
         { "include": "#strings" },
-        { "include": "#qualified-fn-call" },
-        { "include": "#fn-call" },
+            { "include": "#fn-call" },
         { "include": "#qualified-const-ref" },
         { "include": "#upper-constant" },
         { "include": "#pascal-type" },
@@ -556,16 +545,6 @@
         "2": { "name": "entity.name.namespace.graphcal" },
         "3": { "name": "punctuation.separator.namespace.graphcal" },
         "4": { "name": "variable.other.graphcal" }
-      }
-    },
-
-    "qualified-fn-call": {
-      "comment": "Qualified function call: module::fn_name(...) or module::fn_name<3>(...)",
-      "match": "\\b([a-z][a-z0-9_]*)(::)([a-z][a-z0-9_]*)\\s*(?=(<[^>]*>)?\\s*\\()",
-      "captures": {
-        "1": { "name": "entity.name.namespace.graphcal" },
-        "2": { "name": "punctuation.separator.namespace.graphcal" },
-        "3": { "name": "entity.name.function.graphcal" }
       }
     },
 

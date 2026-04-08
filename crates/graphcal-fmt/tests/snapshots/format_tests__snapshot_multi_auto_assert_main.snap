@@ -2,8 +2,8 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// main.gcl -- selective import; does NOT import the assertion explicitly
+// main.gcl -- selective include; does NOT import the assertion explicitly
 // The assertion in lib.gcl should still be evaluated and reported.
-import "./lib.gcl" { doubled };
+include "./lib.gcl" { doubled };
 
 node result: Dimensionless = @doubled + 1.0;

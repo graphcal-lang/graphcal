@@ -350,7 +350,6 @@ fn extract_decl_name(kind: &DeclKind) -> Option<String> {
         DeclKind::Index(i) => Some(i.name.value.as_str().to_string()),
         DeclKind::Type(t) => Some(t.name.value.as_str().to_string()),
         DeclKind::UnionType(u) => Some(u.name.value.as_str().to_string()),
-        DeclKind::Fn(f) => Some(f.name.value.as_str().to_string()),
         DeclKind::Assert(a) => Some(a.name.value.as_str().to_string()),
         DeclKind::Plot(p) => Some(p.name.value.as_str().to_string()),
         DeclKind::Figure(f) => Some(f.name.value.as_str().to_string()),

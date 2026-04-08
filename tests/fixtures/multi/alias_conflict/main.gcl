@@ -1,4 +1,4 @@
-import "./a.gcl" { x as x_a };
-import "./b.gcl" { x as x_b };
+include "./a.gcl" { x as x_a };
+include "./b.gcl" { x as x_b };
 
 node sum: Dimensionless = @x_a + @x_b;

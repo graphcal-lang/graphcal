@@ -41,7 +41,6 @@ pub(crate) trait ExprVisitor {
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref(expr),
 
             ExprKind::FnCall { args, .. } => self.visit_fn_call(expr, args),
-            ExprKind::QualifiedFnCall { args, .. } => self.visit_qualified_fn_call(expr, args),
 
             ExprKind::BinOp { lhs, rhs, .. } => self.visit_bin_op(expr, lhs, rhs),
             ExprKind::UnaryOp { operand, .. } => self.visit_unary_op(expr, operand),
@@ -121,13 +120,6 @@ pub(crate) trait ExprVisitor {
     // -- Container handlers (default: recurse into children) --
 
     fn visit_fn_call(&mut self, _expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
-        for arg in args {
-            self.visit_expr(arg)?;
-        }
-        Ok(())
-    }
-
-    fn visit_qualified_fn_call(&mut self, _expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
         for arg in args {
             self.visit_expr(arg)?;
         }
@@ -273,7 +265,6 @@ pub trait ExprVisitorMut {
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
 
             ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
-            ExprKind::QualifiedFnCall { .. } => self.visit_qualified_fn_call_mut(expr),
 
             ExprKind::BinOp { lhs, rhs, .. } => {
                 self.visit_expr_mut(lhs)?;
@@ -380,15 +371,6 @@ pub trait ExprVisitorMut {
 
     fn visit_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::FnCall { args, .. } = &mut expr.kind {
-            for arg in args {
-                self.visit_expr_mut(arg)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn visit_qualified_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedFnCall { args, .. } = &mut expr.kind {
             for arg in args {
                 self.visit_expr_mut(arg)?;
             }

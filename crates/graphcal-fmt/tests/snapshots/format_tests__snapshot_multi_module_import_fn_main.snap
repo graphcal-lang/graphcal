@@ -2,9 +2,10 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// Module import: qualified function call
+// Module import: values from lib
 import "./lib.gcl";
 
+const node TWO: Dimensionless = 2.0;
 param x: Dimensionless = 21.0;
 
-node y: Dimensionless = lib::double(@x);
+node y: Dimensionless = @x * TWO;

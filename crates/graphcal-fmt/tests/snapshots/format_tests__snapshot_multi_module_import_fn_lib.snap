@@ -2,5 +2,9 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// lib.gcl -- utility functions
-fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
+// lib.gcl -- utility DAG
+dag double {
+param x: Dimensionless;
+    
+    node result: Dimensionless = @x * 2.0;
+}

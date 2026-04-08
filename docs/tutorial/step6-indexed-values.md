@@ -78,18 +78,6 @@ This produces:
 - `Correction`: 2.58 km/s (2.46 + 0.12)
 - `Insertion`: 4.41 km/s (2.58 + 1.83)
 
-## Generic Functions with Index Constraints
-
-Functions can be generic over indexes:
-
-```
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-
-node total_check: Velocity = total(@delta_v);
-```
-
-`<I: Index>` declares an index type parameter, similar to `<D: Dim>` for dimensions.
-
 ## Complete Example
 
 ```
@@ -120,7 +108,7 @@ node departure_dv: Velocity = @delta_v[Maneuver::Departure];
 - **`for` comprehensions** to transform each element
 - **Aggregations**: `sum`, `max`, `min`, `mean`, `count`
 - **`scan`** for cumulative folds
-- **Index generics** with `<I: Index>` in functions
+- **Aggregation functions** that work with any index
 
 ## What's Next?
 

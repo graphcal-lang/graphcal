@@ -6,11 +6,10 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::syntax::ast::{Expr, LetBinding, MatchArm};
-use crate::syntax::names::{FieldName, FnName, IndexName, StructTypeName};
+use crate::syntax::names::{FieldName, IndexName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
-use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     check_arm_types_match, declared_to_inferred, format_inferred_type, resolve_field_type,
@@ -27,7 +26,6 @@ pub(super) fn infer_if(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let cond_type = infer_type(
@@ -36,7 +34,6 @@ pub(super) fn infer_if(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     if cond_type != InferredType::Bool {
@@ -55,7 +52,6 @@ pub(super) fn infer_if(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     let else_type = infer_type(
@@ -64,7 +60,6 @@ pub(super) fn infer_if(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
 
@@ -89,7 +84,6 @@ pub(super) fn infer_block(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let mut block_locals = local_types.clone();
@@ -116,7 +110,6 @@ pub(super) fn infer_block(
             &block_locals,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         )?;
 
@@ -144,7 +137,6 @@ pub(super) fn infer_block(
         &block_locals,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )
 }
@@ -162,7 +154,6 @@ pub(super) fn infer_match(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     // Infer scrutinee type — must be a struct/tagged union value.
@@ -172,7 +163,6 @@ pub(super) fn infer_match(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
 
@@ -257,7 +247,6 @@ pub(super) fn infer_match(
                     local_types,
                     registry,
                     builtin_fns,
-                    resolved_fn_sigs,
                     src,
                 )?;
                 arm_types.push(arm_type);
@@ -378,7 +367,6 @@ pub(super) fn infer_match(
                     &arm_locals,
                     registry,
                     builtin_fns,
-                    resolved_fn_sigs,
                     src,
                 )?;
                 arm_types.push(arm_type);

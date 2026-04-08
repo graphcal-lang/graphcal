@@ -1,10 +1,12 @@
 # Pure Functions
 
+> **SUPERSEDED:** The `fn` keyword has been removed from Graphcal. User-defined functions have been replaced by `dag` blocks, which unify pure functions and parameterized imports into a single abstraction. See [24-inline-modules.md](./24-inline-modules.md) for the current design.
+>
 > Reusable computation logic via `fn`, enforced pure by the `@` prohibition rule.
 
 ## Status
 
-**Decision level:** Design complete (see [pure-functions-syntax-design.md](../2026-02-12_pure-functions-syntax-design.md)). Awaiting implementation.
+**Decision level:** ~~Design complete~~ **Superseded by [design doc 24](./24-inline-modules.md).** The `fn` keyword now produces a parse error: "fn is no longer supported; use dag blocks instead."
 
 ## Summary
 

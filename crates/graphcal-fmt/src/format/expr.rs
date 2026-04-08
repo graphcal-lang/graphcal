@@ -79,15 +79,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             type_args,
             args,
         } => format_fn_call_expr(fmt, name.value.as_str(), type_args, args),
-        ExprKind::QualifiedFnCall {
-            module,
-            name,
-            type_args,
-            args,
-        } => {
-            let fn_name = format!("{}::{}", module.name.as_str(), name.value.as_str());
-            format_fn_call_expr(fmt, &fn_name, type_args, args)
-        }
         ExprKind::If {
             condition,
             then_branch,
@@ -253,7 +244,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
     }
 }
 
-/// Shared logic for `FnCall` and `QualifiedFnCall` with comment handling per argument.
+/// Format a `FnCall` expression with comment handling per argument.
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
     fn_name: &str,

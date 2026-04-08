@@ -10,14 +10,14 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::syntax::ast::TypeExpr;
-use crate::syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File, FnBody, FnDecl};
+use crate::syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File};
 use crate::syntax::span::Span;
 
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
-    ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedFunctionEntry,
-    ResolvedLayerEntry, ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
+    ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
+    ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -33,10 +33,7 @@ pub(crate) use names::{is_lower_snake_case, is_upper_snake_case};
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
-use scope::{
-    check_no_assert_graph_refs, check_no_graph_refs, check_no_graph_refs_in_fn,
-    check_no_variant_literals,
-};
+use scope::{check_no_assert_graph_refs, check_no_graph_refs, check_no_variant_literals};
 
 /// Known attribute names in the language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,13 +76,10 @@ impl AttributeName {
 /// Classification of a name in the resolver's scope.
 ///
 /// Used to partition names into const vs runtime sets without relying on casing heuristics.
-/// Functions are tracked separately because they don't participate in const/runtime dependency
-/// extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NameCategory {
     Const,
     Runtime,
-    Fn,
 }
 
 /// Result of collecting local declarations from the AST.
@@ -97,7 +91,6 @@ struct CollectedDeclarations {
     plots: Vec<ResolvedPlotEntry>,
     figures: Vec<ResolvedFigureEntry>,
     layers: Vec<ResolvedLayerEntry>,
-    functions: Vec<ResolvedFunctionEntry>,
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
     source_order: Vec<(String, DeclCategory)>,
@@ -130,15 +123,13 @@ fn collect_local_declarations(
     let mut plots = Vec::new();
     let mut figures = Vec::new();
     let mut layers = Vec::new();
-    let mut functions = Vec::new();
     let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut source_order = Vec::new();
-    let mut local_user_fn_names: HashSet<String> = HashSet::new();
     let mut assert_names: HashSet<String> = HashSet::new();
 
     // Build combined user function names (imported + local) for reference checking
-    let mut all_user_fn_names = imported_user_fns.clone();
+    let all_user_fn_names = imported_user_fns.clone();
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
@@ -151,22 +142,6 @@ fn collect_local_declarations(
             DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
             DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
             DeclKind::Layer(l) => (l.name.value.to_string(), l.name.span, false),
-            DeclKind::Fn(f) => {
-                let fn_name_str = f.name.value.to_string();
-                // Check fn name for duplicates (same namespace as param/node/const)
-                if let Some((first_span, _)) = names.get(&fn_name_str) {
-                    return Err(GraphcalError::DuplicateName {
-                        name: fn_name_str,
-                        src: src.clone(),
-                        duplicate: f.name.span.into(),
-                        first: (*first_span).into(),
-                    });
-                }
-                names.insert(fn_name_str.clone(), (f.name.span, NameCategory::Fn));
-                local_user_fn_names.insert(fn_name_str.clone());
-                all_user_fn_names.insert(fn_name_str);
-                continue;
-            }
             DeclKind::BaseDimension(_)
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
@@ -213,7 +188,6 @@ fn collect_local_declarations(
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
             | DeclKind::UnionType(_)
-            | DeclKind::Fn(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_)
@@ -394,28 +368,6 @@ fn collect_local_declarations(
                     span: decl.span,
                 });
             }
-            DeclKind::Fn(f) => {
-                // Enforce @ prohibition in function bodies
-                check_no_graph_refs_in_fn(f, src)?;
-                // Enforce variant literal prohibition in function bodies
-                let check_fn_variant = |expr: &Expr| -> Result<(), GraphcalError> {
-                    check_no_variant_literals(expr, "fn", src)
-                };
-                match &f.body {
-                    FnBody::Short(expr) => check_fn_variant(expr)?,
-                    FnBody::Block { stmts, expr } => {
-                        for stmt in stmts {
-                            check_fn_variant(&stmt.value)?;
-                        }
-                        check_fn_variant(expr)?;
-                    }
-                }
-                functions.push(ResolvedFunctionEntry {
-                    name: f.name.value.to_string(),
-                    decl: f.clone(),
-                    span: decl.span,
-                });
-            }
             DeclKind::Param(p) => {
                 let pname = p.name.value.to_string();
                 if let Some(ref value) = p.value {
@@ -491,11 +443,10 @@ fn collect_local_declarations(
         plots,
         figures,
         layers,
-        functions,
         runtime_deps,
         const_deps,
         source_order,
-        user_fn_names: local_user_fn_names,
+        user_fn_names: HashSet::new(),
         assert_names,
     })
 }
@@ -541,7 +492,6 @@ fn validate_attributes(
             DeclKind::Assert(a) => Some(a.name.value.to_string()),
             DeclKind::Plot(p) => Some(p.name.value.to_string()),
             DeclKind::Figure(f) => Some(f.name.value.to_string()),
-            DeclKind::Fn(f) => Some(f.name.value.to_string()),
             _ => None,
         };
         for attr in &decl.attributes {
@@ -565,7 +515,7 @@ fn validate_attributes(
                         DeclKind::Assert(_) => "assert",
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
-                        DeclKind::Fn(_) => "fn",
+
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
@@ -590,7 +540,7 @@ fn validate_attributes(
                         DeclKind::Plot(_) => Some("plot"),
                         DeclKind::Figure(_) => Some("figure"),
                         DeclKind::Layer(_) => Some("layer"),
-                        DeclKind::Fn(_) => Some("fn"),
+
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dimension"),
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
@@ -663,7 +613,7 @@ fn validate_attributes(
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
-                        DeclKind::Fn(_) => "fn",
+
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
@@ -692,7 +642,7 @@ fn validate_attributes(
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
-                        DeclKind::Fn(_) => "fn",
+
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
@@ -746,7 +696,7 @@ fn validate_attributes(
                         DeclKind::Plot(_) => "plot",
                         DeclKind::Figure(_) => "figure",
                         DeclKind::Layer(_) => "layer",
-                        DeclKind::Fn(_) => "fn",
+
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dimension",
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Index(_) => "cat/range",
@@ -779,7 +729,6 @@ pub(crate) struct ImportedNames {
     pub consts: Vec<(String, TypeExpr, Expr, Span)>,
     pub params: Vec<(String, TypeExpr, Expr, Span)>,
     pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    pub functions: Vec<(String, FnDecl, Span)>,
     pub asserts: Vec<(String, AssertBody, Span)>,
 }
 
@@ -816,7 +765,7 @@ pub(crate) fn resolve_with_imports(
     let builtin_fns = builtin_functions();
 
     let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
-    let mut imported_fn_names: HashSet<String> = HashSet::new();
+    let imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
@@ -828,10 +777,6 @@ pub(crate) fn resolve_with_imports(
     }
     for (name, _, _, span) in &imported.nodes {
         names.insert(name.clone(), (*span, NameCategory::Runtime));
-    }
-    for (name, _, span) in &imported.functions {
-        names.insert(name.clone(), (*span, NameCategory::Fn));
-        imported_fn_names.insert(name.clone());
     }
     for (name, _, span) in &imported.asserts {
         names.insert(name.clone(), (*span, NameCategory::Runtime));
@@ -933,16 +878,6 @@ pub(crate) fn resolve_with_imports(
         })
         .collect();
     all_nodes.extend(local.nodes);
-    let mut all_functions: Vec<ResolvedFunctionEntry> = imported
-        .functions
-        .iter()
-        .map(|(name, decl, span)| ResolvedFunctionEntry {
-            name: name.clone(),
-            decl: decl.clone(),
-            span: *span,
-        })
-        .collect();
-    all_functions.extend(local.functions);
     let mut all_asserts: Vec<ResolvedAssertEntry> = imported
         .asserts
         .iter()
@@ -984,7 +919,6 @@ pub(crate) fn resolve_with_imports(
         runtime_deps,
         const_deps,
         source_order: all_source_order,
-        functions: all_functions,
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
@@ -1011,7 +945,7 @@ pub(crate) fn resolve_with_imported_values(
     let builtin_fns = builtin_functions();
 
     let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
-    let mut imported_fn_names: HashSet<String> = HashSet::new();
+    let imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (for scope checking only).
     // ScopedName -> String conversion: the resolver's internal scope uses flat strings
@@ -1024,10 +958,6 @@ pub(crate) fn resolve_with_imported_values(
     }
     for (name, span) in &imported.node_names {
         names.insert(name.to_string(), (*span, NameCategory::Runtime));
-    }
-    for entry in &imported.functions {
-        names.insert(entry.name.clone(), (entry.span, NameCategory::Fn));
-        imported_fn_names.insert(entry.name.clone());
     }
     for (name, span) in &imported.assert_names {
         names.insert(name.clone(), (*span, NameCategory::Runtime));
@@ -1050,10 +980,6 @@ pub(crate) fn resolve_with_imported_values(
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
-    // Imported functions still need to be in the resolved output for IR compilation.
-    let mut all_functions = imported.functions.clone();
-    all_functions.extend(local.functions);
-
     // Validate attributes and build assumes_map / expected_fail_map
     let validated = validate_attributes(file, src, &all_assert_names)?;
 
@@ -1068,7 +994,6 @@ pub(crate) fn resolve_with_imported_values(
         runtime_deps: local.runtime_deps,
         const_deps: local.const_deps,
         source_order: local.source_order,
-        functions: all_functions,
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,

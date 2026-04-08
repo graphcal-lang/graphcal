@@ -35,24 +35,37 @@ index Step = linspace(0.0 s, 10.0 s, step: 1.0 s);
 const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 const node R_EARTH: Length = 6371.0 km;
 
-// Long function signature that should wrap
-fn compute_transfer_velocity(gm: GravParam,
-    r_departure: Length,
-    r_arrival: Length,
-    inclination_change: Dimensionless) -> Velocity {
-    let v1 = sqrt(gm / r_departure);
-    let v2 = sqrt(gm / r_arrival);
-    let dv_hohmann = sqrt(2.0 * gm * r_arrival / (r_departure * (r_departure + r_arrival))) - v1;
-    let dv_plane = 2.0 * v1 * sin(inclination_change / 2.0);
-    sqrt(dv_hohmann ^ 2.0 + dv_plane ^ 2.0)
+// DAG with long signature (replaces block-body function)
+dag compute_transfer_velocity {
+param gm: GravParam;
+    
+    param r_departure: Length;
+    
+    param r_arrival: Length;
+    
+    param inclination_change: Dimensionless;
+    
+    node v1: Velocity = sqrt(@gm / @r_departure);
+    
+    node v2: Velocity = sqrt(@gm / @r_arrival);
+    
+    node dv_hohmann: Velocity = sqrt(2.0 * @gm * @r_arrival / (@r_departure * (@r_departure + @r_arrival))) - @v1;
+    
+    node dv_plane: Velocity = 2.0 * @v1 * sin(@inclination_change / 2.0);
+    
+    node result: Velocity = sqrt(@dv_hohmann ^ 2.0 + @dv_plane ^ 2.0);
 }
 
-// Short expression-body function
-fn clamp(x: Dimensionless, lo: Dimensionless, hi: Dimensionless) -> Dimensionless = if x < lo {
-    lo
-} else {
-    if x > hi { hi } else { x }
-};
+// DAG with short expression body (replaces expression-body function)
+dag clamp_dag {
+param x: Dimensionless;
+    
+    param lo: Dimensionless;
+    
+    param hi: Dimensionless;
+    
+    node result: Dimensionless = if @x < @lo { @lo } else { if @x > @hi { @hi } else { @x } };
+}
 
 // Deeply nested if-else chain in for comprehension
 param phase_priority: Dimensionless[Phase] = for p: Phase {
@@ -121,7 +134,7 @@ node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| {
     @decay[prev_t] * (1.0 - rate * dt)
 });
 
-// Block expression as parameter value
+// Block expression as node value
 node complex_result: Velocity = {
     let r1 = R_EARTH + 200.0 km;
     let r2 = R_EARTH + 35786.0 km;

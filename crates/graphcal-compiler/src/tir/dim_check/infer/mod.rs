@@ -16,11 +16,10 @@ use miette::NamedSource;
 
 use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{FnName, UnitName};
+use crate::syntax::names::UnitName;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
-use crate::tir::tir::ResolvedFnSig;
 
 use super::helpers::declared_to_inferred;
 use super::{DeclaredType, InferredType};
@@ -37,7 +36,6 @@ pub(super) fn infer_type(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     infer_type_with_owner(
@@ -47,7 +45,6 @@ pub(super) fn infer_type(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )
 }
@@ -61,7 +58,6 @@ pub(super) fn infer_type_with_owner(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match &expr.kind {
@@ -166,7 +162,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -177,7 +172,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -191,7 +185,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -206,7 +199,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -221,30 +213,17 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
         // --- Function calls ---
-        ExprKind::FnCall {
+        ExprKind::FnCall { name, args, .. } => functions::infer_fn_call(
             name,
-            type_args,
-            args,
-        }
-        | ExprKind::QualifiedFnCall {
-            name,
-            type_args,
-            args,
-            ..
-        } => functions::infer_fn_call(
-            name,
-            type_args,
             args,
             declared_types,
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -261,7 +240,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -272,7 +250,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -286,7 +263,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -298,7 +274,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -310,7 +285,6 @@ pub(super) fn infer_type_with_owner(
                 local_types,
                 registry,
                 builtin_fns,
-                resolved_fn_sigs,
                 src,
             )
         }
@@ -323,7 +297,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -343,7 +316,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -362,7 +334,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -373,7 +344,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 
@@ -390,7 +360,6 @@ pub(super) fn infer_type_with_owner(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         ),
 

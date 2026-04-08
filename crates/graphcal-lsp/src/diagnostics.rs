@@ -320,11 +320,12 @@ mod tests {
             1,
             "expected exactly 1 assertion diagnostic, got: {assert_diags:?}"
         );
-        // The span should point to the import statement on line 0 of the root file,
+        // The span should point to the import statement on line 1 of the root file
+        // (line 0 is the `include` for the runtime value, line 1 is the `import` for the assert),
         // not to the assertion declaration in the dependency file.
         assert_eq!(
-            assert_diags[0].range.start.line, 0,
-            "expected diagnostic span on line 0 (the import statement), got line {}",
+            assert_diags[0].range.start.line, 1,
+            "expected diagnostic span on line 1 (the import statement), got line {}",
             assert_diags[0].range.start.line
         );
         // The span should be within the root file's source (valid byte offsets).

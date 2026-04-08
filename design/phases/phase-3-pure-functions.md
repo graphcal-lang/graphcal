@@ -1,5 +1,7 @@
 # Phase 3: Pure Functions
 
+> **SUPERSEDED:** The `fn` keyword has been removed from Graphcal. Reusable computation is now provided by `dag` blocks and `include`. See [design doc 24](../24-inline-modules.md) for the current design. This document is retained as a historical record.
+>
 > `fn` keyword for reusable computation, enforced pure by the `@` prohibition.
 
 ## Goal

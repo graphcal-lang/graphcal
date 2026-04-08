@@ -24,7 +24,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
         let kind = match def.category {
             SymbolCategory::Param | SymbolCategory::Node => SymbolKind::VARIABLE,
             SymbolCategory::Const | SymbolCategory::Unit => SymbolKind::CONSTANT,
-            SymbolCategory::Function | SymbolCategory::Dag => SymbolKind::FUNCTION,
+            SymbolCategory::Dag => SymbolKind::FUNCTION,
             SymbolCategory::StructType => SymbolKind::STRUCT,
             SymbolCategory::Dimension => SymbolKind::TYPE_PARAMETER,
             SymbolCategory::Index => SymbolKind::ENUM,

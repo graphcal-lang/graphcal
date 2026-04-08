@@ -124,84 +124,6 @@ fn resolve_runtime_deps_extracted() {
     assert_eq!(c_deps.len(), 2);
 }
 
-// Phase 3: function resolution tests
-
-#[test]
-fn resolve_fn_collected() {
-    let source = r"
-        fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
-        param val: Dimensionless = 1.0;
-        node result: Dimensionless = double(@val);
-    ";
-    let resolved = parse_and_resolve(source).unwrap();
-    assert_eq!(resolved.functions.len(), 1);
-    assert_eq!(resolved.functions[0].name, "double");
-}
-
-#[test]
-fn resolve_fn_duplicate_name_with_param() {
-    let source = r"
-        param x: Dimensionless = 1.0;
-        fn x(a: Dimensionless) -> Dimensionless = a;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DuplicateName { .. }));
-}
-
-#[test]
-fn resolve_fn_duplicate_name_with_const() {
-    let source = r"
-        const node X: Dimensionless = 1.0;
-        fn X(a: Dimensionless) -> Dimensionless = a;
-    ";
-    // This should fail at parse time (fn name must be lower_snake_case)
-    let result = Parser::new(source).parse_file();
-    assert!(result.is_err());
-}
-
-#[test]
-fn resolve_at_in_fn_body() {
-    let source = r"
-        param val: Dimensionless = 1.0;
-        fn bad(x: Dimensionless) -> Dimensionless = x + @val;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::GraphRefInFn { .. }));
-}
-
-#[test]
-fn resolve_user_fn_call_in_node() {
-    let source = r"
-        fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
-        param val: Dimensionless = 5.0;
-        node result: Dimensionless = double(@val);
-    ";
-    let resolved = parse_and_resolve(source).unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
-}
-
-#[test]
-fn resolve_user_fn_call_in_const() {
-    let source = r"
-        fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
-        const node FOUR: Dimensionless = double(2.0);
-    ";
-    let resolved = parse_and_resolve(source).unwrap();
-    assert_eq!(resolved.consts.len(), 1);
-}
-
-#[test]
-fn resolve_fn_not_in_source_order() {
-    let source = r"
-        fn double(x: Dimensionless) -> Dimensionless = x * 2.0;
-        param val: Dimensionless = 5.0;
-        node result: Dimensionless = double(@val);
-    ";
-    let resolved = parse_and_resolve(source).unwrap();
-    // Functions should NOT appear in source_order
-    assert_eq!(resolved.source_order.len(), 2); // param + node only
-}
-
 // --- Additional error path tests ---
 
 #[test]
@@ -413,34 +335,6 @@ fn resolve_scan_expression() {
     assert_eq!(resolved.nodes.len(), 1);
     let deps = &resolved.runtime_deps["cumul"];
     assert!(deps.contains("vals"));
-}
-
-#[test]
-fn resolve_fn_with_block_body() {
-    let resolved = parse_and_resolve(
-        r"
-        fn compute(x: Dimensionless) -> Dimensionless {
-            let a = x * 2.0;
-            let b = a + 1.0;
-            b
-        }
-        param val: Dimensionless = 5.0;
-        node result: Dimensionless = compute(@val);
-    ",
-    )
-    .unwrap();
-    assert_eq!(resolved.functions.len(), 1);
-    assert_eq!(resolved.nodes.len(), 1);
-}
-
-#[test]
-fn resolve_duplicate_fn_name() {
-    let source = r"
-        fn foo(x: Dimensionless) -> Dimensionless = x;
-        fn foo(x: Dimensionless) -> Dimensionless = x * 2.0;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DuplicateName { .. }));
 }
 
 #[test]

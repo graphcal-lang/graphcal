@@ -14,7 +14,7 @@ Phase 1: Dimensions & Units
     |
 Phase 2: Structs & Multi-Line Nodes
     |
-Phase 3: Pure Functions (fn, generics)
+Phase 3: DAG Blocks (dag/include, replaces fn)
     |
 Phase 4: Multi-File & Namespaces (import, private, prelude)
     |
@@ -42,7 +42,7 @@ Phase 6: Scenarios & CLI Workflow
 | [0](./phase-0-scalar-graph.md) | Scalar Graph | `param`/`node`/`const node`, `@`, `f64`, single file |
 | [1](./phase-1-dimensions-and-units.md) | Dimensions & Units | `dimension`, `unit`, `->`, type annotations |
 | [2](./phase-2-structs.md) | Structs & Multi-Line Nodes | `type` (single-variant), block bodies, `let` |
-| [3](./phase-3-pure-functions.md) | Pure Functions | `fn`, `<D: Dim>`, stdlib math |
+| [3](./phase-3-pure-functions.md) | ~~Pure Functions~~ DAG Blocks | ~~`fn`~~ `dag`/`include` (fn removed; see [design 24](../24-inline-modules.md)) |
 | [4](./phase-4-multi-file.md) | Multi-File & Namespaces | `import`, `private`, `project.graph`, prelude |
 | [5](./phase-5-tables.md) | Indexed Values | `index`, `T[I]`, `for`, sum/reduce/scan |
 | [6](./phase-6-scenarios.md) | Scenarios & CLI | `.scenario`, `cellgraph check`, assertions |

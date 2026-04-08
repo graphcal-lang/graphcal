@@ -69,7 +69,6 @@ pub enum DeclKind {
     Unit(UnitDecl),
     Type(TypeDecl),
     UnionType(UnionTypeDecl),
-    Fn(FnDecl),
     Index(IndexDecl),
     Import(ImportDecl),
     Include(IncludeDecl),
@@ -254,6 +253,13 @@ pub enum ImportPath {
     /// Parent scope path: `..` (1 level), `../..` (2 levels), etc.
     /// Only valid inside `dag` blocks to access the enclosing scope.
     ParentScope { levels: u32, span: Span },
+    /// Cross-file DAG path: `"./file.gcl"/dag_name`
+    /// References an inline DAG defined in another file.
+    CrossFileDag {
+        file_path: String,
+        dag_name: Ident,
+        span: Span,
+    },
 }
 
 impl ImportPath {
@@ -263,7 +269,8 @@ impl ImportPath {
         match self {
             Self::FilePath { span, .. }
             | Self::ModulePath { span, .. }
-            | Self::ParentScope { span, .. } => *span,
+            | Self::ParentScope { span, .. }
+            | Self::CrossFileDag { span, .. } => *span,
         }
     }
 
@@ -284,6 +291,11 @@ impl ImportPath {
                 }
                 path
             }
+            Self::CrossFileDag {
+                file_path,
+                dag_name,
+                ..
+            } => format!("\"{file_path}\"/{}", dag_name.name),
         }
     }
 
@@ -291,6 +303,12 @@ impl ImportPath {
     #[must_use]
     pub const fn is_parent_scope(&self) -> bool {
         matches!(self, Self::ParentScope { .. })
+    }
+
+    /// Returns `true` if this is a `CrossFileDag` path (`"./file.gcl"/dag_name`).
+    #[must_use]
+    pub const fn is_cross_file_dag(&self) -> bool {
+        matches!(self, Self::CrossFileDag { .. })
     }
 }
 
@@ -521,16 +539,6 @@ pub struct IndexDecl {
     pub kind: IndexDeclKind,
 }
 
-/// Function declaration: `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;`
-#[derive(Debug, Clone)]
-pub struct FnDecl {
-    pub name: Spanned<FnName>,
-    pub generic_params: Vec<GenericParam>,
-    pub params: Vec<FnParam>,
-    pub return_type: TypeExpr,
-    pub body: FnBody,
-}
-
 /// A generic parameter: `D: Dim`
 #[derive(Debug, Clone)]
 pub struct GenericParam {
@@ -551,25 +559,6 @@ pub enum GenericConstraint {
     Nat,
     /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
     Type,
-}
-
-/// A function parameter: `x: Length`, `t: Dimensionless`
-#[derive(Debug, Clone)]
-pub struct FnParam {
-    pub name: Ident,
-    pub type_ann: TypeExpr,
-}
-
-/// The body of a function declaration.
-#[derive(Debug, Clone)]
-pub enum FnBody {
-    /// Short form: `= expr;`
-    Short(Expr),
-    /// Block form: `{ let a = ...; let b = ...; expr }`
-    Block {
-        stmts: Vec<LetBinding>,
-        expr: Box<Expr>,
-    },
 }
 
 /// An identifier with its source span.
@@ -928,13 +917,6 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
-    /// Module-qualified function call: `module::fn_name(args...)` or `module::fn_name<3>(args...)`
-    QualifiedFnCall {
-        module: Ident,
-        name: Spanned<FnName>,
-        type_args: Vec<GenericArg>,
-        args: Vec<Expr>,
-    },
 }
 
 /// A `let` binding inside a block body.
@@ -1147,15 +1129,6 @@ pub fn desugar_tuple_matches(file: &mut File) {
                     desugar_expr(&mut def.scale_expr);
                 }
             }
-            DeclKind::Fn(f) => match &mut f.body {
-                FnBody::Short(e) => desugar_expr(e),
-                FnBody::Block { stmts, expr } => {
-                    for s in stmts {
-                        desugar_expr(&mut s.value);
-                    }
-                    desugar_expr(expr);
-                }
-            },
             DeclKind::Assert(a) => match &mut a.body {
                 AssertBody::Expr(e) => desugar_expr(e),
                 AssertBody::Tolerance {
@@ -1231,7 +1204,7 @@ fn desugar_expr(expr: &mut Expr) {
             desugar_expr(rhs);
         }
         ExprKind::UnaryOp { operand, .. } => desugar_expr(operand),
-        ExprKind::FnCall { args, .. } | ExprKind::QualifiedFnCall { args, .. } => {
+        ExprKind::FnCall { args, .. } => {
             for a in args {
                 desugar_expr(a);
             }
@@ -1419,145 +1392,5 @@ mod tests {
             }],
         };
         assert_eq!(file.declarations.len(), 1);
-    }
-
-    #[test]
-    fn construct_fn_decl_short() {
-        let s = Span::new(0, 1);
-        let decl = FnDecl {
-            name: Spanned::new(FnName::new("double"), s),
-            generic_params: vec![GenericParam {
-                name: Spanned::new(GenericParamName::new("D"), s),
-                constraint: GenericConstraint::Dim,
-                default: None,
-            }],
-            params: vec![FnParam {
-                name: Ident {
-                    name: "x".into(),
-                    span: s,
-                },
-                type_ann: TypeExpr {
-                    kind: TypeExprKind::DimExpr(DimExpr {
-                        terms: vec![DimExprItem {
-                            op: MulDivOp::Mul,
-                            term: DimTerm {
-                                name: Ident {
-                                    name: "D".into(),
-                                    span: s,
-                                },
-                                power: None,
-                                span: s,
-                            },
-                        }],
-                        span: s,
-                    }),
-                    constraints: vec![],
-                    span: s,
-                },
-            }],
-            return_type: TypeExpr {
-                kind: TypeExprKind::DimExpr(DimExpr {
-                    terms: vec![DimExprItem {
-                        op: MulDivOp::Mul,
-                        term: DimTerm {
-                            name: Ident {
-                                name: "D".into(),
-                                span: s,
-                            },
-                            power: None,
-                            span: s,
-                        },
-                    }],
-                    span: s,
-                }),
-                constraints: vec![],
-                span: s,
-            },
-            body: FnBody::Short(Expr {
-                kind: ExprKind::BinOp {
-                    op: BinOp::Mul,
-                    lhs: Box::new(Expr {
-                        kind: ExprKind::Number(2.0),
-                        span: s,
-                    }),
-                    rhs: Box::new(Expr {
-                        kind: ExprKind::LocalRef(Ident {
-                            name: "x".into(),
-                            span: s,
-                        }),
-                        span: s,
-                    }),
-                },
-                span: s,
-            }),
-        };
-        assert_eq!(decl.generic_params.len(), 1);
-        assert_eq!(decl.params.len(), 1);
-        assert_eq!(decl.generic_params[0].constraint, GenericConstraint::Dim);
-    }
-
-    #[test]
-    fn construct_fn_decl_block() {
-        let s = Span::new(0, 1);
-        let decl = FnDecl {
-            name: Spanned::new(FnName::new("add_one"), s),
-            generic_params: vec![],
-            params: vec![FnParam {
-                name: Ident {
-                    name: "x".into(),
-                    span: s,
-                },
-                type_ann: TypeExpr {
-                    kind: TypeExprKind::Dimensionless,
-                    constraints: vec![],
-                    span: s,
-                },
-            }],
-            return_type: TypeExpr {
-                kind: TypeExprKind::Dimensionless,
-                constraints: vec![],
-                span: s,
-            },
-            body: FnBody::Block {
-                stmts: vec![LetBinding {
-                    name: Ident {
-                        name: "one".into(),
-                        span: s,
-                    },
-                    type_ann: None,
-                    value: Expr {
-                        kind: ExprKind::Number(1.0),
-                        span: s,
-                    },
-                    span: s,
-                }],
-                expr: Box::new(Expr {
-                    kind: ExprKind::BinOp {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr {
-                            kind: ExprKind::LocalRef(Ident {
-                                name: "x".into(),
-                                span: s,
-                            }),
-                            span: s,
-                        }),
-                        rhs: Box::new(Expr {
-                            kind: ExprKind::LocalRef(Ident {
-                                name: "one".into(),
-                                span: s,
-                            }),
-                            span: s,
-                        }),
-                    },
-                    span: s,
-                }),
-            },
-        };
-        assert_eq!(decl.generic_params.len(), 0);
-        assert_eq!(decl.params.len(), 1);
-        match &decl.body {
-            FnBody::Block { stmts, .. } => assert_eq!(stmts.len(), 1),
-            FnBody::Short(_) => panic!("expected block body"),
-        }
     }
 }

@@ -4,9 +4,8 @@ use std::collections::HashMap;
 
 use graphcal_compiler::syntax::ast::{
     AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
-    FigureDecl, FnBody, FnDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl,
-    ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl,
-    UnitExpr,
+    FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
+    PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -14,7 +13,7 @@ use graphcal_eval::builtins::{builtin_constants, builtin_functions};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::format::format_unit_expr_with_config;
 use graphcal_eval::registry::{IndexKind, Registry, UnitScale};
-use graphcal_eval::tir::{ResolvedFnSig, ResolvedIndex, ResolvedTypeExpr, TIR};
+use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
 
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,15 +31,13 @@ pub enum ExprScopeKind {
 /// with a structured enum that can be pattern-matched.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolKey {
-    /// Top-level declaration: param, node, const, dim, unit, type, fn, index,
+    /// Top-level declaration: param, node, const, dim, unit, type, index,
     /// assert, plot, figure, builtins.
     TopLevel(String),
     /// Variant of a type or index: e.g., `Season::Winter`.
     Variant { parent: String, variant: String },
     /// Field reference: e.g., `field::thrust`.
     Field(String),
-    /// Function-scoped: parameter or block-local in a function body.
-    FnScoped { fn_name: String, local: String },
     /// Expression-scoped local variable (block, for, scan, unfold, match).
     ExprScoped {
         kind: ExprScopeKind,
@@ -55,7 +52,6 @@ impl std::fmt::Display for SymbolKey {
             Self::TopLevel(name) => write!(f, "{name}"),
             Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
             Self::Field(name) => write!(f, "field::{name}"),
-            Self::FnScoped { fn_name, local } => write!(f, "{fn_name}::{local}"),
             Self::ExprScoped {
                 kind,
                 offset,
@@ -103,7 +99,6 @@ pub enum SymbolCategory {
     Dimension,
     Unit,
     StructType,
-    Function,
     Index,
     IndexVariant,
     Field,
@@ -294,7 +289,6 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
             DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
             DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
             DeclKind::UnionType(u) => collect_union_type_decl(u, decl.span, &mut table),
-            DeclKind::Fn(f) => collect_fn_decl(f, decl.span, &mut table, &mut scopes),
             DeclKind::Index(idx) => collect_index_decl(idx, decl.span, &mut table),
             DeclKind::Assert(a) => collect_assert_decl(a, decl.span, &mut table, &mut scopes),
             DeclKind::Plot(p) => collect_plot_decl(p, decl.span, &mut table, &mut scopes),
@@ -528,81 +522,6 @@ fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut Symbo
     }
 }
 
-fn collect_fn_decl(f: &FnDecl, decl_span: Span, table: &mut SymbolTable, scopes: &mut ScopeStack) {
-    let fname = f.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(fname.clone()),
-        DefinitionInfo {
-            name: fname.clone(),
-            category: SymbolCategory::Function,
-            name_span: f.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
-    );
-
-    // Push scope for function params.
-    scopes.push();
-    for param in &f.params {
-        let pname = param.name.name.clone();
-        let key = SymbolKey::FnScoped {
-            fn_name: fname.clone(),
-            local: pname.clone(),
-        };
-        table.definitions.insert(
-            key.clone(),
-            DefinitionInfo {
-                name: pname.clone(),
-                category: SymbolCategory::LocalVar,
-                name_span: param.name.span,
-                decl_span: param.name.span,
-                type_description: None,
-                detail: Some(format!("parameter of fn {fname}")),
-            },
-        );
-        scopes.insert(pname, key);
-        collect_type_expr_refs(&param.type_ann, table);
-    }
-
-    collect_type_expr_refs(&f.return_type, table);
-
-    match &f.body {
-        FnBody::Short(expr) => {
-            collect_expr_refs(expr, table, scopes);
-        }
-        FnBody::Block { stmts, expr } => {
-            scopes.push();
-            for stmt in stmts {
-                collect_expr_refs(&stmt.value, table, scopes);
-                let lname = stmt.name.name.clone();
-                let key = SymbolKey::FnScoped {
-                    fn_name: fname.clone(),
-                    local: lname.clone(),
-                };
-                table.definitions.insert(
-                    key.clone(),
-                    DefinitionInfo {
-                        name: lname.clone(),
-                        category: SymbolCategory::LocalVar,
-                        name_span: stmt.name.span,
-                        decl_span: stmt.span,
-                        type_description: None,
-                        detail: None,
-                    },
-                );
-                scopes.insert(lname, key);
-                if let Some(type_ann) = &stmt.type_ann {
-                    collect_type_expr_refs(type_ann, table);
-                }
-            }
-            collect_expr_refs(expr, table, scopes);
-            scopes.pop();
-        }
-    }
-    scopes.pop();
-}
-
 fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = idx.name.value.to_string();
     table.definitions.insert(
@@ -819,7 +738,7 @@ fn collect_expr_refs(
                 target: SymbolKey::TopLevel(name.value.to_string()),
             });
         }
-        ExprKind::FnCall { name, args, .. } | ExprKind::QualifiedFnCall { name, args, .. } => {
+        ExprKind::FnCall { name, args, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: SymbolKey::TopLevel(name.value.to_string()),
@@ -1389,34 +1308,6 @@ fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
     &[]
 }
 
-/// Format a function signature as `fn name<generics>(params) -> ret`.
-pub fn format_fn_signature(fn_name: &str, sig: &ResolvedFnSig, registry: &Registry) -> String {
-    let params_str: Vec<String> = sig
-        .params
-        .iter()
-        .map(|p| format!("{}: {}", p.name, p.resolved_type.format(registry)))
-        .collect();
-
-    let generics = if sig.generic_dim_params.is_empty() && sig.generic_index_params.is_empty() {
-        String::new()
-    } else {
-        let all: Vec<String> = sig
-            .generic_dim_params
-            .iter()
-            .map(|p| format!("{p}: Dim"))
-            .chain(
-                sig.generic_index_params
-                    .iter()
-                    .map(|p| format!("{p}: Index")),
-            )
-            .collect();
-        format!("<{}>", all.join(", "))
-    };
-
-    let ret = sig.return_type.format(registry);
-    format!("fn {fn_name}{generics}({}) -> {ret}", params_str.join(", "))
-}
-
 /// Enrich a symbol table with type information from a TIR.
 #[expect(
     clippy::too_many_lines,
@@ -1456,14 +1347,6 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                 |constraints| format_type_with_constraints(resolved_type, constraints, registry),
             );
             def.type_description = Some(type_desc);
-        }
-    }
-
-    // Enrich function definitions with signatures.
-    for (fn_name, sig) in &tir.resolved_fn_sigs {
-        let key = SymbolKey::TopLevel(fn_name.as_str().to_string());
-        if let Some(def) = table.definitions.get_mut(&key) {
-            def.type_description = Some(format_fn_signature(fn_name.as_str(), sig, registry));
         }
     }
 
@@ -1621,31 +1504,6 @@ mod tests {
     }
 
     #[test]
-    fn build_symbol_table_with_function() {
-        let source = "fn double<D: Dim>(x: D) -> D = x + x;";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
-            .parse_file()
-            .unwrap();
-        let table = build_from_ast(&file);
-
-        let double_key = SymbolKey::TopLevel("double".to_string());
-        let double_x_key = SymbolKey::FnScoped {
-            fn_name: "double".to_string(),
-            local: "x".to_string(),
-        };
-        assert!(table.definitions.contains_key(&double_key));
-        assert_eq!(
-            table.definitions[&double_key].category,
-            SymbolCategory::Function
-        );
-        assert!(table.definitions.contains_key(&double_x_key));
-        assert_eq!(
-            table.definitions[&double_x_key].category,
-            SymbolCategory::LocalVar
-        );
-    }
-
-    #[test]
     fn find_reference_at_offset() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
         let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
@@ -1677,14 +1535,6 @@ mod tests {
         assert_eq!(
             SymbolKey::Field("thrust".to_string()).to_string(),
             "field::thrust"
-        );
-        assert_eq!(
-            SymbolKey::FnScoped {
-                fn_name: "sqrt".to_string(),
-                local: "x".to_string()
-            }
-            .to_string(),
-            "sqrt::x"
         );
         assert_eq!(
             SymbolKey::ExprScoped {

@@ -66,9 +66,9 @@ The `@` prefix is the central scoping mechanism:
 
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
-| `@name` | Parameter or node in the graph | `node` expressions |
+| `@name` | Parameter or node in the graph | `node` expressions, `dag` block bodies |
 | `NAME` | Constant or built-in constant | Everywhere |
-| `name` | Local variable (`let` binding, function parameter) | Block/function bodies |
+| `name` | Local variable (`let` binding) | Block bodies |
 
 ### Where `@` Is Allowed
 
@@ -77,11 +77,8 @@ The `@` prefix is the central scoping mechanism:
 | `node` expression | Yes |
 | `param` default value | No |
 | `const node` expression | No |
-| `fn` body | No |
+| `dag` block body (inside `node` expressions) | Yes |
 | `let` binding (in a `node` block) | Yes |
-| `let` binding (in a `fn` block) | No |
-
-The prohibition of `@` in `fn` bodies ensures functions are pure and reusable.
 
 ## Evaluation Order
 
@@ -116,7 +113,7 @@ Graphcal enforces naming conventions at parse time:
 | `node` | `lower_snake_case` | `total_dv` |
 | `const node` | `UPPER_SNAKE_CASE` | `G0`, `MARGIN_FACTOR` |
 | `assert` | `lower_snake_case` | `fuel_positive` |
-| `fn` | `lower_snake_case` | `orbital_velocity` |
+| `dag` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |
 | `dimension` | `PascalCase` | `Velocity` |
 | `index` | `PascalCase` | `Maneuver` |

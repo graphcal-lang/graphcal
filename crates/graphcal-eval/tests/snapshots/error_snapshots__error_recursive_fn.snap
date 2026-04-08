@@ -2,12 +2,17 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-recursive function `recurse` detected
+recursive DAG instantiation: recurse -> recurse
     Diagnostic severity: error
 Begin snippet for recursive_fn.gcl starting at line 1, column 1
 
-snippet line 1: // Error: recursive function call detected
-snippet line 2: fn recurse(x: Dimensionless) -> Dimensionless = recurse(x);
-    label at line 2, columns 1 to 59: involved in recursion
-diagnostic help: graphcal does not support recursive functions
-diagnostic code: graphcal::F002
+snippet line 1: // Error: recursive DAG instantiation detected
+snippet line 2: dag recurse {
+    label starting at line 2, column 1: error here
+snippet line 3:     param x: Dimensionless;
+snippet line 4:     include recurse(x: 1.0) { result };
+snippet line 5:     node result: Dimensionless = @x;
+snippet line 6: }
+    label ending at line 6, column 1: error here
+snippet line 7: include recurse(x: 1.0) { result };
+diagnostic code: graphcal::E001

@@ -78,7 +78,7 @@ fn collect_const_refs(
                 })
             }
         }
-        ExprKind::FnCall { name, args, .. } | ExprKind::QualifiedFnCall { name, args, .. } => {
+        ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)
@@ -443,7 +443,7 @@ fn collect_all_refs(
                 })
             }
         }
-        ExprKind::FnCall { name, args, .. } | ExprKind::QualifiedFnCall { name, args, .. } => {
+        ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
                 && !user_fn_names.contains(name_str)

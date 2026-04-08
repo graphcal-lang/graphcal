@@ -4,7 +4,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::ast::{Expr, ExprKind, FnBody};
+use graphcal_compiler::syntax::ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::VariantName;
 
 use crate::error::GraphcalError;
@@ -15,11 +15,10 @@ use super::EvalContext;
 use super::arithmetic::check_finite;
 use super::eval_expr;
 
-/// Evaluate a function call expression (`FnCall` or `QualifiedFnCall`).
+/// Evaluate a built-in function call expression (`FnCall`).
 pub(super) fn eval_fn_call(
     expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
-    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -28,7 +27,6 @@ pub(super) fn eval_fn_call(
     let fn_ctx = FnDispatch {
         expr,
         name,
-        type_args,
         args,
         values,
         local_values,
@@ -61,7 +59,6 @@ type EvalHelperFn = fn(
 struct FnDispatch<'a, 'ctx> {
     expr: &'a Expr,
     name: &'a graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
-    type_args: &'a [graphcal_compiler::syntax::ast::GenericArg],
     args: &'a [Expr],
     values: &'a HashMap<String, RuntimeValue>,
     local_values: &'a HashMap<String, RuntimeValue>,
@@ -77,7 +74,7 @@ impl FnDispatch<'_, '_> {
             return eval_aggregation_fn(self.name, &entries, self.expr, self.ctx.src);
         }
         // Not indexed, fall through to builtin (min/max are 2-arg builtins)
-        self.dispatch_builtin_or_user()
+        self.dispatch_builtin()
     }
 
     /// Conversion dispatch: time-scale conversions (`to_utc`, …) vs type conversions
@@ -98,10 +95,10 @@ impl FnDispatch<'_, '_> {
         )
     }
 
-    /// Fallback: check for a time-scale conversion, then builtins / user-defined functions.
+    /// Fallback: check for a time-scale conversion, then builtins.
     fn dispatch_timescale_or_builtin(&self) -> Result<RuntimeValue, GraphcalError> {
         crate::time_scale::time_scale_from_conversion_fn(self.name.value.as_str()).map_or_else(
-            || self.dispatch_builtin_or_user(),
+            || self.dispatch_builtin(),
             |scale| self.dispatch_timescale(scale),
         )
     }
@@ -121,11 +118,10 @@ impl FnDispatch<'_, '_> {
         )
     }
 
-    fn dispatch_builtin_or_user(&self) -> Result<RuntimeValue, GraphcalError> {
-        eval_builtin_or_user_fn(
+    fn dispatch_builtin(&self) -> Result<RuntimeValue, GraphcalError> {
+        eval_builtin_fn(
             self.expr,
             self.name,
-            self.type_args,
             self.args,
             self.values,
             self.local_values,
@@ -480,269 +476,46 @@ fn eval_datetime_to_fn(
     Ok(RuntimeValue::Scalar(result))
 }
 
-/// Evaluate a builtin numeric function or a user-defined function.
-fn eval_builtin_or_user_fn(
+/// Evaluate a builtin numeric function.
+fn eval_builtin_fn(
     expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
-    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    // Try builtin first
-    if let Some(builtin) = ctx.builtin_fns.get(name.value.as_str()) {
-        let arg_values: Vec<f64> = args
-            .iter()
-            .map(|a| {
-                let rv = eval_expr(a, values, local_values, ctx)?;
-                rv.expect_scalar("function argument")
-                    .map_err(|e| ctx.eval_error(e.to_string(), a.span))
-            })
-            .collect::<Result<_, _>>()?;
-        if arg_values.len() != builtin.arity() {
-            return Err(ctx.eval_error(
-                format!(
-                    "builtin function `{}` expects {} argument(s) but got {}",
-                    name.value,
-                    builtin.arity(),
-                    arg_values.len(),
-                ),
-                expr.span,
-            ));
-        }
-        let result = (builtin.eval)(&arg_values);
-        return Ok(RuntimeValue::Scalar(check_finite(
-            result,
-            name.value.as_str(),
-            ctx.src,
-            expr.span,
-        )?));
-    }
-
-    // Try user-defined function
-    let fn_def = ctx
-        .registry
-        .functions
-        .get_function(name.value.as_str())
+    let builtin = ctx
+        .builtin_fns
+        .get(name.value.as_str())
         .ok_or_else(|| ctx.eval_error(format!("unknown function `{}`", name.value), name.span))?;
 
-    // Evaluate arguments
-    let arg_values: Vec<RuntimeValue> = args
+    let arg_values: Vec<f64> = args
         .iter()
-        .map(|a| eval_expr(a, values, local_values, ctx))
+        .map(|a| {
+            let rv = eval_expr(a, values, local_values, ctx)?;
+            rv.expect_scalar("function argument")
+                .map_err(|e| ctx.eval_error(e.to_string(), a.span))
+        })
         .collect::<Result<_, _>>()?;
-
-    // Build fn_locals from param names + arg values
-    let mut fn_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    for (param, val) in fn_def.params.iter().zip(arg_values) {
-        fn_locals.insert(param.name.clone(), val);
+    if arg_values.len() != builtin.arity() {
+        return Err(ctx.eval_error(
+            format!(
+                "builtin function `{}` expects {} argument(s) but got {}",
+                name.value,
+                builtin.arity(),
+                arg_values.len(),
+            ),
+            expr.span,
+        ));
     }
-
-    // Resolve nat generic params from turbofish type args and/or argument shapes.
-    // First try turbofish (explicit), then fall back to argument-shape extraction.
-    for (i, gp) in fn_def.generic_params.iter().enumerate() {
-        if gp.constraint == graphcal_compiler::registry::registry::FnGenericConstraint::Nat {
-            let nat_name = gp.name.as_str();
-
-            // Try turbofish first
-            let size = if i < type_args.len() {
-                extract_nat_from_generic_arg(&type_args[i])
-            } else {
-                None
-            };
-            // Fall back to argument shape extraction
-            let size = size.or_else(|| extract_nat_param_from_args(nat_name, fn_def, &fn_locals));
-
-            if let Some(size) = size {
-                let nat_int = RuntimeValue::Int(i64::try_from(size).unwrap_or(0));
-                fn_locals.insert(format!("__nat_param_{nat_name}"), nat_int.clone());
-                fn_locals.insert(nat_name.to_string(), nat_int);
-            }
-        }
-    }
-
-    // Evaluate body: pass `values` for ConstRef access (user consts like GM_EARTH).
-    // Purity is enforced by the resolver's @ prohibition -- no GraphRef nodes
-    // exist in function bodies, so passing values is safe.
-    let body = fn_def.body.clone();
-    match &body {
-        FnBody::Short(expr) => eval_expr(expr, values, &fn_locals, ctx),
-        FnBody::Block { stmts, expr } => {
-            let mut block_locals = fn_locals;
-            for binding in stmts {
-                let val = eval_expr(&binding.value, values, &block_locals, ctx)?;
-                block_locals.insert(binding.name.name.clone(), val);
-            }
-            eval_expr(expr, values, &block_locals, ctx)
-        }
-    }
-}
-
-/// Extract a nat value from a turbofish `GenericArg`, if it is a `Nat` variant.
-fn extract_nat_from_generic_arg(arg: &graphcal_compiler::syntax::ast::GenericArg) -> Option<u64> {
-    use graphcal_compiler::syntax::ast::GenericArg;
-    match arg {
-        GenericArg::Nat(nat_expr) => eval_nat_expr(nat_expr),
-        GenericArg::Type(_) => None,
-    }
-}
-
-/// Evaluate a `NatExpr` to a concrete `u64` at runtime (literals and addition only).
-fn eval_nat_expr(nat_expr: &graphcal_compiler::syntax::ast::NatExpr) -> Option<u64> {
-    use graphcal_compiler::syntax::ast::NatExpr;
-    match nat_expr {
-        NatExpr::Literal(v, _) => Some(*v),
-        NatExpr::Add(lhs, rhs, _) => {
-            let l = eval_nat_expr(lhs)?;
-            let r = eval_nat_expr(rhs)?;
-            l.checked_add(r)
-        }
-        NatExpr::Mul(lhs, rhs, _) => {
-            let l = eval_nat_expr(lhs)?;
-            let r = eval_nat_expr(rhs)?;
-            l.checked_mul(r)
-        }
-        NatExpr::Var(_) => None,
-    }
-}
-
-/// Extract the value of a nat param by inspecting the function's argument values.
-///
-/// Walks the parameter type annotations looking for the nat param name in index position.
-/// When found, extracts the corresponding nat range size from the actual argument value.
-fn extract_nat_param_from_args(
-    nat_name: &str,
-    fn_def: &graphcal_compiler::registry::registry::FnDef,
-    fn_locals: &HashMap<String, RuntimeValue>,
-) -> Option<u64> {
-    for param_def in &fn_def.params {
-        if let Some(size) = extract_nat_from_type_and_value(
-            nat_name,
-            &param_def.type_expr,
-            fn_locals.get(&param_def.name)?,
-        ) {
-            return Some(size);
-        }
-    }
-    None
-}
-
-/// Recursively extract a nat param value from a type annotation and matching runtime value.
-fn extract_nat_from_type_and_value(
-    nat_name: &str,
-    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
-    value: &RuntimeValue,
-) -> Option<u64> {
-    use graphcal_compiler::syntax::ast::{IndexExpr, TypeExprKind};
-
-    if let TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
-        // Peel from outermost: first index is outermost
-        let mut current = value;
-        for idx in indexes {
-            let RuntimeValue::Indexed {
-                index_name,
-                entries,
-            } = current
-            else {
-                return None;
-            };
-            match idx {
-                IndexExpr::Name(ident) if ident.name == nat_name => {
-                    // This index position has the nat param we're looking for.
-                    // Extract the size from the actual index name.
-                    return graphcal_compiler::registry::registry::parse_nat_range_index_name(
-                        index_name.as_str(),
-                    );
-                }
-                IndexExpr::NatExpr(nat_expr) => {
-                    // Compound nat expression (e.g., N + 1): try to solve for the param.
-                    if nat_expr_contains_var(nat_expr, nat_name) {
-                        let actual_size =
-                            graphcal_compiler::registry::registry::parse_nat_range_index_name(
-                                index_name.as_str(),
-                            )?;
-                        return solve_nat_expr_for_var(nat_expr, nat_name, actual_size);
-                    }
-                }
-                _ => {}
-            }
-            // Move to the first element to descend
-            current = entries.values().next()?;
-        }
-        // Also check the base type recursively
-        return extract_nat_from_type_and_value(nat_name, base, current);
-    }
-    None
-}
-
-/// Check if a `NatExpr` references a given variable.
-fn nat_expr_contains_var(expr: &graphcal_compiler::syntax::ast::NatExpr, var_name: &str) -> bool {
-    use graphcal_compiler::syntax::ast::NatExpr;
-    match expr {
-        NatExpr::Literal(_, _) => false,
-        NatExpr::Var(ident) => ident.name == var_name,
-        NatExpr::Add(lhs, rhs, _) | NatExpr::Mul(lhs, rhs, _) => {
-            nat_expr_contains_var(lhs, var_name) || nat_expr_contains_var(rhs, var_name)
-        }
-    }
-}
-
-/// Solve a `NatExpr` for a single variable, given the target value.
-///
-/// Computes the constant part and the coefficient of the target variable,
-/// then solves `coefficient * var + constant_sum = target`.
-fn solve_nat_expr_for_var(
-    expr: &graphcal_compiler::syntax::ast::NatExpr,
-    var_name: &str,
-    target: u64,
-) -> Option<u64> {
-    let (constant_sum, var_coeff) = nat_expr_linear_parts(expr, var_name)?;
-    if var_coeff == 0 {
-        return None;
-    }
-    let remainder = target.checked_sub(constant_sum)?;
-    if remainder % var_coeff != 0 {
-        return None;
-    }
-    Some(remainder / var_coeff)
-}
-
-/// Decompose a `NatExpr` into `(constant_sum, coefficient_of_var)` for a given variable.
-///
-/// Returns `None` if arithmetic overflows.
-fn nat_expr_linear_parts(
-    expr: &graphcal_compiler::syntax::ast::NatExpr,
-    var_name: &str,
-) -> Option<(u64, u64)> {
-    use graphcal_compiler::syntax::ast::NatExpr;
-    match expr {
-        NatExpr::Literal(n, _) => Some((*n, 0)),
-        NatExpr::Var(ident) => {
-            if ident.name == var_name {
-                Some((0, 1))
-            } else {
-                // Other variables are treated as constants (they should already be resolved)
-                Some((0, 0))
-            }
-        }
-        NatExpr::Add(lhs, rhs, _) => {
-            let (lc, lv) = nat_expr_linear_parts(lhs, var_name)?;
-            let (rc, rv) = nat_expr_linear_parts(rhs, var_name)?;
-            Some((lc.checked_add(rc)?, lv.checked_add(rv)?))
-        }
-        NatExpr::Mul(lhs, rhs, _) => {
-            let (lc, lv) = nat_expr_linear_parts(lhs, var_name)?;
-            let (rc, rv) = nat_expr_linear_parts(rhs, var_name)?;
-            // For linear solving: (lc * rc) is the constant-constant product,
-            // (lc * rv + rc * lv) is the effective coefficient of the variable.
-            // Cross-term lv * rv is the quadratic coefficient — we ignore it
-            // (solve_nat_expr_for_var only handles linear equations).
-            let const_part = lc.checked_mul(rc)?;
-            let var_part = lc.checked_mul(rv)?.checked_add(rc.checked_mul(lv)?)?;
-            Some((const_part, var_part))
-        }
-    }
+    let result = (builtin.eval)(&arg_values);
+    Ok(RuntimeValue::Scalar(check_finite(
+        result,
+        name.value.as_str(),
+        ctx.src,
+        expr.span,
+    )?))
 }
 
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.

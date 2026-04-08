@@ -185,19 +185,23 @@ node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
 node result: Dimensionless = if @enabled { 1.0 } else { 0.0 };
 ```
 
-### Pure functions with dimension generics
+### DAG blocks (reusable computation)
 
-Define reusable functions with compile-time dimension checking. Dimension generics (`<D: Dim>`) let you write functions that work across any physical quantity. Index generics (`<I: Index>`) enable generic aggregation. Nat generics (`<N: Nat>`) enable size-generic operations on vectors and matrices.
+Define reusable, parameterized computation as `dag` blocks and instantiate them with `include`. DAG blocks use the same `param`/`node`/`@` syntax as top-level declarations, and can expose multiple outputs.
 
 ```gcl
-fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
-fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-fn dot<N: Nat, D1: Dim, D2: Dim>(a: D1[N], b: D2[N]) -> D1 * D2 =
-    sum(for i: range(N) { a[i] * b[i] });
+dag orbital_velocity {
+    param gm: GravParam;
+    param r: Length;
+    node v: Velocity = sqrt(@gm / @r);
+}
+
+include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
+    v as v_parking,
+}
 ```
 
-Recursive functions are detected and rejected at compile time.
+DAG blocks unify what was previously split between pure functions (`fn`) and parameterized imports into a single, consistent mechanism.
 
 ### Generic types with phantom parameters
 
@@ -276,26 +280,16 @@ node x: Dimensionless[TimeStep] = unfold(
 
 ### Nat range indexes for vectors and matrices
 
-Use integer literals in index position for anonymous numeric indexes. Combined with `Nat` generics, this enables size-generic linear algebra:
+Use integer literals in index position for anonymous numeric indexes:
 
 ```gcl
 param v: Length[3] = for i: range(3) { 1.0 m };
 
-fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
-    for j: range(N), i: range(M) { a[i, j] };
-
+// A 2x3 matrix
 param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
-node transposed: Dimensionless[3, 2] = transpose(@mat);
-```
 
-`Nat` expressions support addition, enabling functions that relate input and output sizes:
-
-```gcl
-fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
-    for i: range(N) { v[i] };
-
-param v4: Dimensionless[4] = for i: range(4) { 1.0 };
-node v3: Dimensionless[3] = drop_last(@v4);  // compiler solves N + 1 = 4 → N = 3
+// Transpose via for comprehension
+node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j] };
 ```
 
 ### Multi-file projects
@@ -389,7 +383,7 @@ When both `--set` and `--input` are provided, `--set` takes precedence for the s
 
 - Rich error diagnostics with source spans and error codes (via [miette](https://github.com/zkat/miette))
 - JSON output for tooling integration (`--format json`)
-- Naming convention enforcement: `lower_snake_case` for params/nodes/functions, `UPPER_SNAKE_CASE` for constants, `PascalCase` for types/indexes/dimensions
+- Naming convention enforcement: `lower_snake_case` for params/nodes/DAGs, `UPPER_SNAKE_CASE` for constants, `PascalCase` for types/indexes/dimensions
 - Runtime safety checks: division by zero, NaN/infinity detection, integer overflow
 - Fault isolation: a failing node does not crash unrelated nodes
 
@@ -635,9 +629,6 @@ node double_dv: Velocity[Maneuver] = for m: Maneuver {
 
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
-
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-node total_check: Velocity = total(@delta_v);
 ```
 
 ```sh
@@ -652,7 +643,6 @@ total_dv                  = 4410 m/s
 cumulative_dv[Departure]  = 2460 m/s
 cumulative_dv[Correction] = 2580 m/s
 cumulative_dv[Insertion]  = 4410 m/s
-total_check               = 4410 m/s
 ```
 
 ### Time-series with range index and unfold
@@ -796,8 +786,8 @@ The `graphcal lsp` subcommand starts an LSP server that communicates over stdin/
 **Capabilities:**
 
 - **Diagnostics** -- Real-time parse errors, type/dimension mismatches, unknown references, etc.
-- **Document Symbols** -- Outline view of all declarations (params, nodes, constants, functions, dimensions, units, indexes, types)
-- **Go to Definition** -- Navigate from references (`@param`, function calls, type names, unit names, etc.) to their declaration
+- **Document Symbols** -- Outline view of all declarations (params, nodes, constants, DAG blocks, dimensions, units, indexes, types)
+- **Go to Definition** -- Navigate from references (`@param`, type names, unit names, etc.) to their declaration
 - **Hover** -- Show resolved type information (e.g., `param v_exhaust: Length / Time`)
 
 Build and run:

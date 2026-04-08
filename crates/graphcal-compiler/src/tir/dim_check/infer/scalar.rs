@@ -7,11 +7,10 @@ use miette::NamedSource;
 
 use crate::syntax::ast::{BinOp, Expr, ExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{FnName, GenericParamName, UnitName};
+use crate::syntax::names::{GenericParamName, UnitName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
-use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     check_derived_binop, check_derived_neg, declared_to_inferred, expect_scalar,
@@ -34,27 +33,10 @@ pub(super) fn infer_binop(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let lhs_type = infer_type(
-        lhs,
-        declared_types,
-        local_types,
-        registry,
-        builtin_fns,
-        resolved_fn_sigs,
-        src,
-    )?;
-    let rhs_type = infer_type(
-        rhs,
-        declared_types,
-        local_types,
-        registry,
-        builtin_fns,
-        resolved_fn_sigs,
-        src,
-    )?;
+    let lhs_type = infer_type(lhs, declared_types, local_types, registry, builtin_fns, src)?;
+    let rhs_type = infer_type(rhs, declared_types, local_types, registry, builtin_fns, src)?;
 
     match op {
         // Logical operators: require Bool operands, return Bool
@@ -348,7 +330,6 @@ pub(super) fn infer_unary(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let operand_type = infer_type(
@@ -357,7 +338,6 @@ pub(super) fn infer_unary(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     match op {
@@ -401,7 +381,6 @@ pub(super) fn infer_convert(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_type(
@@ -410,7 +389,6 @@ pub(super) fn infer_convert(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
@@ -455,7 +433,6 @@ pub(super) fn infer_display_timezone(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_type(
@@ -464,7 +441,6 @@ pub(super) fn infer_display_timezone(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     if !matches!(&inner_type, InferredType::Datetime(_)) {
@@ -496,7 +472,6 @@ pub(super) fn infer_as_cast(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_type(
@@ -505,7 +480,6 @@ pub(super) fn infer_as_cast(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     // Resolve the target type

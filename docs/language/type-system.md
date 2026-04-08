@@ -6,7 +6,7 @@ icon: material/format-list-bulleted-type
 
 This page is the formal reference for Graphcal's type system. It describes the three-level type stratification, the dimension algebra, typing rules for expressions, generics, and type equivalence.
 
-For introductory material, see the [tutorial](../tutorial/index.md). For specific features, see [Dimensions & Units](dimensions-and-units.md), [Algebraic Data Types](algebraic-data-types.md), [Indexes](indexes.md), and [Functions](functions.md).
+For introductory material, see the [tutorial](../tutorial/index.md). For specific features, see [Dimensions & Units](dimensions-and-units.md), [Algebraic Data Types](algebraic-data-types.md), [Indexes](indexes.md), and [DAG Blocks](functions.md).
 
 ## Type Stratification
 
@@ -254,8 +254,8 @@ Named index labels use qualified syntax (`Maneuver::Departure`), distinguishing 
 
 Named index labels are proper runtime values within expressions:
 
-- Pass to functions: `fn f(m: Maneuver) -> Velocity` works.
-- Return from functions: `fn pick() -> Maneuver` works.
+- Use in DAG block parameters: `param m: Maneuver` works.
+- Use as DAG block node types: `node result: Maneuver` works.
 - Store in local variables: `let x = Maneuver::Departure` works.
 - Compare: `m == Maneuver::Departure` works.
 - Pattern match: `match m { Maneuver::Departure => ..., ... }` works.
@@ -285,7 +285,7 @@ Range index labels are scalar values, not union type members. The loop variable 
 | Equality comparison | Yes (as Label) | Yes (as Scalar) |
 | Pattern matching | Yes (qualified: `Maneuver::X => ...`) | No |
 | Arithmetic | No (not a scalar) | Yes |
-| Pass to function | Yes | Yes (as scalar) |
+| Pass to DAG param | Yes | Yes (as scalar) |
 
 Both loop variable types are runtime values -- named index labels are `Label` values (expression-level), range index labels are scalar values (Primitive).
 
@@ -659,40 +659,33 @@ unfold(init, |prev, curr| body)
 
 The `|prev, curr| body` is special syntax, not a function value.
 
-## Functions
+## DAG Blocks
 
-Functions are declarations, not values. There is no function type in the type system. No higher-order functions are supported.
+DAG blocks are named, reusable sub-DAGs. They are declarations, not values. There is no function type in the type system.
 
-Functions can accept and return DeclTypes (ValueTypes or indexed types):
-
-```
-// ValueType params and return
-fn hohmann(gm: Length^3 / Time^2, r1: Length, r2: Length) -> TransferResult { ... }
-
-// Indexed type params and return
-fn total<D: Dim, I: Index>(values: D[I]) -> D = sum(values);
-fn normalize<I: Index>(v: Dimensionless[I]) -> Dimensionless[I] = for i: I {
-    v[i] / sum(v)
-};
-```
-
-Functions **cannot** accept other functions as arguments (no higher-order functions), nor dimensions or units as runtime values. Dimensions and units appear as generic parameters (`<D: Dim>`) or in compile-time expressions only.
-
-Named index labels are passable to functions as `Label` values:
+DAG block parameters and nodes use the same DeclTypes (ValueTypes or indexed types) as top-level declarations:
 
 ```
-fn maneuver_fuel(m: Maneuver, params: MissionParams) -> Mass {
-    match m {
-        Maneuver::Departure => compute_departure_fuel(params),
-        Maneuver::Correction => compute_correction_fuel(params),
-        Maneuver::Insertion => compute_insertion_fuel(params),
-    }
+dag hohmann_transfer {
+    param gm: Length^3 / Time^2;
+    param r1: Length;
+    param r2: Length;
+    node dv1: Velocity = ...;
+    node total_dv: Velocity = @dv1 + ...;
+}
+```
+
+DAG blocks are instantiated with `include`, which embeds their nodes into the enclosing computation graph:
+
+```
+include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
+    total_dv,
 }
 ```
 
 ## Generics
 
-Functions and types can be generic over dimensions, indexes, natural numbers, and phantom types.
+Types can be generic over dimensions, indexes, natural numbers, and phantom types.
 
 ### Generic Constraints
 
@@ -722,71 +715,37 @@ param pos: Vec3<Length, Unframed> = ...;
 
 ### Generic Type Inference
 
-When calling a generic function, type parameters are inferred from the argument types:
+When using generic types, type parameters are inferred from context:
 
 ```
-fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
-
-// D is inferred as Length from the arguments:
-node mid: Length = lerp(@start, @end, 0.5);
+param pos: Vec3<Length, Eci> = Vec3<Length, Eci> { x: 1.0 km, y: 0.0 km, z: 0.0 km };
 ```
 
-The compiler performs **unification**: it matches the declared parameter types (which may contain generic variables) against the inferred argument types (which are concrete) to determine bindings for each generic variable.
+The compiler performs **unification**: it matches the declared type parameters (which may contain generic variables) against the concrete types to determine bindings for each generic variable.
 
-If a generic variable appears multiple times, all occurrences must unify to the same concrete type. For example, in `lerp<D: Dim>(a: D, b: D, ...)`, both `a` and `b` must have the same dimension.
+If a generic variable appears multiple times, all occurrences must unify to the same concrete type.
 
 ### Dimension Expressions in Generics
 
-Generic dimension parameters can appear in compound dimension expressions:
+Generic dimension parameters can appear in compound dimension expressions in type definitions.
 
-```
-fn kinetic_energy<D: Dim>(mass: Mass, speed: D) -> Mass * D^2 =
-    0.5 * mass * speed ^ 2;
-```
+### Nat Range Indexes
 
-During unification, the compiler solves for the generic variable. If the parameter type is `D` and the argument type is `Length`, then `D = Length`, and the return type `Mass * D^2` becomes `Mass * Length^2` (= `Energy`).
-
-### Nat Generics and Range Indexes
-
-`Nat` generics allow functions to be parameterized over array sizes. Integer literals in index position create anonymous **nat range** indexes:
+Integer literals in index position create anonymous **nat range** indexes:
 
 ```
 // A 3-element vector (internally uses range(3))
 param v: Dimensionless[3] = for i: range(3) { 1.0 };
 
-// A generic transpose function
-fn transpose<M: Nat, N: Nat, D: Dim>(a: D[M, N]) -> D[N, M] =
-    for j: range(N), i: range(M) { a[i, j] };
-
-// M and N are inferred from the argument shape
 param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
-node transposed: Dimensionless[3, 2] = transpose(@mat);
+node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j] };
 ```
 
-During unification, `Nat` parameters are matched by identity: `range(M)` unifies with `range(3)` to bind `M = 3`. Two nat ranges are equal if and only if their sizes are equal.
+Two nat ranges are equal if and only if their sizes are equal.
 
-`Nat` expressions support addition, which enables functions that relate input and output sizes:
+`Nat` expressions support addition. Expressions are normalized to a canonical linear form (`c + a1*x1 + ...`) and equality is decided by comparing coefficients. Subtraction is not supported -- instead, express the larger side with addition.
 
-```
-fn drop_last<N: Nat, D: Dim>(v: D[N + 1]) -> D[N] =
-    for i: range(N) { v[i] };
-
-// When calling drop_last on a Dimensionless[4] vector,
-// the compiler solves N + 1 = 4 to deduce N = 3.
-```
-
-Expressions are normalized to a canonical linear form (`c + a₁·x₁ + …`) and equality is decided by comparing coefficients. Subtraction is not supported — instead, express the larger side with addition.
-
-Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values. `Nat` parameters are also available as runtime `Int` values in function bodies (e.g., `if i < N`).
-
-When a `Nat` parameter appears only in the return type (not in any argument), it cannot be inferred. Use explicit generic arguments (turbofish syntax) to provide the value:
-
-```
-fn eye<N: Nat>() -> Dimensionless[N, N] =
-    for i: range(N), j: range(N) { if i == j { 1.0 } else { 0.0 } };
-
-node I3: Dimensionless[3, 3] = eye<3>();
-```
+Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values.
 
 ## Type Equivalence
 
@@ -807,8 +766,8 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 
 ## Complete Entity Map
 
-| Entity | Is a type? | First-class value? | Pass to `fn`? | Return from `fn`? | Appears in expressions |
-|--------|-----------|---------------------|---------------|-------------------|----------------------|
+| Entity | Is a type? | First-class value? | DAG param? | DAG node? | Appears in expressions |
+|--------|-----------|---------------------|------------|-----------|----------------------|
 | Scalar value | ValueType | Yes | Yes | Yes | Yes |
 | Int value | ValueType | Yes | Yes | Yes | Yes |
 | Bool value | ValueType | Yes | Yes | Yes | Yes |

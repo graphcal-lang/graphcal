@@ -109,7 +109,7 @@ Graphcal enforces naming conventions at parse time:
 
 | Declaration | Convention | Example |
 |-------------|-----------|---------|
-| `param`, `node`, `fn` | `lower_snake_case` | `dry_mass`, `total_dv` |
+| `param`, `node`, `dag` | `lower_snake_case` | `dry_mass`, `total_dv` |
 | `const node` | `UPPER_SNAKE_CASE` | `MARGIN_FACTOR`, `G0` |
 | `type`, `index`, `dimension` | `PascalCase` | `TransferResult`, `Maneuver` |
 

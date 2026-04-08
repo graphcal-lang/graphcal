@@ -21,7 +21,6 @@ pub use graphcal_compiler::registry::runtime_value;
 pub use graphcal_compiler::registry::time_scale;
 
 // Re-export IR modules from graphcal-ir.
-pub use graphcal_compiler::ir::fn_check;
 pub use graphcal_compiler::ir::ir;
 pub use graphcal_compiler::ir::resolve;
 

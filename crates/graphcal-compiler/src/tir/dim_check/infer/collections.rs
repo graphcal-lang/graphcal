@@ -8,12 +8,11 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::syntax::ast::{BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr};
-use crate::syntax::names::{FieldName, FnName, GenericParamName, IndexName, StructTypeName};
+use crate::syntax::names::{FieldName, GenericParamName, IndexName, StructTypeName};
 use crate::tir::tir::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::registry::Registry;
-use crate::tir::tir::ResolvedFnSig;
 
 use super::super::helpers::{
     cartesian_product, declared_to_inferred, format_inferred_type, resolve_field_type,
@@ -86,7 +85,6 @@ pub(super) fn infer_for_comp(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     // Add loop variables to local_types, infer body type, wrap in Indexed layers
@@ -129,7 +127,6 @@ pub(super) fn infer_for_comp(
         &inner_locals,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     // Wrap body type with index layers (outermost binding first)
@@ -156,7 +153,6 @@ pub(super) fn infer_map_or_table_literal(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if entries.is_empty() {
@@ -351,7 +347,6 @@ pub(super) fn infer_map_or_table_literal(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     // Reject nested Indexed when the inner index is a label (named) index.
@@ -378,7 +373,6 @@ pub(super) fn infer_map_or_table_literal(
             local_types,
             registry,
             builtin_fns,
-            resolved_fn_sigs,
             src,
         )?;
         if entry_type != first_type {
@@ -410,7 +404,6 @@ pub(super) fn infer_index_access(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_type(
@@ -419,7 +412,6 @@ pub(super) fn infer_index_access(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     // Peel off one index layer per argument
@@ -596,7 +588,6 @@ pub(super) fn infer_index_access(
                     local_types,
                     registry,
                     builtin_fns,
-                    resolved_fn_sigs,
                     src,
                 )?;
                 if !expr_type.is_int_like() {
@@ -715,7 +706,6 @@ pub(super) fn infer_scan(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     // source must be indexed, init must be scalar matching element type
@@ -725,7 +715,6 @@ pub(super) fn infer_scan(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     let InferredType::Indexed { element, index } = source_type else {
@@ -741,7 +730,6 @@ pub(super) fn infer_scan(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     // init and element must have the same type
@@ -764,7 +752,6 @@ pub(super) fn infer_scan(
         &scan_locals,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     if body_type != *element {
@@ -795,7 +782,6 @@ pub(super) fn infer_unfold(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let init_type = infer_type(
@@ -804,7 +790,6 @@ pub(super) fn infer_unfold(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
 
@@ -858,7 +843,6 @@ pub(super) fn infer_unfold(
         &scan_locals,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     if body_type != init_type {
@@ -891,7 +875,6 @@ pub(super) fn infer_field_access(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_type(
@@ -900,7 +883,6 @@ pub(super) fn infer_field_access(
         local_types,
         registry,
         builtin_fns,
-        resolved_fn_sigs,
         src,
     )?;
     match &inner_type {
@@ -961,7 +943,6 @@ pub(super) fn infer_struct_construction(
     local_types: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    resolved_fn_sigs: &HashMap<FnName, ResolvedFnSig>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     // Look up by type name — must be a record or unit type (not a union)
@@ -1118,7 +1099,6 @@ pub(super) fn infer_struct_construction(
                 local_types,
                 registry,
                 builtin_fns,
-                resolved_fn_sigs,
                 src,
             )?
         } else {

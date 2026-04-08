@@ -19,7 +19,7 @@
   "dimension"
   "unit"
   "type"
-  "fn"
+
   "index"
   "linspace"
   "import"
@@ -104,8 +104,6 @@
 ; index Maneuver, index TimeStep
 (index_declaration name: (identifier) @type)
 
-; fn orbital_velocity
-(fn_declaration name: (identifier) @function)
 
 ; import "./path.gcl" { name1, name2 as alias2 }
 (import_declaration path: (string_literal) @string)
@@ -177,8 +175,6 @@
 ; Function calls and definitions
 ; ---------------------------------------------------------------
 
-; fn params: fn lerp(a: D, b: D)
-(fn_param name: (identifier) @variable.parameter)
 
 ; fn calls: sqrt(x), ln(x)
 (fn_call name: (identifier) @function.call)
