@@ -2,14 +2,14 @@
 dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
-const node GM: GravParam = 3.986004418e14 m^3/s^2;
-const node R_EARTH: Length = 6371000.0 m;
+const node gm: GravParam = 3.986004418e14 m^3/s^2;
+const node r_earth: Length = 6371000.0 m;
 
 dag circular_velocity {
-    import .. { GM, R_EARTH };
+    import .. { gm, r_earth };
 
     param alt: Length;
-    node v: Velocity = sqrt(GM / (R_EARTH + @alt));
+    node v: Velocity = sqrt(@gm / (@r_earth + @alt));
 }
 
 param altitude: Length = 400000.0 m;

@@ -33,8 +33,8 @@ index Maneuver = { Departure, Midcourse1, Midcourse2, Correction, Insertion };
 
 index Step = linspace(0.0 s, 10.0 s, step: 1.0 s);
 
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
-const node R_EARTH: Length = 6371.0 km;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
 
 // DAG with long signature (replaces block-body function)
 dag compute_transfer_velocity {
@@ -106,11 +106,11 @@ param maneuver_dv: Velocity[Phase, Maneuver] = for p: Phase, m: Maneuver {
 
 // Struct construction with many fields and long expressions
 param initial_state: StateVec<Length, Velocity, Eci> = StateVec<Length, Velocity, Eci> {
-    pos_x: R_EARTH + 200.0 km,
+    pos_x: @r_earth + 200.0 km,
     pos_y: 0.0 km,
     pos_z: 0.0 km,
     vel_x: 0.0 m/s,
-    vel_y: sqrt(GM_EARTH / (R_EARTH + 200.0 km)),
+    vel_y: sqrt(@gm_earth / (@r_earth + 200.0 km)),
     vel_z: 0.0 m/s,
 };
 
@@ -129,28 +129,28 @@ node combined_metric: Dimensionless = (@phase_priority[Phase::Launch] + @phase_p
 node cumulative_priority: Dimensionless[Phase] = scan(@phase_priority, 0.0, |acc, val| acc + val);
 
 // Unfold with complex body
-const node DECAY_RATE: Frequency = 0.5 Hz;
-node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.0 - DECAY_RATE * (t - prev_t)));
+const node decay_rate: Frequency = 0.5 Hz;
+node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.0 - @decay_rate * (t - prev_t)));
 
 // DAG for complex result computation
 dag compute_complex_result {
-import .. { GM_EARTH, R_EARTH };
+import .. { gm_earth, r_earth };
     
-    node r1: Length = R_EARTH + 200.0 km;
+    node r1: Length = @r_earth + 200.0 km;
     
-    node r2: Length = R_EARTH + 35786.0 km;
+    node r2: Length = @r_earth + 35786.0 km;
     
-    node v1: Velocity = sqrt(GM_EARTH / @r1);
+    node v1: Velocity = sqrt(@gm_earth / @r1);
     
-    node v2: Velocity = sqrt(GM_EARTH / @r2);
+    node v2: Velocity = sqrt(@gm_earth / @r2);
     
     node a_transfer: Length = (@r1 + @r2) / 2.0;
     
-    node v_transfer_at_r1: Velocity = sqrt(GM_EARTH * (2.0 / @r1 - 1.0 / @a_transfer));
+    node v_transfer_at_r1: Velocity = sqrt(@gm_earth * (2.0 / @r1 - 1.0 / @a_transfer));
     
     node dv1: Velocity = @v_transfer_at_r1 - @v1;
     
-    node v_transfer_at_r2: Velocity = sqrt(GM_EARTH * (2.0 / @r2 - 1.0 / @a_transfer));
+    node v_transfer_at_r2: Velocity = sqrt(@gm_earth * (2.0 / @r2 - 1.0 / @a_transfer));
     
     node dv2: Velocity = @v2 - @v_transfer_at_r2;
     

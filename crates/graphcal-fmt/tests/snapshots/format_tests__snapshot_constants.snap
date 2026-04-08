@@ -6,10 +6,10 @@ expression: formatted
 dim Acceleration = Length / Time^2;
 dim Area = Length^2;
 
-const node G0: Acceleration = 9.80665 m/s^2;
-const node TWO_G0: Acceleration = 2.0 * G0;
-const node HALF_PI: Dimensionless = PI / 2.0;
-const node SQRT2: Dimensionless = sqrt(2.0);
+const node g0: Acceleration = 9.80665 m/s^2;
+const node two_g0: Acceleration = 2.0 * @g0;
+const node half_pi: Dimensionless = PI / 2.0;
+const node sqrt2: Dimensionless = sqrt(2.0);
 
 param radius: Length = 100.0 m;
 node circumference: Length = 2.0 * PI * @radius;

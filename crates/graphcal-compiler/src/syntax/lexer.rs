@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn peek_with_span_returns_correct_span() {
-        let input = "const node G0 = 9.80665;";
+        let input = "const node g0 = 9.80665;";
         let mut lexer = Lexer::new(input);
 
         let (tok, span) = lexer.peek_with_span().unwrap();

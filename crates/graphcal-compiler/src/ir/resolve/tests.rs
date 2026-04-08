@@ -59,7 +59,7 @@ fn resolve_unknown_const_ref() {
 #[test]
 fn resolve_at_in_const() {
     let err = parse_and_resolve(
-        "param p: Dimensionless = 1.0;\nconst node BAD: Dimensionless = @p * 2.0;",
+        "param p: Dimensionless = 1.0;\nconst node bad: Dimensionless = @p * 2.0;",
     )
     .unwrap_err();
     assert!(matches!(err, GraphcalError::GraphRefInConst { .. }));
@@ -67,7 +67,7 @@ fn resolve_at_in_const() {
 
 #[test]
 fn parser_rejects_bad_const_casing() {
-    let result = Parser::new("const node bad_name: Dimensionless = 42.0;").parse_file();
+    let result = Parser::new("const node BAD_NAME: Dimensionless = 42.0;").parse_file();
     assert!(result.is_err());
 }
 
@@ -106,11 +106,11 @@ fn resolve_wrong_arity() {
 #[test]
 fn resolve_const_deps_extracted() {
     let resolved = parse_and_resolve(
-        "const node A: Dimensionless = 1.0;\nconst node B: Dimensionless = A + 2.0;",
+        "const node a: Dimensionless = 1.0;\nconst node b: Dimensionless = @a + 2.0;",
     )
     .unwrap();
-    let b_deps = &resolved.const_deps["B"];
-    assert!(b_deps.contains("A"));
+    let b_deps = &resolved.const_deps["b"];
+    assert!(b_deps.contains("a"));
     assert_eq!(b_deps.len(), 1);
 }
 
@@ -136,7 +136,7 @@ fn resolve_duplicate_param_name() {
 #[test]
 fn resolve_duplicate_const_name() {
     let err =
-        parse_and_resolve("const node A: Dimensionless = 1.0;\nconst node A: Dimensionless = 2.0;")
+        parse_and_resolve("const node a: Dimensionless = 1.0;\nconst node a: Dimensionless = 2.0;")
             .unwrap_err();
     assert!(matches!(err, GraphcalError::DuplicateName { .. }));
 }
@@ -152,9 +152,9 @@ fn resolve_duplicate_node_name() {
 
 #[test]
 fn resolve_const_collision_with_param() {
-    // const uses UPPER, param uses lower — no collision
+    // const and param both use lower_snake_case — different names → no collision
     let resolved =
-        parse_and_resolve("const node A: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;")
+        parse_and_resolve("const node a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;")
             .unwrap();
     assert_eq!(resolved.consts.len(), 1);
     assert_eq!(resolved.params.len(), 1);
@@ -162,19 +162,19 @@ fn resolve_const_collision_with_param() {
 
 #[test]
 fn resolve_unknown_const_ref_in_const() {
-    let err = parse_and_resolve("const node A: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
+    let err = parse_and_resolve("const node a: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownConstRef { .. }));
 }
 
 #[test]
 fn resolve_unknown_function_in_const() {
-    let err = parse_and_resolve("const node A: Dimensionless = unknown_fn(1.0);").unwrap_err();
+    let err = parse_and_resolve("const node a: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
 }
 
 #[test]
 fn resolve_wrong_arity_in_const() {
-    let err = parse_and_resolve("const node A: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
+    let err = parse_and_resolve("const node a: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
 
@@ -204,14 +204,14 @@ fn resolve_wrong_arity_in_node() {
 #[test]
 fn resolve_const_with_if_else() {
     let resolved =
-        parse_and_resolve("const node A: Dimensionless = if 1.0 > 0.0 { 1.0 } else { 0.0 };")
+        parse_and_resolve("const node a: Dimensionless = if 1.0 > 0.0 { 1.0 } else { 0.0 };")
             .unwrap();
     assert_eq!(resolved.consts.len(), 1);
 }
 
 #[test]
 fn resolve_const_with_unary_op() {
-    let resolved = parse_and_resolve("const node A: Dimensionless = -42.0;").unwrap();
+    let resolved = parse_and_resolve("const node a: Dimensionless = -42.0;").unwrap();
     assert_eq!(resolved.consts.len(), 1);
 }
 

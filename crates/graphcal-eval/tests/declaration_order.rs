@@ -130,7 +130,7 @@ fn forward_ref_derived_dimension() {
     let source = r"
         dim Acceleration = Velocity / Time;
         dim Velocity = Length / Time;
-        const node G0: Acceleration = 9.80665 m/s^2;
+        const node g0: Acceleration = 9.80665 m/s^2;
     ";
     compile_and_eval(source).expect("forward-ref derived dimension must compile and evaluate");
 }
@@ -141,7 +141,7 @@ fn forward_ref_unit() {
     let source = r"
         unit km_custom: Length = 1000 m_base;
         unit m_base: Length;
-        const node DIST: Length = 5.0 km_custom;
+        const node dist: Length = 5.0 km_custom;
     ";
     compile_and_eval(source).expect("forward-ref unit must compile and evaluate");
 }

@@ -2024,7 +2024,7 @@ mod tests {
         );
         assert!(
             tir.resolved_decl_types
-                .contains_key(&ScopedName::local("G0"))
+                .contains_key(&ScopedName::local("g0"))
         );
     }
 

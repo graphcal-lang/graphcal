@@ -29,27 +29,27 @@ A `type` with a single set of fields defines a struct. Each field has a name and
 Complex calculations can use block expressions with `let` bindings for intermediate values:
 
 ```
-const node R_EARTH: Length = 6371.0 km;
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 node transfer: TransferResult = {
-    let r1 = R_EARTH + @parking_alt;
-    let r2 = R_EARTH + @target_alt;
+    let r1 = @r_earth + @parking_alt;
+    let r2 = @r_earth + @target_alt;
     let a = (r1 + r2) / 2.0;
 
-    let v1 = sqrt(GM_EARTH / r1);
-    let v2 = sqrt(GM_EARTH / r2);
-    let dv1 = sqrt(2.0 * GM_EARTH * r2 / (r1 * (r1 + r2))) - v1;
-    let dv2 = v2 - sqrt(2.0 * GM_EARTH * r1 / (r2 * (r1 + r2)));
+    let v1 = sqrt(@gm_earth / r1);
+    let v2 = sqrt(@gm_earth / r2);
+    let dv1 = sqrt(2.0 * @gm_earth * r2 / (r1 * (r1 + r2))) - v1;
+    let dv2 = v2 - sqrt(2.0 * @gm_earth * r1 / (r2 * (r1 + r2)));
 
     TransferResult {
         dv1,
         dv2,
         total_dv: dv1 + dv2,
-        tof: PI * sqrt(a ^ 3.0 / GM_EARTH),
+        tof: PI * sqrt(a ^ 3.0 / @gm_earth),
     }
 };
 ```
@@ -85,27 +85,27 @@ type TransferResult {
     tof: Time,
 }
 
-const node R_EARTH: Length = 6371.0 km;
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 node transfer: TransferResult = {
-    let r1 = R_EARTH + @parking_alt;
-    let r2 = R_EARTH + @target_alt;
+    let r1 = @r_earth + @parking_alt;
+    let r2 = @r_earth + @target_alt;
     let a = (r1 + r2) / 2.0;
 
-    let v1 = sqrt(GM_EARTH / r1);
-    let v2 = sqrt(GM_EARTH / r2);
-    let dv1 = sqrt(2.0 * GM_EARTH * r2 / (r1 * (r1 + r2))) - v1;
-    let dv2 = v2 - sqrt(2.0 * GM_EARTH * r1 / (r2 * (r1 + r2)));
+    let v1 = sqrt(@gm_earth / r1);
+    let v2 = sqrt(@gm_earth / r2);
+    let dv1 = sqrt(2.0 * @gm_earth * r2 / (r1 * (r1 + r2))) - v1;
+    let dv2 = v2 - sqrt(2.0 * @gm_earth * r1 / (r2 * (r1 + r2)));
 
     TransferResult {
         dv1,
         dv2,
         total_dv: dv1 + dv2,
-        tof: PI * sqrt(a ^ 3.0 / GM_EARTH),
+        tof: PI * sqrt(a ^ 3.0 / @gm_earth),
     }
 };
 

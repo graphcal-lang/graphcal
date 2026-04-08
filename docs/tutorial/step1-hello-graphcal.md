@@ -23,10 +23,10 @@ Create a file `mass_budget.gcl`:
 ```
 param dry_mass: Dimensionless = 1200.0;
 param fuel_mass: Dimensionless = 2800.0;
-const node MARGIN_FACTOR: Dimensionless = 1.1;
+const node margin_factor: Dimensionless = 1.1;
 
 node total_mass: Dimensionless = @dry_mass + @fuel_mass;
-node mass_with_margin: Dimensionless = @total_mass * MARGIN_FACTOR;
+node mass_with_margin: Dimensionless = @total_mass * @margin_factor;
 node mass_ratio: Dimensionless = @total_mass / @dry_mass;
 ```
 
@@ -36,7 +36,7 @@ node mass_ratio: Dimensionless = @total_mass / @dry_mass;
 $ graphcal eval mass_budget.gcl
 dry_mass         = 1200
 fuel_mass        = 2800
-MARGIN_FACTOR    = 1.1
+margin_factor    = 1.1
 total_mass       = 4000
 mass_with_margin = 4400
 mass_ratio       = 3.333333
@@ -62,11 +62,11 @@ param dry_mass: Dimensionless = 1200.0;
 Constants are fixed values known at compile time:
 
 ```
-const node MARGIN_FACTOR: Dimensionless = 1.1;
+const node margin_factor: Dimensionless = 1.1;
 ```
 
 - **`const node`** -- declares a compile-time constant
-- **`MARGIN_FACTOR`** -- the name (must be `UPPER_SNAKE_CASE`)
+- **`margin_factor`** -- the name (must be `lower_snake_case`)
 
 ### Nodes (`node`)
 
@@ -83,9 +83,9 @@ node total_mass: Dimensionless = @dry_mass + @fuel_mass;
 
 The `@` prefix is how you reference values in the computation graph:
 
-- `@name` references a `param` or `node`
-- Bare `NAME` references a `const node` or built-in constant
-- The `@` sigil makes it visually clear which values participate in the reactive DAG
+- `@name` references a `param`, `node`, or `const node`
+- Bare `NAME` references a built-in constant (`PI`, `E`, `TAU`, etc.)
+- The `@` sigil makes it visually clear which values participate in the computation
 
 ## Overriding Parameters
 
@@ -95,7 +95,7 @@ You can override parameter values from the command line using `--set`. When you 
 $ graphcal eval mass_budget.gcl --set 'dry_mass=1200.0' --set 'fuel_mass=3500.0'
 dry_mass         = 1200
 fuel_mass        = 3500
-MARGIN_FACTOR    = 1.1
+margin_factor    = 1.1
 total_mass       = 4700
 mass_with_margin = 5170
 mass_ratio       = 3.916667
@@ -109,8 +109,7 @@ Graphcal enforces naming conventions at parse time:
 
 | Declaration | Convention | Example |
 |-------------|-----------|---------|
-| `param`, `node`, `dag` | `lower_snake_case` | `dry_mass`, `total_dv` |
-| `const node` | `UPPER_SNAKE_CASE` | `MARGIN_FACTOR`, `G0` |
+| `param`, `node`, `const node`, `dag` | `lower_snake_case` | `dry_mass`, `total_dv`, `margin_factor` |
 | `type`, `index`, `dim` | `PascalCase` | `TransferResult`, `Maneuver` |
 
 ## What You Learned

@@ -21,9 +21,9 @@ dim Acceleration = Length / Time^2;
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
 param isp: Time = 320.0 s;
-const node G0: Acceleration = 9.80665 m/s^2;
+const node g0: Acceleration = 9.80665 m/s^2;
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
@@ -33,7 +33,7 @@ $ graphcal eval rocket.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
@@ -59,7 +59,7 @@ The prelude provides common units. Attach a unit to a numeric literal:
 ```
 param altitude: Length = 200.0 km;
 param duration: Time = 3600.0 s;
-const node SPEED_OF_LIGHT: Velocity = 299792458.0 m/s;
+const node speed_of_light: Velocity = 299792458.0 m/s;
 ```
 
 ### Available Prelude Units

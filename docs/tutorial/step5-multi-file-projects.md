@@ -27,7 +27,7 @@ rocket_project/
 
 ```
 dim Acceleration = Length / Time^2;
-const node G0: Acceleration = 9.80665 m/s^2;
+const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 ### `params.gcl`
@@ -41,12 +41,12 @@ param isp: Time = 320.0 s;
 ### `main.gcl`
 
 ```
-import "./constants.gcl" { G0 };
+import "./constants.gcl" { g0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
@@ -60,7 +60,7 @@ $ graphcal eval rocket_project/main.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
@@ -93,7 +93,7 @@ You can import any top-level declaration:
 
 | Declaration | Import | Reference |
 |-------------|--------|-----------|
-| `const node` | `import "..." { NAME }` | `NAME` |
+| `const node` | `import "..." { name }` | `@name` |
 | `dim` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |

@@ -3,4 +3,4 @@ import "./constants.gcl";
 
 dim Acceleration = Length / Time^2;
 
-node g: Acceleration = constants::G0;
+node g: Acceleration = @constants::g0;

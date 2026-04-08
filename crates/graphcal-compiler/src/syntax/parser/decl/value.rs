@@ -4,7 +4,7 @@ use crate::syntax::ast::{
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case, is_upper_snake_case};
+use super::super::{ParseError, Parser, is_lower_snake_case};
 
 impl Parser<'_> {
     // --- param/node/const node with required type annotation ---
@@ -65,7 +65,7 @@ impl Parser<'_> {
         // Next token must be `node`.
         self.expect(Token::Node)?;
         let name = self
-            .parse_ident_with_casing("UPPER_SNAKE_CASE", is_upper_snake_case)?
+            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
             .into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;

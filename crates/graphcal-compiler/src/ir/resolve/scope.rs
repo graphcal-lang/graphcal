@@ -7,16 +7,23 @@ use crate::registry::error::GraphcalError;
 use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::syntax::visitor::ExprVisitor;
 
-/// Visitor that checks for graph references in const expressions.
-struct NoGraphRefChecker<'a> {
+/// Visitor that checks for runtime graph references in const expressions.
+///
+/// Const node expressions may reference other const nodes via `@`, but must not
+/// reference runtime names (params or nodes). This checker rejects only `@` references
+/// whose names appear in the `runtime_names` set.
+struct NoRuntimeGraphRefChecker<'a> {
+    runtime_names: &'a HashSet<&'a str>,
     src: &'a NamedSource<Arc<String>>,
 }
 
-impl ExprVisitor for NoGraphRefChecker<'_> {
+impl ExprVisitor for NoRuntimeGraphRefChecker<'_> {
     type Error = GraphcalError;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind {
+        if let ExprKind::GraphRef(ident) = &expr.kind
+            && self.runtime_names.contains(ident.value.as_str())
+        {
             Err(GraphcalError::GraphRefInConst {
                 name: ident.value.clone(),
                 src: self.src.clone(),
@@ -28,7 +35,9 @@ impl ExprVisitor for NoGraphRefChecker<'_> {
     }
 
     fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind {
+        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
+            && self.runtime_names.contains(ident.value.as_str())
+        {
             Err(GraphcalError::GraphRefInConst {
                 name: ident.value.clone(),
                 src: self.src.clone(),
@@ -40,12 +49,16 @@ impl ExprVisitor for NoGraphRefChecker<'_> {
     }
 }
 
-/// Check that an expression contains no `@` references (for const expressions).
-pub(super) fn check_no_graph_refs(
+/// Check that an expression contains no runtime `@` references (for const expressions).
+///
+/// Const node expressions may use `@other_const_node` but must not reference
+/// runtime params or nodes.
+pub(super) fn check_no_runtime_graph_refs(
     expr: &Expr,
+    runtime_names: &HashSet<&str>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let mut checker = NoGraphRefChecker { src };
+    let mut checker = NoRuntimeGraphRefChecker { runtime_names, src };
     checker.visit_expr(expr)
 }
 

@@ -77,4 +77,4 @@ pub(super) fn parse_expected_fail_args(
     Ok(ExpectedFail::Variants(keys))
 }
 
-pub use crate::syntax::names::{is_lower_snake_case, is_upper_snake_case};
+pub use crate::syntax::names::is_lower_snake_case;

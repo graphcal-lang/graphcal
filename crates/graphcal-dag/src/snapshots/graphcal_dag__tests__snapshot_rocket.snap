@@ -2,7 +2,7 @@
 source: crates/graphcal-dag/src/lib.rs
 expression: render(&g)
 ---
- param dry_mass     param fuel_mass    const node G0    param isp
+ param dry_mass     param fuel_mass    const node g0    param isp
         │                  │                 │              │
         └──────────────┬───┴──────────────┬──┴──────────────┘
                        │                  │

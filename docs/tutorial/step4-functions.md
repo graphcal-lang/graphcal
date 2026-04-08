@@ -14,7 +14,7 @@ A `dag` block defines a reusable sub-DAG with its own parameters and nodes. It u
 dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 dag orbital_velocity {
     param gm: GravParam;
@@ -30,15 +30,15 @@ A `dag` block is a named template -- it doesn't execute until you `include` it.
 Use `include` to instantiate a DAG block with specific arguments:
 
 ```
-const node R_EARTH: Length = 6371.0 km;
+const node r_earth: Length = 6371.0 km;
 param parking_alt: Length = 200.0 km;
 
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) {
     v as v_parking,
 }
 ```
 
-- **Named arguments**: `gm: GM_EARTH` passes `GM_EARTH` to the `gm` parameter
+- **Named arguments**: `gm: @gm_earth` passes `@gm_earth` to the `gm` parameter
 - **Output selection**: `{ v as v_parking }` selects the `v` node and renames it to `v_parking`
 - The included nodes become part of your computation graph
 
@@ -71,7 +71,7 @@ Include it and pick the outputs you need:
 ```
 param target_alt: Length = 35786.0 km;
 
-include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
+include hohmann_transfer(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt) {
     total_dv as transfer_dv,
     dv1 as departure_dv,
 }
@@ -82,11 +82,11 @@ include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH +
 The included outputs are regular graph nodes, referenced with `@`:
 
 ```
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) {
     v as v_parking,
 }
 
-include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
+include hohmann_transfer(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt) {
     total_dv as transfer_dv,
 }
 

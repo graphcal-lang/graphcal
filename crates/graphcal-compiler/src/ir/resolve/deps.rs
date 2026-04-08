@@ -52,23 +52,24 @@ fn collect_const_refs(
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. } => Ok(()),
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
-            Err(GraphcalError::EvalError {
-                message: format!(
-                    "internal: graph reference `@{}` found in const expression",
-                    ident.value
-                ),
-                src: src.clone(),
-                span: expr.span.into(),
-            })
+            // In const expressions, @name can reference other const nodes but not runtime names.
+            // Runtime refs are already rejected by check_no_runtime_graph_refs before we get here.
+            if all_const_names.contains(ident.value.as_str()) {
+                deps.insert(ident.value.to_string());
+                Ok(())
+            } else {
+                Err(GraphcalError::UnknownConstRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
+            }
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
+            // Bare UPPER_SNAKE_CASE identifiers: built-in constants only.
             if builtin_consts.contains_key(ident.value.as_str())
-                || all_const_names.contains(ident.value.as_str())
                 || is_time_scale_name(ident.value.as_str())
             {
-                if all_const_names.contains(ident.value.as_str()) {
-                    deps.insert(ident.value.to_string());
-                }
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {
@@ -396,6 +397,10 @@ fn collect_all_refs(
             if all_runtime_names.contains(ident.value.as_str()) {
                 graph_refs.insert(ident.value.to_string());
                 Ok(())
+            } else if all_const_names.contains(ident.value.as_str()) {
+                // @const_node_name in a node expression — track as const dependency
+                const_refs.insert(ident.value.to_string());
+                Ok(())
             } else {
                 Err(GraphcalError::UnknownGraphRef {
                     name: ident.value.clone(),
@@ -405,13 +410,10 @@ fn collect_all_refs(
             }
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
+            // Bare UPPER_SNAKE_CASE: built-in constants only.
             if builtin_consts.contains_key(ident.value.as_str())
-                || all_const_names.contains(ident.value.as_str())
                 || is_time_scale_name(ident.value.as_str())
             {
-                if all_const_names.contains(ident.value.as_str()) {
-                    const_refs.insert(ident.value.to_string());
-                }
                 Ok(())
             } else {
                 Err(GraphcalError::UnknownConstRef {

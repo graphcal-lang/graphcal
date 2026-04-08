@@ -8,6 +8,6 @@ expression: formatted
 // file's directory (child/). The import "../lib.gcl" resolves outside
 // this boundary and is rejected by the path sandboxing check.
 include "../lib.gcl" { base_value };
-import "../lib.gcl" { SCALE };
+import "../lib.gcl" { scale };
 
-node result: Dimensionless = @base_value * SCALE;
+node result: Dimensionless = @base_value * @scale;

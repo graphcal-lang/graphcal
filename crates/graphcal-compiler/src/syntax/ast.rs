@@ -412,7 +412,7 @@ pub struct NodeDecl {
     pub value: Expr,
 }
 
-/// Const node declaration: `const node NAME: Type = expr;`
+/// Const node declaration: `const node name: Type = expr;`
 #[derive(Debug, Clone)]
 pub struct ConstNodeDecl {
     pub name: Spanned<DeclName>,
@@ -797,9 +797,9 @@ pub enum ExprKind {
     Bool(bool),
     /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
     StringLiteral(String),
-    /// Graph reference: `@lower_name`
+    /// Graph reference: `@name` (param, node, or const node)
     GraphRef(Spanned<DeclName>),
-    /// Const or built-in constant reference: `UPPER_NAME`, `PI`, `E`
+    /// Built-in constant reference: `PI`, `E`, `TAU`
     ConstRef(Spanned<DeclName>),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
@@ -907,7 +907,7 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
-    /// Module-qualified const reference: `module::CONST_NAME`
+    /// Module-qualified built-in constant reference: `module::CONST_NAME`
     QualifiedConstRef {
         module: Ident,
         name: Spanned<DeclName>,

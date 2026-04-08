@@ -47,7 +47,7 @@ Nodes are computed values. Their expressions can reference parameters, other nod
 ### Constants
 
 ```
-const node G0: Acceleration = 9.80665 m/s^2;
+const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes (the `@` sigil is prohibited in `const node` expressions).
@@ -66,9 +66,9 @@ The `@` prefix is the central scoping mechanism:
 
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
-| `@name` | Parameter or node in the graph | `node` expressions, `dag` block bodies |
+| `@name` | Parameter, node, or const node in the graph | `node` expressions, `dag` block bodies |
 | `@module::name` | Qualified graph reference | Same as above |
-| `NAME` | Constant or built-in constant | Everywhere |
+| `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
 
 ### Where `@` Is Allowed
@@ -111,7 +111,7 @@ Graphcal enforces naming conventions at parse time:
 |-------------|-----------|---------|
 | `param` | `lower_snake_case` | `dry_mass` |
 | `node` | `lower_snake_case` | `total_dv` |
-| `const node` | `UPPER_SNAKE_CASE` | `G0`, `MARGIN_FACTOR` |
+| `const node` | `lower_snake_case` | `g0`, `margin_factor` |
 | `assert` | `lower_snake_case` | `fuel_positive` |
 | `dag` | `lower_snake_case` | `orbital_velocity` |
 | `type` | `PascalCase` | `TransferResult` |

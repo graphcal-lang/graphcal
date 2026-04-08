@@ -7,6 +7,6 @@ expression: formatted
 // This succeeds because a graphcal.toml file exists in the parent directory,
 // widening the project root from child/ to the manifest's directory.
 include "../lib.gcl" { base_value };
-import "../lib.gcl" { SCALE };
+import "../lib.gcl" { scale };
 
-node result: Dimensionless = @base_value * SCALE;
+node result: Dimensionless = @base_value * @scale;

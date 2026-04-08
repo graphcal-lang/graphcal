@@ -43,7 +43,7 @@ fn eval_rocket_milestone() {
     assert!((find_value(&result, "dry_mass") - 1200.0).abs() < f64::EPSILON);
     assert!((find_value(&result, "fuel_mass") - 2800.0).abs() < f64::EPSILON);
     assert!((find_value(&result, "isp") - 320.0).abs() < f64::EPSILON);
-    assert!((find_value(&result, "G0") - 9.80665).abs() < 1e-10);
+    assert!((find_value(&result, "g0") - 9.80665).abs() < 1e-10);
 
     let v_exhaust = find_value(&result, "v_exhaust");
     assert!(
@@ -74,10 +74,10 @@ fn eval_constants_ksr() {
     let source = include_str!("../../../../tests/fixtures/constants.gcl");
     let result = compile_and_eval(source).unwrap();
 
-    assert!((find_value(&result, "G0") - 9.80665).abs() < f64::EPSILON);
-    assert!((find_value(&result, "TWO_G0") - 19.6133).abs() < 1e-10);
-    assert!((find_value(&result, "HALF_PI") - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
-    assert!((find_value(&result, "SQRT2") - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
+    assert!((find_value(&result, "g0") - 9.80665).abs() < f64::EPSILON);
+    assert!((find_value(&result, "two_g0") - 19.6133).abs() < 1e-10);
+    assert!((find_value(&result, "half_pi") - std::f64::consts::FRAC_PI_2).abs() < f64::EPSILON);
+    assert!((find_value(&result, "sqrt2") - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
 
     let circumference = find_value(&result, "circumference");
     let expected = 2.0 * std::f64::consts::PI * 100.0;
@@ -165,7 +165,7 @@ fn eval_result_all_field_source_order() {
             "dry_mass",
             "fuel_mass",
             "isp",
-            "G0",
+            "g0",
             "v_exhaust",
             "mass_ratio",
             "delta_v"
@@ -195,9 +195,9 @@ fn eval_orbital_milestone() {
     );
     // R_EARTH = 6371 km -> SI: 6_371_000.0 m
     assert!(
-        (find_value(&result, "R_EARTH") - 6_371_000.0).abs() < f64::EPSILON,
+        (find_value(&result, "r_earth") - 6_371_000.0).abs() < f64::EPSILON,
         "R_EARTH = {}",
-        find_value(&result, "R_EARTH")
+        find_value(&result, "r_earth")
     );
 
     // circumference = 2 * PI * (6_371_000 + 400_000)
@@ -610,11 +610,11 @@ fn override_node_errors() {
 fn override_const_errors() {
     let source = include_str!("../../../../tests/fixtures/rocket.gcl");
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("G0"), parse_expr("10.0 m/s^2"));
+    overrides.insert(DeclName::new("g0"), parse_expr("10.0 m/s^2"));
     let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
-            assert_eq!(name.as_str(), "G0");
+            assert_eq!(name.as_str(), "g0");
             assert_eq!(actual_kind.to_string(), "const");
         }
         other => panic!("expected OverrideNotAParam, got {other:?}"),
@@ -935,7 +935,7 @@ fn eval_integers_milestone() {
     assert!(!find_bool_value(&result, "a_eq_b"));
     assert!(!find_bool_value(&result, "a_le_b"));
 
-    assert_eq!(find_int_value(&result, "SEVEN"), 7);
+    assert_eq!(find_int_value(&result, "seven"), 7);
     assert_eq!(find_int_value(&result, "clamped"), 7); // 10 > 7, so clamp to 7
 
     // to_float(10) = 10.0

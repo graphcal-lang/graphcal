@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn snapshot_rocket() {
         let mut g = DiGraph::new();
-        let g0 = g.add_node("const node G0".into());
+        let g0 = g.add_node("const node g0".into());
         let dm = g.add_node("param dry_mass".into());
         let fm = g.add_node("param fuel_mass".into());
         let isp = g.add_node("param isp".into());

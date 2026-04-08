@@ -110,12 +110,12 @@ fn parse_node_with_compound_dim_type() {
 
 #[test]
 fn parse_const_node_with_type() {
-    let file = Parser::new("const node G0: Dimensionless = 9.80665;")
+    let file = Parser::new("const node g0: Dimensionless = 9.80665;")
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
         DeclKind::ConstNode(c) => {
-            assert_eq!(c.name.value.as_str(), "G0");
+            assert_eq!(c.name.value.as_str(), "g0");
             assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
         }
         _ => panic!("expected const node"),
@@ -257,13 +257,13 @@ fn parse_error_bad_param_casing() {
 
 #[test]
 fn parse_error_bad_const_node_casing() {
-    let result = Parser::new("const node bad_name: Dimensionless = 42.0;").parse_file();
+    let result = Parser::new("const node BAD_NAME: Dimensionless = 42.0;").parse_file();
     assert!(result.is_err());
 }
 
 #[test]
 fn parse_error_standalone_const() {
-    let result = Parser::new("const G0: Dimensionless = 9.80665;").parse_file();
+    let result = Parser::new("const g0: Dimensionless = 9.80665;").parse_file();
     assert!(
         result.is_err(),
         "standalone `const` should be a parse error"
@@ -277,9 +277,9 @@ dim Velocity = Length / Time;
 
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;
-const node R_EARTH: Length = 6371.0 km;
+const node r_earth: Length = 6371.0 km;
 
-node circumference: Length = 2.0 * PI * (R_EARTH + @alt);
+node circumference: Length = 2.0 * PI * (@r_earth + @alt);
 node speed: Velocity = @circumference / @period;
 node speed_kmh: Velocity = @speed -> km/hour;
 ";
@@ -314,7 +314,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             "Velocity",
             "alt",
             "period",
-            "R_EARTH",
+            "r_earth",
             "circumference",
             "speed",
             "speed_kmh"

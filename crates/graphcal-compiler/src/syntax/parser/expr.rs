@@ -475,7 +475,7 @@ impl Parser<'_> {
         let name = self.lexer.slice_at(span).to_string();
 
         if is_upper_snake_case(&name) {
-            // Const reference: PI, E, G0, UPPER_NAME
+            // Built-in constant reference: PI, E, TAU, SQRT2, etc.
             Ok(Expr {
                 kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
                 span,
@@ -518,12 +518,12 @@ impl Parser<'_> {
                 span,
             })
         } else if is_lower_snake_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
-            // Module-qualified reference: module::CONST or module::fn(args)
+            // Module-qualified built-in constant: module::CONST_NAME
             self.lexer.next_token(); // consume '::'
             let member_ident = self.parse_any_ident()?;
             let member = member_ident.name.clone();
             if is_upper_snake_case(&member) {
-                // module::CONST_NAME
+                // module::BUILTIN_CONST (e.g., math::PI)
                 let full_span = span.merge(member_ident.span);
                 Ok(Expr {
                     kind: ExprKind::QualifiedConstRef {
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn parse_compound_unit_literal() {
-        let file = Parser::new("const node G0: Acceleration = 9.80665 m/s^2;")
+        let file = Parser::new("const node g0: Acceleration = 9.80665 m/s^2;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {

@@ -28,12 +28,12 @@ pub use crate::registry::resolve_types::{
 
 // Re-export items from submodules (crate-internal only).
 pub use deps::collect_graph_refs;
-pub(crate) use names::{is_lower_snake_case, is_upper_snake_case};
+pub(crate) use names::is_lower_snake_case;
 
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
-use scope::{check_no_assert_graph_refs, check_no_graph_refs, check_no_variant_literals};
+use scope::{check_no_assert_graph_refs, check_no_runtime_graph_refs, check_no_variant_literals};
 
 /// Known attribute names in the language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,9 +204,9 @@ fn collect_local_declarations(
             reason = "no action needed in the else case"
         )]
         if is_const {
-            if !is_upper_snake_case(&name) {
+            if !is_lower_snake_case(&name) {
                 return Err(GraphcalError::EvalError {
-                    message: format!("const name `{name}` must be UPPER_SNAKE_CASE"),
+                    message: format!("const node name `{name}` must be lower_snake_case"),
                     src: src.clone(),
                     span: name_span.into(),
                 });
@@ -393,7 +393,7 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::ConstNode(c) => {
-                check_no_graph_refs(&c.value, src)?;
+                check_no_runtime_graph_refs(&c.value, &all_runtime_names, src)?;
                 check_no_variant_literals(&c.value, "const node", src)?;
                 let deps = extract_const_refs(
                     &c.value,
