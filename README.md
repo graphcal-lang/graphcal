@@ -326,14 +326,12 @@ $ graphcal eval analysis.gcl --plot json
 Supported mark types: `point`, `line`, `bar`, `area`, `rect`, `tick`.
 
 Group plots into combined subplot figures with `figure` declarations, or
-overlay them on shared axes with `layer` declarations. Use `#[hidden]` to
+overlay them on shared axes with `layer` declarations. Omit `pub` to
 suppress standalone output for plots that only belong in a combined view:
 
 ```gcl
-#[hidden]
 plot my_scatter = { mark: point, encode: { ... } };
 
-#[hidden]
 plot power_bars = { mark: bar, encode: { ... } };
 
 figure combined = {

@@ -32,7 +32,8 @@ pub struct AssertBodyEntry {
 pub struct PlotBodyEntry {
     pub(crate) name: DeclName,
     pub(crate) decl: PlotDecl,
-    pub(crate) hidden: bool,
+    /// Whether this plot is `pub` (visible in standalone output).
+    pub(crate) is_pub: bool,
 }
 
 /// A figure body entry for execution.
@@ -107,7 +108,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .map(|entry| PlotBodyEntry {
             name: DeclName::new(entry.name.to_string()),
             decl: entry.decl.clone(),
-            hidden: entry.hidden,
+            is_pub: entry.is_pub,
         })
         .collect();
 

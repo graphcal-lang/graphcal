@@ -14,7 +14,7 @@ pub struct RenderedFigure {
 
 /// Build figures from evaluated plot, figure, and layer specs.
 ///
-/// - Each non-hidden `PlotSpec` produces one standalone figure.
+/// - Each `pub` `PlotSpec` produces one standalone figure.
 /// - Each `FigureSpec` produces one combined figure with `hconcat`.
 /// - Each `LayerSpec` produces one combined figure with `layer`.
 pub fn build_figures(
@@ -24,9 +24,9 @@ pub fn build_figures(
 ) -> Vec<RenderedFigure> {
     let mut result = Vec::new();
 
-    // Standalone figures from non-hidden plots
+    // Standalone figures from pub plots (non-pub plots are only usable in figures/layers)
     for spec in plots {
-        if spec.hidden {
+        if !spec.is_pub {
             continue;
         }
         result.push(RenderedFigure {

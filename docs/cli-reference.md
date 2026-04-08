@@ -220,11 +220,11 @@ Each figure in the array has a `name` and a `spec` (Vega-Lite JSON):
 ]
 ```
 
-Each non-hidden `plot` declaration produces a standalone figure. Each `figure`
+Each `pub plot` declaration produces a standalone figure. Each `figure`
 declaration produces a combined chart using Vega-Lite `hconcat`. Each `layer`
-declaration produces a chart using Vega-Lite `layer`. Hidden plots (marked
-with `#[hidden]`) are suppressed from standalone output but still appear in
-any `figure` or `layer` that references them.
+declaration produces a chart using Vega-Lite `layer`. Non-`pub` plots are
+suppressed from standalone output but still appear in any `figure` or `layer`
+that references them.
 
 If no `plot`, `figure`, or `layer` declarations are found, a warning is
 printed to stderr.

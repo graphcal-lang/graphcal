@@ -78,7 +78,8 @@ pub struct PlotEntry {
     pub name: ScopedName,
     pub decl: PlotDecl,
     pub span: Span,
-    pub hidden: bool,
+    /// Whether this plot is `pub` (visible in standalone output).
+    pub is_pub: bool,
 }
 
 /// A figure declaration.
@@ -205,16 +206,6 @@ pub(crate) fn lower_to_builder(
     // Step 1: Name resolution
     let mut resolved = resolve_with_imports(ast, src, imported)?;
 
-    // Emit any non-fatal warnings from resolution.
-    #[expect(
-        clippy::print_stderr,
-        reason = "warnings are intentionally printed to stderr"
-    )]
-    for warning in &resolved.warnings {
-        let report = miette::Report::new_boxed(Box::new(warning.clone()));
-        eprintln!("{report:?}");
-    }
-
     // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
@@ -321,11 +312,14 @@ pub(crate) fn lower_to_builder(
         plots: resolved
             .plots
             .into_iter()
-            .map(|entry| PlotEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-                hidden: entry.hidden,
+            .map(|entry| {
+                let is_pub = resolved.pub_names.contains(&entry.name);
+                PlotEntry {
+                    name: ScopedName::local(entry.name),
+                    decl: entry.decl,
+                    span: entry.span,
+                    is_pub,
+                }
             })
             .collect(),
         figures: resolved
@@ -406,16 +400,6 @@ pub fn lower_to_builder_with_imported_values(
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let mut resolved = resolve_with_imported_values(ast, src, imported_names)?;
-
-    // Emit any non-fatal warnings from resolution.
-    #[expect(
-        clippy::print_stderr,
-        reason = "warnings are intentionally printed to stderr"
-    )]
-    for warning in &resolved.warnings {
-        let report = miette::Report::new_boxed(Box::new(warning.clone()));
-        eprintln!("{report:?}");
-    }
 
     // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
@@ -511,11 +495,14 @@ pub fn lower_to_builder_with_imported_values(
         plots: resolved
             .plots
             .into_iter()
-            .map(|entry| PlotEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-                hidden: entry.hidden,
+            .map(|entry| {
+                let is_pub = resolved.pub_names.contains(&entry.name);
+                PlotEntry {
+                    name: ScopedName::local(entry.name),
+                    decl: entry.decl,
+                    span: entry.span,
+                    is_pub,
+                }
             })
             .collect(),
         figures: resolved
@@ -825,7 +812,7 @@ impl UnfrozenIR {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
-                hidden: entry.hidden,
+                is_pub: entry.is_pub,
             });
             self.source_order.push((prefixed, DeclCategory::Plot));
         }

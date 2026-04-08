@@ -41,7 +41,6 @@ use scope::{
 /// Known attribute names in the language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AttributeName {
-    Hidden,
     Assumes,
     ExpectedFail,
     Lazy,
@@ -53,7 +52,6 @@ impl AttributeName {
     /// Parse an attribute name from a string.
     fn from_str(s: &str) -> Option<Self> {
         match s {
-            "hidden" => Some(Self::Hidden),
             "assumes" => Some(Self::Assumes),
             "expected_fail" => Some(Self::ExpectedFail),
             "lazy" => Some(Self::Lazy),
@@ -66,7 +64,6 @@ impl AttributeName {
     /// Get the string representation of the attribute name.
     const fn as_str(self) -> &'static str {
         match self {
-            Self::Hidden => "hidden",
             Self::Assumes => "assumes",
             Self::ExpectedFail => "expected_fail",
             Self::Lazy => "lazy",
@@ -384,12 +381,10 @@ fn collect_local_declarations(
                     check_no_variant_literals(&prop.value, "plot", src)?;
                 }
                 let pname = p.name.value.to_string();
-                let hidden = decl.attributes.iter().any(|a| a.name.name == "hidden");
                 plots.push(ResolvedPlotEntry {
                     name: pname,
                     decl: p.clone(),
                     span: decl.span,
-                    hidden,
                 });
             }
             DeclKind::Figure(f) => {
@@ -545,7 +540,6 @@ fn build_name_sets(
 struct ValidatedAttributes {
     assumes_map: HashMap<String, Vec<String>>,
     expected_fail_map: HashMap<String, ExpectedFail>,
-    warnings: Vec<GraphcalError>,
 }
 
 /// Validate attributes and build `assumes_map` / `expected_fail_map`.
@@ -557,7 +551,6 @@ fn validate_attributes(
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
-    let mut warnings: Vec<GraphcalError> = Vec::new();
 
     for decl in &file.declarations {
         let decl_name = match &decl.kind {
@@ -580,38 +573,6 @@ fn validate_attributes(
             })?;
 
             match attr_name {
-                AttributeName::Hidden => {
-                    // #[hidden] is deprecated — emit warning and continue for plots.
-                    let kind = match &decl.kind {
-                        DeclKind::Plot(_) => {
-                            warnings.push(GraphcalError::DeprecatedHiddenAttribute {
-                                src: src.clone(),
-                                span: attr.span.into(),
-                            });
-                            continue;
-                        }
-                        DeclKind::Param(_) => "param",
-                        DeclKind::ConstNode(_) => "const node",
-                        DeclKind::Node(_) => "node",
-                        DeclKind::Assert(_) => "assert",
-                        DeclKind::Figure(_) => "figure",
-                        DeclKind::Layer(_) => "layer",
-
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
-                        DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
-                        DeclKind::Index(_) => "cat/range",
-                        DeclKind::Import(_) => "import",
-                        DeclKind::Include(_) => "include",
-                        DeclKind::Dag(_) => "dag",
-                    };
-                    return Err(GraphcalError::InvalidAttributeTarget {
-                        attr_name: AttributeName::Hidden.as_str().to_string(),
-                        kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
-                }
                 AttributeName::Assumes => {
                     // #[assumes] is only valid on non-const node and param
                     let kind = match &decl.kind {
@@ -799,7 +760,6 @@ fn validate_attributes(
     Ok(ValidatedAttributes {
         assumes_map,
         expected_fail_map,
-        warnings,
     })
 }
 
@@ -1124,7 +1084,6 @@ pub(crate) fn resolve_with_imports(
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
         pub_names: local.pub_names,
-        warnings: validated.warnings,
     })
 }
 
@@ -1204,6 +1163,5 @@ pub(crate) fn resolve_with_imported_values(
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
         pub_names: local.pub_names,
-        warnings: validated.warnings,
     })
 }

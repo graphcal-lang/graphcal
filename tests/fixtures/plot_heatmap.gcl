@@ -15,7 +15,7 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
 param comms_power: Power[OpMode] = for m: OpMode { @power_draw[Subsystem::Comms, m] };
 param safe_power: Power[Subsystem] = for s: Subsystem { @power_draw[s, OpMode::Safe] };
 
-plot power_heatmap = {
+pub plot power_heatmap = {
     mark: rect,
     encode: {
         x: for m: OpMode { @comms_power[m] },

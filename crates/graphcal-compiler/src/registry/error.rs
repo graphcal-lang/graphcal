@@ -1122,18 +1122,4 @@ pub enum GraphcalError {
         #[label("variant literal of pub index")]
         span: SourceSpan,
     },
-
-    /// The `#[hidden]` attribute is deprecated in favour of the `pub` keyword.
-    #[error("`#[hidden]` is deprecated; omit `pub` from the declaration instead")]
-    #[diagnostic(
-        code(graphcal::W001),
-        severity(warning),
-        help("remove `#[hidden]` — declarations without `pub` are already private")
-    )]
-    DeprecatedHiddenAttribute {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("`#[hidden]` is deprecated")]
-        span: SourceSpan,
-    },
 }

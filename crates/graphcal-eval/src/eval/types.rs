@@ -464,8 +464,9 @@ pub struct PlotSpec {
     pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).
     pub properties: Vec<(PlotProperty, PlotFieldValue)>,
-    /// Whether this plot is hidden from standalone output (`#[hidden]`).
-    pub hidden: bool,
+    /// Whether this plot is `pub` (visible in standalone output).
+    /// Non-`pub` plots are only usable in figure composition.
+    pub is_pub: bool,
 }
 
 /// A single evaluated figure specification.
