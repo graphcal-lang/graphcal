@@ -4,4 +4,4 @@ expression: formatted
 ---
 // lib.gcl -- A library file in the parent directory
 param base_value: Dimensionless = 42.0;
-const node SCALE: Dimensionless = 2.0;
+const node scale: Dimensionless = 2.0;

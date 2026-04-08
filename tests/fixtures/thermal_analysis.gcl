@@ -166,10 +166,10 @@ param emissivity: Dimensionless = 0.85;
 // Simplified: radiative_capacity = emissivity * area * 459.3 W/m^2
 // We pre-compute the flux density as a Power value per unit area.
 dim HeatFlux = Mass / Time^3;
-const node FLUX_AT_300K: HeatFlux = 459.3 kg/s^3;
+const node flux_at_300k: HeatFlux = 459.3 kg/s^3;
 
 node radiative_power_capacity: Power[ThermalNode] = for n: ThermalNode {
-    @emissivity * @radiator_area[n] * FLUX_AT_300K
+    @emissivity * @radiator_area[n] * @flux_at_300k
 };
 
 // --- Total radiative capacity ---

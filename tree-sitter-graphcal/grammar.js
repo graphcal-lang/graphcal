@@ -104,8 +104,8 @@ module.exports = grammar({
       ";",
     ),
 
-    // node v_exhaust: Velocity = @isp * G0;
-    // const node G0: Acceleration = 9.80665 m/s^2;
+    // node v_exhaust: Velocity = @isp * @g0;
+    // const node g0: Acceleration = 9.80665 m/s^2;
     node_declaration: $ => seq(
       repeat($.attribute),
       optional("const"),

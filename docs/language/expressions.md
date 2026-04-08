@@ -101,7 +101,7 @@ node first: Velocity = @delta_v[Maneuver::Departure];
 Conditional expressions:
 
 ```
-node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
+node clamped: Int = if @a > @seven { @seven } else { @a };
 ```
 
 Both branches must have the same type and dimension. The `else` branch is required.

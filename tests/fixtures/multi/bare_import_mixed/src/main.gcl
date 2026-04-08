@@ -1,8 +1,8 @@
 // Mix of bare module path and file-based import/include
-import nasa/constants { G0 };
+import nasa/constants { g0 };
 include "./local_params.gcl" { isp };
 
 dim Velocity = Length / Time;
 dim Acceleration = Length / Time^2;
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;

@@ -32,12 +32,12 @@ fn eval_rocket_text_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
-    // Source order: dry_mass, fuel_mass, isp, G0, v_exhaust, mass_ratio, delta_v
+    // Source order: dry_mass, fuel_mass, isp, g0, v_exhaust, mass_ratio, delta_v
     assert_eq!(lines.len(), 7);
     assert!(lines[0].contains("dry_mass"));
     assert!(lines[1].contains("fuel_mass"));
     assert!(lines[2].contains("isp"));
-    assert!(lines[3].contains("G0"));
+    assert!(lines[3].contains("g0"));
     assert!(lines[4].contains("v_exhaust"));
     assert!(lines[5].contains("mass_ratio"));
     assert!(lines[6].contains("delta_v"));
@@ -59,7 +59,7 @@ fn eval_rocket_json_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
-    assert!(json["const"]["G0"]["si_value"].as_f64().is_some());
+    assert!(json["const"]["g0"]["si_value"].as_f64().is_some());
     assert!(
         (json["param"]["dry_mass"]["si_value"].as_f64().unwrap() - 1200.0).abs() < f64::EPSILON
     );
@@ -99,8 +99,8 @@ fn eval_functions_text_output() {
     // Output: consts, params, DAG internal nodes (prefixed), and aliased nodes.
     // DAG includes produce prefixed internal nodes (e.g., orbital_velocity::gm).
     assert_eq!(lines.len(), 26, "lines: {lines:?}");
-    assert!(lines[0].contains("R_EARTH"));
-    assert!(lines[1].contains("GM_EARTH"));
+    assert!(lines[0].contains("r_earth"));
+    assert!(lines[1].contains("gm_earth"));
     assert!(lines[2].contains("parking_alt"));
     assert!(lines[3].contains("target_alt"));
     assert!(lines[4].contains("midpoint_alt"));

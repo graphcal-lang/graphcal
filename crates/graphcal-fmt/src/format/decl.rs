@@ -102,7 +102,7 @@ fn format_node_decl(fmt: &mut Formatter<'_>, d: &NodeDecl) -> RcDoc<'static> {
     format_value_decl(fmt, "node", &d.name.value, &d.type_ann, &d.value)
 }
 
-/// `const node NAME: Type = expr;`
+/// `const node name: Type = expr;`
 fn format_const_node_decl(
     fmt: &mut Formatter<'_>,
     d: &graphcal_compiler::syntax::ast::ConstNodeDecl,

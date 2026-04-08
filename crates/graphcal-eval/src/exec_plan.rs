@@ -657,18 +657,18 @@ mod tests {
 
     #[test]
     fn compile_simple_const() {
-        let plan = compile_source("const node G0: Dimensionless = 9.80665;").unwrap();
-        assert!((scalar(&plan.const_values["G0"]) - 9.80665).abs() < f64::EPSILON);
+        let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
+        assert!((scalar(&plan.const_values["g0"]) - 9.80665).abs() < f64::EPSILON);
         assert!(plan.topo_order.is_empty());
     }
 
     #[test]
     fn compile_const_chain() {
         let plan = compile_source(
-            "const node G0: Dimensionless = 9.80665;\nconst node TWO_G0: Dimensionless = 2.0 * G0;",
+            "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((scalar(&plan.const_values["TWO_G0"]) - 19.6133).abs() < 1e-10);
+        assert!((scalar(&plan.const_values["two_g0"]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn compile_const_cycle() {
         let err = compile_source(
-            "const node A: Dimensionless = B + 1.0;\nconst node B: Dimensionless = A + 1.0;",
+            "const node a: Dimensionless = @b + 1.0;\nconst node b: Dimensionless = @a + 1.0;",
         )
         .unwrap_err();
         assert!(matches!(err, GraphcalError::CyclicDependency { .. }));

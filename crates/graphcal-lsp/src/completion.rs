@@ -28,13 +28,18 @@ pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<Comple
     if items.is_empty() { None } else { Some(items) }
 }
 
-/// Complete param and node names (after `@`).
+/// Complete param, node, and const node names (after `@`).
 fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = analysis
         .symbol_table
         .definitions
         .values()
-        .filter(|def| matches!(def.category, SymbolCategory::Param | SymbolCategory::Node))
+        .filter(|def| {
+            matches!(
+                def.category,
+                SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
+            )
+        })
         .filter(|def| !def.name_span.is_empty())
         .map(|def| CompletionItem {
             label: def.name.clone(),
@@ -44,7 +49,7 @@ fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
         })
         .collect();
 
-    // Include imported param/node definitions.
+    // Include imported param/node/const definitions.
     items.extend(
         analysis
             .imported_definitions
@@ -52,7 +57,7 @@ fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
             .filter(|(_, imported)| {
                 matches!(
                     imported.definition.category,
-                    SymbolCategory::Param | SymbolCategory::Node
+                    SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
                 )
             })
             .map(|(_, imported)| CompletionItem {

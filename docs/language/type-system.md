@@ -77,7 +77,7 @@ Only `Scalar` carries a physical dimension. `Int` and `Bool` are non-scalable --
 
 ```
 param count: Int = 42;
-const node SEVEN: Int = 7;
+const node seven: Int = 7;
 ```
 
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
@@ -477,8 +477,8 @@ This section lists the type of each expression form and the constraints the comp
 
 | Expression | Type |
 |-----------|------|
-| `@name` | Declared type of param/node `name` |
-| `CONST_NAME` | Declared type of `const node` `CONST_NAME` |
+| `@name` | Declared type of param/node/const node `name` |
+| `BUILTIN_NAME` | Type of the built-in constant (`PI`, `E`, `TAU`, etc.) |
 | `local_var` | Type of the loop variable or match binding |
 
 ### Arithmetic Operators
@@ -664,7 +664,7 @@ dag hohmann_transfer {
 DAG blocks are instantiated with `include`, which embeds their nodes into the enclosing computation graph:
 
 ```
-include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
+include hohmann_transfer(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt) {
     total_dv,
 }
 ```

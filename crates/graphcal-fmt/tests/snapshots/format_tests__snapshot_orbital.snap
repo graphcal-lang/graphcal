@@ -7,8 +7,8 @@ dim Velocity = Length / Time;
 
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;
-const node R_EARTH: Length = 6371.0 km;
+const node r_earth: Length = 6371.0 km;
 
-node circumference: Length = 2.0 * PI * (R_EARTH + @alt);
+node circumference: Length = 2.0 * PI * (@r_earth + @alt);
 node speed: Velocity = @circumference / @period;
 node speed_kmh: Velocity = @speed -> km/hour;

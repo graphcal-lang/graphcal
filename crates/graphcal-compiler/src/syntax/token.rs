@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn lex_const_decl() {
-        let tokens = lex_tokens("const node G0 = 9.80665;");
+        let tokens = lex_tokens("const node g0 = 9.80665;");
         assert_eq!(
             tokens,
             vec![

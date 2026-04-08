@@ -127,7 +127,7 @@
 (dag_declaration name: (identifier) @function)
 
 ; Casing heuristics for import items:
-; ALL_CAPS → constant, PascalCase → type, else → variable
+; ALL_CAPS → built-in constant, PascalCase → type, else → variable
 (import_item name: (identifier) @constant
   (#match? @constant "^[A-Z][A-Z0-9_]*$"))
 (import_item name: (identifier) @type

@@ -41,7 +41,7 @@ import "./constants.gcl";
 import "./params.gcl";
 import "./lib.gcl";
 
-node g: Acceleration = constants::G0;           // qualified const node
+node g: Acceleration = @constants::g0;           // qualified const node
 node total: Mass = @params::dry_mass;           // qualified graph ref
 ```
 
@@ -53,7 +53,7 @@ Paths are resolved relative to the file containing the `import` declaration:
 
 ```
 // In project/main.gcl:
-import "./lib/constants.gcl" { G0 };     // resolves to project/lib/constants.gcl
+import "./lib/constants.gcl" { g0 };     // resolves to project/lib/constants.gcl
 import "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
 ```
 
@@ -117,7 +117,7 @@ node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 File paths and module paths can be used in the same project:
 
 ```
-import nasa/constants { G0 };
+import nasa/constants { g0 };
 import "./local_helpers.gcl" { HelperType };
 ```
 
@@ -129,7 +129,7 @@ my_project/
   src/
     main.gcl               # entry point
     nasa/
-      constants.gcl        # import nasa/constants { G0 };
+      constants.gcl        # import nasa/constants { g0 };
       rocket.gcl            # import nasa/rocket { delta_v };
       orbital/
         transfer.gcl       # import nasa/orbital/transfer { dv };
@@ -154,7 +154,7 @@ node diff: Velocity = @velocity_a - @velocity_b;
 
 | Declaration | How to Import | How to Reference |
 |-------------|--------------|-----------------|
-| `const node` | `import "..." { NAME }` | `NAME` |
+| `const node` | `import "..." { name }` | `@name` |
 | `dim` | `import "..." { DimName }` | `DimName` |
 | `unit` | `import "..." { unit_name }` | `unit_name` |
 | `type` | `import "..." { TypeName }` | `TypeName` |
@@ -167,7 +167,7 @@ Runtime values (`param`, `node`) are not imported directly. To use values from a
 
 | Declaration | How to Reference |
 |-------------|-----------------|
-| `const node` | `module::NAME` |
+| `const node` | `@module::name` |
 
 Dimension, unit, type, and index declarations cannot currently be referenced via module-qualified syntax. To use types or dimensions from another file, use selective imports.
 
@@ -176,7 +176,7 @@ Dimension, unit, type, and index declarations cannot currently be referenced via
 To instantiate a DAG from another file, use `include` with a DAG path:
 
 ```
-include "./lib/orbital.gcl"/hohmann_transfer(gm: GM_EARTH, r1: @r1, r2: @r2) {
+include "./lib/orbital.gcl"/hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2) {
     total_dv,
 }
 ```
@@ -322,7 +322,7 @@ A param declared without a default value is **required** — it must be provided
 param dry_mass: Mass;                     // required — must be provided
 param isp: Velocity = 320.0 s;           // optional — has default
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 ```
 
@@ -415,8 +415,8 @@ param dry_mass: Mass;     // required
 param fuel_mass: Mass;    // required
 param isp: Time = 320 s;  // optional default
 
-const node G0: Acceleration = 9.80665 m/s^2;
-node v_exhaust: Velocity = @isp * G0;
+const node g0: Acceleration = 9.80665 m/s^2;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
@@ -495,7 +495,7 @@ workspace/
 
 ```bash
 # In main.gcl, this import would FAIL:
-# import "../shared/constants.gcl" { G0 };
+# import "../shared/constants.gcl" { g0 };
 # ERROR: import resolves outside the project root
 ```
 

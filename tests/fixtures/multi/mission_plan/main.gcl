@@ -2,7 +2,7 @@
 //
 // Demonstrates importing from child directories (./shared/, ./subsystems/)
 // with many identifiers in a single use statement.
-import "./shared/constants.gcl" { G0, R_EARTH, GM_EARTH, GM_MOON, R_MOON, GravParam };
+import "./shared/constants.gcl" { g0, r_earth, gm_earth, gm_moon, r_moon, GravParam };
 
 import "./shared/indexes.gcl" { MissionPhase, Subsystem };
 
@@ -46,7 +46,7 @@ node structure_mass: Mass = sum(for s: Subsystem { @subsystem_mass[s] });
 
 // --- Parking orbit velocity ---
 param parking_alt: Length = 200.0 km;
-node v_parking: Velocity = sqrt(GM_EARTH / (R_EARTH + @parking_alt));
+node v_parking: Velocity = sqrt(@gm_earth / (@r_earth + @parking_alt));
 
 // --- Assertions ---
 assert positive_dv_margin = @dv_margin > 0.0 m/s;

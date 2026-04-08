@@ -24,9 +24,9 @@ fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
 
 #[test]
 fn check_dimensionless_const() {
-    let types = check("const node G0: Dimensionless = 9.80665;").unwrap();
+    let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
-        types["G0"],
+        types["g0"],
         DeclaredType::Scalar(Dimension::dimensionless())
     );
 }

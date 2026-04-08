@@ -85,10 +85,10 @@ IDENT
 (* Casing conventions enforced by the parser:
    - lower_snake_case: starts with a lowercase letter, contains only
      lowercase letters, digits, and underscores.
-     Used for: param, node, dag names, field names, local variables.
+     Used for: param, node, const node, dag names, field names, local variables.
    - UPPER_SNAKE_CASE: starts with an uppercase letter, contains only
      uppercase letters, digits, and underscores.
-     Used for: const node names, built-in constants (PI, E).
+     Used for: built-in constants only (PI, E, TAU).
    - PascalCase: starts with an uppercase letter, contains at least
      one lowercase letter.
      Used for: type, index, variant names.
@@ -200,7 +200,7 @@ node_decl
    = "node", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
 
 const_decl
-   = "const", "node", upper_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
+   = "const", "node", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
 
 (* --- dimension --- *)
 (* Two forms:
@@ -617,10 +617,10 @@ bool_literal
 graph_ref
    = "@", [ lower_snake_case_ident, "::" ], lower_snake_case_ident;
 
-(* @name -- local graph ref.  @module::name -- qualified graph ref.
-   Const refs (UPPER_SNAKE_CASE) and qualified const refs
-   (module::NAME) are parsed as bare identifiers and resolved
-   during name resolution. *)
+(* @name -- graph ref (param, node, or const node).
+   @module::name -- qualified graph ref.
+   Bare UPPER_SNAKE_CASE identifiers (PI, E, TAU) are built-in constants
+   only; user-defined const nodes use @name like regular nodes. *)
 
 local_ref
    = lower_snake_case_ident;

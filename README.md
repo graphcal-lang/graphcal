@@ -15,9 +15,9 @@ dim Acceleration = Length / Time^2;
 param dry_mass: Mass = 1200 kg;
 param fuel_mass: Mass = 2800 kg;
 param isp: Time = 320 s;
-const node G0: Acceleration = 9.80665 m/s^2;
+const node g0: Acceleration = 9.80665 m/s^2;
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
@@ -27,7 +27,7 @@ $ graphcal eval rocket.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
@@ -166,8 +166,8 @@ node status_code: Dimensionless = match @current_status {
 ### If/else expressions
 
 ```gcl
-const node SEVEN: Int = 7;
-node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
+const node seven: Int = 7;
+node clamped: Int = if @a > @seven { @seven } else { @a };
 node result: Dimensionless = if @enabled { 1.0 } else { 0.0 };
 ```
 
@@ -182,7 +182,7 @@ dag orbital_velocity {
     node v: Velocity = sqrt(@gm / @r);
 }
 
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) {
     v as v_parking,
 }
 ```
@@ -277,7 +277,7 @@ node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j]
 Split calculations across files with `import` declarations. All declaration kinds can be imported, and circular dependencies are detected at compile time.
 
 ```gcl
-import "./constants.gcl" { G0 };
+import "./constants.gcl" { g0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
 
@@ -363,7 +363,7 @@ When both `--set` and `--input` are provided, `--set` takes precedence for the s
 
 - Rich error diagnostics with source spans and error codes (via [miette](https://github.com/zkat/miette))
 - JSON output for tooling integration (`--format json`)
-- Naming convention enforcement: `lower_snake_case` for params/nodes/DAGs, `UPPER_SNAKE_CASE` for constants, `PascalCase` for types/indexes/dimensions
+- Naming convention enforcement: `lower_snake_case` for params/nodes/constants/DAGs, `PascalCase` for types/indexes/dimensions
 - Runtime safety checks: division by zero, NaN/infinity detection, integer overflow
 - Fault isolation: a failing node does not crash unrelated nodes
 
@@ -489,31 +489,31 @@ type TransferResult {
     tof: Time,
 }
 
-const node R_EARTH: Length = 6371.0 km;
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 dag hohmann_transfer {
-    import .. { TransferResult, R_EARTH, GM_EARTH };
+    import .. { TransferResult, r_earth, gm_earth };
     param parking_alt: Length;
     param target_alt: Length;
 
-    node r1: Length = R_EARTH + @parking_alt;
-    node r2: Length = R_EARTH + @target_alt;
+    node r1: Length = @r_earth + @parking_alt;
+    node r2: Length = @r_earth + @target_alt;
     node a: Length = (@r1 + @r2) / 2.0;
 
-    node v1: Velocity = sqrt(GM_EARTH / @r1);
-    node v2: Velocity = sqrt(GM_EARTH / @r2);
-    node dv1: Velocity = sqrt(2.0 * GM_EARTH * @r2 / (@r1 * (@r1 + @r2))) - @v1;
-    node dv2: Velocity = @v2 - sqrt(2.0 * GM_EARTH * @r1 / (@r2 * (@r1 + @r2)));
+    node v1: Velocity = sqrt(@gm_earth / @r1);
+    node v2: Velocity = sqrt(@gm_earth / @r2);
+    node dv1: Velocity = sqrt(2.0 * @gm_earth * @r2 / (@r1 * (@r1 + @r2))) - @v1;
+    node dv2: Velocity = @v2 - sqrt(2.0 * @gm_earth * @r1 / (@r2 * (@r1 + @r2)));
 
     node result: TransferResult = TransferResult {
         dv1: @dv1,
         dv2: @dv2,
         total_dv: @dv1 + @dv2,
-        tof: PI * sqrt(@a ^ 3.0 / GM_EARTH),
+        tof: PI * sqrt(@a ^ 3.0 / @gm_earth),
     };
 }
 
@@ -525,8 +525,8 @@ node tof_hours: Time = @transfer.tof -> hour;
 
 ```sh
 $ graphcal eval hohmann.gcl
-R_EARTH           = 6371 km
-GM_EARTH          = 398600.4418 km^3/s^2
+r_earth           = 6371 km
+gm_earth          = 398600.4418 km^3/s^2
 parking_alt       = 200 km
 target_alt        = 35786 km
 transfer.dv1      = 2456.55318 m/s
@@ -667,7 +667,7 @@ node transfer_time: Time = @storage / @rate;
 ```gcl
 // constants.gcl
 dim Acceleration = Length / Time^2;
-const node G0: Acceleration = 9.80665 m/s^2;
+const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 ```gcl
@@ -679,19 +679,19 @@ param isp: Time = 320 s;
 
 ```gcl
 // main.gcl
-import "./constants.gcl" { G0 };
+import "./constants.gcl" { g0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 
-node v_exhaust: Velocity = @isp * G0;
+node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```sh
 $ graphcal eval main.gcl
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
@@ -704,7 +704,7 @@ Imported params can be overridden at the command line (all params must be provid
 
 ```sh
 $ graphcal eval main.gcl --set 'isp=450.0 s' --allow-defaults
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 450 s

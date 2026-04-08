@@ -4,8 +4,8 @@ dim GravParam = Length^3 / Time^2;
 unit km_s: Velocity = 1000 m/s;
 unit MJ: Energy = 1e6 J;
 
-const node G0: Acceleration = 9.80665 m/s^2;
-const node R_EARTH: Length = 6371.0 km;
-const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
-const node GM_MOON: GravParam = 4.9028695e3 km^3/s^2;
-const node R_MOON: Length = 1737.4 km;
+const node g0: Acceleration = 9.80665 m/s^2;
+const node r_earth: Length = 6371.0 km;
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+const node gm_moon: GravParam = 4.9028695e3 km^3/s^2;
+const node r_moon: Length = 1737.4 km;

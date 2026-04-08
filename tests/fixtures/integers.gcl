@@ -19,10 +19,10 @@ node a_eq_b: Bool = @a == @b;
 node a_le_b: Bool = @a <= @b;
 
 // Integer constant
-const node SEVEN: Int = 7;
+const node seven: Int = 7;
 
 // If-else with integers
-node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
+node clamped: Int = if @a > @seven { @seven } else { @a };
 
 // Conversions
 node a_float: Dimensionless = to_float(@a);
