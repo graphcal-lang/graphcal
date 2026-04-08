@@ -349,8 +349,7 @@ fn format_dag_decl(fmt: &mut Formatter<'_>, d: &DagDecl) -> RcDoc<'static> {
         d.body.iter().map(|decl| format_decl(fmt, decl)).collect();
     let body = RcDoc::intersperse(body_parts, RcDoc::hardline().append(RcDoc::hardline()));
     header
-        .append(RcDoc::hardline())
-        .append(body.nest(INDENT))
+        .append(RcDoc::hardline().append(body).nest(INDENT))
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"))
 }

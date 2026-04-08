@@ -1,9 +1,9 @@
 // main.gcl -- imports lib with a concrete index binding
 index MyPhase = { Design, Build };
 
-include "./lib.gcl"(
-    Phase: MyPhase,
-    cost: { MyPhase::Design: 10.0, MyPhase::Build: 20.0 },
-) { total };
+include "./lib.gcl"(Phase: MyPhase { }, cost: {
+    MyPhase::Design: 10.0,
+    MyPhase::Build: 20.0,
+}) { total };
 
 node result: Dimensionless = @total;

@@ -38,7 +38,7 @@ const node r_earth: Length = 6371.0 km;
 
 // DAG with long signature (replaces block-body function)
 dag compute_transfer_velocity {
-param gm: GravParam;
+    param gm: GravParam;
     
     param r_departure: Length;
     
@@ -59,7 +59,7 @@ param gm: GravParam;
 
 // DAG with short expression body (replaces expression-body function)
 dag clamp_dag {
-param x: Dimensionless;
+    param x: Dimensionless;
     
     param lo: Dimensionless;
     
@@ -134,7 +134,7 @@ node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.
 
 // DAG for complex result computation
 dag compute_complex_result {
-import .. { gm_earth, r_earth };
+    import .. { gm_earth, r_earth };
     
     node r1: Length = @r_earth + 200.0 km;
     

@@ -4,7 +4,7 @@ expression: formatted
 ---
 // lib.gcl -- utility DAG
 dag double {
-param x: Dimensionless;
+    param x: Dimensionless;
     
     node result: Dimensionless = @x * 2.0;
 }

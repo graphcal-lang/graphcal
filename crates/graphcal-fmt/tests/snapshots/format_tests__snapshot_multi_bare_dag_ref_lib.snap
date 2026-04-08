@@ -1,11 +1,10 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 656
 expression: formatted
 ---
 // lib.gcl -- defines a reusable DAG
 dag double {
-param x: Dimensionless;
+    param x: Dimensionless;
     
     node result: Dimensionless = @x * 2.0;
 }

@@ -7,8 +7,9 @@ const node r_earth: Length = 6371000.0 m;
 
 dag circular_velocity {
     import .. { gm, r_earth };
-
+    
     param alt: Length;
+    
     node v: Velocity = sqrt(@gm / (@r_earth + @alt));
 }
 
