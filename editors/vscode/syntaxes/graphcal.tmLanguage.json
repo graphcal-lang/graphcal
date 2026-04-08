@@ -63,43 +63,48 @@
     },
 
     "type-declaration": {
-      "match": "\\b(type)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(type)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.type.graphcal" },
-        "2": { "name": "entity.name.type.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.type.graphcal" },
+        "3": { "name": "entity.name.type.graphcal" }
       }
     },
 
     "base-dimension-declaration": {
-      "match": "\\b(base)\\s+(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(base)\\s+(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.dimension.graphcal" },
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.dimension.graphcal" },
+        "3": { "name": "keyword.declaration.dimension.graphcal" },
+        "4": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "dimension-declaration": {
+      "match": "(?:\\b(pub)\\s+)?\\b(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.dimension.graphcal" },
         "3": { "name": "entity.name.type.graphcal" }
       }
     },
 
-    "dimension-declaration": {
-      "match": "\\b(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
-      "captures": {
-        "1": { "name": "keyword.declaration.dimension.graphcal" },
-        "2": { "name": "entity.name.type.graphcal" }
-      }
-    },
-
     "unit-declaration": {
-      "match": "\\b(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.unit.graphcal" },
-        "2": { "name": "entity.name.type.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.unit.graphcal" },
+        "3": { "name": "entity.name.type.graphcal" }
       }
     },
 
     "index-declaration": {
-      "match": "\\b(index)\\s+([A-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(index)\\s+([A-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.index.graphcal" },
-        "2": { "name": "entity.name.type.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.index.graphcal" },
+        "3": { "name": "entity.name.type.graphcal" }
       }
     },
 
@@ -109,36 +114,40 @@
     },
 
     "param-declaration": {
-      "match": "\\b(param)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(param)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.param.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.param.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "node-declaration": {
-      "match": "\\b(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.node.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.node.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "const-node-declaration": {
-      "match": "\\b(const)\\s+(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(const)\\s+(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.const.graphcal" },
-        "2": { "name": "keyword.declaration.node.graphcal" },
-        "3": { "name": "variable.other.constant.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.const.graphcal" },
+        "3": { "name": "keyword.declaration.node.graphcal" },
+        "4": { "name": "variable.other.constant.graphcal" }
       }
     },
 
     "const-unit-declaration": {
-      "match": "\\b(const)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(const)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.const.graphcal" },
-        "2": { "name": "keyword.declaration.unit.graphcal" },
-        "3": { "name": "entity.name.type.unit.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.const.graphcal" },
+        "3": { "name": "keyword.declaration.unit.graphcal" },
+        "4": { "name": "entity.name.type.unit.graphcal" }
       }
     },
 
@@ -170,18 +179,20 @@
     },
 
     "assert-declaration": {
-      "match": "\\b(assert)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(assert)\\s+([a-z][a-z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.assert.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.assert.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "plot-declaration": {
-      "match": "\\b(plot)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(plot)\\s+([a-z][a-z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.plot.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.plot.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
@@ -201,26 +212,29 @@
     },
 
     "figure-declaration": {
-      "match": "\\b(figure)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(figure)\\s+([a-z][a-z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.figure.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.figure.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "layer-declaration": {
-      "match": "\\b(layer)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub)\\s+)?\\b(layer)\\s+([a-z][a-z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.declaration.layer.graphcal" },
-        "2": { "name": "variable.other.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.layer.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "import-declaration": {
-      "begin": "\\b(import)\\b",
+      "begin": "(?:\\b(pub)\\s+)?\\b(import)\\b",
       "end": ";",
       "beginCaptures": {
-        "1": { "name": "keyword.declaration.import.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.import.graphcal" }
       },
       "endCaptures": {
         "0": { "name": "punctuation.terminator.graphcal" }
@@ -242,11 +256,12 @@
     },
 
     "dag-declaration": {
-      "begin": "\\b(dag)\\s+([a-z][a-z0-9_]*)\\s*\\{",
+      "begin": "(?:\\b(pub)\\s+)?\\b(dag)\\s+([a-z][a-z0-9_]*)\\s*\\{",
       "end": "\\}",
       "beginCaptures": {
-        "1": { "name": "keyword.declaration.dag.graphcal" },
-        "2": { "name": "entity.name.function.dag.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.dag.graphcal" },
+        "3": { "name": "entity.name.function.dag.graphcal" }
       },
       "patterns": [
         { "include": "$self" }
@@ -254,10 +269,11 @@
     },
 
     "include-declaration": {
-      "begin": "\\b(include)\\b",
+      "begin": "(?:\\b(pub)\\s+)?\\b(include)\\b",
       "end": ";",
       "beginCaptures": {
-        "1": { "name": "keyword.declaration.include.graphcal" }
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.include.graphcal" }
       },
       "endCaptures": {
         "0": { "name": "punctuation.terminator.graphcal" }

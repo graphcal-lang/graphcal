@@ -58,6 +58,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Plot(PlotDecl {
                 name,
                 mark,

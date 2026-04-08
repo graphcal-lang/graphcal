@@ -26,6 +26,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Param(ParamDecl {
                 name,
                 type_ann,
@@ -48,6 +49,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Node(NodeDecl {
                 name,
                 type_ann,
@@ -75,6 +77,7 @@ impl Parser<'_> {
         let span = const_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::ConstNode(ConstNodeDecl {
                 name,
                 type_ann,
@@ -121,6 +124,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Assert(AssertDecl { name, body }),
             span,
         })

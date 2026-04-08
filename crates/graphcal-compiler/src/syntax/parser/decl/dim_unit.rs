@@ -18,6 +18,7 @@ impl Parser<'_> {
         let span = base_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::BaseDimension(BaseDimDecl { name }),
             span,
         })
@@ -35,6 +36,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Dimension(DimDecl { name, definition }),
             span,
         })
@@ -73,6 +75,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
                 name,
                 dim_type,
