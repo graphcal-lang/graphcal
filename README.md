@@ -163,20 +163,6 @@ node status_code: Dimensionless = match @current_status {
 };
 ```
 
-### Block expressions
-
-Use block bodies with `let` bindings for complex computations:
-
-```gcl
-node transfer: TransferResult = {
-    let r1 = R_EARTH + @parking_alt;
-    let r2 = R_EARTH + @target_alt;
-    let a = (r1 + r2) / 2.0;
-    // ...
-    TransferResult { dv1, dv2, total_dv: dv1 + dv2, tof: PI * sqrt(a ^ 3.0 / GM_EARTH) }
-};
-```
-
 ### If/else expressions
 
 ```gcl
@@ -269,13 +255,7 @@ param rate: Frequency = 0.5 Hz;
 param x0: Dimensionless = 1.0;
 
 // Exponential growth: x(t+dt) = x(t) * (1 + rate * dt)
-node x: Dimensionless[TimeStep] = unfold(
-    @x0,
-    |prev_t, t| {
-        let dt = t - prev_t;
-        @x[prev_t] * (1.0 + @rate * dt)
-    }
-);
+node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| @x[prev_t] * (1.0 + @rate * (t - prev_t)));
 ```
 
 ### Nat range indexes for vectors and matrices
@@ -509,29 +489,35 @@ type TransferResult {
     tof: Time,
 }
 
-const node R_EARTH: Length = 6371 km;
+const node R_EARTH: Length = 6371.0 km;
 const node GM_EARTH: GravParam = 3.986004418e5 km^3/s^2;
 
-param parking_alt: Length = 200 km;
-param target_alt: Length = 35786 km;
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
 
-node transfer: TransferResult = {
-    let r1 = R_EARTH + @parking_alt;
-    let r2 = R_EARTH + @target_alt;
-    let a = (r1 + r2) / 2.0;
+dag hohmann_transfer {
+    import .. { TransferResult, R_EARTH, GM_EARTH };
+    param parking_alt: Length;
+    param target_alt: Length;
 
-    let v1 = sqrt(GM_EARTH / r1);
-    let v2 = sqrt(GM_EARTH / r2);
-    let dv1 = sqrt(2.0 * GM_EARTH * r2 / (r1 * (r1 + r2))) - v1;
-    let dv2 = v2 - sqrt(2.0 * GM_EARTH * r1 / (r2 * (r1 + r2)));
+    node r1: Length = R_EARTH + @parking_alt;
+    node r2: Length = R_EARTH + @target_alt;
+    node a: Length = (@r1 + @r2) / 2.0;
 
-    TransferResult {
-        dv1,
-        dv2,
-        total_dv: dv1 + dv2,
-        tof: PI * sqrt(a ^ 3.0 / GM_EARTH),
-    }
-};
+    node v1: Velocity = sqrt(GM_EARTH / @r1);
+    node v2: Velocity = sqrt(GM_EARTH / @r2);
+    node dv1: Velocity = sqrt(2.0 * GM_EARTH * @r2 / (@r1 * (@r1 + @r2))) - @v1;
+    node dv2: Velocity = @v2 - sqrt(2.0 * GM_EARTH * @r1 / (@r2 * (@r1 + @r2)));
+
+    node result: TransferResult = TransferResult {
+        dv1: @dv1,
+        dv2: @dv2,
+        total_dv: @dv1 + @dv2,
+        tof: PI * sqrt(@a ^ 3.0 / GM_EARTH),
+    };
+}
+
+include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt) { result as transfer };
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;
@@ -657,13 +643,7 @@ param k: Frequency = 2.0 Hz;
 param y0: Dimensionless = 10.0;
 
 // Exponential decay: y(t+dt) = y(t) * (1 - k * dt)
-node y: Dimensionless[Step] = unfold(
-    @y0,
-    |prev_t, t| {
-        let dt = t - prev_t;
-        @y[prev_t] * (1.0 - @k * dt)
-    }
-);
+node y: Dimensionless[Step] = unfold(@y0, |prev_t, t| @y[prev_t] * (1.0 - @k * (t - prev_t)));
 ```
 
 ### User-defined dimensions and units
@@ -840,8 +820,11 @@ See the [GitHub issues](https://github.com/shunichironomura/graphcal/issues) for
 ```
 graphcal/
   crates/
-    graphcal-syntax/   # lexer (logos) + recursive descent parser + AST
-    graphcal-eval/     # name resolution, dim check, const eval, DAG, runtime eval
+    graphcal-compiler/ # lexer (logos) + recursive descent parser + AST
+    graphcal-dag/      # DAG construction and dependency analysis
+    graphcal-eval/     # name resolution, dim check, const eval, runtime eval
+    graphcal-fmt/      # code formatter
+    graphcal-io/       # input/output (JSON, text)
     graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
     graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, go-to-def, hover
   grammar.ebnf       # formal grammar (source of truth for tree-sitter/TextMate grammars)

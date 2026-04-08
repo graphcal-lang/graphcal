@@ -358,10 +358,7 @@ The file cannot be evaluated standalone. It must be imported with a binding that
 `unfold` computes values over a range index where each value depends on the previous:
 
 ```
-node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| {
-    let dt = t - prev_t;
-    @x[prev_t] * (1.0 + @rate * dt)
-});
+node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| @x[prev_t] * (1.0 + @rate * (t - prev_t)));
 ```
 
 This is useful for time-stepping simulations and discrete dynamic systems.

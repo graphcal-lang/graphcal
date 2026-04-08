@@ -27,7 +27,7 @@ Expression-level:
 - **Primitive** — An indivisible atomic datum.
 - **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, union types). This is the type of one value: you can pass it to a function, return it, store it.
 - **DeclType** — What can appear in type annotations of `param`, `node`, and `const node` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
-- **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver::Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies, function parameters, and `let` bindings.
+- **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver::Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies and match bindings.
 
 ### DAG Correspondence
 
@@ -256,7 +256,7 @@ Named index labels are proper runtime values within expressions:
 
 - Use in DAG block parameters: `param m: Maneuver` works.
 - Use as DAG block node types: `node result: Maneuver` works.
-- Store in local variables: `let x = Maneuver::Departure` works.
+- Store in nodes: `node x: Maneuver = Maneuver::Departure` works.
 - Compare: `m == Maneuver::Departure` works.
 - Pattern match: `match m { Maneuver::Departure => ..., ... }` works.
 - Use in struct fields: `type Config { phase: Phase, maneuver: Maneuver }` works.
@@ -479,7 +479,7 @@ This section lists the type of each expression form and the constraints the comp
 |-----------|------|
 | `@name` | Declared type of param/node `name` |
 | `CONST_NAME` | Declared type of `const node` `CONST_NAME` |
-| `local_var` | Type of the `let` binding or function parameter |
+| `local_var` | Type of the loop variable or match binding |
 
 ### Arithmetic Operators
 
@@ -515,20 +515,6 @@ if condition { then_expr } else { else_expr }
 - `condition` must be `Bool`.
 - `then_expr` and `else_expr` must have the same type.
 - The result type is the type of the branches.
-
-### Block Expression
-
-```
-{
-    let x: Type = expr1;
-    let y = expr2;
-    result_expr
-}
-```
-
-- `let` bindings introduce local variables.
-- Type annotations on `let` bindings are optional; if present, the inferred type of the initializer must match.
-- The type of the block is the type of the final expression.
 
 ### Function Call
 

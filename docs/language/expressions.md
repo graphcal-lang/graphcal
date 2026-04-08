@@ -4,7 +4,7 @@ icon: material/code-parentheses
 
 # Expressions
 
-This page covers all expression forms in Graphcal: operators, precedence, conditionals, blocks, and let bindings.
+This page covers all expression forms in Graphcal: operators, precedence, and conditionals.
 
 ## Operator Precedence
 
@@ -105,31 +105,6 @@ node clamped: Int = if @a > SEVEN { SEVEN } else { @a };
 ```
 
 Both branches must have the same type and dimension. The `else` branch is required.
-
-## Block Expressions
-
-A block `{ ... }` introduces a scope with `let` bindings:
-
-```
-node result: Velocity = {
-    let r = R_EARTH + @altitude;
-    sqrt(GM_EARTH / r)
-};
-```
-
-- `let` bindings are local to the block
-- The last expression (without trailing `;`) is the block's value
-- Blocks can be nested
-
-## Let Bindings
-
-```
-let name = expression;
-```
-
-- The dimension and type are inferred from the expression
-- `let` bindings are immutable
-- Duplicate `let` names in the same scope are a compile-time error
 
 ## Numeric Literals
 

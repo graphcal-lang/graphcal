@@ -32,11 +32,11 @@ node result: TransferResult = TransferResult {
 };
 ```
 
-Field shorthand: when a local variable matches the field name, you can omit the value:
+Field shorthand: when a node name matches the field name, you can omit the value:
 
 ```
-let dv1 = 100.0 m/s;
-TransferResult { dv1, dv2: 200.0 m/s, total_dv: 300.0 m/s, tof: 3600.0 s }
+node dv1: Velocity = 100.0 m/s;
+node result: TransferResult = TransferResult { dv1: @dv1, dv2: 200.0 m/s, total_dv: 300.0 m/s, tof: 3600.0 s };
 ```
 
 ### Field Access
