@@ -167,15 +167,13 @@ plot efficiency_map = {
 };
 ```
 
-## The `#[hidden]` Attribute
+## Visibility and Standalone Output
 
-By default, every `plot` declaration produces its own standalone figure in the
-output. To suppress a plot's standalone figure (for example, when it only makes
-sense as part of a combined figure or layer), use the `#[hidden]` attribute:
+By default, plots are **private** and do not produce standalone figures in the
+output. To make a plot appear as a standalone chart, mark it `pub`:
 
 ```gcl
-#[hidden]
-plot curve_a = {
+pub plot curve_a = {
     mark: line,
     encode: {
         x: for t: Time { t },
@@ -185,11 +183,10 @@ plot curve_a = {
 };
 ```
 
-A hidden plot still participates in the computation graph and can be referenced
-by `figure` and `layer` declarations -- it simply does not appear as a
-standalone chart in the output.
-
-The `#[hidden]` attribute is only valid on `plot` declarations.
+A non-`pub` plot still participates in the computation graph and can be
+referenced by `figure` and `layer` declarations -- it simply does not appear
+as a standalone chart in the output. This replaces the former `#[hidden]`
+attribute, which has been removed.
 
 ## Figure Declarations
 
@@ -247,13 +244,11 @@ This produces **three** figures in the output: `curve_a` (standalone),
 
 ### Hiding Standalone Plots
 
-To output only the combined figure, mark the individual plots as `#[hidden]`:
+To output only the combined figure, omit `pub` from the individual plots:
 
 ```gcl
-#[hidden]
 plot curve_a = { mark: line, encode: { ... } };
 
-#[hidden]
 plot curve_b = { mark: bar, encode: { ... } };
 
 figure comparison = {
@@ -262,8 +257,9 @@ figure comparison = {
 };
 ```
 
-This produces **one** figure: `comparison`. The hidden plots are still evaluated
-and included in the combined figure, but do not appear as standalone charts.
+This produces **one** figure: `comparison`. The non-`pub` plots are still
+evaluated and included in the combined figure, but do not appear as standalone
+charts.
 
 ## Layer Declarations
 
@@ -287,7 +283,6 @@ layer <name> = {
 ### Layer Example
 
 ```gcl
-#[hidden]
 plot line_trace = {
     mark: line,
     encode: {
@@ -296,7 +291,6 @@ plot line_trace = {
     },
 };
 
-#[hidden]
 plot point_trace = {
     mark: point,
     encode: {

@@ -375,7 +375,7 @@ pub(super) fn evaluate_plan(
             evaluate_plot(
                 &entry.decl,
                 entry.name.as_str(),
-                entry.hidden,
+                entry.is_pub,
                 &values,
                 &empty_locals,
                 &ctx,
@@ -900,7 +900,7 @@ fn check_scalar_constraint(
 fn evaluate_plot(
     decl: &graphcal_compiler::syntax::ast::PlotDecl,
     name: &str,
-    hidden: bool,
+    is_pub: bool,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -966,7 +966,7 @@ fn evaluate_plot(
         encoding_meta,
         mark_properties,
         properties,
-        hidden,
+        is_pub,
     })
 }
 

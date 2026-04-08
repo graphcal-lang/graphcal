@@ -254,7 +254,6 @@ pub struct ResolvedPlotEntry {
     pub name: String,
     pub decl: PlotDecl,
     pub span: Span,
-    pub hidden: bool,
 }
 
 /// A resolved figure declaration.
@@ -321,6 +320,4 @@ pub struct ResolvedFile {
     pub expected_fail: HashMap<String, ExpectedFail>,
     /// Names of all declarations marked `pub` in this file (values + type-system).
     pub pub_names: HashSet<String>,
-    /// Non-fatal warnings collected during resolution (e.g., deprecated `#[hidden]`).
-    pub warnings: Vec<crate::registry::error::GraphcalError>,
 }
