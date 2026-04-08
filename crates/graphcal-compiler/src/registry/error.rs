@@ -1049,4 +1049,88 @@ pub enum GraphcalError {
         #[label("constraints not valid here")]
         span: SourceSpan,
     },
+
+    // --- Visibility errors ---
+
+    /// Attempting to import a private (non-`pub`) item from another file.
+    #[error("cannot import private item `{name}` from `{file_path}`")]
+    #[diagnostic(
+        code(graphcal::V001),
+        help("add `pub` to the declaration in the source file to make it importable")
+    )]
+    ImportPrivateItem {
+        name: String,
+        file_path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not visible — item is private")]
+        span: SourceSpan,
+    },
+
+    /// A required param or index is not marked `pub`.
+    #[error("required {kind} `{name}` must be declared `pub`")]
+    #[diagnostic(
+        code(graphcal::V002),
+        help(
+            "required params and indexes form the public interface — add `pub` before the declaration"
+        )
+    )]
+    RequiredItemMustBePub {
+        kind: String,
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("required item must be `pub`")]
+        span: SourceSpan,
+    },
+
+    /// A `pub` declaration references a private type-system item in its type annotation.
+    #[error("`pub {pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its type annotation")]
+    #[diagnostic(
+        code(graphcal::V003),
+        help("add `pub` to `{ref_name}` or remove `pub` from `{pub_name}`")
+    )]
+    PrivateInPublic {
+        pub_kind: String,
+        pub_name: String,
+        ref_kind: String,
+        ref_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("references private `{ref_name}`")]
+        ref_span: SourceSpan,
+        #[label("declared `pub` here")]
+        pub_span: SourceSpan,
+    },
+
+    /// A `pub index` with concrete variants has its variants used in the defining file's expressions.
+    #[error("variant literal `{index}::{variant}` of `pub index` cannot be used in the defining file")]
+    #[diagnostic(
+        code(graphcal::V004),
+        help(
+            "pub indexes may be overridden by importers; use `param` declarations for variant-specific values instead"
+        )
+    )]
+    PubIndexVariantLiteral {
+        index: String,
+        variant: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("variant literal of pub index")]
+        span: SourceSpan,
+    },
+
+    /// The `#[hidden]` attribute is deprecated in favour of the `pub` keyword.
+    #[error("`#[hidden]` is deprecated; omit `pub` from the declaration instead")]
+    #[diagnostic(
+        code(graphcal::W001),
+        severity(warning),
+        help("remove `#[hidden]` — declarations without `pub` are already private")
+    )]
+    DeprecatedHiddenAttribute {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("`#[hidden]` is deprecated")]
+        span: SourceSpan,
+    },
 }

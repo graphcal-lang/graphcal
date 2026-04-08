@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // lib.gcl -- defines a reusable DAG
-dag double {
-    param x: Dimensionless;
+pub dag double {
+    pub param x: Dimensionless;
     
-    node result: Dimensionless = @x * 2.0;
+    pub node result: Dimensionless = @x * 2.0;
 }

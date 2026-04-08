@@ -1,0 +1,2 @@
+// Error: required param is not marked `pub`.
+param x: Dimensionless;

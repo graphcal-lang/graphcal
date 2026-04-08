@@ -1,0 +1,3 @@
+// Error: pub param references private dim in its type annotation.
+dim Velocity = Length / Time;
+pub param speed: Velocity = 10.0 m/s;

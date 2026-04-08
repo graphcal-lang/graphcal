@@ -123,6 +123,9 @@ struct EvaluatedFile {
     assertions: HashMap<DeclName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
+    /// Names of declarations marked `pub` in the source file.
+    /// Used to enforce private-by-default visibility during imports.
+    pub_names: HashSet<String>,
 }
 
 impl EvaluatedFile {
@@ -206,7 +209,8 @@ struct ImportContext<'a> {
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
     imported_type_system_names: HashMap<PathBuf, HashSet<String>>,
     module_map: HashMap<String, (PathBuf, Span)>,
-    extra_registry_builders: Vec<&'a Registry>,
+    /// Registry + `pub_names` for module-imported dependencies.
+    extra_registry_builders: Vec<(&'a Registry, &'a HashSet<String>)>,
     deferred_instantiated: Vec<DeferredInstantiatedImport>,
     deferred_inline_dags: Vec<DeferredInlineDagInclude>,
 }
@@ -587,7 +591,7 @@ fn process_instantiated_include<'a>(
             let importer_idx_from_registry = if importer_idx_ast.is_none() {
                 ctx.extra_registry_builders
                     .iter()
-                    .find_map(|reg| reg.indexes.get_index(&rhs_name))
+                    .find_map(|(reg, _)| reg.indexes.get_index(&rhs_name))
                     .or_else(|| {
                         evaluated_files
                             .values()
@@ -763,9 +767,10 @@ fn process_instantiated_include<'a>(
                     }
                 }
             }
-            // Import type-system declarations.
+            // Import type-system declarations (pub items only).
             if let Some(dep_eval) = evaluated_files.get(import_canonical) {
-                ctx.extra_registry_builders.push(&dep_eval.registry);
+                ctx.extra_registry_builders
+                    .push((&dep_eval.registry, &dep_eval.pub_names));
             }
             None
         }
@@ -1316,6 +1321,10 @@ fn is_bare_module_dag_ref(
     clippy::too_many_arguments,
     reason = "import processing needs all these context parameters"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "visibility check adds necessary logic to the import processing"
+)]
 fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_canonical: &PathBuf,
@@ -1342,6 +1351,31 @@ fn process_non_instantiated_import<'a>(
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
+
+                // Visibility check: the item must be declared `pub` in the source file.
+                if !dep.pub_names.contains(orig_name.as_str()) {
+                    // Check if the name exists at all (value or type-system) before
+                    // reporting "private" vs "not found".
+                    let dep_loaded = &project.files[import_canonical];
+                    let exists = dep.const_values.contains_key(orig_name)
+                        || dep.values.contains_key(orig_name)
+                        || dep.has_assert(orig_name)
+                        || file_has_declaration(&dep_loaded.ast, orig_name);
+                    if exists {
+                        return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+                            name: orig_name.clone(),
+                            file_path: import_path.display_path(),
+                            src: file_src.clone(),
+                            span: import_item.name.span.into(),
+                        }));
+                    }
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                        name: orig_name.clone(),
+                        file_path: import_path.display_path(),
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
+                }
 
                 match import_selective_item(
                     dep,
@@ -1420,8 +1454,8 @@ fn process_non_instantiated_import<'a>(
                 Some(&mut ctx.imported_source_order),
                 is_import,
             );
-            // Import all type-system declarations from dep's registry.
-            ctx.extra_registry_builders.push(&dep.registry);
+            // Import all public type-system declarations from dep's registry.
+            ctx.extra_registry_builders.push((&dep.registry, &dep.pub_names));
         }
     }
     Ok(())
@@ -1513,9 +1547,14 @@ fn lower_and_finalize(
         )?;
     }
 
-    // Merge type-system declarations from module-imported registries.
-    for dep_registry in &ctx.extra_registry_builders {
-        merge_registry_into_builder(&mut builder, dep_registry, &HashMap::new());
+    // Merge type-system declarations from module-imported registries (pub items only).
+    for (dep_registry, pub_names) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_filtered(
+            &mut builder,
+            dep_registry,
+            &HashMap::new(),
+            Some(pub_names),
+        );
     }
 
     // Process deferred instantiated imports: compile dep to IR and merge.
@@ -1963,6 +2002,10 @@ fn import_module_values(
     let mut const_keys: Vec<&String> = dep.const_values.keys().collect();
     const_keys.sort();
     for name in const_keys {
+        // Only import pub items.
+        if !dep.pub_names.contains(name.as_str()) {
+            continue;
+        }
         let rv = &dep.const_values[name];
         let scoped = ScopedName::Qualified {
             module: module_name.to_string(),
@@ -1992,6 +2035,10 @@ fn import_module_values(
     let mut value_keys: Vec<&String> = dep.values.keys().collect();
     value_keys.sort();
     for name in value_keys {
+        // Only import pub items.
+        if !dep.pub_names.contains(name.as_str()) {
+            continue;
+        }
         let rv = &dep.values[name];
         let scoped = ScopedName::Qualified {
             module: module_name.to_string(),
@@ -2155,6 +2202,7 @@ fn evaluate_and_store_file(
     compiled: CompiledFile,
     file_path: &Path,
     file_src: &NamedSource<Arc<String>>,
+    pub_names: HashSet<String>,
     evaluated_files: &mut HashMap<PathBuf, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
@@ -2178,6 +2226,7 @@ fn evaluate_and_store_file(
                 .map(|(name, result, span)| (name, (result, span)))
                 .collect(),
             registry: compiled.tir.registry,
+            pub_names,
         },
     );
     Ok(())
@@ -2419,7 +2468,8 @@ fn evaluate_project_perfile(
         }
 
         let file_src = &project.files[file_path].named_source;
-        evaluate_and_store_file(compiled, file_path, file_src, &mut evaluated_files)?;
+        let pub_names = extract_pub_names(&project.files[file_path].ast);
+        evaluate_and_store_file(compiled, file_path, file_src, pub_names, &mut evaluated_files)?;
     }
 
     // Should not reach here — root file should have returned above.
@@ -2514,7 +2564,8 @@ fn compile_to_tir_project_perfile(
         }
 
         let file_src = &project.files[file_path].named_source;
-        evaluate_and_store_file(compiled, file_path, file_src, &mut evaluated_files)?;
+        let pub_names = extract_pub_names(&project.files[file_path].ast);
+        evaluate_and_store_file(compiled, file_path, file_src, pub_names, &mut evaluated_files)?;
     }
 
     Err(CompileError::Eval(GraphcalError::EvalError {
@@ -2666,8 +2717,20 @@ fn merge_registry_into_builder(
     dep_registry: &Registry,
     index_bindings: &HashMap<String, String>,
 ) {
+    merge_registry_into_builder_filtered(builder, dep_registry, index_bindings, None);
+}
+
+fn merge_registry_into_builder_filtered(
+    builder: &mut RegistryBuilder,
+    dep_registry: &Registry,
+    index_bindings: &HashMap<String, String>,
+    pub_names: Option<&HashSet<String>>,
+) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
+        if pub_names.is_some_and(|pn| !pn.contains(name)) {
+            continue;
+        }
         builder.register_base_dimension(
             graphcal_compiler::syntax::names::DimName::new(name),
             id.clone(),
@@ -2676,6 +2739,9 @@ fn merge_registry_into_builder(
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
     for (name, dim) in dep_registry.dimensions.all_dimensions() {
+        if pub_names.is_some_and(|pn| !pn.contains(name.as_str())) {
+            continue;
+        }
         builder.register_dimension(name.clone(), dim.clone());
     }
 
@@ -2686,18 +2752,27 @@ fn merge_registry_into_builder(
 
     // Import units.
     for (name, dim, scale) in dep_registry.units.all_units() {
+        if pub_names.is_some_and(|pn| !pn.contains(name.as_str())) {
+            continue;
+        }
         builder.register_unit_dynamic((*name).clone(), dim.clone(), scale.clone());
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
     for idx_def in dep_registry.indexes.all_indexes() {
         if !index_bindings.contains_key(idx_def.name.as_str()) {
+            if pub_names.is_some_and(|pn| !pn.contains(idx_def.name.as_str())) {
+                continue;
+            }
             builder.register_index(idx_def.clone());
         }
     }
 
     // Import struct types.
     for type_def in dep_registry.types.all_types() {
+        if pub_names.is_some_and(|pn| !pn.contains(type_def.name.as_str())) {
+            continue;
+        }
         builder.register_type(type_def.clone());
     }
 }
@@ -2952,6 +3027,35 @@ fn check_dag_recursion(
         }
     }
     Ok(())
+}
+
+/// Extract the set of `pub`-declared names from a file's AST.
+fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> HashSet<String> {
+    let mut pub_names = HashSet::new();
+    for decl in &file.declarations {
+        if !decl.is_pub {
+            continue;
+        }
+        let name = match &decl.kind {
+            DeclKind::Param(p) => p.name.value.to_string(),
+            DeclKind::Node(n) => n.name.value.to_string(),
+            DeclKind::ConstNode(c) => c.name.value.to_string(),
+            DeclKind::Assert(a) => a.name.value.to_string(),
+            DeclKind::BaseDimension(d) => d.name.value.to_string(),
+            DeclKind::Dimension(d) => d.name.value.to_string(),
+            DeclKind::Unit(u) => u.name.value.to_string(),
+            DeclKind::Index(idx) => idx.name.value.to_string(),
+            DeclKind::Type(t) => t.name.value.to_string(),
+            DeclKind::UnionType(u) => u.name.value.to_string(),
+            DeclKind::Plot(p) => p.name.value.to_string(),
+            DeclKind::Figure(f) => f.name.value.to_string(),
+            DeclKind::Layer(l) => l.name.value.to_string(),
+            DeclKind::Dag(d) => d.name.value.to_string(),
+            DeclKind::Import(_) | DeclKind::Include(_) => continue,
+        };
+        pub_names.insert(name);
+    }
+    pub_names
 }
 
 /// selective import name is not found among the dependency's evaluated values.

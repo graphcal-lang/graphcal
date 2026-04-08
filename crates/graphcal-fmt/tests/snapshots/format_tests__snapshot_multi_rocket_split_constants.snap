@@ -3,5 +3,5 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // constants.gcl -- shared constants
-dim Acceleration = Length / Time^2;
-const node g0: Acceleration = 9.80665 m/s^2;
+pub dim Acceleration = Length / Time^2;
+pub const node g0: Acceleration = 9.80665 m/s^2;

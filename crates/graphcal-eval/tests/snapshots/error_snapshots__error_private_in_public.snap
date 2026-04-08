@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`pub param` `speed` references private dim `Velocity` in its type annotation
+    Diagnostic severity: error
+Begin snippet for private_in_public.gcl starting at line 2, column 1
+
+snippet line 2: dim Velocity = Length / Time;
+snippet line 3: pub param speed: Velocity = 10.0 m/s;
+    label at line 3, columns 1 to 37: declared `pub` here
+    label at line 3, columns 18 to 25: references private `Velocity`
+diagnostic help: add `pub` to `Velocity` or remove `pub` from `speed`
+diagnostic code: graphcal::V003

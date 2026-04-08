@@ -22,9 +22,9 @@ param target_alt: Length = 35786.0 km;
 dag hohmann_transfer {
     import .. { TransferResult, r_earth, gm_earth };
     
-    param parking_alt: Length;
+    pub param parking_alt: Length;
     
-    param target_alt: Length;
+    pub param target_alt: Length;
     
     node r1: Length = @r_earth + @parking_alt;
     

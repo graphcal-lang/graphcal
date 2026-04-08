@@ -1,0 +1,2 @@
+// Error: required index is not marked `pub`.
+index Phase;

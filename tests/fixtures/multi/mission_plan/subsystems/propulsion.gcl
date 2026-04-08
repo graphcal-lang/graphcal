@@ -1,9 +1,9 @@
 // subsystems/propulsion.gcl -- Propulsion parameters
-param isp: Time = 320.0 s;
-param dry_mass: Mass = 2500.0 kg;
-param fuel_mass: Mass = 12000.0 kg;
+pub param isp: Time = 320.0 s;
+pub param dry_mass: Mass = 2500.0 kg;
+pub param fuel_mass: Mass = 12000.0 kg;
 
-node v_exhaust: Velocity = @isp * 9.80665 m/s^2;
-node total_mass: Mass = @dry_mass + @fuel_mass;
-node mass_ratio: Dimensionless = @total_mass / @dry_mass;
-node total_delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
+pub node v_exhaust: Velocity = @isp * 9.80665 m/s^2;
+pub node total_mass: Mass = @dry_mass + @fuel_mass;
+pub node mass_ratio: Dimensionless = @total_mass / @dry_mass;
+pub node total_delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

@@ -3,13 +3,13 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // shared/constants.gcl -- Physical constants and custom units
-dim GravParam = Length^3 / Time^2;
+pub dim GravParam = Length^3 / Time^2;
 
 unit km_s: Velocity = 1000 m/s;
 unit MJ: Energy = 1e6 J;
 
-const node g0: Acceleration = 9.80665 m/s^2;
-const node r_earth: Length = 6371.0 km;
-const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
-const node gm_moon: GravParam = 4.9028695e3 km^3/s^2;
-const node r_moon: Length = 1737.4 km;
+pub const node g0: Acceleration = 9.80665 m/s^2;
+pub const node r_earth: Length = 6371.0 km;
+pub const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+pub const node gm_moon: GravParam = 4.9028695e3 km^3/s^2;
+pub const node r_moon: Length = 1737.4 km;

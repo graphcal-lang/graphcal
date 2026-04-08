@@ -209,3 +209,98 @@ pub(super) fn check_no_variant_literals(
     let mut checker = VariantLiteralChecker { context, src };
     checker.visit_expr(expr)
 }
+
+/// Visitor that checks for variant literals of `pub index` declarations.
+///
+/// Pub indexes may be overridden by importers, so their variant literals must not
+/// appear anywhere in the defining file's expressions (including param defaults).
+struct PubIndexVariantLiteralChecker<'a> {
+    pub_index_names: &'a HashSet<String>,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl PubIndexVariantLiteralChecker<'_> {
+    fn check_index(&self, index: &str, variant: &impl std::fmt::Display, span: crate::syntax::span::Span) -> Result<(), GraphcalError> {
+        if self.pub_index_names.contains(index) {
+            return Err(GraphcalError::PubIndexVariantLiteral {
+                index: index.to_string(),
+                variant: variant.to_string(),
+                src: self.src.clone(),
+                span: span.into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl ExprVisitor for PubIndexVariantLiteralChecker<'_> {
+    type Error = GraphcalError;
+
+    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::VariantLiteral { index, variant } = &expr.kind {
+            self.check_index(index.value.as_ref(), &variant.value, expr.span)?;
+        }
+        Ok(())
+    }
+
+    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::IndexAccess { args, .. } = &expr.kind {
+            for arg in args {
+                if let IndexArg::Variant { index, variant } = arg {
+                    self.check_index(index.value.as_ref(), &variant.value, expr.span)?;
+                }
+            }
+        }
+        self.visit_expr(inner)
+    }
+
+    fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
+        for entry in entries {
+            if let Some(key) = entry.keys.first() {
+                self.check_index(
+                    key.index.value.as_ref(),
+                    &key.variant.value,
+                    key.index.span,
+                )?;
+            }
+            self.visit_expr(&entry.value)?;
+        }
+        Ok(())
+    }
+
+    fn visit_match(
+        &mut self,
+        _expr: &Expr,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<(), Self::Error> {
+        self.visit_expr(scrutinee)?;
+        for arm in arms {
+            if let Some(qi) = &arm.pattern.qualified_index {
+                self.check_index(
+                    qi.value.as_ref(),
+                    &arm.pattern.variant_name.value,
+                    arm.pattern.span,
+                )?;
+            }
+            self.visit_expr(&arm.body)?;
+        }
+        Ok(())
+    }
+}
+
+/// Check that an expression contains no variant literals of `pub index` declarations.
+///
+/// Pub indexes may be overridden by importers, so their variant literals are not
+/// allowed in the defining file (including param default expressions).
+pub(super) fn check_no_pub_index_variant_literals(
+    expr: &Expr,
+    pub_index_names: &HashSet<String>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    if pub_index_names.is_empty() {
+        return Ok(());
+    }
+    let mut checker = PubIndexVariantLiteralChecker { pub_index_names, src };
+    checker.visit_expr(expr)
+}
