@@ -1501,3 +1501,16 @@ fn cross_file_dag_selective() {
         "expected {expected_mach}, got {mach}"
     );
 }
+
+// ---- Bare module path DAG reference tests ----
+
+#[test]
+fn bare_module_dag_ref() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/bare_dag_ref/src/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+
+    // double DAG: 21.0 * 2.0 = 42.0
+    let answer = find_value(&result, "answer");
+    assert!((answer - 42.0).abs() < 1e-10, "expected 42.0, got {answer}");
+}

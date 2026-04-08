@@ -636,6 +636,28 @@ snapshot_test!(
     "multi/cross_file_dag/lib.gcl"
 );
 
+// bare_dag_ref: bare module path DAG references
+idempotency_test!(
+    idempotent_multi_bare_dag_ref_main,
+    "multi/bare_dag_ref/src/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_bare_dag_ref_lib,
+    "multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_bare_dag_ref_main,
+    "multi/bare_dag_ref/src/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_bare_dag_ref_main,
+    "multi/bare_dag_ref/src/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_bare_dag_ref_lib,
+    "multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
+);
+
 // module_import_graph_ref: qualified @-references
 idempotency_test!(
     idempotent_multi_module_import_graph_ref_main,

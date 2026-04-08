@@ -271,11 +271,21 @@ fn compile_single_file_in_project(
     }
 
     // Process all include declarations (file-based DAG instantiation).
-    // Inline DAG includes (single-segment module paths matching a dag name) and
-    // cross-file DAG includes are handled below.
+    // Inline DAG includes (single-segment module paths matching a dag name),
+    // cross-file DAG includes, and bare module path DAG includes are handled below.
     for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
         // Skip cross-file DAG includes — handled in the next section.
         if include_decl.path.is_cross_file_dag() {
+            continue;
+        }
+        // Skip bare module path DAG references — handled after inline DAGs.
+        // These are multi-segment ModulePath includes where the last segment
+        // matches a DAG in the resolved target file.
+        if is_bare_module_dag_ref(
+            &include_decl.path,
+            &include_canonical.to_path_buf(),
+            project,
+        ) {
             continue;
         }
         let include_canonical = include_canonical.to_path_buf();
@@ -383,6 +393,76 @@ fn compile_single_file_in_project(
         process_inline_dag_include(
             target_dag_def,
             &dag_name.name,
+            include_decl,
+            decl,
+            &target_loaded.ast,
+            file_src,
+            &mut ctx,
+            true, // cross-file DAG
+        )?;
+    }
+
+    // Process bare module path DAG includes (include pkg/mod/dag_name(...) { ... }).
+    // These are multi-segment ModulePath includes where the last segment is a DAG
+    // defined in the resolved parent file (e.g. `pkg/mod.gcl` contains `dag dag_name`).
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+        if !is_bare_module_dag_ref(
+            &include_decl.path,
+            &include_canonical.to_path_buf(),
+            project,
+        ) {
+            continue;
+        }
+
+        let include_canonical = include_canonical.to_path_buf();
+        let ImportPath::ModulePath { segments, .. } = &include_decl.path else {
+            // is_bare_module_dag_ref only returns true for ModulePath
+            continue;
+        };
+        // Safety: is_bare_module_dag_ref ensures segments.len() >= 2
+        let Some(last_seg) = segments.last() else {
+            continue;
+        };
+        let dag_name = &last_seg.name;
+
+        // Find the target file's AST from the project.
+        let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!(
+                    "bare module DAG target file not found in project: {}",
+                    include_canonical.display()
+                ),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            })
+        })?;
+
+        // Find the named DAG definition in the target file's AST.
+        let target_dag_def = target_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name => Some(dag),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: format!(
+                        "DAG `{}` not found in file `{}`",
+                        dag_name,
+                        include_canonical.display()
+                    ),
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                })
+            })?;
+
+        // Reuse the same inline DAG processing, with the target file's AST
+        // for parent scope resolution.
+        process_inline_dag_include(
+            target_dag_def,
+            dag_name,
             include_decl,
             decl,
             &target_loaded.ast,
@@ -1196,6 +1276,42 @@ fn process_cross_file_parent_scope_import(
 /// When `is_import` is `true`, only compile-time items (consts, dims, units, types, indexes,
 /// dags, assertions) are allowed. Runtime items (params, non-const nodes) trigger an error
 /// advising the user to use `include` instead.
+/// Check whether a multi-segment `ModulePath` include is a bare module path
+/// DAG reference.  This is the case when:
+/// 1. The path is a `ModulePath` with 2+ segments, AND
+/// 2. The resolved target file's AST contains a `dag` definition whose name
+///    matches the last segment of the module path.
+///
+/// For example, `include pkg/lib/double(...)` where `pkg/lib.gcl` defines
+/// `dag double { ... }`.
+fn is_bare_module_dag_ref(
+    import_path: &ImportPath,
+    resolved_canonical: &PathBuf,
+    project: &crate::loader::LoadedProject,
+) -> bool {
+    let segments = match import_path {
+        ImportPath::ModulePath { segments, .. } if segments.len() >= 2 => segments,
+        _ => return false,
+    };
+
+    // Safety: the match guard above ensures segments.len() >= 2
+    let Some(last_seg) = segments.last() else {
+        return false;
+    };
+    let last_segment = &last_seg.name;
+
+    // Check if the resolved file contains a DAG with the matching name.
+    let Some(target_loaded) = project.files.get(resolved_canonical) else {
+        return false;
+    };
+
+    target_loaded
+        .ast
+        .declarations
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Dag(dag) if dag.name.value.as_str() == last_segment))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "import processing needs all these context parameters"

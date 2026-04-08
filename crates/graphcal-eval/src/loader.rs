@@ -492,13 +492,30 @@ fn resolve_module_path<F: FileSystemReader>(
     }
     file_path.set_extension("gcl");
 
-    fs.canonicalize(&file_path).map_err(|_| {
-        CompileError::Eval(GraphcalError::ImportFileNotFound {
-            path: display_path,
-            src: src.clone(),
-            span: span.into(),
-        })
-    })
+    // Try the full path first.
+    if let Ok(canonical) = fs.canonicalize(&file_path) {
+        return Ok(canonical);
+    }
+
+    // Fallback: if there are 2+ segments (beyond the package name), try the
+    // parent file. E.g. for `nasa/rocket/velocity`, try `nasa/rocket.gcl`
+    // and expect `velocity` to be a DAG defined inside it.
+    if segments.len() >= 2 {
+        let mut parent_path = project_root.join(&m.source_dir);
+        for seg in &segments[..segments.len() - 1] {
+            parent_path = parent_path.join(&seg.name);
+        }
+        parent_path.set_extension("gcl");
+        if let Ok(canonical) = fs.canonicalize(&parent_path) {
+            return Ok(canonical);
+        }
+    }
+
+    Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+        path: display_path,
+        src: src.clone(),
+        span: span.into(),
+    }))
 }
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
@@ -1003,6 +1020,42 @@ mod tests {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/main.gcl", "import nasa/nonexistent { x };"),
+        ]);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
+        assert!(result.is_err());
+    }
+
+    // ---- Bare module path DAG fallback tests ----
+
+    #[test]
+    fn load_bare_module_dag_fallback() {
+        // `nasa/rocket/double` should resolve to `nasa/rocket.gcl` when
+        // `nasa/rocket/double.gcl` doesn't exist.
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            (
+                "src/nasa/rocket.gcl",
+                "dag double {\n    param x: Dimensionless;\n    node result: Dimensionless = @x * 2.0;\n}\n",
+            ),
+            (
+                "src/main.gcl",
+                "include nasa/rocket/double(x: 5.0) { result as y };\nnode z: Dimensionless = @y;",
+            ),
+        ]);
+        let project = load_project(&dir.path().join("src/main.gcl"), None, &FS).unwrap();
+        // The parent file `nasa/rocket.gcl` should be loaded.
+        assert_eq!(project.files.len(), 2);
+    }
+
+    #[test]
+    fn load_bare_module_dag_fallback_not_found() {
+        // Neither `nasa/rocket/nonexistent.gcl` nor `nasa/rocket.gcl` exist.
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
+            (
+                "src/main.gcl",
+                "include nasa/rocket/nonexistent(x: 5.0) { result as y };",
+            ),
         ]);
         let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
         assert!(result.is_err());
