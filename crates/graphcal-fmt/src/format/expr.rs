@@ -110,7 +110,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             target_type,
         } => format_expr(fmt, inner)
             .append(RcDoc::text(" as "))
-            .append(format_type_expr_inline(target_type)),
+            .append(format_type_expr_inline(fmt, target_type)),
         ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),
@@ -258,19 +258,22 @@ pub fn format_fn_call_expr(
     let inner = RcDoc::intersperse(arg_docs, sep);
     let mut doc = RcDoc::text(fn_name.to_string());
     if !type_args.is_empty() {
-        doc = doc.append(format_generic_args(type_args));
+        doc = doc.append(format_generic_args(fmt, type_args));
     }
     doc.append(RcDoc::text("("))
         .append(inner.nest(INDENT).group())
         .append(RcDoc::text(")"))
 }
 
-fn format_generic_args(type_args: &[graphcal_compiler::syntax::ast::GenericArg]) -> RcDoc<'static> {
+fn format_generic_args(
+    fmt: &mut Formatter<'_>,
+    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
+) -> RcDoc<'static> {
     use graphcal_compiler::syntax::ast::GenericArg;
     let docs: Vec<RcDoc<'static>> = type_args
         .iter()
         .map(|arg| match arg {
-            GenericArg::Type(te) => super::type_expr::format_type_expr_inline(te),
+            GenericArg::Type(te) => super::type_expr::format_type_expr_inline(fmt, te),
             GenericArg::Nat(ne) => RcDoc::text(format_nat_expr_str(ne)),
         })
         .collect();
@@ -324,7 +327,7 @@ pub fn format_struct_construction(
     if !type_args.is_empty() {
         let arg_docs: Vec<RcDoc<'static>> = type_args
             .iter()
-            .map(|a| format_type_expr_inline(a))
+            .map(|a| format_type_expr_inline(fmt, a))
             .collect();
         header = header
             .append(RcDoc::text("<"))

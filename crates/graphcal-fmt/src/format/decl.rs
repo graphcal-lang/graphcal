@@ -84,17 +84,15 @@ fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> R
 
 /// `param name: Type = expr;` or `param name: Type;` (required param)
 fn format_param_decl(fmt: &mut Formatter<'_>, d: &ParamDecl) -> RcDoc<'static> {
-    d.value.as_ref().map_or_else(
-        || {
-            RcDoc::text("param")
-                .append(RcDoc::text(" "))
-                .append(RcDoc::text(d.name.value.as_str().to_string()))
-                .append(RcDoc::text(": "))
-                .append(format_type_expr_inline(&d.type_ann))
-                .append(RcDoc::text(";"))
-        },
-        |value| format_value_decl(fmt, "param", &d.name.value, &d.type_ann, value),
-    )
+    match d.value.as_ref() {
+        None => RcDoc::text("param")
+            .append(RcDoc::text(" "))
+            .append(RcDoc::text(d.name.value.as_str().to_string()))
+            .append(RcDoc::text(": "))
+            .append(format_type_expr_inline(fmt, &d.type_ann))
+            .append(RcDoc::text(";")),
+        Some(value) => format_value_decl(fmt, "param", &d.name.value, &d.type_ann, value),
+    }
 }
 
 /// `node name: Type = expr;`
@@ -122,7 +120,7 @@ fn format_value_decl(
         .append(RcDoc::text(" "))
         .append(RcDoc::text(name.as_str().to_string()))
         .append(RcDoc::text(": "))
-        .append(format_type_expr_inline(type_ann))
+        .append(format_type_expr_inline(fmt, type_ann))
         .append(RcDoc::text(" = "));
 
     let val = format_expr(fmt, value);
@@ -175,11 +173,11 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
 }
 
 /// `type Name { ... }` or `type Name;` or `#[derive(...)] type Name<...> { ... }`
-fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
+fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
     if !d.generic_params.is_empty() {
-        header = header.append(format_generic_params(&d.generic_params));
+        header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
     if d.fields.is_empty() {
@@ -188,7 +186,7 @@ fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     }
 
     // Record type with fields
-    let fields = format_field_decls(&d.fields);
+    let fields = format_field_decls(fmt, &d.fields);
     header
         .append(RcDoc::text(" {"))
         .append(RcDoc::hardline().append(fields).nest(INDENT))
@@ -197,11 +195,11 @@ fn format_type_decl(_fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
 }
 
 /// `type Name = A | B | C;` or `type Name<D: Dim> = Ok<D> | Err;`
-fn format_union_type_decl(_fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'static> {
+fn format_union_type_decl(fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
     if !d.generic_params.is_empty() {
-        header = header.append(format_generic_params(&d.generic_params));
+        header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
     let member_docs: Vec<RcDoc<'static>> = d
@@ -213,7 +211,7 @@ fn format_union_type_decl(_fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<
                 let args: Vec<RcDoc<'static>> = m
                     .type_args
                     .iter()
-                    .map(|a| format_type_expr_inline(a))
+                    .map(|a| format_type_expr_inline(fmt, a))
                     .collect();
                 doc = doc
                     .append(RcDoc::text("<"))
@@ -230,21 +228,21 @@ fn format_union_type_decl(_fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<
         .append(RcDoc::text(";"))
 }
 
-fn format_field_decls(fields: &[FieldDecl]) -> RcDoc<'static> {
+fn format_field_decls(fmt: &mut Formatter<'_>, fields: &[FieldDecl]) -> RcDoc<'static> {
     let field_docs: Vec<RcDoc<'static>> = fields
         .iter()
-        .map(|f| format_single_field_decl(f).append(RcDoc::text(",")))
+        .map(|f| format_single_field_decl(fmt, f).append(RcDoc::text(",")))
         .collect();
     RcDoc::intersperse(field_docs, RcDoc::hardline())
 }
 
-fn format_single_field_decl(f: &FieldDecl) -> RcDoc<'static> {
+fn format_single_field_decl(fmt: &mut Formatter<'_>, f: &FieldDecl) -> RcDoc<'static> {
     RcDoc::text(f.name.value.as_str().to_string())
         .append(RcDoc::text(": "))
-        .append(format_type_expr_inline(&f.type_ann))
+        .append(format_type_expr_inline(fmt, &f.type_ann))
 }
 
-fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
+fn format_generic_params(fmt: &mut Formatter<'_>, params: &[GenericParam]) -> RcDoc<'static> {
     let param_docs: Vec<RcDoc<'static>> = params
         .iter()
         .map(|p| {
@@ -260,7 +258,7 @@ fn format_generic_params(params: &[GenericParam]) -> RcDoc<'static> {
             if let Some(ref default) = p.default {
                 doc = doc
                     .append(RcDoc::text(" = "))
-                    .append(format_type_expr_inline(default));
+                    .append(format_type_expr_inline(fmt, default));
             }
             doc
         })

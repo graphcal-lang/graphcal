@@ -1,15 +1,17 @@
 use graphcal_compiler::syntax::ast::{
-    DimExpr, DimTerm, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+    DimExpr, DimTerm, DomainBound, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use pretty::RcDoc;
+
+use super::Formatter;
 
 // ---------------------------------------------------------------------------
 // Type expressions
 // ---------------------------------------------------------------------------
 
 /// Format a type expression.
-pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
-    match &te.kind {
+pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<'static> {
+    let base = match &te.kind {
         TypeExprKind::Dimensionless => RcDoc::text("Dimensionless"),
         TypeExprKind::Bool => RcDoc::text("Bool"),
         TypeExprKind::Int => RcDoc::text("Int"),
@@ -30,7 +32,7 @@ pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
                     }
                 })
                 .collect();
-            format_type_expr_inline(base)
+            format_type_expr_inline(fmt, base)
                 .append(RcDoc::text("["))
                 .append(RcDoc::intersperse(idx_docs, RcDoc::text(", ")))
                 .append(RcDoc::text("]"))
@@ -40,7 +42,7 @@ pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
             if !type_args.is_empty() {
                 let arg_docs: Vec<RcDoc<'static>> = type_args
                     .iter()
-                    .map(|a| format_type_expr_inline(a))
+                    .map(|a| format_type_expr_inline(fmt, a))
                     .collect();
                 doc = doc
                     .append(RcDoc::text("<"))
@@ -49,7 +51,31 @@ pub fn format_type_expr_inline(te: &TypeExpr) -> RcDoc<'static> {
             }
             doc
         }
+    };
+
+    if te.constraints.is_empty() {
+        base
+    } else {
+        base.append(format_domain_constraints(fmt, &te.constraints))
     }
+}
+
+/// Format domain constraints: `(min: expr, max: expr)`.
+fn format_domain_constraints(
+    fmt: &mut Formatter<'_>,
+    constraints: &[DomainBound],
+) -> RcDoc<'static> {
+    let docs: Vec<RcDoc<'static>> = constraints
+        .iter()
+        .map(|bound| {
+            RcDoc::text(bound.kind.to_string())
+                .append(RcDoc::text(": "))
+                .append(super::expr::format_expr(fmt, &bound.value))
+        })
+        .collect();
+    RcDoc::text("(")
+        .append(RcDoc::intersperse(docs, RcDoc::text(", ")))
+        .append(RcDoc::text(")"))
 }
 
 // ---------------------------------------------------------------------------

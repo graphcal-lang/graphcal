@@ -83,6 +83,8 @@ idempotency_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 idempotency_test!(idempotent_required_indexes, "required_indexes.gcl");
+idempotency_test!(idempotent_domain_scalar, "domain_scalar.gcl");
+idempotency_test!(idempotent_domain_indexed, "domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -157,6 +159,8 @@ roundtrip_test!(
     "expected_fail_multi_indexed_partial.gcl"
 );
 roundtrip_test!(roundtrip_required_indexes, "required_indexes.gcl");
+roundtrip_test!(roundtrip_domain_scalar, "domain_scalar.gcl");
+roundtrip_test!(roundtrip_domain_indexed, "domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -508,6 +512,8 @@ snapshot_test!(
     "comments_in_expressions.gcl"
 );
 snapshot_test!(snapshot_required_indexes, "required_indexes.gcl");
+snapshot_test!(snapshot_domain_scalar, "domain_scalar.gcl");
+snapshot_test!(snapshot_domain_indexed, "domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Fixture: comments_in_expressions.gcl
