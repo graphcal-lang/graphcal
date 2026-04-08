@@ -206,7 +206,10 @@ pub(crate) fn lower_to_builder(
     let mut resolved = resolve_with_imports(ast, src, imported)?;
 
     // Emit any non-fatal warnings from resolution.
-    #[expect(clippy::print_stderr, reason = "warnings are intentionally printed to stderr")]
+    #[expect(
+        clippy::print_stderr,
+        reason = "warnings are intentionally printed to stderr"
+    )]
     for warning in &resolved.warnings {
         let report = miette::Report::new_boxed(Box::new(warning.clone()));
         eprintln!("{report:?}");
@@ -405,7 +408,10 @@ pub fn lower_to_builder_with_imported_values(
     let mut resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
     // Emit any non-fatal warnings from resolution.
-    #[expect(clippy::print_stderr, reason = "warnings are intentionally printed to stderr")]
+    #[expect(
+        clippy::print_stderr,
+        reason = "warnings are intentionally printed to stderr"
+    )]
     for warning in &resolved.warnings {
         let report = miette::Report::new_boxed(Box::new(warning.clone()));
         eprintln!("{report:?}");

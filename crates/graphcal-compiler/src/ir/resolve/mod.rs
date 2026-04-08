@@ -814,7 +814,7 @@ fn validate_private_in_public(
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<String>,
 ) -> Result<(), GraphcalError> {
-    use crate::syntax::ast::{TypeExprKind, IndexExpr};
+    use crate::syntax::ast::{IndexExpr, TypeExprKind};
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -836,7 +836,10 @@ fn validate_private_in_public(
     }
 
     // Recursively collect type-system references from a `TypeExpr`.
-    #[expect(clippy::items_after_statements, reason = "helper function scoped to this validation")]
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
     fn collect_type_refs(type_expr: &crate::syntax::ast::TypeExpr, refs: &mut Vec<(String, Span)>) {
         match &type_expr.kind {
             TypeExprKind::DimExpr(dim_expr) => {

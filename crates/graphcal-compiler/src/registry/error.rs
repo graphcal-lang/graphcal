@@ -1051,7 +1051,6 @@ pub enum GraphcalError {
     },
 
     // --- Visibility errors ---
-
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]
     #[diagnostic(
@@ -1085,7 +1084,9 @@ pub enum GraphcalError {
     },
 
     /// A `pub` declaration references a private type-system item in its type annotation.
-    #[error("`pub {pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its type annotation")]
+    #[error(
+        "`pub {pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its type annotation"
+    )]
     #[diagnostic(
         code(graphcal::V003),
         help("add `pub` to `{ref_name}` or remove `pub` from `{pub_name}`")
@@ -1104,7 +1105,9 @@ pub enum GraphcalError {
     },
 
     /// A `pub index` with concrete variants has its variants used in the defining file's expressions.
-    #[error("variant literal `{index}::{variant}` of `pub index` cannot be used in the defining file")]
+    #[error(
+        "variant literal `{index}::{variant}` of `pub index` cannot be used in the defining file"
+    )]
     #[diagnostic(
         code(graphcal::V004),
         help(

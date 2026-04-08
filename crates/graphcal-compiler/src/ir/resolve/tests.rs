@@ -404,7 +404,9 @@ fn resolve_private_in_public_dim() {
         pub param speed: Velocity = 10.0 m/s;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity"));
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
+    );
 }
 
 #[test]
@@ -436,8 +438,8 @@ fn resolve_private_in_public_index_in_type() {
     // May get PubIndexVariantLiteral or VariantLiteralInNonRebindable before PrivateInPublic.
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name == "Step")
-        || matches!(err, GraphcalError::PubIndexVariantLiteral { .. })
-        || matches!(err, GraphcalError::VariantLiteralInNonRebindable { .. }),
+            || matches!(err, GraphcalError::PubIndexVariantLiteral { .. })
+            || matches!(err, GraphcalError::VariantLiteralInNonRebindable { .. }),
         "expected PrivateInPublic or variant literal error, got: {err:?}"
     );
 }

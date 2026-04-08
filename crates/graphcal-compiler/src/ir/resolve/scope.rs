@@ -220,7 +220,12 @@ struct PubIndexVariantLiteralChecker<'a> {
 }
 
 impl PubIndexVariantLiteralChecker<'_> {
-    fn check_index(&self, index: &str, variant: &impl std::fmt::Display, span: crate::syntax::span::Span) -> Result<(), GraphcalError> {
+    fn check_index(
+        &self,
+        index: &str,
+        variant: &impl std::fmt::Display,
+        span: crate::syntax::span::Span,
+    ) -> Result<(), GraphcalError> {
         if self.pub_index_names.contains(index) {
             return Err(GraphcalError::PubIndexVariantLiteral {
                 index: index.to_string(),
@@ -257,11 +262,7 @@ impl ExprVisitor for PubIndexVariantLiteralChecker<'_> {
     fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
         for entry in entries {
             if let Some(key) = entry.keys.first() {
-                self.check_index(
-                    key.index.value.as_ref(),
-                    &key.variant.value,
-                    key.index.span,
-                )?;
+                self.check_index(key.index.value.as_ref(), &key.variant.value, key.index.span)?;
             }
             self.visit_expr(&entry.value)?;
         }
@@ -301,6 +302,9 @@ pub(super) fn check_no_pub_index_variant_literals(
     if pub_index_names.is_empty() {
         return Ok(());
     }
-    let mut checker = PubIndexVariantLiteralChecker { pub_index_names, src };
+    let mut checker = PubIndexVariantLiteralChecker {
+        pub_index_names,
+        src,
+    };
     checker.visit_expr(expr)
 }

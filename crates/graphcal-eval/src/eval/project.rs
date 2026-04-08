@@ -1455,7 +1455,8 @@ fn process_non_instantiated_import<'a>(
                 is_import,
             );
             // Import all public type-system declarations from dep's registry.
-            ctx.extra_registry_builders.push((&dep.registry, &dep.pub_names));
+            ctx.extra_registry_builders
+                .push((&dep.registry, &dep.pub_names));
         }
     }
     Ok(())
@@ -2469,7 +2470,13 @@ fn evaluate_project_perfile(
 
         let file_src = &project.files[file_path].named_source;
         let pub_names = extract_pub_names(&project.files[file_path].ast);
-        evaluate_and_store_file(compiled, file_path, file_src, pub_names, &mut evaluated_files)?;
+        evaluate_and_store_file(
+            compiled,
+            file_path,
+            file_src,
+            pub_names,
+            &mut evaluated_files,
+        )?;
     }
 
     // Should not reach here — root file should have returned above.
@@ -2565,7 +2572,13 @@ fn compile_to_tir_project_perfile(
 
         let file_src = &project.files[file_path].named_source;
         let pub_names = extract_pub_names(&project.files[file_path].ast);
-        evaluate_and_store_file(compiled, file_path, file_src, pub_names, &mut evaluated_files)?;
+        evaluate_and_store_file(
+            compiled,
+            file_path,
+            file_src,
+            pub_names,
+            &mut evaluated_files,
+        )?;
     }
 
     Err(CompileError::Eval(GraphcalError::EvalError {
@@ -2728,7 +2741,7 @@ fn merge_registry_into_builder_filtered(
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
-        if pub_names.is_some_and(|pn| !pn.contains(name)) {
+        if pub_names.is_some_and(|visible| !visible.contains(name)) {
             continue;
         }
         builder.register_base_dimension(
@@ -2739,7 +2752,7 @@ fn merge_registry_into_builder_filtered(
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
     for (name, dim) in dep_registry.dimensions.all_dimensions() {
-        if pub_names.is_some_and(|pn| !pn.contains(name.as_str())) {
+        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
             continue;
         }
         builder.register_dimension(name.clone(), dim.clone());
@@ -2752,7 +2765,7 @@ fn merge_registry_into_builder_filtered(
 
     // Import units.
     for (name, dim, scale) in dep_registry.units.all_units() {
-        if pub_names.is_some_and(|pn| !pn.contains(name.as_str())) {
+        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
             continue;
         }
         builder.register_unit_dynamic((*name).clone(), dim.clone(), scale.clone());
@@ -2761,7 +2774,7 @@ fn merge_registry_into_builder_filtered(
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
     for idx_def in dep_registry.indexes.all_indexes() {
         if !index_bindings.contains_key(idx_def.name.as_str()) {
-            if pub_names.is_some_and(|pn| !pn.contains(idx_def.name.as_str())) {
+            if pub_names.is_some_and(|visible| !visible.contains(idx_def.name.as_str())) {
                 continue;
             }
             builder.register_index(idx_def.clone());
@@ -2770,7 +2783,7 @@ fn merge_registry_into_builder_filtered(
 
     // Import struct types.
     for type_def in dep_registry.types.all_types() {
-        if pub_names.is_some_and(|pn| !pn.contains(type_def.name.as_str())) {
+        if pub_names.is_some_and(|visible| !visible.contains(type_def.name.as_str())) {
             continue;
         }
         builder.register_type(type_def.clone());
