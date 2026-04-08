@@ -35,6 +35,13 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
     };
 
+    // Prepend `pub ` if the declaration is public
+    let body = if decl.is_pub {
+        RcDoc::text("pub ").append(body)
+    } else {
+        body
+    };
+
     if decl.attributes.is_empty() {
         body
     } else {

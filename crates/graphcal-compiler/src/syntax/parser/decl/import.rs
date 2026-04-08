@@ -45,6 +45,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
             span,
         })
@@ -81,6 +82,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
+            is_pub: false,
             kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
                 path,
                 param_bindings,

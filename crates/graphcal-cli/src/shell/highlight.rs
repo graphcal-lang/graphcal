@@ -142,7 +142,8 @@ const fn token_color(token: &Token) -> Option<&'static str> {
         | Token::Assert
         | Token::Table
         | Token::Index
-        | Token::Linspace => Some(BOLD_BLUE),
+        | Token::Linspace
+        | Token::Pub => Some(BOLD_BLUE),
 
         // Booleans
         Token::True | Token::False => Some(BOLD_CYAN),

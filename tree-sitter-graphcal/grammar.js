@@ -97,6 +97,7 @@ module.exports = grammar({
     // param dry_mass: Mass;  (required param, no default)
     param_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "param",
       field("name", $.identifier),
       optional(seq(":", field("type", $.type_expr))),
@@ -108,6 +109,7 @@ module.exports = grammar({
     // const node g0: Acceleration = 9.80665 m/s^2;
     node_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       optional("const"),
       "node",
       field("name", $.identifier),
@@ -120,6 +122,7 @@ module.exports = grammar({
     // base dim Length;
     // dim Velocity = Length / Time;
     dimension_declaration: $ => seq(
+      optional("pub"),
       optional("base"),
       "dim",
       field("name", $.identifier),
@@ -131,6 +134,7 @@ module.exports = grammar({
     // unit km: Length = 1000 m;
     // const unit km: Length = 1000 m;
     unit_declaration: $ => seq(
+      optional("pub"),
       optional("const"),
       "unit",
       field("name", $.identifier),
@@ -148,6 +152,7 @@ module.exports = grammar({
     // type Result<D: Dim> = Ok<D> | Err;                     -- generic union type
     type_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "type",
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
@@ -200,6 +205,7 @@ module.exports = grammar({
     index_declaration: $ => choice(
       // Named index: index Maneuver = { Departure, Correction, Insertion };
       seq(
+        optional("pub"),
         "index",
         field("name", $.identifier),
         "=",
@@ -214,6 +220,7 @@ module.exports = grammar({
       ),
       // Linspace index: index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
       seq(
+        optional("pub"),
         "index",
         field("name", $.identifier),
         "=",
@@ -230,9 +237,10 @@ module.exports = grammar({
         ";",
       ),
       // Required named: index Foo;
-      seq("index", field("name", $.identifier), ";"),
+      seq(optional("pub"), "index", field("name", $.identifier), ";"),
       // Required range: index Foo: Time;
       seq(
+        optional("pub"),
         "index",
         field("name", $.identifier),
         ":",
@@ -269,6 +277,7 @@ module.exports = grammar({
     // import nasa/rocket as r;                            -- bare module path with alias
     import_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "import",
       field("path", choice($.string_literal, $.bare_module_path, $.parent_scope_path)),
       choice(
@@ -297,6 +306,7 @@ module.exports = grammar({
     // include my_dag(x: 1.0) { result };                          -- inline DAG reference
     include_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "include",
       field("path", choice($.string_literal, $.bare_module_path, $.dag_ref_path, $.parent_scope_path)),
       optional(field("param_bindings", $.include_param_bindings)),
@@ -338,6 +348,7 @@ module.exports = grammar({
     // dag name { declarations... }
     dag_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "dag",
       field("name", $.identifier),
       "{",
@@ -375,6 +386,7 @@ module.exports = grammar({
     // assert approx_pct = @x ~= 50.0 +/- 5 %;
     assert_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "assert",
       field("name", $.identifier),
       "=",
@@ -392,6 +404,7 @@ module.exports = grammar({
     // };
     plot_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "plot",
       field("name", $.identifier),
       "=",
@@ -460,6 +473,7 @@ module.exports = grammar({
     // };
     figure_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "figure",
       field("name", $.identifier),
       "=",
@@ -504,6 +518,7 @@ module.exports = grammar({
     // };
     layer_declaration: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       "layer",
       field("name", $.identifier),
       "=",

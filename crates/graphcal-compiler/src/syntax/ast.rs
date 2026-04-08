@@ -55,6 +55,7 @@ impl AttributeArg {
 #[derive(Debug, Clone)]
 pub struct Declaration {
     pub attributes: Vec<Attribute>,
+    pub is_pub: bool,
     pub kind: DeclKind,
     pub span: Span,
 }
@@ -1355,6 +1356,7 @@ mod tests {
         let file = File {
             declarations: vec![Declaration {
                 attributes: vec![],
+                is_pub: false,
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {

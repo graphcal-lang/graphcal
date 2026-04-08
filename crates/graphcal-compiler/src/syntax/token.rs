@@ -61,6 +61,8 @@ pub enum Token {
     Linspace,
     #[token("step")]
     Step,
+    #[token("pub")]
+    Pub,
 
     // Literals
     #[regex(r#""[^"]*""#)]
@@ -186,6 +188,7 @@ impl std::fmt::Display for Token {
             Self::Unfold => write!(f, "unfold"),
             Self::Linspace => write!(f, "linspace"),
             Self::Step => write!(f, "step"),
+            Self::Pub => write!(f, "pub"),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -451,7 +454,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dim unit type fn index for import include dag match as assert table plot figure scan unfold linspace step",
+            "param node const if else base dim unit type fn index for import include dag match as assert table plot figure scan unfold linspace step pub",
         );
         assert_eq!(
             tokens,
@@ -481,6 +484,7 @@ mod tests {
                 Token::Unfold,
                 Token::Linspace,
                 Token::Step,
+                Token::Pub,
             ]
         );
     }
@@ -824,6 +828,14 @@ mod tests {
         // `..` should lex as DotDot, `.` as Dot
         let tokens = lex_tokens(".. . ..");
         assert_eq!(tokens, vec![Token::DotDot, Token::Dot, Token::DotDot]);
+    }
+
+    #[test]
+    fn lex_identifier_starting_with_pub() {
+        // "public" should be Ident, not Pub + "lic"
+        let mut lexer = Token::lexer("public");
+        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
+        assert_eq!(lexer.slice(), "public");
     }
 
     #[test]

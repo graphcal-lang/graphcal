@@ -10,6 +10,7 @@ impl Parser<'_> {
     /// - `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);` (range / linspace)
     /// - `index Foo;` (required named — must be bound via parameterized import)
     /// - `index Foo: Time;` (required range — must be bound via parameterized import)
+    #[expect(clippy::too_many_lines, reason = "index has four syntactic forms")]
     pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
         let name = self
@@ -22,6 +23,7 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
+                is_pub: false,
                 kind: DeclKind::Index(IndexDecl {
                     name,
                     kind: IndexDeclKind::RequiredNamed,
@@ -38,6 +40,7 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
+                is_pub: false,
                 kind: DeclKind::Index(IndexDecl {
                     name,
                     kind: IndexDeclKind::RequiredRange { dimension },
@@ -85,6 +88,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
+                    is_pub: false,
                     kind: DeclKind::Index(IndexDecl {
                         name,
                         kind: IndexDeclKind::Named { variants },
@@ -108,6 +112,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
+                    is_pub: false,
                     kind: DeclKind::Index(IndexDecl {
                         name,
                         kind: IndexDeclKind::Range {

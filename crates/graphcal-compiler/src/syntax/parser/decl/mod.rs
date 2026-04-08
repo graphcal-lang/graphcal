@@ -23,6 +23,14 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
+        // Optional `pub` visibility modifier
+        let pub_span = if self.lexer.peek() == Some(&Token::Pub) {
+            let (_, span) = self.advance()?;
+            Some(span)
+        } else {
+            None
+        };
+
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),
@@ -72,6 +80,15 @@ impl Parser<'_> {
             }
             None => Err(self.unexpected_eof(expected)),
         }?;
+
+        // Set visibility
+        let is_pub = pub_span.is_some();
+        decl.is_pub = is_pub;
+
+        // Extend the declaration span to include `pub` keyword
+        if let Some(ps) = pub_span {
+            decl.span = ps.merge(decl.span);
+        }
 
         // Extend the declaration span to include the attributes
         if let Some(first_attr) = attributes.first() {
