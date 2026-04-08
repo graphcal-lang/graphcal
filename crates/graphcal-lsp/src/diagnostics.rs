@@ -302,6 +302,83 @@ mod tests {
     }
 
     #[test]
+    fn v001_import_private_item_produces_diagnostic() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/multi/import_private_item/main.gcl");
+        let source = std::fs::read_to_string(&root).unwrap();
+        let diags = produce_diagnostics_for_file(&root, &source);
+        assert_eq!(diags.len(), 1);
+        let code = diags[0].code.as_ref();
+        assert!(
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V001"))),
+            "expected V001 error code, got {code:?}"
+        );
+        assert!(diags[0].message.contains("secret"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn v002_required_param_not_pub_produces_diagnostic() {
+        let source = "param x: Dimensionless;";
+        let diags = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diags.len(), 1);
+        let code = diags[0].code.as_ref();
+        assert!(
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V002"))),
+            "expected V002 error code, got {code:?}"
+        );
+        assert!(diags[0].message.contains("param"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn v002_required_index_not_pub_produces_diagnostic() {
+        let source = "index Phase;";
+        let diags = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diags.len(), 1);
+        let code = diags[0].code.as_ref();
+        assert!(
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V002"))),
+            "expected V002 error code, got {code:?}"
+        );
+        assert!(diags[0].message.contains("index"));
+    }
+
+    #[test]
+    fn v003_private_in_public_produces_diagnostic() {
+        let source = "dim Velocity = Length / Time;\npub param speed: Velocity = 10.0 m/s;";
+        let diags = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diags.len(), 1);
+        let code = diags[0].code.as_ref();
+        assert!(
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V003"))),
+            "expected V003 error code, got {code:?}"
+        );
+        assert!(diags[0].message.contains("Velocity"));
+        // V003 has related information pointing to the pub declaration
+        assert!(diags[0].related_information.is_some());
+    }
+
+    #[test]
+    fn v004_pub_index_variant_literal_produces_diagnostic() {
+        let source = concat!(
+            "pub index Phase = { Design, Test };\n",
+            "param x: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };\n",
+        );
+        let diags = produce_diagnostics(source, "test.gcl");
+        assert!(!diags.is_empty());
+        let has_v004 = diags.iter().any(|d| {
+            d.code
+                .as_ref()
+                .is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V004")))
+        });
+        assert!(
+            has_v004,
+            "expected at least one V004 diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn imported_assertion_failure_span_points_to_import() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/multi/imported_assert_fail/main.gcl");
