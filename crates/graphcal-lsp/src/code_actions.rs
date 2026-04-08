@@ -12,10 +12,7 @@ use tower_lsp::lsp_types::{
 };
 
 /// Produce code actions for the given diagnostics.
-pub fn code_actions(
-    params: &CodeActionParams,
-    source: &str,
-) -> Option<CodeActionResponse> {
+pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActionResponse> {
     let mut actions = Vec::new();
 
     for diag in &params.context.diagnostics {
@@ -43,18 +40,18 @@ pub fn code_actions(
         }
     }
 
-    if actions.is_empty() { None } else { Some(actions) }
+    if actions.is_empty() {
+        None
+    } else {
+        Some(actions)
+    }
 }
 
 /// For V002: insert `pub ` before the declaration keyword on the line containing the diagnostic.
 ///
 /// The diagnostic span points to the name (e.g., `x` in `param x: Dimensionless;`).
 /// We find the start of the line and insert `pub ` right after leading whitespace.
-fn make_add_pub_action_v002(
-    diag: &Diagnostic,
-    source: &str,
-    uri: &Url,
-) -> Option<CodeAction> {
+fn make_add_pub_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
     let insert_pos = find_keyword_position(source, diag.range.start.line)?;
 
     let edit = TextEdit {
@@ -88,11 +85,7 @@ fn make_add_pub_action_v002(
 ///
 /// We extract `ref_name` from the message and search the source for its declaration,
 /// then insert `pub ` before the keyword.
-fn make_add_pub_action_v003(
-    diag: &Diagnostic,
-    source: &str,
-    uri: &Url,
-) -> Option<CodeAction> {
+fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
     // Extract ref_name from the message: "... references private {kind} `{ref_name}` ..."
     let ref_name = extract_private_ref_name(&diag.message)?;
 
@@ -142,12 +135,10 @@ fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
 
     // Verify this looks like a declaration keyword.
     let keywords = [
-        "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot",
-        "assert", "import", "include",
+        "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot", "assert",
+        "import", "include",
     ];
-    let starts_with_keyword = keywords
-        .iter()
-        .any(|kw| trimmed.starts_with(kw));
+    let starts_with_keyword = keywords.iter().any(|kw| trimmed.starts_with(kw));
 
     if !starts_with_keyword {
         return None;
@@ -182,7 +173,14 @@ fn extract_private_ref_name(message: &str) -> Option<String> {
 )]
 fn find_declaration_line(source: &str, name: &str) -> Option<u32> {
     let keywords = [
-        "dim ", "type ", "index ", "base dim ", "unit ", "param ", "node ", "const ",
+        "dim ",
+        "type ",
+        "index ",
+        "base dim ",
+        "unit ",
+        "param ",
+        "node ",
+        "const ",
     ];
 
     for (i, line) in source.lines().enumerate() {
@@ -331,8 +329,14 @@ mod tests {
             "graphcal::V003",
             "`pub param` `speed` references private dim `Velocity` in its type annotation\n\nhint: add `pub` to `Velocity` or remove `pub` from `speed`",
             Range {
-                start: Position { line: 1, character: 17 },
-                end: Position { line: 1, character: 25 },
+                start: Position {
+                    line: 1,
+                    character: 17,
+                },
+                end: Position {
+                    line: 1,
+                    character: 25,
+                },
             },
         );
 
