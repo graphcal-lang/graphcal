@@ -13,11 +13,7 @@ pub struct Rational {
 
 impl fmt::Debug for Rational {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.den == 1 {
-            write!(f, "{}", self.num)
-        } else {
-            write!(f, "{}/{}", self.num, self.den)
-        }
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -352,8 +348,26 @@ impl Dimension {
         if self.is_dimensionless() {
             return None;
         }
-
         let mut result = String::new();
+        // Writing to `String` never fails, so `expect` is safe here.
+        #[expect(clippy::expect_used, reason = "writing to String is infallible")]
+        self.write_exponents(&mut result, symbols, "*", "/")
+            .expect("writing to String never fails");
+        Some(result)
+    }
+
+    /// Write the dimension's exponents to a [`fmt::Write`] sink.
+    ///
+    /// `mul_sep` is placed between positive-exponent terms (e.g., `"*"` or `" * "`).
+    /// `div_sep` is placed before each negative-exponent term when positive terms exist
+    /// (e.g., `"/"` or `" / "`).
+    fn write_exponents(
+        &self,
+        w: &mut impl fmt::Write,
+        names: &BTreeMap<BaseDimId, String>,
+        mul_sep: &str,
+        div_sep: &str,
+    ) -> fmt::Result {
         let mut first = true;
 
         // Positive exponents (numerator)
@@ -362,16 +376,15 @@ impl Dimension {
                 continue;
             }
             if !first {
-                result.push('*');
+                w.write_str(mul_sep)?;
             }
             first = false;
-            let symbol = symbols
+            let name = names
                 .get(id)
                 .map_or_else(|| id.fallback_symbol(), String::clone);
-            result.push_str(&symbol);
+            write!(w, "{name}")?;
             if exp != Rational::ONE {
-                result.push('^');
-                result.push_str(&exp.to_string());
+                write!(w, "^{exp}")?;
             }
         }
 
@@ -380,27 +393,24 @@ impl Dimension {
             if exp.num() >= 0 {
                 continue;
             }
-            let symbol = symbols
+            let name = names
                 .get(id)
                 .map_or_else(|| id.fallback_symbol(), String::clone);
             if first {
                 // Only negative exponents (e.g., Frequency = s^-1)
-                result.push_str(&symbol);
-                result.push('^');
-                result.push_str(&exp.to_string());
+                write!(w, "{name}^{exp}")?;
                 first = false;
             } else {
-                result.push('/');
-                result.push_str(&symbol);
+                w.write_str(div_sep)?;
+                write!(w, "{name}")?;
                 let pos_exp = -exp;
                 if pos_exp != Rational::ONE {
-                    result.push('^');
-                    result.push_str(&pos_exp.to_string());
+                    write!(w, "^{pos_exp}")?;
                 }
             }
         }
 
-        Some(result)
+        Ok(())
     }
 }
 
@@ -415,65 +425,29 @@ impl fmt::Display for DimensionDisplay<'_> {
         if self.dim.is_dimensionless() {
             return write!(f, "Dimensionless");
         }
-
-        let mut first = true;
-
-        // Positive exponents first (numerator part)
-        for (id, &exp) in &self.dim.exponents {
-            if exp.num() <= 0 {
-                continue;
-            }
-            if !first {
-                write!(f, " * ")?;
-            }
-            first = false;
-            let name = self
-                .names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
-            write!(f, "{name}")?;
-            if exp != Rational::ONE {
-                write!(f, "^{exp}")?;
-            }
-        }
-
-        // Negative exponents (denominator part)
-        for (id, &exp) in &self.dim.exponents {
-            if exp.num() >= 0 {
-                continue;
-            }
-            let name = self
-                .names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
-            if first {
-                // Only negative exponents exist (e.g., Frequency = Time^-1)
-                write!(f, "{name}")?;
-                write!(f, "^{exp}")?;
-                first = false;
-            } else {
-                write!(f, " / {name}")?;
-                let pos_exp = -exp;
-                if pos_exp != Rational::ONE {
-                    write!(f, "^{pos_exp}")?;
-                }
-            }
-        }
-
-        Ok(())
+        self.dim.write_exponents(f, self.names, " * ", " / ")
     }
+}
+
+/// Whether to add or subtract exponents when combining dimensions.
+#[derive(Clone, Copy)]
+enum CombineOp {
+    /// Add exponents (dimension multiplication).
+    Add,
+    /// Subtract exponents (dimension division).
+    Sub,
 }
 
 impl Dimension {
     /// Combine two dimensions by adding or subtracting exponents.
-    ///
-    /// If `negate` is false, exponents are added (multiplication).
-    /// If `negate` is true, exponents are subtracted (division).
-    fn combine(self, other: &Self, negate: bool) -> Self {
+    fn combine(self, other: &Self, op: CombineOp) -> Self {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
             let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
-            *entry = if negate { *entry - *exp } else { *entry + *exp };
+            *entry = match op {
+                CombineOp::Add => *entry + *exp,
+                CombineOp::Sub => *entry - *exp,
+            };
             if entry.is_zero() {
                 exponents.remove(id);
             }
@@ -486,7 +460,7 @@ impl std::ops::Mul for Dimension {
     type Output = Self;
     /// Multiply two dimensions (add exponents).
     fn mul(self, other: Self) -> Self {
-        self.combine(&other, false)
+        self.combine(&other, CombineOp::Add)
     }
 }
 
@@ -494,7 +468,7 @@ impl std::ops::Div for Dimension {
     type Output = Self;
     /// Divide two dimensions (subtract exponents).
     fn div(self, other: Self) -> Self {
-        self.combine(&other, true)
+        self.combine(&other, CombineOp::Sub)
     }
 }
 

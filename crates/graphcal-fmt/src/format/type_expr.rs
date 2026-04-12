@@ -28,7 +28,7 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                         RcDoc::text(n.to_string())
                     }
                     graphcal_compiler::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
-                        RcDoc::text(super::expr::format_nat_expr_str_pub(nat_expr))
+                        RcDoc::text(nat_expr.to_string())
                     }
                 })
                 .collect();

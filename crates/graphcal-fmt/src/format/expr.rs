@@ -11,38 +11,6 @@ use super::{
 };
 
 // ---------------------------------------------------------------------------
-// Nat expression formatting
-// ---------------------------------------------------------------------------
-
-/// Format a `NatExpr` to a string (public for use by `type_expr` formatter).
-pub(super) fn format_nat_expr_str_pub(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
-    format_nat_expr_str(expr)
-}
-
-/// Format a `NatExpr` to a string.
-fn format_nat_expr_str(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
-    use graphcal_compiler::syntax::ast::NatExpr;
-    match expr {
-        NatExpr::Literal(n, _) => n.to_string(),
-        NatExpr::Var(ident) => ident.name.clone(),
-        NatExpr::Add(lhs, rhs, _) => {
-            format!(
-                "{} + {}",
-                format_nat_expr_str(lhs),
-                format_nat_expr_str(rhs)
-            )
-        }
-        NatExpr::Mul(lhs, rhs, _) => {
-            format!(
-                "{} * {}",
-                format_nat_expr_str(lhs),
-                format_nat_expr_str(rhs)
-            )
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
 
@@ -274,7 +242,7 @@ fn format_generic_args(
         .iter()
         .map(|arg| match arg {
             GenericArg::Type(te) => super::type_expr::format_type_expr_inline(fmt, te),
-            GenericArg::Nat(ne) => RcDoc::text(format_nat_expr_str(ne)),
+            GenericArg::Nat(ne) => RcDoc::text(ne.to_string()),
         })
         .collect();
     let sep = RcDoc::text(", ");
@@ -696,7 +664,7 @@ pub fn format_for_comp(
                         RcDoc::text(spanned.value.as_str().to_string())
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
-                        let arg_str = format_nat_expr_str(arg);
+                        let arg_str = arg.to_string();
                         RcDoc::text(format!("range({arg_str})"))
                     }
                 })

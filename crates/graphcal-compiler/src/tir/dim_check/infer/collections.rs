@@ -40,8 +40,7 @@ fn nat_expr_to_index_name_str(expr: &NatExpr) -> String {
         NatExpr::Add(_, _, _) | NatExpr::Mul(_, _, _) => {
             // Normalize to polynomial form for a canonical representation.
             // During generic function body checking, we use symbolic names.
-            let formatted = format_nat_expr(expr);
-            format!("__nat_range_{formatted}")
+            format!("__nat_range_{expr}")
         }
     }
 }
@@ -63,19 +62,6 @@ fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
     }
 }
 
-/// Format a `NatExpr` as a string (for symbolic index names).
-fn format_nat_expr(expr: &NatExpr) -> String {
-    match expr {
-        NatExpr::Literal(n, _) => n.to_string(),
-        NatExpr::Var(ident) => ident.name.clone(),
-        NatExpr::Add(lhs, rhs, _) => {
-            format!("{} + {}", format_nat_expr(lhs), format_nat_expr(rhs))
-        }
-        NatExpr::Mul(lhs, rhs, _) => {
-            format!("{} * {}", format_nat_expr(lhs), format_nat_expr(rhs))
-        }
-    }
-}
 
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(

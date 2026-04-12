@@ -979,6 +979,17 @@ impl NatExpr {
     }
 }
 
+impl std::fmt::Display for NatExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Literal(n, _) => write!(f, "{n}"),
+            Self::Var(ident) => f.write_str(&ident.name),
+            Self::Add(lhs, rhs, _) => write!(f, "{lhs} + {rhs}"),
+            Self::Mul(lhs, rhs, _) => write!(f, "{lhs} * {rhs}"),
+        }
+    }
+}
+
 /// A generic argument at a call site (turbofish syntax).
 ///
 /// `eye<3>()` has one `GenericArg::Nat(NatExpr::Literal(3, ..))`.
