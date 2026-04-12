@@ -40,8 +40,8 @@ pub enum SpecialFnKind {
 pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
     match name {
         "sum" | "min" | "max" | "mean" | "count" => Some(SpecialFnKind::Aggregation),
-        "to_float" | "to_int" | "to_utc" | "to_tai" | "to_tt" | "to_tdb" | "to_et"
-        | "to_gpst" | "to_gst" | "to_bdt" | "to_qzsst" => Some(SpecialFnKind::Conversion),
+        "to_float" | "to_int" | "to_utc" | "to_tai" | "to_tt" | "to_tdb" | "to_et" | "to_gpst"
+        | "to_gst" | "to_bdt" | "to_qzsst" => Some(SpecialFnKind::Conversion),
         "datetime" | "epoch" => Some(SpecialFnKind::Constructor),
         "year" | "month" | "day" | "hour" | "minute" | "second" | "weekday" | "day_of_year" => {
             Some(SpecialFnKind::DatetimeExtract)
