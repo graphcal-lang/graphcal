@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{CompletionContext, determine_completion_context};
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
+use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
 /// Top-level declaration keywords.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
@@ -13,6 +13,16 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
 
 /// Built-in type keywords available in type annotation position.
 const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime"];
+
+/// Iterate over all visible definitions: local (from symbol table) and imported.
+fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &DefinitionInfo> {
+    let local = analysis.symbol_table.definitions.values();
+    let imported = analysis
+        .imported_definitions
+        .values()
+        .map(|imp| &imp.definition);
+    local.chain(imported)
+}
 
 /// Produce completion items for the given cursor position.
 pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<CompletionItem>> {
@@ -30,10 +40,7 @@ pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<Comple
 
 /// Complete param, node, and const node names (after `@`).
 fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items: Vec<CompletionItem> = analysis
-        .symbol_table
-        .definitions
-        .values()
+    all_definitions(analysis)
         .filter(|def| {
             matches!(
                 def.category,
@@ -47,28 +54,7 @@ fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
             detail: def.type_description.clone(),
             ..Default::default()
         })
-        .collect();
-
-    // Include imported param/node/const definitions.
-    items.extend(
-        analysis
-            .imported_definitions
-            .iter()
-            .filter(|(_, imported)| {
-                matches!(
-                    imported.definition.category,
-                    SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
-                )
-            })
-            .map(|(_, imported)| CompletionItem {
-                label: imported.definition.name.clone(),
-                kind: Some(CompletionItemKind::VARIABLE),
-                detail: imported.definition.type_description.clone(),
-                ..Default::default()
-            }),
-    );
-
-    items
+        .collect()
 }
 
 /// Complete type names (after `:`).
@@ -84,10 +70,7 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
         .collect();
 
     items.extend(
-        analysis
-            .symbol_table
-            .definitions
-            .values()
+        all_definitions(analysis)
             .filter(|def| !def.name_span.is_empty())
             .filter_map(|def| {
                 let kind = match def.category {
@@ -100,27 +83,6 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
                     label: def.name.clone(),
                     kind: Some(kind),
                     detail: def.type_description.clone(),
-                    ..Default::default()
-                })
-            }),
-    );
-
-    // Include imported type-like definitions.
-    items.extend(
-        analysis
-            .imported_definitions
-            .iter()
-            .filter_map(|(_, imported)| {
-                let kind = match imported.definition.category {
-                    SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
-                    SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
-                    SymbolCategory::Index => Some(CompletionItemKind::ENUM),
-                    _ => None,
-                }?;
-                Some(CompletionItem {
-                    label: imported.definition.name.clone(),
-                    kind: Some(kind),
-                    detail: imported.definition.type_description.clone(),
                     ..Default::default()
                 })
             }),
@@ -153,46 +115,24 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
         })
         .collect();
 
-    items.extend(
-        analysis
-            .symbol_table
-            .definitions
-            .values()
-            .filter_map(|def| {
-                let kind = match def.category {
-                    SymbolCategory::Const | SymbolCategory::BuiltinConst => {
-                        Some(CompletionItemKind::CONSTANT)
-                    }
-                    SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
-                    _ => None,
-                }?;
-                Some(CompletionItem {
-                    label: def.name.clone(),
-                    kind: Some(kind),
-                    detail: def.type_description.clone(),
-                    ..Default::default()
-                })
-            }),
-    );
-
-    // Include imported constants and functions.
-    items.extend(
-        analysis
-            .imported_definitions
-            .iter()
-            .filter_map(|(_, imported)| {
-                let kind = match imported.definition.category {
-                    SymbolCategory::Const => Some(CompletionItemKind::CONSTANT),
-                    _ => None,
-                }?;
-                Some(CompletionItem {
-                    label: imported.definition.name.clone(),
-                    kind: Some(kind),
-                    detail: imported.definition.type_description.clone(),
-                    ..Default::default()
-                })
-            }),
-    );
+    // Constants and functions from both local and imported definitions.
+    // Imported definitions never have BuiltinConst/BuiltinFn categories,
+    // so the filter is safe to apply uniformly.
+    items.extend(all_definitions(analysis).filter_map(|def| {
+        let kind = match def.category {
+            SymbolCategory::Const | SymbolCategory::BuiltinConst => {
+                Some(CompletionItemKind::CONSTANT)
+            }
+            SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
+            _ => None,
+        }?;
+        Some(CompletionItem {
+            label: def.name.clone(),
+            kind: Some(kind),
+            detail: def.type_description.clone(),
+            ..Default::default()
+        })
+    }));
 
     items
 }

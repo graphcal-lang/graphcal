@@ -166,6 +166,7 @@ mod tests {
     )]
 
     use super::*;
+    use crate::server::build_fn_signatures;
     use crate::symbol_table;
 
     /// Build a minimal `AnalysisResult` from source text.
@@ -180,7 +181,7 @@ mod tests {
             imported_definitions: HashMap::new(),
             diagnostics: Vec::new(),
             eval_values: HashMap::new(),
-            fn_signatures: HashMap::new(),
+            fn_signatures: build_fn_signatures(),
             import_decls: Vec::new(),
         }
     }

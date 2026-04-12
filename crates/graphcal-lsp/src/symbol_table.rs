@@ -217,6 +217,35 @@ impl SymbolTable {
         SymbolKey::TopLevel(definition.name.clone())
     }
 
+    /// Register a top-level definition from a named declaration.
+    ///
+    /// This is a convenience helper that handles the common pattern of:
+    /// 1. Converting the name to a `String`
+    /// 2. Creating a `SymbolKey::TopLevel`
+    /// 3. Inserting a `DefinitionInfo` with the given category and spans
+    fn register_top_level(
+        &mut self,
+        name: impl AsRef<str>,
+        name_span: Span,
+        decl_span: Span,
+        category: SymbolCategory,
+        type_description: Option<String>,
+        detail: Option<String>,
+    ) {
+        let name = name.as_ref().to_string();
+        self.definitions.insert(
+            SymbolKey::TopLevel(name.clone()),
+            DefinitionInfo {
+                name,
+                category,
+                name_span,
+                decl_span,
+                type_description,
+                detail,
+            },
+        );
+    }
+
     /// Find all references that point to the given target key.
     pub fn find_all_references(&self, target: &SymbolKey) -> Vec<&ReferenceInfo> {
         self.references
@@ -358,17 +387,13 @@ fn collect_param_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = p.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Param,
-            name_span: p.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &p.name.value,
+        p.name.span,
+        decl_span,
+        SymbolCategory::Param,
+        None,
+        None,
     );
     collect_type_expr_refs(&p.type_ann, table);
     if let Some(ref value) = p.value {
@@ -382,17 +407,13 @@ fn collect_node_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = n.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Node,
-            name_span: n.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &n.name.value,
+        n.name.span,
+        decl_span,
+        SymbolCategory::Node,
+        None,
+        None,
     );
     collect_type_expr_refs(&n.type_ann, table);
     collect_expr_refs(&n.value, table, scopes);
@@ -404,49 +425,37 @@ fn collect_const_node_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = c.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Const,
-            name_span: c.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &c.name.value,
+        c.name.span,
+        decl_span,
+        SymbolCategory::Const,
+        None,
+        None,
     );
     collect_type_expr_refs(&c.type_ann, table);
     collect_expr_refs(&c.value, table, scopes);
 }
 
 fn collect_base_dim_decl(d: &BaseDimDecl, decl_span: Span, table: &mut SymbolTable) {
-    let name = d.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Dimension,
-            name_span: d.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &d.name.value,
+        d.name.span,
+        decl_span,
+        SymbolCategory::Dimension,
+        None,
+        None,
     );
 }
 
 fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
-    let name = d.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Dimension,
-            name_span: d.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &d.name.value,
+        d.name.span,
+        decl_span,
+        SymbolCategory::Dimension,
+        None,
+        None,
     );
     collect_dim_expr_refs(&d.definition, table);
 }
@@ -457,17 +466,13 @@ fn collect_unit_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = u.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Unit,
-            name_span: u.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &u.name.value,
+        u.name.span,
+        decl_span,
+        SymbolCategory::Unit,
+        None,
+        None,
     );
     collect_dim_expr_refs(&u.dim_type, table);
     if let Some(unit_def) = &u.definition {
@@ -477,17 +482,13 @@ fn collect_unit_decl(
 }
 
 fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
-    let name = t.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::StructType,
-            name_span: t.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &t.name.value,
+        t.name.span,
+        decl_span,
+        SymbolCategory::StructType,
+        None,
+        None,
     );
     // Walk field type annotations.
     for field in &t.fields {
@@ -496,17 +497,13 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
 }
 
 fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut SymbolTable) {
-    let name = u.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::StructType,
-            name_span: u.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &u.name.value,
+        u.name.span,
+        decl_span,
+        SymbolCategory::StructType,
+        None,
+        None,
     );
     // Register each union member as a reference to the member type.
     for member in &u.members {
@@ -523,16 +520,13 @@ fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut Symbo
 
 fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable) {
     let name = idx.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name: name.clone(),
-            category: SymbolCategory::Index,
-            name_span: idx.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        &name,
+        idx.name.span,
+        decl_span,
+        SymbolCategory::Index,
+        None,
+        None,
     );
     match &idx.kind {
         IndexDeclKind::Named { variants } => {
@@ -568,17 +562,13 @@ fn collect_assert_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = a.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Assert,
-            name_span: a.name.span,
-            decl_span,
-            type_description: Some("Bool".to_string()),
-            detail: Some("assert".to_string()),
-        },
+    table.register_top_level(
+        &a.name.value,
+        a.name.span,
+        decl_span,
+        SymbolCategory::Assert,
+        Some("Bool".to_string()),
+        Some("assert".to_string()),
     );
     match &a.body {
         graphcal_compiler::syntax::ast::AssertBody::Expr(expr) => {
@@ -603,17 +593,13 @@ fn collect_plot_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = p.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Plot,
-            name_span: p.name.span,
-            decl_span,
-            type_description: Some(format!("plot (mark: {})", p.mark.mark_type)),
-            detail: Some("plot".to_string()),
-        },
+    table.register_top_level(
+        &p.name.value,
+        p.name.span,
+        decl_span,
+        SymbolCategory::Plot,
+        Some(format!("plot (mark: {})", p.mark.mark_type)),
+        Some("plot".to_string()),
     );
     for encoding in &p.encodings {
         collect_expr_refs(&encoding.value, table, scopes);
@@ -632,17 +618,13 @@ fn collect_figure_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = f.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Figure,
-            name_span: f.name.span,
-            decl_span,
-            type_description: Some("figure".to_string()),
-            detail: Some("figure".to_string()),
-        },
+    table.register_top_level(
+        &f.name.value,
+        f.name.span,
+        decl_span,
+        SymbolCategory::Figure,
+        Some("figure".to_string()),
+        Some("figure".to_string()),
     );
     for field in &f.fields {
         collect_expr_refs(&field.value, table, scopes);
@@ -655,17 +637,13 @@ fn collect_layer_decl(
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
-    let name = l.name.value.to_string();
-    table.definitions.insert(
-        SymbolKey::TopLevel(name.clone()),
-        DefinitionInfo {
-            name,
-            category: SymbolCategory::Layer,
-            name_span: l.name.span,
-            decl_span,
-            type_description: Some("layer".to_string()),
-            detail: Some("layer".to_string()),
-        },
+    table.register_top_level(
+        &l.name.value,
+        l.name.span,
+        decl_span,
+        SymbolCategory::Layer,
+        Some("layer".to_string()),
+        Some("layer".to_string()),
     );
     for field in &l.fields {
         collect_expr_refs(&field.value, table, scopes);
@@ -673,16 +651,13 @@ fn collect_layer_decl(
 }
 
 fn collect_dag_decl(d: &DagDecl, decl_span: Span, table: &mut SymbolTable) {
-    table.definitions.insert(
-        SymbolKey::TopLevel(d.name.value.as_str().to_string()),
-        DefinitionInfo {
-            name: d.name.value.as_str().to_string(),
-            category: SymbolCategory::Dag,
-            name_span: d.name.span,
-            decl_span,
-            type_description: None,
-            detail: None,
-        },
+    table.register_top_level(
+        d.name.value.as_str(),
+        d.name.span,
+        decl_span,
+        SymbolCategory::Dag,
+        None,
+        None,
     );
 }
 

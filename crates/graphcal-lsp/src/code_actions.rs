@@ -11,6 +11,31 @@ use tower_lsp::lsp_types::{
     Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
+/// All declaration keywords that can be preceded by `pub`.
+///
+/// Used by `find_keyword_position` to locate the insertion point for `pub `.
+/// `"base"` matches `"base dim ..."` via `starts_with`.
+const ALL_DECL_KEYWORDS: &[&str] = &[
+    "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot", "assert",
+    "import", "include",
+];
+
+/// Declaration keywords for name-based lookup.
+///
+/// Each entry includes a trailing space to match `keyword name...` patterns.
+/// Only includes keywords whose declarations can trigger V003 (items that
+/// appear in type annotations of `pub` declarations).
+const NAMED_DECL_KEYWORDS: &[&str] = &[
+    "dim ",
+    "type ",
+    "index ",
+    "base dim ",
+    "unit ",
+    "param ",
+    "node ",
+    "const ",
+];
+
 /// Produce code actions for the given diagnostics.
 pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActionResponse> {
     let mut actions = Vec::new();
@@ -134,11 +159,7 @@ fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
     let indent = line_str.len() - trimmed.len();
 
     // Verify this looks like a declaration keyword.
-    let keywords = [
-        "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot", "assert",
-        "import", "include",
-    ];
-    let starts_with_keyword = keywords.iter().any(|kw| trimmed.starts_with(kw));
+    let starts_with_keyword = ALL_DECL_KEYWORDS.iter().any(|kw| trimmed.starts_with(kw));
 
     if !starts_with_keyword {
         return None;
@@ -172,20 +193,9 @@ fn extract_private_ref_name(message: &str) -> Option<String> {
     reason = "line index fits in u32 for typical source files"
 )]
 fn find_declaration_line(source: &str, name: &str) -> Option<u32> {
-    let keywords = [
-        "dim ",
-        "type ",
-        "index ",
-        "base dim ",
-        "unit ",
-        "param ",
-        "node ",
-        "const ",
-    ];
-
     for (i, line) in source.lines().enumerate() {
         let trimmed = line.trim_start();
-        for kw in &keywords {
+        for kw in NAMED_DECL_KEYWORDS {
             if let Some(rest) = trimmed.strip_prefix(kw) {
                 // Check if the name matches (followed by space, '=', ':', ';', or end of line).
                 if rest.starts_with(name)
