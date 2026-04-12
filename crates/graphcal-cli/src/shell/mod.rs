@@ -337,23 +337,7 @@ fn try_add_with_key(key: &str, input: &str, state: &mut ShellState) -> DeclResul
 
 /// Extract the declaration name from a `DeclKind`.
 fn extract_decl_name(kind: &DeclKind) -> Option<String> {
-    match kind {
-        DeclKind::Param(p) => Some(p.name.value.as_str().to_string()),
-        DeclKind::Node(n) => Some(n.name.value.as_str().to_string()),
-        DeclKind::ConstNode(c) => Some(c.name.value.as_str().to_string()),
-        DeclKind::BaseDimension(d) => Some(d.name.value.as_str().to_string()),
-        DeclKind::Dimension(d) => Some(d.name.value.as_str().to_string()),
-        DeclKind::Unit(u) => Some(u.name.value.as_str().to_string()),
-        DeclKind::Index(i) => Some(i.name.value.as_str().to_string()),
-        DeclKind::Type(t) => Some(t.name.value.as_str().to_string()),
-        DeclKind::UnionType(u) => Some(u.name.value.as_str().to_string()),
-        DeclKind::Assert(a) => Some(a.name.value.as_str().to_string()),
-        DeclKind::Plot(p) => Some(p.name.value.as_str().to_string()),
-        DeclKind::Figure(f) => Some(f.name.value.as_str().to_string()),
-        DeclKind::Layer(l) => Some(l.name.value.as_str().to_string()),
-        DeclKind::Dag(d) => Some(d.name.value.as_str().to_string()),
-        DeclKind::Import(_) | DeclKind::Include(_) => None,
-    }
+    kind.name_and_span().map(|(name, _)| name.to_string())
 }
 
 /// Print propagation: show new and changed values.

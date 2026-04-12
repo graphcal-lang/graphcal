@@ -71,15 +71,15 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     vl["encoding"] = build_encoding(spec);
 
     // Title
-    if let Some(title) = get_plot_string_property(spec, PlotProperty::Title) {
+    if let Some(title) = get_string_property(&spec.properties, &PlotProperty::Title) {
         vl["title"] = json!(title);
     }
 
     // Width/height
-    if let Some(w) = get_plot_number_property(spec, PlotProperty::Width) {
+    if let Some(w) = get_number_property(&spec.properties, &PlotProperty::Width) {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_plot_number_property(spec, PlotProperty::Height) {
+    if let Some(h) = get_number_property(&spec.properties, &PlotProperty::Height) {
         vl["height"] = json!(h);
     }
 
@@ -104,9 +104,7 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "hconcat": sub_specs,
     });
 
-    if let Some(title) =
-        get_composition_string_property(&fig.properties, CompositionProperty::Title)
-    {
+    if let Some(title) = get_string_property(&fig.properties, &CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
@@ -138,19 +136,15 @@ fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "layer": sub_specs,
     });
 
-    if let Some(title) =
-        get_composition_string_property(&layer.properties, CompositionProperty::Title)
-    {
+    if let Some(title) = get_string_property(&layer.properties, &CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
     // Width/height from layer properties
-    if let Some(w) = get_composition_number_property(&layer.properties, CompositionProperty::Width)
-    {
+    if let Some(w) = get_number_property(&layer.properties, &CompositionProperty::Width) {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_composition_number_property(&layer.properties, CompositionProperty::Height)
-    {
+    if let Some(h) = get_number_property(&layer.properties, &CompositionProperty::Height) {
         vl["height"] = json!(h);
     }
 
@@ -231,8 +225,8 @@ fn build_encoding(spec: &PlotSpec) -> JsonValue {
 
         // Axis title: explicit x_label/y_label overrides auto-generated titles
         let explicit_label = match channel {
-            EncodingChannel::X => get_plot_string_property(spec, PlotProperty::XLabel),
-            EncodingChannel::Y => get_plot_string_property(spec, PlotProperty::YLabel),
+            EncodingChannel::X => get_string_property(&spec.properties, &PlotProperty::XLabel),
+            EncodingChannel::Y => get_string_property(&spec.properties, &PlotProperty::YLabel),
             _ => None,
         };
         let axis_title = explicit_label.or_else(|| {
@@ -314,51 +308,27 @@ fn json_number(n: f64) -> JsonValue {
     }
 }
 
-/// Get a string value from a plot property.
-fn get_plot_string_property(spec: &PlotSpec, prop: PlotProperty) -> Option<String> {
-    spec.properties
-        .iter()
-        .find(|(p, _)| *p == prop)
-        .and_then(|(_, v)| match v {
-            PlotFieldValue::String(s) => Some(s.clone()),
-            _ => None,
-        })
-}
-
-/// Get a single numeric value from a plot property.
-fn get_plot_number_property(spec: &PlotSpec, prop: PlotProperty) -> Option<f64> {
-    spec.properties
-        .iter()
-        .find(|(p, _)| *p == prop)
-        .and_then(|(_, v)| match v {
-            PlotFieldValue::Number(n) => Some(*n),
-            PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
-            _ => None,
-        })
-}
-
-/// Get a string value from a composition property list.
-fn get_composition_string_property(
-    properties: &[(CompositionProperty, PlotFieldValue)],
-    prop: CompositionProperty,
+/// Look up a property by key and return the associated string value.
+fn get_string_property<P: PartialEq>(
+    properties: &[(P, PlotFieldValue)],
+    prop: &P,
 ) -> Option<String> {
     properties
         .iter()
-        .find(|(p, _)| *p == prop)
+        .find(|(p, _)| p == prop)
         .and_then(|(_, v)| match v {
             PlotFieldValue::String(s) => Some(s.clone()),
             _ => None,
         })
 }
 
-/// Get a single numeric value from a composition property list.
-fn get_composition_number_property(
-    properties: &[(CompositionProperty, PlotFieldValue)],
-    prop: CompositionProperty,
-) -> Option<f64> {
+/// Look up a property by key and return a single numeric value.
+///
+/// Accepts both `Number(n)` and a single-element `Numbers([n])`.
+fn get_number_property<P: PartialEq>(properties: &[(P, PlotFieldValue)], prop: &P) -> Option<f64> {
     properties
         .iter()
-        .find(|(p, _)| *p == prop)
+        .find(|(p, _)| p == prop)
         .and_then(|(_, v)| match v {
             PlotFieldValue::Number(n) => Some(*n),
             PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),

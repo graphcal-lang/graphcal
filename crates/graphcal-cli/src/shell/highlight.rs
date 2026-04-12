@@ -64,11 +64,19 @@ fn highlight_line(line: &str) -> String {
 }
 
 /// Find the byte offset of a line comment (`//`), skipping those inside strings.
+///
+/// Handles backslash-escaped quotes (`\"`) inside strings so that a string
+/// like `"foo\"bar // baz"` does not incorrectly detect `//` as a comment.
 fn find_comment_start(line: &str) -> Option<usize> {
     let mut in_string = false;
     let bytes = line.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        if in_string && bytes[i] == b'\\' {
+            // Skip the escaped character.
+            i += 2;
+            continue;
+        }
         if bytes[i] == b'"' {
             in_string = !in_string;
         } else if !in_string && i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {

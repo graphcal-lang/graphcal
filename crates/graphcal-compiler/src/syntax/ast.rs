@@ -80,6 +80,32 @@ pub enum DeclKind {
     Layer(LayerDecl),
 }
 
+impl DeclKind {
+    /// Returns the declaration name as a string slice and its span, if the
+    /// variant carries a name. `Import` and `Include` have no name and return
+    /// `None`.
+    #[must_use]
+    pub fn name_and_span(&self) -> Option<(&str, Span)> {
+        match self {
+            Self::Param(p) => Some((p.name.value.as_str(), p.name.span)),
+            Self::Node(n) => Some((n.name.value.as_str(), n.name.span)),
+            Self::ConstNode(c) => Some((c.name.value.as_str(), c.name.span)),
+            Self::BaseDimension(d) => Some((d.name.value.as_str(), d.name.span)),
+            Self::Dimension(d) => Some((d.name.value.as_str(), d.name.span)),
+            Self::Unit(u) => Some((u.name.value.as_str(), u.name.span)),
+            Self::Type(t) => Some((t.name.value.as_str(), t.name.span)),
+            Self::UnionType(u) => Some((u.name.value.as_str(), u.name.span)),
+            Self::Index(i) => Some((i.name.value.as_str(), i.name.span)),
+            Self::Dag(d) => Some((d.name.value.as_str(), d.name.span)),
+            Self::Assert(a) => Some((a.name.value.as_str(), a.name.span)),
+            Self::Plot(p) => Some((p.name.value.as_str(), p.name.span)),
+            Self::Figure(f) => Some((f.name.value.as_str(), f.name.span)),
+            Self::Layer(l) => Some((l.name.value.as_str(), l.name.span)),
+            Self::Import(_) | Self::Include(_) => None,
+        }
+    }
+}
+
 /// Assert declaration: `assert name = <expr>;`
 ///
 /// The body must evaluate to `Bool`. No type annotation (it's always Bool).
