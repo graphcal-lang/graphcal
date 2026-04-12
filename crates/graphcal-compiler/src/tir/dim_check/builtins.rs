@@ -8,7 +8,7 @@ use crate::syntax::dimension::Dimension;
 
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 pub(super) fn infer_fn_dim(
     sig: &DimSignature,

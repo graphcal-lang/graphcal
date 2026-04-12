@@ -9,10 +9,10 @@ use miette::NamedSource;
 
 use crate::syntax::ast::{BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr};
 use crate::syntax::names::{FieldName, GenericParamName, IndexName, StructTypeName};
-use crate::tir::tir::NatLinearForm;
+use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 use super::super::helpers::{
     cartesian_product, declared_to_inferred, format_inferred_type, resolve_field_type,
@@ -35,7 +35,7 @@ fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
 /// `__nat_range_N` or `__nat_range_N + 1`.
 fn nat_expr_to_index_name_str(expr: &NatExpr) -> String {
     match expr {
-        NatExpr::Literal(n, _) => crate::registry::registry::nat_range_index_name(*n),
+        NatExpr::Literal(n, _) => crate::registry::types::nat_range_index_name(*n),
         NatExpr::Var(ident) => format!("__nat_range_{}", ident.name),
         NatExpr::Add(_, _, _) | NatExpr::Mul(_, _, _) => {
             // Normalize to polynomial form for a canonical representation.
@@ -86,15 +86,15 @@ pub(super) fn infer_for_comp(
                     }
                 })?;
                 match &idx_def.kind {
-                    crate::registry::registry::IndexKind::Named { .. }
-                    | crate::registry::registry::IndexKind::RequiredNamed => {
+                    crate::registry::types::IndexKind::Named { .. }
+                    | crate::registry::types::IndexKind::RequiredNamed => {
                         InferredType::Label(spanned_idx.value.clone())
                     }
-                    crate::registry::registry::IndexKind::Range { dimension, .. }
-                    | crate::registry::registry::IndexKind::RequiredRange { dimension } => {
+                    crate::registry::types::IndexKind::Range { dimension, .. }
+                    | crate::registry::types::IndexKind::RequiredRange { dimension } => {
                         InferredType::Scalar(dimension.clone())
                     }
-                    crate::registry::registry::IndexKind::NatRange { size } => {
+                    crate::registry::types::IndexKind::NatRange { size } => {
                         InferredType::Fin(NatLinearForm::from_constant(*size))
                     }
                 }
@@ -796,8 +796,8 @@ pub(super) fn infer_unfold(
 
     if let Some((_index_name, idx_def)) = &owner_range_index {
         let dimension = match &idx_def.kind {
-            crate::registry::registry::IndexKind::Range { dimension, .. }
-            | crate::registry::registry::IndexKind::RequiredRange { dimension } => Some(dimension),
+            crate::registry::types::IndexKind::Range { dimension, .. }
+            | crate::registry::types::IndexKind::RequiredRange { dimension } => Some(dimension),
             _ => None,
         };
         if let Some(dimension) = dimension {
@@ -983,7 +983,7 @@ pub(super) fn infer_struct_construction(
         let no_nat_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
         for arg in constructor_type_args {
-            let resolved = crate::tir::tir::resolve_type_expr(
+            let resolved = crate::tir::typed::resolve_type_expr(
                 arg,
                 registry,
                 no_dim_params,
@@ -991,7 +991,7 @@ pub(super) fn infer_struct_construction(
                 no_nat_params,
                 src,
             )?;
-            let dt = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
             args.push(declared_to_inferred(&dt));
         }
         // Fill in defaults for remaining params
@@ -1011,7 +1011,7 @@ pub(super) fn infer_struct_construction(
                     src: src.clone(),
                     span: type_name.span.into(),
                 })?;
-            let resolved = crate::tir::tir::resolve_type_expr(
+            let resolved = crate::tir::typed::resolve_type_expr(
                 default_expr,
                 registry,
                 no_dim_params,
@@ -1019,7 +1019,7 @@ pub(super) fn infer_struct_construction(
                 no_nat_params,
                 src,
             )?;
-            let dt = crate::tir::tir::resolved_to_declared_type(&resolved, src)?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
             args.push(declared_to_inferred(&dt));
         }
         args

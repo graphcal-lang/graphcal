@@ -1,7 +1,7 @@
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{DimName, UnitName};
 
-use crate::registry::registry::RegistryBuilder;
+use crate::registry::types::RegistryBuilder;
 
 /// Base dimension IDs returned by `load_base_dimensions`.
 ///
@@ -172,7 +172,7 @@ mod tests {
         reason = "test code"
     )]
     use super::*;
-    use crate::registry::registry::RegistryBuilder;
+    use crate::registry::types::RegistryBuilder;
     use crate::syntax::dimension::{BaseDimId, Rational};
 
     // Well-known IDs matching prelude dimension names.

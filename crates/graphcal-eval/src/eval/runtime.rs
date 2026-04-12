@@ -11,7 +11,7 @@ use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::syntax::names::{DeclName, IndexName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
-use crate::builtins::{builtin_constants, builtin_functions};
+use crate::builtins::{BuiltinFunction, builtin_constants, builtin_functions};
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
 use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
@@ -154,9 +154,9 @@ pub(super) fn run_eval_loop(
     tir: &crate::tir::TIR,
     declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
-    let builtin_consts = builtin_constants();
-    let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
     let mut values: HashMap<String, RuntimeValue> = HashMap::new();
@@ -271,7 +271,8 @@ pub(super) fn evaluate_plan(
         unfold_context: None,
     };
 
-    let EvalLoopResult { values, errors } = run_eval_loop(plan, tir, declared_types, src);
+    let EvalLoopResult { values, errors } =
+        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
     // Build a map from name -> expression for display unit extraction
     let expr_map: HashMap<String, &graphcal_compiler::syntax::ast::Expr> = tir

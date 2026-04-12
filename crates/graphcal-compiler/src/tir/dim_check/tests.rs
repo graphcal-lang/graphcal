@@ -16,8 +16,8 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
 fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
     let file = Parser::new(source).parse_file().unwrap();
     let src = make_src(source);
-    let ir = crate::ir::ir::lower(&file, &src)?;
-    let tir = crate::tir::tir::type_resolve(ir, &src)?;
+    let ir = crate::ir::lower::lower(&file, &src)?;
+    let tir = crate::tir::typed::type_resolve(ir, &src)?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
 }

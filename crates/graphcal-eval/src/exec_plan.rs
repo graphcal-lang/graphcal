@@ -254,8 +254,8 @@ fn build_runtime_dag(
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
     enum DeclRef<'a> {
-        Param(&'a graphcal_compiler::ir::ir::ParamEntry),
-        Node(&'a graphcal_compiler::ir::ir::NodeEntry),
+        Param(&'a graphcal_compiler::ir::lower::ParamEntry),
+        Node(&'a graphcal_compiler::ir::lower::NodeEntry),
     }
 
     let mut graph = DiGraph::<String, ()>::new();

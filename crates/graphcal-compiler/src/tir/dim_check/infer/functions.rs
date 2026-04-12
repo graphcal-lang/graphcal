@@ -10,7 +10,7 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::FnName;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 use crate::registry::resolve_types::{SpecialFnKind, classify_special_fn};
 
 use super::super::builtins::infer_fn_dim;

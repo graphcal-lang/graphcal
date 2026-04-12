@@ -1,8 +1,4 @@
 //! Graphcal IR: name resolution and intermediate representation lowering.
 
-#[expect(
-    clippy::module_inception,
-    reason = "preserved from pre-merge crate structure"
-)]
-pub mod ir;
+pub mod lower;
 pub mod resolve;
