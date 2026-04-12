@@ -22,7 +22,7 @@ use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 use crate::ir::resolve::{
-    DeclCategory, ExpectedFail, ImportedValueNames, resolve_with_imported_values,
+    DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
@@ -194,37 +194,16 @@ fn lower_with_imports(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "will be decomposed in a later refactor phase"
-)]
 pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution
-    let mut resolved = resolve_with_imports(ast, src, imported)?;
+    let resolved = resolve_with_imports(ast, src, imported)?;
 
-    // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
-    let mut builder = RegistryBuilder::new();
-    load_prelude(&mut builder);
-    register_file_declarations(ast, &mut builder, src)?;
-
-    // Step 2b: Augment runtime deps with transitive dependencies through dynamic units.
-    // This must happen after registry construction (which registers dynamic units)
-    // but before the resolved entries are consumed.
-    let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
-    augment_runtime_deps_for_dynamic_units(
-        &mut resolved.runtime_deps,
-        &dynamic_unit_deps,
-        &resolved.params,
-        &resolved.nodes,
-    );
-
-    // Step 3: Extract type annotations from the AST and pair with resolved declarations.
+    // Step 2: Extract type annotations from AST + imported declarations
     let mut type_anns = extract_type_annotations(ast);
-    // Also extract type annotations from imported declarations.
     for (name, type_ann, _, _) in &imported.consts {
         type_anns.insert(name.clone(), type_ann.clone());
     }
@@ -235,142 +214,8 @@ pub(crate) fn lower_to_builder(
         type_anns.insert(name.clone(), type_ann.clone());
     }
 
-    let consts = resolved
-        .consts
-        .into_iter()
-        .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
-            Ok(ConstEntry {
-                name: ScopedName::local(entry.name),
-                type_ann,
-                expr: entry.expr,
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let params = resolved
-        .params
-        .into_iter()
-        .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
-            Ok(ParamEntry {
-                name: ScopedName::local(entry.name),
-                type_ann,
-                default_expr: entry.default_expr,
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let nodes = resolved
-        .nodes
-        .into_iter()
-        .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
-            Ok(NodeEntry {
-                name: ScopedName::local(entry.name),
-                type_ann,
-                expr: entry.expr,
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-
-    let unfrozen = UnfrozenIR {
-        consts,
-        params,
-        nodes,
-        asserts: resolved
-            .asserts
-            .into_iter()
-            .map(|entry| AssertEntry {
-                name: ScopedName::local(entry.name),
-                body: entry.body,
-                span: entry.span,
-            })
-            .collect(),
-        plots: resolved
-            .plots
-            .into_iter()
-            .map(|entry| {
-                let is_pub = resolved.pub_names.contains(&entry.name);
-                PlotEntry {
-                    name: ScopedName::local(entry.name),
-                    decl: entry.decl,
-                    span: entry.span,
-                    is_pub,
-                }
-            })
-            .collect(),
-        figures: resolved
-            .figures
-            .into_iter()
-            .map(|entry| FigureEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-            })
-            .collect(),
-        layers: resolved
-            .layers
-            .into_iter()
-            .map(|entry| LayerEntry {
-                name: ScopedName::local(entry.name),
-                decl: entry.decl,
-                span: entry.span,
-            })
-            .collect(),
-        runtime_deps: wrap_dep_map(resolved.runtime_deps),
-        const_deps: wrap_dep_map(resolved.const_deps),
-        source_order: resolved
-            .source_order
-            .into_iter()
-            .map(|(name, cat)| (ScopedName::local(name), cat))
-            .collect(),
-        assert_names: resolved
-            .assert_names
-            .into_iter()
-            .map(ScopedName::local)
-            .collect(),
-        assumes_map: resolved
-            .assumes_map
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    ScopedName::local(k),
-                    v.into_iter().map(ScopedName::local).collect(),
-                )
-            })
-            .collect(),
-        expected_fail: resolved
-            .expected_fail
-            .into_iter()
-            .map(|(k, v)| (ScopedName::local(k), v))
-            .collect(),
-        imported_values: HashMap::new(),
-    };
-
-    Ok((builder, unfrozen))
+    // Step 3: Build registry, augment deps, and construct IR
+    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new())
 }
 
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
@@ -388,10 +233,6 @@ pub(crate) fn lower_to_builder(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "will be decomposed in a later refactor phase"
-)]
 pub fn lower_to_builder_with_imported_values(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -399,14 +240,36 @@ pub fn lower_to_builder_with_imported_values(
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
-    let mut resolved = resolve_with_imported_values(ast, src, imported_names)?;
+    let resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
-    // Step 2: Build registry (prelude + user-declared dimensions/units/indexes/structs)
+    // Step 2: Extract type annotations from local declarations only
+    let type_anns = extract_type_annotations(ast);
+
+    // Step 3: Build registry, augment deps, and construct IR
+    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values)
+}
+
+/// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
+///
+/// Builds the registry, augments runtime deps for dynamic units, pairs resolved
+/// declarations with type annotations, and constructs the `UnfrozenIR`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single linear pipeline — splitting would obscure the flow"
+)]
+fn build_ir_from_resolved(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+    mut resolved: ResolvedFile,
+    mut type_anns: HashMap<String, TypeExpr>,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    // Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
     register_file_declarations(ast, &mut builder, src)?;
 
-    // Step 2b: Augment runtime deps with transitive dependencies through dynamic units.
+    // Augment runtime deps with transitive dependencies through dynamic units.
     let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
     augment_runtime_deps_for_dynamic_units(
         &mut resolved.runtime_deps,
@@ -415,9 +278,7 @@ pub fn lower_to_builder_with_imported_values(
         &resolved.nodes,
     );
 
-    // Step 3: Extract type annotations from local declarations only.
-    let mut type_anns = extract_type_annotations(ast);
-
+    // Pair resolved declarations with type annotations.
     let consts = resolved
         .consts
         .into_iter()

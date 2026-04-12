@@ -267,21 +267,6 @@ impl ScopeStack {
     }
 }
 
-/// Format a `NatExpr` as a human-readable string.
-fn format_nat_expr(expr: &graphcal_compiler::syntax::ast::NatExpr) -> String {
-    use graphcal_compiler::syntax::ast::NatExpr;
-    match expr {
-        NatExpr::Literal(n, _) => n.to_string(),
-        NatExpr::Var(ident) => ident.name.clone(),
-        NatExpr::Add(lhs, rhs, _) => {
-            format!("{} + {}", format_nat_expr(lhs), format_nat_expr(rhs))
-        }
-        NatExpr::Mul(lhs, rhs, _) => {
-            format!("{} * {}", format_nat_expr(lhs), format_nat_expr(rhs))
-        }
-    }
-}
-
 /// Build a symbol table from a parsed AST file.
 pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable {
     let mut table = SymbolTable::default();
@@ -877,7 +862,7 @@ fn collect_expr_refs(
                         (detail, ref_info)
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
-                        let detail = format!("loop variable over range({})", format_nat_expr(arg));
+                        let detail = format!("loop variable over range({arg})");
                         (detail, None)
                     }
                 };
