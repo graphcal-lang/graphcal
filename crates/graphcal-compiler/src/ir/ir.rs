@@ -1195,14 +1195,17 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
                     }
                     // Already handled in the outer match — unreachable but needed
                     // for exhaustiveness.
+                    #[expect(
+                        clippy::unreachable,
+                        reason = "exhaustiveness arm for variants handled in outer match"
+                    )]
                     ExprKind::VariantLiteral { .. }
                     | ExprKind::ForComp { .. }
                     | ExprKind::IndexAccess { .. }
                     | ExprKind::MapLiteral { .. }
                     | ExprKind::TableLiteral { .. }
                     | ExprKind::Match { .. } => {
-                        debug_assert!(false, "handled in outer match");
-                        Ok(())
+                        unreachable!("handled in outer match");
                     }
                 }
             }

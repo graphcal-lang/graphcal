@@ -190,15 +190,31 @@ impl SymbolTable {
     ///
     /// When `find_definition_at` returns a `&DefinitionInfo`, the caller may need the
     /// corresponding `SymbolKey`. This method performs a reverse lookup using pointer
-    /// equality, falling back to a `TopLevel` key from the definition's name.
+    /// equality, falling back to a span-based lookup.
     pub fn find_definition_key(&self, definition: &DefinitionInfo) -> SymbolKey {
-        self.definitions
+        // Primary: pointer identity (fast path when reference comes from our map).
+        if let Some((k, _)) = self
+            .definitions
             .iter()
             .find(|(_, d)| std::ptr::eq(*d, definition))
-            .map_or_else(
-                || SymbolKey::TopLevel(definition.name.clone()),
-                |(k, _)| k.clone(),
-            )
+        {
+            return k.clone();
+        }
+        // Fallback: match by name_span offset (handles cloned DefinitionInfo).
+        if let Some((k, _)) = self
+            .definitions
+            .iter()
+            .find(|(_, d)| d.name_span == definition.name_span)
+        {
+            return k.clone();
+        }
+        // Last resort: should not happen if the definition came from this table.
+        debug_assert!(
+            false,
+            "find_definition_key: no matching definition found for {:?}",
+            definition.name
+        );
+        SymbolKey::TopLevel(definition.name.clone())
     }
 
     /// Find all references that point to the given target key.

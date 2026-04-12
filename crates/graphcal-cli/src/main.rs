@@ -181,10 +181,10 @@ fn main() {
             file,
             set,
             input,
-            root: _root,
+            root,
         } => {
             let overrides = parse_overrides(&set, input.as_deref());
-            shell::run_shell(file.as_deref(), overrides);
+            shell::run_shell(file.as_deref(), overrides, root.as_deref());
         }
         Commands::Eval {
             file,
