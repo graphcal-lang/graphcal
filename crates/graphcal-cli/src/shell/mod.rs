@@ -240,8 +240,8 @@ fn is_valid_identifier(s: &str) -> bool {
     }
     // Allow qualified names like rocket::delta_v
     s.chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
-        && s.starts_with(|c: char| c.is_alphabetic() || c == '_')
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+        && s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
 }
 
 /// The result of trying to add a declaration.

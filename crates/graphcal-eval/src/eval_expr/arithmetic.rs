@@ -30,7 +30,11 @@ pub(super) fn eval_binop_expr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
-        // Logical operators: Bool operands, Bool result
+        // Logical AND/OR: both operands are always evaluated (no short-circuit).
+        // This is intentional — in a reactive calculation graph, every sub-expression
+        // should be valid regardless of control flow. Silently skipping a broken operand
+        // via short-circuit would hide errors. Users who need conditional evaluation
+        // should use `if-then-else` expressions instead.
         BinOp::And => {
             let l = eval_expr(lhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
