@@ -267,7 +267,6 @@ impl ScopeStack {
     }
 }
 
-
 /// Build a symbol table from a parsed AST file.
 pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable {
     let mut table = SymbolTable::default();

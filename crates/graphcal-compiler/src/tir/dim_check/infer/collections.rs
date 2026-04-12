@@ -62,7 +62,6 @@ fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
     }
 }
 
-
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(
     bindings: &[ForBinding],
