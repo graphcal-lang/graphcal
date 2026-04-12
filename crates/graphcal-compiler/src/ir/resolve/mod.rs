@@ -135,24 +135,10 @@ fn collect_local_declarations(
         if !decl.is_pub {
             continue;
         }
-        let name = match &decl.kind {
-            DeclKind::Param(p) => p.name.value.to_string(),
-            DeclKind::Node(n) => n.name.value.to_string(),
-            DeclKind::ConstNode(c) => c.name.value.to_string(),
-            DeclKind::Assert(a) => a.name.value.to_string(),
-            DeclKind::BaseDimension(d) => d.name.value.to_string(),
-            DeclKind::Dimension(d) => d.name.value.to_string(),
-            DeclKind::Unit(u) => u.name.value.to_string(),
-            DeclKind::Index(idx) => idx.name.value.to_string(),
-            DeclKind::Type(t) => t.name.value.to_string(),
-            DeclKind::UnionType(u) => u.name.value.to_string(),
-            DeclKind::Plot(p) => p.name.value.to_string(),
-            DeclKind::Figure(f) => f.name.value.to_string(),
-            DeclKind::Layer(l) => l.name.value.to_string(),
-            DeclKind::Dag(d) => d.name.value.to_string(),
-            DeclKind::Import(_) | DeclKind::Include(_) => continue,
+        let Some((name, _)) = decl.kind.name_and_span() else {
+            continue;
         };
-        pub_names.insert(name);
+        pub_names.insert(name.to_string());
     }
 
     // Validate: required params and indexes must be `pub`.

@@ -36,8 +36,6 @@ const SYNTH_SPAN: Span = Span::new(0, 0);
 /// Errors that can occur when converting a JSON input file to overrides.
 #[derive(Debug)]
 pub enum JsonInputError {
-    /// The JSON file could not be read.
-    Io(std::io::Error),
     /// The JSON file could not be parsed.
     Json(serde_json::Error),
     /// The top-level JSON value is not an object.
@@ -67,7 +65,6 @@ pub enum JsonInputError {
 impl fmt::Display for JsonInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "cannot read input file: {e}"),
             Self::Json(e) => write!(f, "invalid JSON: {e}"),
             Self::TopLevelNotObject => write!(f, "top-level JSON value must be an object"),
             Self::ParseFailed { param, message } => {
@@ -115,12 +112,6 @@ impl fmt::Display for JsonInputError {
 }
 
 impl std::error::Error for JsonInputError {}
-
-impl From<std::io::Error> for JsonInputError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
 
 impl From<serde_json::Error> for JsonInputError {
     fn from(e: serde_json::Error) -> Self {
