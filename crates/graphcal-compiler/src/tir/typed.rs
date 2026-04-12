@@ -17,9 +17,9 @@ use crate::syntax::span::Span;
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
 use crate::registry::resolve_types::ScopedName;
 use crate::registry::time_scale::TimeScale;
+use crate::registry::types::Registry;
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -1034,15 +1034,14 @@ pub fn unify_resolved_type(
                     }
                     ResolvedIndex::NatExpr(form, _) => {
                         // Extract the concrete nat value from the actual index name
-                        let actual_nat = crate::registry::types::parse_nat_range_index_name(
-                            actual_idx.as_str(),
-                        )
-                        .ok_or_else(|| GraphcalError::IndexMismatch {
-                            expected: IndexName::new(format!("range({})", form.format())),
-                            found: actual_idx.clone(),
-                            src: src.clone(),
-                            span: span.into(),
-                        })?;
+                        let actual_nat =
+                            crate::registry::types::parse_nat_range_index_name(actual_idx.as_str())
+                                .ok_or_else(|| GraphcalError::IndexMismatch {
+                                    expected: IndexName::new(format!("range({})", form.format())),
+                                    found: actual_idx.clone(),
+                                    src: src.clone(),
+                                    span: span.into(),
+                                })?;
                         // Solve the polynomial equation: form = actual_nat
                         unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }

@@ -10,8 +10,8 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::FnName;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
 use crate::registry::resolve_types::{SpecialFnKind, classify_special_fn};
+use crate::registry::types::Registry;
 
 use super::super::builtins::infer_fn_dim;
 use super::super::helpers::{expect_scalar, format_inferred_type};

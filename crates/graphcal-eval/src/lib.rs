@@ -15,10 +15,10 @@ pub use graphcal_compiler::registry::error;
 pub use graphcal_compiler::registry::format;
 pub use graphcal_compiler::registry::manifest;
 pub use graphcal_compiler::registry::prelude;
-pub use graphcal_compiler::registry::types as registry;
 pub use graphcal_compiler::registry::resolve_types;
 pub use graphcal_compiler::registry::runtime_value;
 pub use graphcal_compiler::registry::time_scale;
+pub use graphcal_compiler::registry::types as registry;
 
 // Re-export IR modules from graphcal-ir.
 pub use graphcal_compiler::ir::lower as ir;

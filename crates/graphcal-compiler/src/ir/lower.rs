@@ -29,9 +29,9 @@ use crate::registry::declared_type::DeclaredType;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr;
 use crate::registry::prelude::load_prelude;
-use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::registry::resolve_types::ScopedName;
 use crate::registry::runtime_value::RuntimeValue;
+use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
