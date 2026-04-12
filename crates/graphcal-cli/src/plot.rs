@@ -104,9 +104,7 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "hconcat": sub_specs,
     });
 
-    if let Some(title) =
-        get_string_property(&fig.properties, &CompositionProperty::Title)
-    {
+    if let Some(title) = get_string_property(&fig.properties, &CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
@@ -138,19 +136,15 @@ fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
         "layer": sub_specs,
     });
 
-    if let Some(title) =
-        get_string_property(&layer.properties, &CompositionProperty::Title)
-    {
+    if let Some(title) = get_string_property(&layer.properties, &CompositionProperty::Title) {
         vl["title"] = json!(title);
     }
 
     // Width/height from layer properties
-    if let Some(w) = get_number_property(&layer.properties, &CompositionProperty::Width)
-    {
+    if let Some(w) = get_number_property(&layer.properties, &CompositionProperty::Width) {
         vl["width"] = json!(w);
     }
-    if let Some(h) = get_number_property(&layer.properties, &CompositionProperty::Height)
-    {
+    if let Some(h) = get_number_property(&layer.properties, &CompositionProperty::Height) {
         vl["height"] = json!(h);
     }
 
@@ -315,7 +309,10 @@ fn json_number(n: f64) -> JsonValue {
 }
 
 /// Look up a property by key and return the associated string value.
-fn get_string_property<P: PartialEq>(properties: &[(P, PlotFieldValue)], prop: &P) -> Option<String> {
+fn get_string_property<P: PartialEq>(
+    properties: &[(P, PlotFieldValue)],
+    prop: &P,
+) -> Option<String> {
     properties
         .iter()
         .find(|(p, _)| p == prop)
