@@ -21,7 +21,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Node(d) => format_node_decl(fmt, d),
         DeclKind::ConstNode(d) => format_const_node_decl(fmt, d),
         DeclKind::BaseDimension(d) => format_base_dim_decl(d),
-        DeclKind::Dimension(d) => format_dim_decl(fmt, d),
+        DeclKind::Dimension(d) => format_dim_decl(d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
         DeclKind::UnionType(d) => format_union_type_decl(fmt, d),
@@ -142,7 +142,7 @@ fn format_base_dim_decl(d: &BaseDimDecl) -> RcDoc<'static> {
 }
 
 /// `dim Name = DimExpr;`
-fn format_dim_decl(_fmt: &Formatter<'_>, d: &DimDecl) -> RcDoc<'static> {
+fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
     RcDoc::text("dim ")
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(" = "))

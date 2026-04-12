@@ -240,7 +240,12 @@ impl IndexDef {
             IndexKind::Named { variants } => variants.len(),
             IndexKind::Range {
                 start, end, step, ..
-            } => (((end - start) / step).round() as usize) + 1,
+            } => {
+                let n = (end - start) / step;
+                // Use floor + epsilon to avoid off-by-one from floating-point imprecision
+                // (e.g., 0.3 / 0.1 = 2.9999... should give 3, not 2).
+                (n + 0.5_f64.powi(40)).floor() as usize + 1
+            }
             IndexKind::NatRange { size } => *size as usize,
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }

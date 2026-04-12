@@ -14,16 +14,14 @@ pub enum SymbolLocation<'a> {
 }
 
 /// A resolved symbol at a cursor position, with the key to look it up in the symbol table.
-#[expect(
-    dead_code,
-    reason = "fields are part of the public API for future LSP feature callers"
-)]
 pub struct ResolvedSymbol<'a> {
     /// The symbol table key for this symbol.
+    #[expect(dead_code, reason = "reserved for future LSP feature callers")]
     pub key: SymbolKey,
     /// Where the definition lives.
     pub location: SymbolLocation<'a>,
     /// Whether the cursor was on a reference (true) or a definition (false).
+    #[expect(dead_code, reason = "reserved for future LSP feature callers")]
     pub is_reference: bool,
     /// The span of the token under the cursor.
     pub cursor_span: Span,
