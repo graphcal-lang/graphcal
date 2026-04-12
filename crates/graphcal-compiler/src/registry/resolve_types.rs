@@ -15,27 +15,6 @@ use crate::syntax::span::Span;
 
 /// Aggregation functions recognized as special forms (not registered as builtins).
 pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
-const CONVERSION_FNS: &[&str] = &[
-    "to_float", "to_int", "to_utc", "to_tai", "to_tt", "to_tdb", "to_et", "to_gpst", "to_gst",
-    "to_bdt", "to_qzsst",
-];
-/// Constructor functions that create values from string literals (not registered as builtins).
-const CONSTRUCTOR_FNS: &[&str] = &["datetime", "epoch"];
-/// Functions that construct a Datetime from a numeric value (Julian Date, MJD, Unix).
-const DATETIME_FROM_FNS: &[&str] = &["from_jd", "from_mjd", "from_unix"];
-/// Functions that convert a Datetime to a numeric value (Julian Date, MJD, Unix).
-const DATETIME_TO_FNS: &[&str] = &["to_jd", "to_mjd", "to_unix"];
-/// Datetime component extraction functions.
-const DATETIME_EXTRACT_FNS: &[&str] = &[
-    "year",
-    "month",
-    "day",
-    "hour",
-    "minute",
-    "second",
-    "weekday",
-    "day_of_year",
-];
 
 /// Classification of special built-in functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,20 +38,17 @@ pub enum SpecialFnKind {
 /// Returns `None` if the name is not a recognized special function.
 #[must_use]
 pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
-    if AGGREGATION_FNS.contains(&name) {
-        Some(SpecialFnKind::Aggregation)
-    } else if CONVERSION_FNS.contains(&name) {
-        Some(SpecialFnKind::Conversion)
-    } else if CONSTRUCTOR_FNS.contains(&name) {
-        Some(SpecialFnKind::Constructor)
-    } else if DATETIME_EXTRACT_FNS.contains(&name) {
-        Some(SpecialFnKind::DatetimeExtract)
-    } else if DATETIME_FROM_FNS.contains(&name) {
-        Some(SpecialFnKind::DatetimeFrom)
-    } else if DATETIME_TO_FNS.contains(&name) {
-        Some(SpecialFnKind::DatetimeTo)
-    } else {
-        None
+    match name {
+        "sum" | "min" | "max" | "mean" | "count" => Some(SpecialFnKind::Aggregation),
+        "to_float" | "to_int" | "to_utc" | "to_tai" | "to_tt" | "to_tdb" | "to_et"
+        | "to_gpst" | "to_gst" | "to_bdt" | "to_qzsst" => Some(SpecialFnKind::Conversion),
+        "datetime" | "epoch" => Some(SpecialFnKind::Constructor),
+        "year" | "month" | "day" | "hour" | "minute" | "second" | "weekday" | "day_of_year" => {
+            Some(SpecialFnKind::DatetimeExtract)
+        }
+        "from_jd" | "from_mjd" | "from_unix" => Some(SpecialFnKind::DatetimeFrom),
+        "to_jd" | "to_mjd" | "to_unix" => Some(SpecialFnKind::DatetimeTo),
+        _ => None,
     }
 }
 

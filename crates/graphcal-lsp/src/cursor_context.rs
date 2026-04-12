@@ -40,16 +40,9 @@ fn tokenize(source: &str) -> Vec<(Token, Span)> {
 
 /// Find the index of the last token at or before the given byte offset.
 fn token_index_at(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
-    // Find the last token whose start is <= offset.
-    let mut result = None;
-    for (i, (_, span)) in tokens.iter().enumerate() {
-        if span.offset() <= offset {
-            result = Some(i);
-        } else {
-            break;
-        }
-    }
-    result
+    // Tokens are sorted by offset, so partition_point finds the first token past `offset`.
+    let idx = tokens.partition_point(|(_, span)| span.offset() <= offset);
+    idx.checked_sub(1)
 }
 
 /// Detect whether the cursor is inside a function call's argument list.
@@ -169,20 +162,9 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 /// Find the index of the last token whose span ends at or before `offset`.
 /// If the cursor is in the middle of a token, return that token's index.
 fn find_preceding_token(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
-    let mut result = None;
-    for (i, (_, span)) in tokens.iter().enumerate() {
-        match span.offset().cmp(&offset) {
-            std::cmp::Ordering::Less => {
-                result = Some(i);
-            }
-            std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
-                // Cursor is at or past this token's start — the "preceding"
-                // token is the one before, unless there is none.
-                break;
-            }
-        }
-    }
-    result
+    // Tokens are sorted by offset. Find the first token at or past `offset`, then step back.
+    let idx = tokens.partition_point(|(_, span)| span.offset() < offset);
+    idx.checked_sub(1)
 }
 
 #[cfg(test)]

@@ -48,19 +48,22 @@ enum AttributeName {
     Derive,
 }
 
-impl AttributeName {
-    /// Parse an attribute name from a string.
-    fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for AttributeName {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "assumes" => Some(Self::Assumes),
-            "expected_fail" => Some(Self::ExpectedFail),
-            "lazy" => Some(Self::Lazy),
-            "allow_defaults" => Some(Self::AllowDefaults),
-            "derive" => Some(Self::Derive),
-            _ => None,
+            "assumes" => Ok(Self::Assumes),
+            "expected_fail" => Ok(Self::ExpectedFail),
+            "lazy" => Ok(Self::Lazy),
+            "allow_defaults" => Ok(Self::AllowDefaults),
+            "derive" => Ok(Self::Derive),
+            _ => Err(()),
         }
     }
+}
 
+impl AttributeName {
     /// Get the string representation of the attribute name.
     const fn as_str(self) -> &'static str {
         match self {
@@ -550,7 +553,7 @@ fn validate_attributes(
         };
         for attr in &decl.attributes {
             let attr_name_str = attr.name.name.as_str();
-            let attr_name = AttributeName::from_str(attr_name_str).ok_or_else(|| {
+            let attr_name = attr_name_str.parse::<AttributeName>().map_err(|()| {
                 GraphcalError::UnknownAttribute {
                     name: attr_name_str.to_string(),
                     src: src.clone(),
