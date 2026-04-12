@@ -41,6 +41,8 @@ struct ShellState {
     base_source: Option<String>,
     /// Parameter overrides via `:set`.
     overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    /// Project root directory override (from `--root` flag).
+    project_root: Option<PathBuf>,
     /// Previous successful `EvalResult` (for propagation diff).
     prev_result: Option<EvalResult>,
     /// Previous successful TIR (for dependency info, `:graph`, `:type`).
@@ -54,6 +56,7 @@ impl ShellState {
             base_path: None,
             base_source: None,
             overrides: HashMap::new(),
+            project_root: None,
             prev_result: None,
             prev_tir: None,
         }
@@ -84,7 +87,8 @@ impl ShellState {
                 })
             })?;
             let fs = graphcal_io::OverlayFileSystem::new(base_fs, canonical, full_source);
-            let project = graphcal_eval::loader::load_project(base_path, None, &fs)?;
+            let project =
+                graphcal_eval::loader::load_project(base_path, self.project_root.as_deref(), &fs)?;
             let tir = compile_to_tir_from_project(&project)?;
             let result = compile_and_eval_from_project(&project, &self.overrides, true)?;
             Ok((result, tir))
@@ -121,9 +125,11 @@ impl ShellState {
 pub fn run_shell(
     file: Option<&Path>,
     overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    project_root: Option<&Path>,
 ) {
     let mut state = ShellState::new();
     state.overrides = overrides;
+    state.project_root = project_root.map(Path::to_path_buf);
 
     // If a file was given, load it as the base.
     if let Some(file_path) = file {
