@@ -57,11 +57,16 @@ All comparison operators return `Bool`.
 
 | Operator | Description |
 |----------|-------------|
-| `a \|\| b` | Logical OR (short-circuit) |
-| `a && b` | Logical AND (short-circuit) |
+| `a \|\| b` | Logical OR |
+| `a && b` | Logical AND |
 | `!a` | Logical NOT |
 
 Operands must be `Bool`.
+
+`&&` and `||` always evaluate **both** operands (no short-circuit).
+In a reactive calculation graph every sub-expression should be valid regardless of control flow,
+so Graphcal surfaces errors eagerly rather than hiding them behind a short-circuit.
+Use `if`-`then`-`else` when you need conditional evaluation.
 
 ## Unit Conversion (`->`)
 
