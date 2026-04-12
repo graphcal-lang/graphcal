@@ -1,7 +1,7 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -39,7 +39,8 @@ pub struct ImportedDefinition {
     /// URI of the file containing the definition.
     pub uri: Url,
     /// Source text of the imported file (needed for span-to-range conversion).
-    pub source: String,
+    /// Shared via `Arc` to avoid cloning the full source per imported symbol.
+    pub source: Arc<String>,
     /// The definition info (name, category, spans, type description).
     pub definition: DefinitionInfo,
 }
@@ -72,7 +73,8 @@ pub struct AnalysisResult {
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub eval_values: HashMap<String, String>,
     /// Structured function signatures, keyed by function name.
-    pub fn_signatures: HashMap<String, FnSignatureInfo>,
+    /// Points to a lazily-initialized static map (builtins never change).
+    pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
     /// Use declarations in this file (for Document Links).
     pub import_decls: Vec<ImportDeclInfo>,
 }
@@ -134,7 +136,15 @@ impl Backend {
             return;
         }
 
-        let analysis = run_analysis(&uri, &text);
+        let uri_clone = uri.clone();
+        let Ok(analysis) =
+            tokio::task::spawn_blocking(move || run_analysis(&uri_clone, &text)).await
+        else {
+            self.client
+                .log_message(MessageType::ERROR, "analysis task panicked")
+                .await;
+            return;
+        };
 
         let diagnostics = analysis.diagnostics.clone();
         self.documents.write().await.insert(uri.clone(), analysis);
@@ -278,27 +288,27 @@ fn collect_import_decl_info(ast: &graphcal_compiler::syntax::ast::File) -> Vec<I
         .collect()
 }
 
-/// Build structured function signatures for Signature Help.
+/// Get builtin function signatures for Signature Help.
 ///
-/// Returns builtin function signatures (always available).
-fn build_fn_signatures() -> HashMap<String, FnSignatureInfo> {
-    let mut sigs = HashMap::new();
-
-    // Builtin functions — always available.
-    for (name, f) in builtin_functions() {
-        let (params, ret) = builtin_signature_parts(&f.dim_sig);
-        let params_str = params.join(", ");
-        let label = format!("fn {name}({params_str}) -> {ret}");
-        sigs.insert(
-            (*name).to_string(),
-            FnSignatureInfo {
-                label,
-                parameters: params,
-            },
-        );
-    }
-
-    sigs
+/// Computed once and cached in a static. Builtins never change at runtime.
+pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
+    static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
+        let mut sigs = HashMap::new();
+        for (name, f) in builtin_functions() {
+            let (params, ret) = builtin_signature_parts(&f.dim_sig);
+            let params_str = params.join(", ");
+            let label = format!("fn {name}({params_str}) -> {ret}");
+            sigs.insert(
+                (*name).to_string(),
+                FnSignatureInfo {
+                    label,
+                    parameters: params,
+                },
+            );
+        }
+        sigs
+    });
+    &FN_SIGS
 }
 
 /// Format a dimension for display in builtin signatures (no registry needed).
@@ -556,7 +566,7 @@ fn collect_imported_definitions(
 
     // Cache symbol tables per canonical path to avoid re-building for files imported
     // by multiple `import` declarations.
-    let mut table_cache: HashMap<&Path, (SymbolTable, Url, String)> = HashMap::new();
+    let mut table_cache: HashMap<&Path, (SymbolTable, Url, Arc<String>)> = HashMap::new();
 
     for (_decl, import_decl, canonical) in root_file.imports_with_paths() {
         let Some(loaded_file) = project.files.get(canonical) else {
@@ -573,7 +583,7 @@ fn collect_imported_definitions(
                 // It only fails for non-absolute paths, which should not occur for loaded files.
                 let uri =
                     Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| root_uri.clone());
-                let src = loaded_file.source.to_string();
+                let src = Arc::new(loaded_file.source.to_string());
                 (table, uri, src)
             });
 
@@ -709,7 +719,12 @@ impl LanguageServer for Backend {
                 return;
             }
 
-            let analysis = run_analysis(&uri, &text);
+            let uri_for_analysis = uri.clone();
+            let Ok(analysis) =
+                tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text)).await
+            else {
+                return;
+            };
             let diagnostics = analysis.diagnostics.clone();
             documents.write().await.insert(uri.clone(), analysis);
             client.publish_diagnostics(uri, diagnostics, None).await;
