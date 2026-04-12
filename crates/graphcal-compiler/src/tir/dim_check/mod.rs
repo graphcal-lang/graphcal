@@ -8,11 +8,11 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, StructTypeName};
 
 use crate::registry::time_scale::TimeScale;
-use crate::tir::tir::NatLinearForm;
+use crate::tir::typed::NatLinearForm;
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 pub(crate) use helpers::format_inferred_type;
 use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
@@ -91,7 +91,7 @@ impl InferredType {
     reason = "dimension checking for all declaration kinds including assert tolerance"
 )]
 pub fn check_dimensions_tir(
-    tir: &crate::tir::tir::TIR,
+    tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();

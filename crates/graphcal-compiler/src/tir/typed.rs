@@ -14,12 +14,12 @@ use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
 
-use crate::ir::ir::IR;
+use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
 use crate::registry::resolve_types::ScopedName;
 use crate::registry::time_scale::TimeScale;
+use crate::registry::types::Registry;
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -412,7 +412,7 @@ impl NatPolyForm {
     #[must_use]
     pub fn to_index_name_str(&self) -> String {
         if self.is_constant() {
-            crate::registry::registry::nat_range_index_name(self.constant())
+            crate::registry::types::nat_range_index_name(self.constant())
         } else {
             format!("__nat_range_{}", self.format())
         }
@@ -589,19 +589,19 @@ pub struct TIR {
     /// The type/unit/dimension/index/struct registry.
     pub registry: Registry,
     /// Const declarations in source order.
-    pub consts: Vec<crate::ir::ir::ConstEntry>,
+    pub consts: Vec<crate::ir::lower::ConstEntry>,
     /// Param declarations in source order.
-    pub params: Vec<crate::ir::ir::ParamEntry>,
+    pub params: Vec<crate::ir::lower::ParamEntry>,
     /// Node declarations in source order.
-    pub nodes: Vec<crate::ir::ir::NodeEntry>,
+    pub nodes: Vec<crate::ir::lower::NodeEntry>,
     /// Assert declarations in source order.
-    pub asserts: Vec<crate::ir::ir::AssertEntry>,
+    pub asserts: Vec<crate::ir::lower::AssertEntry>,
     /// Plot declarations in source order.
-    pub plots: Vec<crate::ir::ir::PlotEntry>,
+    pub plots: Vec<crate::ir::lower::PlotEntry>,
     /// Figure declarations in source order.
-    pub figures: Vec<crate::ir::ir::FigureEntry>,
+    pub figures: Vec<crate::ir::lower::FigureEntry>,
     /// Layer declarations in source order.
-    pub layers: Vec<crate::ir::ir::LayerEntry>,
+    pub layers: Vec<crate::ir::lower::LayerEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
     pub runtime_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
@@ -802,7 +802,7 @@ pub fn resolved_to_declared_type(
                             });
                         }
                         let idx_name = IndexName::new(
-                            crate::registry::registry::nat_range_index_name(form.constant()),
+                            crate::registry::types::nat_range_index_name(form.constant()),
                         );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
@@ -873,7 +873,7 @@ fn unify_nat_poly_form(
         // All variables bound — check equality
         if reduced_constant != target {
             return Err(GraphcalError::IndexMismatch {
-                expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                expected: IndexName::new(crate::registry::types::nat_range_index_name(
                     form.evaluate(nat_sub).unwrap_or(0),
                 )),
                 found: actual_idx.clone(),
@@ -923,7 +923,7 @@ fn unify_nat_poly_form(
             if let Some(prev) = nat_sub.get(&var) {
                 if *prev != value {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: IndexName::new(crate::registry::registry::nat_range_index_name(
+                        expected: IndexName::new(crate::registry::types::nat_range_index_name(
                             *prev,
                         )),
                         found: actual_idx.clone(),
@@ -1034,15 +1034,14 @@ pub fn unify_resolved_type(
                     }
                     ResolvedIndex::NatExpr(form, _) => {
                         // Extract the concrete nat value from the actual index name
-                        let actual_nat = crate::registry::registry::parse_nat_range_index_name(
-                            actual_idx.as_str(),
-                        )
-                        .ok_or_else(|| GraphcalError::IndexMismatch {
-                            expected: IndexName::new(format!("range({})", form.format())),
-                            found: actual_idx.clone(),
-                            src: src.clone(),
-                            span: span.into(),
-                        })?;
+                        let actual_nat =
+                            crate::registry::types::parse_nat_range_index_name(actual_idx.as_str())
+                                .ok_or_else(|| GraphcalError::IndexMismatch {
+                                    expected: IndexName::new(format!("range({})", form.format())),
+                                    found: actual_idx.clone(),
+                                    src: src.clone(),
+                                    span: span.into(),
+                                })?;
                         // Solve the polynomial equation: form = actual_nat
                         unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }
@@ -1392,7 +1391,7 @@ pub fn substitute_resolved_type(
                                 span: (*span).into(),
                             }
                         })?;
-                        IndexName::new(crate::registry::registry::nat_range_index_name(n))
+                        IndexName::new(crate::registry::types::nat_range_index_name(n))
                     }
                 };
                 result = InferredType::Indexed {
@@ -1519,8 +1518,8 @@ pub fn resolve_type_expr(
                 if let Some(idx_def) = registry.indexes.get_index(name)
                     && matches!(
                         idx_def.kind,
-                        crate::registry::registry::IndexKind::Named { .. }
-                            | crate::registry::registry::IndexKind::RequiredNamed
+                        crate::registry::types::IndexKind::Named { .. }
+                            | crate::registry::types::IndexKind::RequiredNamed
                     )
                 {
                     return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
@@ -1724,7 +1723,7 @@ mod tests {
     )]
     use super::*;
     use crate::registry::prelude::load_prelude;
-    use crate::registry::registry::RegistryBuilder;
+    use crate::registry::types::RegistryBuilder;
     use crate::syntax::dimension::BaseDimId;
     use crate::syntax::parser::Parser;
 
@@ -1759,17 +1758,17 @@ mod tests {
     fn make_registry_with_struct() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
-        b.register_type(crate::registry::registry::TypeDef {
+        b.register_type(crate::registry::types::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
             derives: vec![],
-            kind: crate::registry::registry::TypeDefKind::Record {
+            kind: crate::registry::types::TypeDefKind::Record {
                 fields: vec![
-                    crate::registry::registry::StructField {
+                    crate::registry::types::StructField {
                         name: crate::syntax::names::FieldName::new("dv1"),
                         type_ann: make_dim_type_expr("Velocity"),
                     },
-                    crate::registry::registry::StructField {
+                    crate::registry::types::StructField {
                         name: crate::syntax::names::FieldName::new("dv2"),
                         type_ann: make_dim_type_expr("Velocity"),
                     },
@@ -1782,9 +1781,9 @@ mod tests {
     fn make_registry_with_index() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
-        b.register_index(crate::registry::registry::IndexDef {
+        b.register_index(crate::registry::types::IndexDef {
             name: IndexName::new("Maneuver"),
-            kind: crate::registry::registry::IndexKind::Named {
+            kind: crate::registry::types::IndexKind::Named {
                 variants: vec![
                     crate::syntax::names::VariantName::new("Departure"),
                     crate::syntax::names::VariantName::new("Insertion"),
@@ -2005,7 +2004,7 @@ mod tests {
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let file = Parser::new(source).parse_file().unwrap();
         let src = NamedSource::new("test", Arc::new(source.to_string()));
-        let ir = crate::ir::ir::lower(&file, &src)?;
+        let ir = crate::ir::lower::lower(&file, &src)?;
         type_resolve(ir, &src)
     }
 

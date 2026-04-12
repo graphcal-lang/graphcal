@@ -15,18 +15,18 @@ pub use graphcal_compiler::registry::error;
 pub use graphcal_compiler::registry::format;
 pub use graphcal_compiler::registry::manifest;
 pub use graphcal_compiler::registry::prelude;
-pub use graphcal_compiler::registry::registry;
 pub use graphcal_compiler::registry::resolve_types;
 pub use graphcal_compiler::registry::runtime_value;
 pub use graphcal_compiler::registry::time_scale;
+pub use graphcal_compiler::registry::types as registry;
 
 // Re-export IR modules from graphcal-ir.
-pub use graphcal_compiler::ir::ir;
+pub use graphcal_compiler::ir::lower as ir;
 pub use graphcal_compiler::ir::resolve;
 
 // Re-export TIR modules from graphcal-tir.
 pub use graphcal_compiler::tir::dim_check;
-pub use graphcal_compiler::tir::tir;
+pub use graphcal_compiler::tir::typed as tir;
 
 // Modules owned by graphcal-eval.
 pub mod eval;

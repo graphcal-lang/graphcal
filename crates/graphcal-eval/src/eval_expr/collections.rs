@@ -401,7 +401,7 @@ fn eval_for_comp(
         ForBindingIndex::Range { arg, span } => {
             let size = eval_nat_expr(arg, local_values, ctx)?;
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
-                graphcal_compiler::registry::registry::nat_range_index_name(size),
+                graphcal_compiler::registry::types::nat_range_index_name(size),
             );
             (idx_name, *span)
         }
@@ -414,11 +414,11 @@ fn eval_for_comp(
     let idx_def = if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
         def
     } else if let Some(size) =
-        graphcal_compiler::registry::registry::parse_nat_range_index_name(idx_name.as_str())
+        graphcal_compiler::registry::types::parse_nat_range_index_name(idx_name.as_str())
     {
-        dynamic_nat_def = graphcal_compiler::registry::registry::IndexDef {
+        dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
             name: idx_name.clone(),
-            kind: graphcal_compiler::registry::registry::IndexKind::NatRange { size },
+            kind: graphcal_compiler::registry::types::IndexKind::NatRange { size },
         };
         &dynamic_nat_def
     } else {

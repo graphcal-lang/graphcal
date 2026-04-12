@@ -242,8 +242,9 @@ pub trait ExprVisitorMut {
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::UnitLiteral { .. }
-            | ExprKind::LocalRef(_)
-            | ExprKind::VariantLiteral { .. } => Ok(()),
+            | ExprKind::LocalRef(_) => Ok(()),
+
+            ExprKind::VariantLiteral { .. } => self.visit_variant_literal_mut(expr),
 
             ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
@@ -270,17 +271,9 @@ pub trait ExprVisitorMut {
             | ExprKind::DisplayTimezone { expr: inner, .. }
             | ExprKind::AsCast { expr: inner, .. }
             | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
-            ExprKind::IndexAccess {
-                expr: inner, args, ..
-            } => {
-                self.visit_expr_mut(inner)?;
-                for arg in args {
-                    if let IndexArg::Expr(e) = arg {
-                        self.visit_expr_mut(e)?;
-                    }
-                }
-                Ok(())
-            }
+
+            ExprKind::IndexAccess { .. } => self.visit_index_access_mut(expr),
+
             ExprKind::StructConstruction { fields, .. } => {
                 for field in fields {
                     if let Some(val) = &mut field.value {
@@ -289,13 +282,11 @@ pub trait ExprVisitorMut {
                 }
                 Ok(())
             }
-            ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-                for entry in entries {
-                    self.visit_expr_mut(&mut entry.value)?;
-                }
-                Ok(())
-            }
-            ExprKind::ForComp { body, .. } => self.visit_expr_mut(body),
+
+            ExprKind::MapLiteral { .. } => self.visit_map_literal_mut(expr),
+            ExprKind::TableLiteral { .. } => self.visit_table_literal_mut(expr),
+
+            ExprKind::ForComp { .. } => self.visit_for_comp_mut(expr),
             ExprKind::Scan {
                 source, init, body, ..
             } => {
@@ -307,13 +298,7 @@ pub trait ExprVisitorMut {
                 self.visit_expr_mut(init)?;
                 self.visit_expr_mut(body)
             }
-            ExprKind::Match { scrutinee, arms } => {
-                self.visit_expr_mut(scrutinee)?;
-                for arm in arms {
-                    self.visit_expr_mut(&mut arm.body)?;
-                }
-                Ok(())
-            }
+            ExprKind::Match { .. } => self.visit_match_mut(expr),
             ExprKind::TupleMatch { scrutinees, arms } => {
                 for s in scrutinees {
                     self.visit_expr_mut(s)?;
@@ -353,6 +338,71 @@ pub trait ExprVisitorMut {
         if let ExprKind::FnCall { args, .. } = &mut expr.kind {
             for arg in args {
                 self.visit_expr_mut(arg)?;
+            }
+        }
+        Ok(())
+    }
+
+    // -- Per-variant handlers for nodes that carry non-Expr fields --
+    //
+    // These allow visitors to intercept structural fields (index names,
+    // bindings, pattern labels) without overriding the entire `dispatch_mut`.
+
+    /// Called for `VariantLiteral`. Default: no-op (leaf node).
+    fn visit_variant_literal_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Called for `ForComp`. Default: recurse into `body`.
+    fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::ForComp { body, .. } = &mut expr.kind {
+            self.visit_expr_mut(body)?;
+        }
+        Ok(())
+    }
+
+    /// Called for `IndexAccess`. Default: recurse into inner expr and expression args.
+    fn visit_index_access_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::IndexAccess {
+            expr: inner, args, ..
+        } = &mut expr.kind
+        {
+            self.visit_expr_mut(inner)?;
+            for arg in args {
+                if let IndexArg::Expr(e) = arg {
+                    self.visit_expr_mut(e)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Called for `MapLiteral`. Default: recurse into entry values.
+    fn visit_map_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::MapLiteral { entries } = &mut expr.kind {
+            for entry in entries {
+                self.visit_expr_mut(&mut entry.value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Called for `TableLiteral`. Default: recurse into entry values.
+    fn visit_table_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::TableLiteral { entries, .. } = &mut expr.kind {
+            for entry in entries {
+                self.visit_expr_mut(&mut entry.value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Called for `Match`. Default: recurse into scrutinee and arm bodies.
+    fn visit_match_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
+            self.visit_expr_mut(scrutinee)?;
+            for arm in arms {
+                self.visit_expr_mut(&mut arm.body)?;
             }
         }
         Ok(())

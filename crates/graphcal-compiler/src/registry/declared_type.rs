@@ -3,8 +3,8 @@
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, StructTypeName};
 
-use crate::registry::registry::DimensionRegistry;
 use crate::registry::time_scale::TimeScale;
+use crate::registry::types::DimensionRegistry;
 
 /// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -29,9 +29,9 @@ use crate::registry::declared_type::DeclaredType;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr;
 use crate::registry::prelude::load_prelude;
-use crate::registry::registry::{self, Registry, RegistryBuilder, UnitScale};
 use crate::registry::resolve_types::ScopedName;
 use crate::registry::runtime_value::RuntimeValue;
+use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
@@ -890,11 +890,10 @@ pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<Strin
 
 /// Visitor that rewrites index names in expressions according to a binding map.
 ///
-/// The default `ExprVisitorMut::dispatch_mut` only recurses into child
-/// *expressions* — it does not touch index name fields in `VariantLiteral`,
-/// `ForComp` bindings, `IndexAccess` args, map/table entry keys, or `Match`
-/// arm patterns. This visitor overrides `dispatch_mut` to intercept those
-/// nodes and rewrite index names before recursing into child expressions.
+/// Overrides the per-variant handler methods for nodes that carry index name
+/// fields (`VariantLiteral`, `ForComp`, `IndexAccess`, `MapLiteral`,
+/// `TableLiteral`, `Match`) to rewrite those names before recursing into
+/// child expressions.
 struct IndexSubstituter<'a> {
     bindings: &'a HashMap<String, String>,
 }
@@ -902,175 +901,102 @@ struct IndexSubstituter<'a> {
 impl ExprVisitorMut for IndexSubstituter<'_> {
     type Error = std::convert::Infallible;
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "exhaustive match over all ExprKind variants"
-    )]
-    fn dispatch_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_variant_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::names::IndexName;
+        if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
+            && let Some(new) = self.bindings.get(index.value.as_str())
+        {
+            index.value = IndexName::new(new);
+        }
+        Ok(())
+    }
+
+    fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::names::IndexName;
+        if let ExprKind::ForComp { bindings, body } = &mut expr.kind {
+            for b in bindings {
+                if let crate::syntax::ast::ForBindingIndex::Named(ref mut spanned_idx) = b.index
+                    && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
+                {
+                    spanned_idx.value = IndexName::new(new);
+                }
+            }
+            self.visit_expr_mut(body)?;
+        }
+        Ok(())
+    }
+
+    fn visit_index_access_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         use crate::syntax::ast::IndexArg;
         use crate::syntax::names::IndexName;
+        if let ExprKind::IndexAccess { expr: inner, args } = &mut expr.kind {
+            for arg in args.iter_mut() {
+                match arg {
+                    IndexArg::Variant { index, .. } => {
+                        if let Some(new) = self.bindings.get(index.value.as_str()) {
+                            index.value = IndexName::new(new);
+                        }
+                    }
+                    IndexArg::Expr(e) => {
+                        self.visit_expr_mut(e)?;
+                    }
+                    IndexArg::Var(_) => {}
+                }
+            }
+            self.visit_expr_mut(inner)?;
+        }
+        Ok(())
+    }
 
-        match &mut expr.kind {
-            ExprKind::VariantLiteral { index, .. } => {
-                if let Some(new) = self.bindings.get(index.value.as_str()) {
-                    index.value = IndexName::new(new);
-                }
-                Ok(())
-            }
-            ExprKind::ForComp { bindings, body } => {
-                for b in bindings {
-                    if let crate::syntax::ast::ForBindingIndex::Named(ref mut spanned_idx) = b.index
-                        && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
-                    {
-                        spanned_idx.value = IndexName::new(new);
+    fn visit_map_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::names::IndexName;
+        if let ExprKind::MapLiteral { entries } = &mut expr.kind {
+            for entry in entries.iter_mut() {
+                for key in &mut entry.keys {
+                    if let Some(new) = self.bindings.get(key.index.value.as_str()) {
+                        key.index.value = IndexName::new(new);
                     }
                 }
-                self.visit_expr_mut(body)
-            }
-            ExprKind::IndexAccess { expr: inner, args } => {
-                for arg in args.iter_mut() {
-                    match arg {
-                        IndexArg::Variant { index, .. } => {
-                            if let Some(new) = self.bindings.get(index.value.as_str()) {
-                                index.value = IndexName::new(new);
-                            }
-                        }
-                        IndexArg::Expr(e) => {
-                            self.visit_expr_mut(e)?;
-                        }
-                        IndexArg::Var(_) => {}
-                    }
-                }
-                self.visit_expr_mut(inner)
-            }
-            ExprKind::MapLiteral { entries } => {
-                for entry in entries.iter_mut() {
-                    for key in &mut entry.keys {
-                        if let Some(new) = self.bindings.get(key.index.value.as_str()) {
-                            key.index.value = IndexName::new(new);
-                        }
-                    }
-                    self.visit_expr_mut(&mut entry.value)?;
-                }
-                Ok(())
-            }
-            ExprKind::TableLiteral { indexes, entries } => {
-                for idx in indexes.iter_mut() {
-                    if let Some(new) = self.bindings.get(idx.value.as_str()) {
-                        idx.value = IndexName::new(new);
-                    }
-                }
-                for entry in entries.iter_mut() {
-                    for key in &mut entry.keys {
-                        if let Some(new) = self.bindings.get(key.index.value.as_str()) {
-                            key.index.value = IndexName::new(new);
-                        }
-                    }
-                    self.visit_expr_mut(&mut entry.value)?;
-                }
-                Ok(())
-            }
-            ExprKind::Match { scrutinee, arms } => {
-                self.visit_expr_mut(scrutinee)?;
-                for arm in arms {
-                    if let Some(ref mut idx) = arm.pattern.qualified_index
-                        && let Some(new) = self.bindings.get(idx.value.as_str())
-                    {
-                        idx.value = IndexName::new(new);
-                    }
-                    self.visit_expr_mut(&mut arm.body)?;
-                }
-                Ok(())
-            }
-            // All other variants: delegate to the default dispatch which
-            // recurses into child expressions without touching index names.
-            _ => {
-                // Re-dispatch through the default logic. We cannot call
-                // `ExprVisitorMut::dispatch_mut` (would be recursive), so
-                // inline the default recursion for the remaining variants.
-                match &mut expr.kind {
-                    // Leaves
-                    ExprKind::Number(_)
-                    | ExprKind::Integer(_)
-                    | ExprKind::Bool(_)
-                    | ExprKind::StringLiteral(_)
-                    | ExprKind::UnitLiteral { .. }
-                    | ExprKind::LocalRef(_) => Ok(()),
-
-                    ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
-                    ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
-                    ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
-                    ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
-                    ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
-
-                    ExprKind::BinOp { lhs, rhs, .. } => {
-                        self.visit_expr_mut(lhs)?;
-                        self.visit_expr_mut(rhs)
-                    }
-                    ExprKind::UnaryOp { operand, .. } => self.visit_expr_mut(operand),
-                    ExprKind::If {
-                        condition,
-                        then_branch,
-                        else_branch,
-                    } => {
-                        self.visit_expr_mut(condition)?;
-                        self.visit_expr_mut(then_branch)?;
-                        self.visit_expr_mut(else_branch)
-                    }
-                    ExprKind::Convert { expr: inner, .. }
-                    | ExprKind::DisplayTimezone { expr: inner, .. }
-                    | ExprKind::AsCast { expr: inner, .. }
-                    | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
-                    ExprKind::StructConstruction { fields, .. } => {
-                        for field in fields {
-                            if let Some(val) = &mut field.value {
-                                self.visit_expr_mut(val)?;
-                            }
-                        }
-                        Ok(())
-                    }
-                    ExprKind::Scan {
-                        source, init, body, ..
-                    } => {
-                        self.visit_expr_mut(source)?;
-                        self.visit_expr_mut(init)?;
-                        self.visit_expr_mut(body)
-                    }
-                    ExprKind::Unfold { init, body, .. } => {
-                        self.visit_expr_mut(init)?;
-                        self.visit_expr_mut(body)
-                    }
-                    ExprKind::TupleMatch { scrutinees, arms } => {
-                        for s in scrutinees {
-                            self.visit_expr_mut(s)?;
-                        }
-                        for arm in arms {
-                            if let Some(patterns) = &mut arm.patterns {
-                                for p in patterns {
-                                    self.visit_expr_mut(p)?;
-                                }
-                            }
-                            self.visit_expr_mut(&mut arm.body)?;
-                        }
-                        Ok(())
-                    }
-                    // Already handled in the outer match — unreachable but needed
-                    // for exhaustiveness.
-                    #[expect(
-                        clippy::unreachable,
-                        reason = "exhaustiveness arm for variants handled in outer match"
-                    )]
-                    ExprKind::VariantLiteral { .. }
-                    | ExprKind::ForComp { .. }
-                    | ExprKind::IndexAccess { .. }
-                    | ExprKind::MapLiteral { .. }
-                    | ExprKind::TableLiteral { .. }
-                    | ExprKind::Match { .. } => {
-                        unreachable!("handled in outer match");
-                    }
-                }
+                self.visit_expr_mut(&mut entry.value)?;
             }
         }
+        Ok(())
+    }
+
+    fn visit_table_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::names::IndexName;
+        if let ExprKind::TableLiteral { indexes, entries } = &mut expr.kind {
+            for idx in indexes.iter_mut() {
+                if let Some(new) = self.bindings.get(idx.value.as_str()) {
+                    idx.value = IndexName::new(new);
+                }
+            }
+            for entry in entries.iter_mut() {
+                for key in &mut entry.keys {
+                    if let Some(new) = self.bindings.get(key.index.value.as_str()) {
+                        key.index.value = IndexName::new(new);
+                    }
+                }
+                self.visit_expr_mut(&mut entry.value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_match_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::names::IndexName;
+        if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
+            self.visit_expr_mut(scrutinee)?;
+            for arm in arms {
+                if let Some(ref mut idx) = arm.pattern.qualified_index
+                    && let Some(new) = self.bindings.get(idx.value.as_str())
+                {
+                    idx.value = IndexName::new(new);
+                }
+                self.visit_expr_mut(&mut arm.body)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1774,7 +1700,7 @@ fn register_index_decl(
     decl_span: Span,
 ) -> Result<(), GraphcalError> {
     let kind = match &idx.kind {
-        crate::syntax::ast::IndexDeclKind::Named { variants } => registry::IndexKind::Named {
+        crate::syntax::ast::IndexDeclKind::Named { variants } => types::IndexKind::Named {
             variants: variants.iter().map(|v| v.value.clone()).collect(),
         },
         crate::syntax::ast::IndexDeclKind::Range {
@@ -1790,7 +1716,7 @@ fn register_index_decl(
             src,
             decl_span,
         )?,
-        crate::syntax::ast::IndexDeclKind::RequiredNamed => registry::IndexKind::RequiredNamed,
+        crate::syntax::ast::IndexDeclKind::RequiredNamed => types::IndexKind::RequiredNamed,
         crate::syntax::ast::IndexDeclKind::RequiredRange { dimension } => {
             let dim = registry.resolve_dim_expr(dimension).ok_or_else(|| {
                 GraphcalError::UnknownDimension {
@@ -1799,10 +1725,10 @@ fn register_index_decl(
                     span: dimension.span.into(),
                 }
             })?;
-            registry::IndexKind::RequiredRange { dimension: dim }
+            types::IndexKind::RequiredRange { dimension: dim }
         }
     };
-    registry.register_index(registry::IndexDef {
+    registry.register_index(types::IndexDef {
         name: idx.name.value.clone(),
         kind,
     });
@@ -1814,10 +1740,10 @@ fn register_type_decl(
     attributes: &[crate::syntax::ast::Attribute],
     registry: &mut RegistryBuilder,
 ) {
-    let generic_params: Vec<registry::TypeGenericParam> = t
+    let generic_params: Vec<types::TypeGenericParam> = t
         .generic_params
         .iter()
-        .map(|g| registry::TypeGenericParam {
+        .map(|g| types::TypeGenericParam {
             name: g.name.value.clone(),
             constraint: g.constraint.into(),
             default: g.default.clone(),
@@ -1825,17 +1751,17 @@ fn register_type_decl(
         .collect();
 
     let kind = if t.fields.is_empty() {
-        registry::TypeDefKind::Unit
+        types::TypeDefKind::Unit
     } else {
         let fields = t
             .fields
             .iter()
-            .map(|f| registry::StructField {
+            .map(|f| types::StructField {
                 name: f.name.value.clone(),
                 type_ann: f.type_ann.clone(),
             })
             .collect();
-        registry::TypeDefKind::Record { fields }
+        types::TypeDefKind::Record { fields }
     };
 
     // Extract derives from attributes (validated by resolver)
@@ -1854,7 +1780,7 @@ fn register_type_decl(
         })
         .collect();
 
-    registry.register_type(registry::TypeDef {
+    registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
         derives,
@@ -1863,10 +1789,10 @@ fn register_type_decl(
 }
 
 fn register_union_type_decl(t: &crate::syntax::ast::UnionTypeDecl, registry: &mut RegistryBuilder) {
-    let generic_params: Vec<registry::TypeGenericParam> = t
+    let generic_params: Vec<types::TypeGenericParam> = t
         .generic_params
         .iter()
-        .map(|g| registry::TypeGenericParam {
+        .map(|g| types::TypeGenericParam {
             name: g.name.value.clone(),
             constraint: g.constraint.into(),
             default: g.default.clone(),
@@ -1876,17 +1802,17 @@ fn register_union_type_decl(t: &crate::syntax::ast::UnionTypeDecl, registry: &mu
     let members = t
         .members
         .iter()
-        .map(|m| registry::UnionMemberDef {
+        .map(|m| types::UnionMemberDef {
             name: m.name.value.clone(),
             type_args: m.type_args.clone(),
         })
         .collect();
 
-    registry.register_type(registry::TypeDef {
+    registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
         derives: vec![],
-        kind: registry::TypeDefKind::Union { members },
+        kind: types::TypeDefKind::Union { members },
     });
 }
 
@@ -1996,7 +1922,7 @@ fn lower_range_index(
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     decl_span: crate::syntax::span::Span,
-) -> Result<registry::IndexKind, GraphcalError> {
+) -> Result<types::IndexKind, GraphcalError> {
     let (start_val, start_dim) = eval_range_expr(start_expr, registry, src)?;
     let (end_val, end_dim) = eval_range_expr(end_expr, registry, src)?;
     let (step_val, step_dim) = eval_range_expr(step_expr, registry, src)?;
@@ -2045,7 +1971,7 @@ fn lower_range_index(
         _ => (None, 1.0),
     };
 
-    Ok(registry::IndexKind::Range {
+    Ok(types::IndexKind::Range {
         start: start_val,
         end: end_val,
         step: step_val,

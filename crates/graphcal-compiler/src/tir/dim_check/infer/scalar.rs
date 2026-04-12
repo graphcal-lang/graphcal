@@ -10,7 +10,7 @@ use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{GenericParamName, UnitName};
 
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 use super::super::helpers::{
     check_derived_binop, check_derived_neg, declared_to_inferred, expect_scalar,
@@ -486,7 +486,7 @@ pub(super) fn infer_as_cast(
     let no_dim_params: &[GenericParamName] = &[];
     let no_index_params: &[GenericParamName] = &[];
     let no_nat_params: &[GenericParamName] = &[];
-    let resolved_target = crate::tir::tir::resolve_type_expr(
+    let resolved_target = crate::tir::typed::resolve_type_expr(
         target_type,
         registry,
         no_dim_params,
@@ -494,7 +494,7 @@ pub(super) fn infer_as_cast(
         no_nat_params,
         src,
     )?;
-    let target_declared = crate::tir::tir::resolved_to_declared_type(&resolved_target, src)?;
+    let target_declared = crate::tir::typed::resolved_to_declared_type(&resolved_target, src)?;
     let target_inferred = declared_to_inferred(&target_declared);
 
     // Both must be structs with the same name
@@ -537,7 +537,7 @@ pub(super) fn infer_as_cast(
             span: inner.span.into(),
         })?;
     for (i, param) in type_def.generic_params.iter().enumerate() {
-        if param.constraint != crate::registry::registry::TypeGenericConstraint::Unconstrained {
+        if param.constraint != crate::registry::types::TypeGenericConstraint::Unconstrained {
             // Non-phantom param — must match exactly
             if i < source_args.len() && i < target_args.len() && source_args[i] != target_args[i] {
                 return Err(GraphcalError::EvalError {

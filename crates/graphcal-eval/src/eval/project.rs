@@ -619,7 +619,7 @@ fn process_instantiated_include<'a>(
             let imp_is_named = importer_idx_ast.map_or_else(
                 || {
                     importer_idx_from_registry
-                        .map(graphcal_compiler::registry::registry::IndexDef::is_named)
+                        .map(graphcal_compiler::registry::types::IndexDef::is_named)
                 },
                 |imp_idx| {
                     Some(matches!(
@@ -1619,7 +1619,7 @@ fn process_deferred_instantiated_imports(
     deferred_imports: &[DeferredInstantiatedImport],
     evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
     builder: &mut RegistryBuilder,
-    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
     for deferred in deferred_imports {
         let dep_loaded = &project.files[&deferred.dep_path];
@@ -1698,7 +1698,7 @@ fn process_deferred_inline_dag_includes(
     deferred_dags: &[DeferredInlineDagInclude],
     file_src: &NamedSource<Arc<String>>,
     builder: &mut RegistryBuilder,
-    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
     for deferred in deferred_dags {
         // Compile the DAG body to IR.
@@ -1770,7 +1770,7 @@ fn add_inline_dag_selective_aliases(
     dag_body: &graphcal_compiler::syntax::ast::File,
     selective: &[(String, String)],
     deferred: &DeferredInlineDagInclude,
-    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
     for (orig_name, local_name) in selective {
         let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
@@ -1790,7 +1790,7 @@ fn add_inline_dag_selective_aliases(
         };
 
         // Substitute index names in the type annotation.
-        graphcal_compiler::ir::ir::substitute_type_expr_index_names(
+        graphcal_compiler::ir::lower::substitute_type_expr_index_names(
             &mut type_ann,
             &deferred.index_bindings,
         );
@@ -1844,7 +1844,7 @@ fn add_selective_aliases(
     dep_loaded: &crate::loader::LoadedFile,
     selective: &[(String, String)],
     deferred: &DeferredInstantiatedImport,
-    unfrozen: &mut graphcal_compiler::ir::ir::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
     for (orig_name, local_name) in selective {
         let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
@@ -1870,7 +1870,7 @@ fn add_selective_aliases(
         };
 
         // Substitute index names in the type annotation.
-        graphcal_compiler::ir::ir::substitute_type_expr_index_names(
+        graphcal_compiler::ir::lower::substitute_type_expr_index_names(
             &mut type_ann,
             &deferred.index_bindings,
         );
@@ -2353,7 +2353,7 @@ fn evaluate_project_perfile(
             .registry
             .indexes
             .all_indexes()
-            .any(graphcal_compiler::registry::registry::IndexDef::is_required);
+            .any(graphcal_compiler::registry::types::IndexDef::is_required);
 
         if !is_root && (has_required_params || has_required_indexes) {
             continue;
@@ -2704,7 +2704,10 @@ fn extract_runtime_values(
     declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> HashMap<String, RuntimeValue> {
-    let result = super::runtime::run_eval_loop(plan, tir, declared_types, src);
+    let builtin_consts = crate::builtins::builtin_constants();
+    let builtin_fns = crate::builtins::builtin_functions();
+    let result =
+        super::runtime::run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
     // Return only locally-defined param/node values (not imported, not consts).
     let local_runtime_names: HashSet<String> = tir

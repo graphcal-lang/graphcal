@@ -8,7 +8,7 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, IndexName, VariantName};
 
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 use super::{DeclaredType, InferredType};
 
@@ -119,12 +119,12 @@ pub(super) fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
 /// with the corresponding concrete type args.
 pub(super) fn resolve_field_type(
     field_type_ann: &crate::syntax::ast::TypeExpr,
-    type_def: &crate::registry::registry::TypeDef,
+    type_def: &crate::registry::types::TypeDef,
     type_args: &[InferredType],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::registry::registry::TypeGenericConstraint;
+    use crate::registry::types::TypeGenericConstraint;
 
     if type_def.generic_params.is_empty() {
         // Non-generic type: resolve the field type_ann using the registry
@@ -192,7 +192,7 @@ pub(super) fn resolve_field_type(
     }
 
     // Resolve using TIR type resolution with generic params in scope, then substitute
-    let resolved = crate::tir::tir::resolve_type_expr(
+    let resolved = crate::tir::typed::resolve_type_expr(
         field_type_ann,
         registry,
         &dim_params,
@@ -201,7 +201,7 @@ pub(super) fn resolve_field_type(
         src,
     )?;
     let no_nat_sub = std::collections::HashMap::new();
-    crate::tir::tir::substitute_resolved_type(&resolved, &dim_sub, &index_sub, &no_nat_sub, src)
+    crate::tir::typed::substitute_resolved_type(&resolved, &dim_sub, &index_sub, &no_nat_sub, src)
 }
 
 /// Helper: extract scalar dimension from `InferredType`, returning error if struct.

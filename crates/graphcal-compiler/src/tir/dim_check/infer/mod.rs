@@ -19,7 +19,7 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::UnitName;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::registry::Registry;
+use crate::registry::types::Registry;
 
 use super::helpers::declared_to_inferred;
 use super::{DeclaredType, InferredType};
