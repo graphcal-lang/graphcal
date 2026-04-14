@@ -128,7 +128,7 @@ fn sort_by_median(
         })
         .collect();
 
-    medians.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    medians.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     for (i, (node, _)) in medians.into_iter().enumerate() {
         layer[i] = node;
