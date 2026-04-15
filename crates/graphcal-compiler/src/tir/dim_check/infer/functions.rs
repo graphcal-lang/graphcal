@@ -10,7 +10,9 @@ use crate::syntax::dimension::Dimension;
 use crate::syntax::names::FnName;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::{SpecialFnKind, classify_special_fn};
+use crate::registry::resolve_types::{
+    ConstructorFn, SpecialFnKind, TypeConversionFn, classify_special_fn,
+};
 use crate::registry::types::Registry;
 
 use super::super::builtins::infer_fn_dim;
@@ -59,26 +61,16 @@ impl InferCtx<'_> {
         self.infer_builtin_fn_call()
     }
 
-    /// Conversion dispatch: time-scale conversions (`to_utc`, ...) vs type
-    /// conversions (`to_float`, `to_int`).
-    ///
-    /// `SpecialFnKind::Conversion` covers both; we split them here.
-    fn infer_conversion_fn_call(&self) -> Result<InferredType, GraphcalError> {
-        if let Some(target_scale) =
-            crate::registry::time_scale::time_scale_from_conversion_fn(self.name.value.as_str())
-        {
-            return self.infer_timescale_fn_call(target_scale);
-        }
-        self.infer_type_conversion_fn_call()
-    }
-
     /// Infer type conversion: `to_float(Int) -> Dimensionless`, `to_int(Dimensionless) -> Int`.
-    fn infer_type_conversion_fn_call(&self) -> Result<InferredType, GraphcalError> {
-        match self.name.value.as_str() {
-            "to_float" => {
+    fn infer_type_conversion_fn_call_typed(
+        &self,
+        kind: TypeConversionFn,
+    ) -> Result<InferredType, GraphcalError> {
+        match kind {
+            TypeConversionFn::ToFloat => {
                 if self.args.len() != 1 {
                     return Err(GraphcalError::WrongArity {
-                        name: FnName::new("to_float"),
+                        name: FnName::new(TypeConversionFn::ToFloat.as_str()),
                         expected: 1,
                         got: self.args.len(),
                         src: self.src.clone(),
@@ -97,10 +89,10 @@ impl InferCtx<'_> {
                 }
                 Ok(InferredType::Scalar(Dimension::dimensionless()))
             }
-            "to_int" => {
+            TypeConversionFn::ToInt => {
                 if self.args.len() != 1 {
                     return Err(GraphcalError::WrongArity {
-                        name: FnName::new("to_int"),
+                        name: FnName::new(TypeConversionFn::ToInt.as_str()),
                         expected: 1,
                         got: self.args.len(),
                         src: self.src.clone(),
@@ -120,22 +112,17 @@ impl InferCtx<'_> {
                 }
                 Ok(InferredType::Int)
             }
-            _ => {
-                // Should not reach here from classify_special_fn, but handle gracefully.
-                self.infer_builtin_fn_call()
-            }
         }
     }
 
     /// Infer datetime constructors: `datetime(string)` and `epoch(string, TimeScale)`.
-    fn infer_datetime_constructor_call(&self) -> Result<InferredType, GraphcalError> {
-        match self.name.value.as_str() {
-            "datetime" => self.infer_datetime_call(),
-            "epoch" => self.infer_epoch_call(),
-            _ => {
-                // Should not reach here from classify_special_fn, but handle gracefully.
-                self.infer_builtin_fn_call()
-            }
+    fn infer_datetime_constructor_call_typed(
+        &self,
+        kind: ConstructorFn,
+    ) -> Result<InferredType, GraphcalError> {
+        match kind {
+            ConstructorFn::Datetime => self.infer_datetime_call(),
+            ConstructorFn::Epoch => self.infer_epoch_call(),
         }
     }
 
@@ -396,12 +383,22 @@ pub(super) fn infer_fn_call(
         src,
     };
     match classify_special_fn(name.value.as_str()) {
-        Some(SpecialFnKind::Aggregation) if args.len() == 1 => ctx.infer_aggregation_fn_call(),
-        Some(SpecialFnKind::Conversion) => ctx.infer_conversion_fn_call(),
-        Some(SpecialFnKind::Constructor) => ctx.infer_datetime_constructor_call(),
-        Some(SpecialFnKind::DatetimeExtract) => ctx.infer_datetime_extract_fn_call(),
-        Some(SpecialFnKind::DatetimeFrom) => ctx.infer_datetime_from_fn_call(),
-        Some(SpecialFnKind::DatetimeTo) => ctx.infer_datetime_to_fn_call(),
+        Some(SpecialFnKind::Aggregation(_)) if args.len() == 1 => ctx.infer_aggregation_fn_call(),
+        Some(SpecialFnKind::TypeConversion(kind)) => ctx.infer_type_conversion_fn_call_typed(kind),
+        Some(SpecialFnKind::TimeScaleConversion) => {
+            #[expect(
+                clippy::expect_used,
+                reason = "TimeScaleConversion variant guarantees a valid time scale name"
+            )]
+            let target_scale =
+                crate::registry::time_scale::time_scale_from_conversion_fn(name.value.as_str())
+                    .expect("TimeScaleConversion variant guarantees a valid time scale name");
+            ctx.infer_timescale_fn_call(target_scale)
+        }
+        Some(SpecialFnKind::Constructor(kind)) => ctx.infer_datetime_constructor_call_typed(kind),
+        Some(SpecialFnKind::DatetimeExtract(_)) => ctx.infer_datetime_extract_fn_call(),
+        Some(SpecialFnKind::DatetimeFrom(_)) => ctx.infer_datetime_from_fn_call(),
+        Some(SpecialFnKind::DatetimeTo(_)) => ctx.infer_datetime_to_fn_call(),
         _ => ctx.infer_builtin_fn_call(),
     }
 }

@@ -10,7 +10,6 @@ impl Parser<'_> {
     /// - `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);` (range / linspace)
     /// - `index Foo;` (required named — must be bound via parameterized import)
     /// - `index Foo: Time;` (required range — must be bound via parameterized import)
-    #[expect(clippy::too_many_lines, reason = "index has four syntactic forms")]
     pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
         let name = self
@@ -58,21 +57,10 @@ impl Parser<'_> {
             Some(&Token::LBrace) => {
                 self.expect(Token::LBrace)?;
 
-                let mut variants = Vec::new();
-                loop {
-                    if self.lexer.peek() == Some(&Token::RBrace) {
-                        break;
-                    }
-                    let variant = self
-                        .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                        .into_spanned::<VariantName>();
-                    variants.push(variant);
-                    if self.lexer.peek() == Some(&Token::Comma) {
-                        self.lexer.next_token();
-                    } else {
-                        break;
-                    }
-                }
+                let variants = self.parse_comma_separated(Token::RBrace, |p| {
+                    Ok(p.parse_ident_with_casing("PascalCase", is_pascal_case)?
+                        .into_spanned::<VariantName>())
+                })?;
 
                 if variants.is_empty() {
                     let (tok, span) = self.advance()?;

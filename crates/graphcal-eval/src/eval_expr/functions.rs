@@ -8,7 +8,10 @@ use graphcal_compiler::syntax::ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::VariantName;
 
 use crate::error::GraphcalError;
-use crate::resolve_types::{SpecialFnKind, classify_special_fn};
+use crate::resolve_types::{
+    AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
+    TypeConversionFn, classify_special_fn,
+};
 use crate::runtime_value::RuntimeValue;
 
 use super::EvalContext;
@@ -33,25 +36,30 @@ pub(super) fn eval_fn_call(
         ctx,
     };
     match classify_special_fn(name.value.as_str()) {
-        Some(SpecialFnKind::Aggregation) if args.len() == 1 => fn_ctx.dispatch_aggregation(),
-        Some(SpecialFnKind::Conversion) => fn_ctx.dispatch_conversion(),
-        Some(SpecialFnKind::Constructor) => eval_datetime_constructor(expr, name, args, ctx.src),
-        Some(SpecialFnKind::DatetimeExtract) => fn_ctx.dispatch_with_eval(eval_datetime_extract_fn),
-        Some(SpecialFnKind::DatetimeFrom) => fn_ctx.dispatch_with_eval(eval_datetime_from_fn),
-        Some(SpecialFnKind::DatetimeTo) => fn_ctx.dispatch_with_eval(eval_datetime_to_fn),
+        Some(SpecialFnKind::Aggregation(kind)) if args.len() == 1 => {
+            fn_ctx.dispatch_aggregation(kind)
+        }
+        Some(SpecialFnKind::TypeConversion(kind)) => {
+            eval_conversion_fn(kind, expr, name, args, values, local_values, ctx)
+        }
+        Some(SpecialFnKind::TimeScaleConversion) => {
+            #[expect(
+                clippy::expect_used,
+                reason = "TimeScaleConversion variant guarantees a valid time scale name"
+            )]
+            let scale = crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
+                .expect("TimeScaleConversion variant guarantees a valid time scale name");
+            fn_ctx.dispatch_timescale(scale)
+        }
+        Some(SpecialFnKind::Constructor(kind)) => {
+            eval_datetime_constructor(kind, expr, name, args, ctx.src)
+        }
+        Some(SpecialFnKind::DatetimeExtract(kind)) => fn_ctx.dispatch_datetime_extract(kind),
+        Some(SpecialFnKind::DatetimeFrom(kind)) => fn_ctx.dispatch_datetime_from(kind),
+        Some(SpecialFnKind::DatetimeTo(kind)) => fn_ctx.dispatch_datetime_to(kind),
         _ => fn_ctx.dispatch_timescale_or_builtin(),
     }
 }
-
-/// Function pointer type for helpers that take the standard evaluation context.
-type EvalHelperFn = fn(
-    &Expr,
-    &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
-    &[Expr],
-    &HashMap<String, RuntimeValue>,
-    &HashMap<String, RuntimeValue>,
-    &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError>;
 
 /// Bundles the function dispatch context.
 ///
@@ -68,31 +76,13 @@ struct FnDispatch<'a, 'ctx> {
 impl FnDispatch<'_, '_> {
     /// Aggregation dispatch: if the single argument is `Indexed`, aggregate; otherwise fall
     /// through to builtins (e.g. 2-arg `min`/`max`).
-    fn dispatch_aggregation(&self) -> Result<RuntimeValue, GraphcalError> {
+    fn dispatch_aggregation(&self, kind: AggregationFn) -> Result<RuntimeValue, GraphcalError> {
         let arg_val = eval_expr(&self.args[0], self.values, self.local_values, self.ctx)?;
         if let RuntimeValue::Indexed { entries, .. } = arg_val {
-            return eval_aggregation_fn(self.name, &entries, self.expr, self.ctx.src);
+            return eval_aggregation_fn(kind, &entries, self.expr, self.ctx.src);
         }
         // Not indexed, fall through to builtin (min/max are 2-arg builtins)
         self.dispatch_builtin()
-    }
-
-    /// Conversion dispatch: time-scale conversions (`to_utc`, …) vs type conversions
-    /// (`to_float`, `to_int`).
-    fn dispatch_conversion(&self) -> Result<RuntimeValue, GraphcalError> {
-        crate::time_scale::time_scale_from_conversion_fn(self.name.value.as_str()).map_or_else(
-            || {
-                eval_conversion_fn(
-                    self.expr,
-                    self.name,
-                    self.args,
-                    self.values,
-                    self.local_values,
-                    self.ctx,
-                )
-            },
-            |scale| self.dispatch_timescale(scale),
-        )
     }
 
     /// Fallback: check for a time-scale conversion, then builtins.
@@ -129,9 +119,36 @@ impl FnDispatch<'_, '_> {
         )
     }
 
-    /// Dispatch to a helper that takes the standard eval-context arguments.
-    fn dispatch_with_eval(&self, f: EvalHelperFn) -> Result<RuntimeValue, GraphcalError> {
-        f(
+    fn dispatch_datetime_extract(
+        &self,
+        kind: DatetimeExtractFn,
+    ) -> Result<RuntimeValue, GraphcalError> {
+        eval_datetime_extract_fn(
+            kind,
+            self.expr,
+            self.name,
+            self.args,
+            self.values,
+            self.local_values,
+            self.ctx,
+        )
+    }
+
+    fn dispatch_datetime_from(&self, kind: DatetimeFromFn) -> Result<RuntimeValue, GraphcalError> {
+        eval_datetime_from_fn(
+            kind,
+            self.expr,
+            self.name,
+            self.args,
+            self.values,
+            self.local_values,
+            self.ctx,
+        )
+    }
+
+    fn dispatch_datetime_to(&self, kind: DatetimeToFn) -> Result<RuntimeValue, GraphcalError> {
+        eval_datetime_to_fn(
+            kind,
             self.expr,
             self.name,
             self.args,
@@ -142,9 +159,9 @@ impl FnDispatch<'_, '_> {
     }
 }
 
-/// Evaluate an aggregation function (`sum`, `min`, `max`, `mean`, `count`) over indexed entries.
+/// Evaluate an aggregation function over indexed entries.
 fn eval_aggregation_fn(
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    kind: AggregationFn,
     entries: &IndexMap<VariantName, RuntimeValue>,
     expr: &Expr,
     src: &NamedSource<Arc<String>>,
@@ -156,26 +173,26 @@ fn eval_aggregation_fn(
             span: expr.span.into(),
         }
     };
-    Ok(match name.value.as_str() {
-        "sum" => {
+    Ok(match kind {
+        AggregationFn::Sum => {
             let total = entries.values().try_fold(0.0_f64, |acc, v| {
                 Ok(acc + v.expect_scalar("sum element").map_err(&type_err)?)
             })?;
             RuntimeValue::Scalar(total)
         }
-        "min" => {
+        AggregationFn::Min => {
             let min = entries.values().try_fold(f64::INFINITY, |acc, v| {
                 Ok(acc.min(v.expect_scalar("min element").map_err(&type_err)?))
             })?;
             RuntimeValue::Scalar(min)
         }
-        "max" => {
+        AggregationFn::Max => {
             let max = entries.values().try_fold(f64::NEG_INFINITY, |acc, v| {
                 Ok(acc.max(v.expect_scalar("max element").map_err(&type_err)?))
             })?;
             RuntimeValue::Scalar(max)
         }
-        "mean" => {
+        AggregationFn::Mean => {
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "indexed collection length fits in f64"
@@ -186,7 +203,7 @@ fn eval_aggregation_fn(
             })?;
             RuntimeValue::Scalar(total / n)
         }
-        "count" => {
+        AggregationFn::Count => {
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "indexed collection length fits in f64"
@@ -194,27 +211,21 @@ fn eval_aggregation_fn(
             let n = entries.len() as f64;
             RuntimeValue::Scalar(n)
         }
-        _ => {
-            return Err(GraphcalError::InternalError {
-                message: format!("unexpected aggregate function `{}`", name.value),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
     })
 }
 
 /// Evaluate a type conversion function (`to_float`, `to_int`).
 fn eval_conversion_fn(
+    kind: TypeConversionFn,
     expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    _name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    match name.value.as_str() {
-        "to_float" => {
+    match kind {
+        TypeConversionFn::ToFloat => {
             let arg = eval_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(
@@ -227,7 +238,7 @@ fn eval_conversion_fn(
             )]
             Ok(RuntimeValue::Scalar(i as f64))
         }
-        "to_int" => {
+        TypeConversionFn::ToInt => {
             let arg = eval_expr(&args[0], values, local_values, ctx)?;
             let f = arg
                 .expect_scalar("to_int argument")
@@ -263,22 +274,19 @@ fn eval_conversion_fn(
             )]
             Ok(RuntimeValue::Int(f as i64))
         }
-        _ => Err(ctx.internal_error(
-            format!("unexpected conversion function `{}`", name.value),
-            expr.span,
-        )),
     }
 }
 
 /// Evaluate a datetime constructor (`datetime`, `epoch`).
 fn eval_datetime_constructor(
-    expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    kind: ConstructorFn,
+    _expr: &Expr,
+    _name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    match name.value.as_str() {
-        "datetime" => {
+    match kind {
+        ConstructorFn::Datetime => {
             let ExprKind::StringLiteral(s) = &args[0].kind else {
                 return Err(GraphcalError::InternalError {
                     message: "datetime() received non-string argument".to_string(),
@@ -310,7 +318,7 @@ fn eval_datetime_constructor(
             };
             Ok(RuntimeValue::Datetime(epoch))
         }
-        "epoch" => {
+        ConstructorFn::Epoch => {
             let ExprKind::StringLiteral(s) = &args[0].kind else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received non-string first argument".to_string(),
@@ -336,11 +344,6 @@ fn eval_datetime_constructor(
             })?;
             Ok(RuntimeValue::Datetime(epoch))
         }
-        _ => Err(GraphcalError::InternalError {
-            message: format!("unexpected constructor function `{}`", name.value),
-            src: src.clone(),
-            span: expr.span.into(),
-        }),
     }
 }
 
@@ -367,6 +370,7 @@ fn eval_timescale_fn(
 
 /// Evaluate a datetime extraction function (`year`, `month`, `day`, etc.).
 fn eval_datetime_extract_fn(
+    kind: DatetimeExtractFn,
     _expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
@@ -383,26 +387,20 @@ fn eval_datetime_extract_fn(
     };
     // Decompose into Gregorian components in UTC
     let (year, month, day, hour, minute, second, _nanos) = epoch.to_gregorian_utc();
-    let result: i64 = match name.value.as_str() {
-        "year" => i64::from(year),
-        "month" => i64::from(month),
-        "day" => i64::from(day),
-        "hour" => i64::from(hour),
-        "minute" => i64::from(minute),
-        "second" => i64::from(second),
-        "weekday" => i64::from(u8::from(epoch.weekday_utc())),
-        "day_of_year" => {
+    let result: i64 = match kind {
+        DatetimeExtractFn::Year => i64::from(year),
+        DatetimeExtractFn::Month => i64::from(month),
+        DatetimeExtractFn::Day => i64::from(day),
+        DatetimeExtractFn::Hour => i64::from(hour),
+        DatetimeExtractFn::Minute => i64::from(minute),
+        DatetimeExtractFn::Second => i64::from(second),
+        DatetimeExtractFn::Weekday => i64::from(u8::from(epoch.weekday_utc())),
+        DatetimeExtractFn::DayOfYear => {
             let start_of_year = hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
             let diff = epoch - start_of_year;
             #[expect(clippy::cast_possible_truncation, reason = "day-of-year fits in i64")]
             let doy = diff.to_seconds().div_euclid(86400.0) as i64 + 1;
             doy
-        }
-        _ => {
-            return Err(ctx.eval_error(
-                format!("unknown extraction function `{}`", name.value),
-                name.span,
-            ));
         }
     };
     Ok(RuntimeValue::Int(result))
@@ -410,6 +408,7 @@ fn eval_datetime_extract_fn(
 
 /// Evaluate a datetime-from-numeric constructor (`from_jd`, `from_mjd`, `from_unix`).
 fn eval_datetime_from_fn(
+    kind: DatetimeFromFn,
     _expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
@@ -432,22 +431,17 @@ fn eval_datetime_from_fn(
             ));
         }
     };
-    let epoch = match name.value.as_str() {
-        "from_jd" => hifitime::Epoch::from_jde_utc(num),
-        "from_mjd" => hifitime::Epoch::from_mjd_utc(num),
-        "from_unix" => hifitime::Epoch::from_unix_seconds(num),
-        _ => {
-            return Err(ctx.eval_error(
-                format!("unknown from-datetime function `{}`", name.value),
-                name.span,
-            ));
-        }
+    let epoch = match kind {
+        DatetimeFromFn::FromJd => hifitime::Epoch::from_jde_utc(num),
+        DatetimeFromFn::FromMjd => hifitime::Epoch::from_mjd_utc(num),
+        DatetimeFromFn::FromUnix => hifitime::Epoch::from_unix_seconds(num),
     };
     Ok(RuntimeValue::Datetime(epoch))
 }
 
 /// Evaluate a datetime-to-numeric function (`to_jd`, `to_mjd`, `to_unix`).
 fn eval_datetime_to_fn(
+    kind: DatetimeToFn,
     _expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
@@ -462,16 +456,10 @@ fn eval_datetime_to_fn(
             args[0].span,
         ));
     };
-    let result = match name.value.as_str() {
-        "to_jd" => epoch.to_jde_utc_days(),
-        "to_mjd" => epoch.to_mjd_utc_days(),
-        "to_unix" => epoch.to_unix_seconds(),
-        _ => {
-            return Err(ctx.eval_error(
-                format!("unknown to-datetime function `{}`", name.value),
-                name.span,
-            ));
-        }
+    let result = match kind {
+        DatetimeToFn::ToJd => epoch.to_jde_utc_days(),
+        DatetimeToFn::ToMjd => epoch.to_mjd_utc_days(),
+        DatetimeToFn::ToUnix => epoch.to_unix_seconds(),
     };
     Ok(RuntimeValue::Scalar(result))
 }

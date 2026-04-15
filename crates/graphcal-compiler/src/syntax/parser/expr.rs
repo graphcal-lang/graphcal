@@ -41,18 +41,7 @@ impl Parser<'_> {
     /// Expects the opening `(` to have already been consumed.
     /// Supports trailing commas.
     fn parse_arg_list(&mut self) -> Result<Vec<Expr>, ParseError> {
-        let mut args = Vec::new();
-        if self.lexer.peek() != Some(&Token::RParen) {
-            args.push(self.parse_expr()?);
-            while self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-                if self.lexer.peek() == Some(&Token::RParen) {
-                    break; // trailing comma
-                }
-                args.push(self.parse_expr()?);
-            }
-        }
-        Ok(args)
+        self.parse_comma_separated(Token::RParen, Self::parse_expr)
     }
 
     /// Parse conversion: `expr -> unit_expr` (lowest precedence).
@@ -296,18 +285,8 @@ impl Parser<'_> {
                 }
                 Some(Token::LBracket) => {
                     self.lexer.next_token(); // consume '['
-                    let mut args = Vec::new();
-                    loop {
-                        if self.lexer.peek() == Some(&Token::RBracket) {
-                            break;
-                        }
-                        args.push(self.parse_index_arg()?);
-                        if self.lexer.peek() == Some(&Token::Comma) {
-                            self.lexer.next_token();
-                        } else {
-                            break;
-                        }
-                    }
+                    let args =
+                        self.parse_comma_separated(Token::RBracket, Self::parse_index_arg)?;
                     let (_, end_span) = self.expect(Token::RBracket)?;
                     let span = expr.span.merge(end_span);
                     expr = Expr {
@@ -679,13 +658,11 @@ impl Parser<'_> {
         }
     }
 
-    /// Look ahead to check if `<...>` is followed by `{`.
-    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
-    /// from `Foo < bar` (comparison).
+    /// Scan balanced `<…>` angle brackets from the current position and check
+    /// whether the byte immediately after `>` (skipping whitespace) equals `expected`.
     ///
-    /// Scans the raw source string from the current position to find matching angle brackets.
-    pub(super) fn is_type_args_followed_by_brace(&mut self) -> bool {
-        // Get the byte offset where `<` starts
+    /// Returns `false` if the next token is not `<` or the brackets are unbalanced.
+    fn is_type_args_followed_by(&mut self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -698,12 +675,11 @@ impl Parser<'_> {
                 b'>' => {
                     depth -= 1;
                     if depth == 0 {
-                        // Skip whitespace after `>`
                         let mut p = pos + 1;
                         while p < bytes.len() && bytes[p].is_ascii_whitespace() {
                             p += 1;
                         }
-                        return p < bytes.len() && bytes[p] == b'{';
+                        return p < bytes.len() && bytes[p] == expected;
                     }
                 }
                 _ => {}
@@ -711,6 +687,13 @@ impl Parser<'_> {
             pos += 1;
         }
         false
+    }
+
+    /// Look ahead to check if `<...>` is followed by `{`.
+    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
+    /// from `Foo < bar` (comparison).
+    pub(super) fn is_type_args_followed_by_brace(&mut self) -> bool {
+        self.is_type_args_followed_by(b'{')
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
@@ -771,30 +754,7 @@ impl Parser<'_> {
     /// Used to disambiguate `eye<3>()` (turbofish fn call)
     /// from `f < x` (comparison).
     pub(super) fn is_type_args_followed_by_paren(&mut self) -> bool {
-        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
-            return false;
-        };
-        let bytes = self.source.as_bytes();
-        let mut pos = lt_span.offset() + lt_span.len();
-        let mut depth: usize = 1;
-        while pos < bytes.len() {
-            match bytes[pos] {
-                b'<' => depth += 1,
-                b'>' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let mut p = pos + 1;
-                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
-                            p += 1;
-                        }
-                        return p < bytes.len() && bytes[p] == b'(';
-                    }
-                }
-                _ => {}
-            }
-            pos += 1;
-        }
-        false
+        self.is_type_args_followed_by(b'(')
     }
 
     /// Parse a generic argument list: `<GenericArg, GenericArg, ...>`
@@ -804,18 +764,7 @@ impl Parser<'_> {
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::GenericArg>, ParseError> {
         self.expect(Token::Lt)?;
-        let mut args = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::Gt) {
-                break;
-            }
-            args.push(self.parse_generic_arg()?);
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+        let args = self.parse_comma_separated(Token::Gt, Self::parse_generic_arg)?;
         self.expect(Token::Gt)?;
         Ok(args)
     }

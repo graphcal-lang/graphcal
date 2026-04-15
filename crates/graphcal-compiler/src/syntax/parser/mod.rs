@@ -211,6 +211,33 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse a comma-separated list of items until `end_token` is peeked.
+    ///
+    /// Supports trailing commas. Does **not** consume the `end_token`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Token is small and the API is cleaner with by-value"
+    )]
+    pub(super) fn parse_comma_separated<T>(
+        &mut self,
+        end_token: Token,
+        mut parse_item: impl FnMut(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<Vec<T>, ParseError> {
+        let mut items = Vec::new();
+        loop {
+            if self.lexer.peek() == Some(&end_token) {
+                break;
+            }
+            items.push(parse_item(self)?);
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
+            } else {
+                break;
+            }
+        }
+        Ok(items)
+    }
+
     /// Parse an identifier and check that it matches the expected casing.
     pub(super) fn parse_ident_with_casing(
         &mut self,

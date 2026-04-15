@@ -10,27 +10,223 @@ use crate::syntax::names::{IndexName, VariantName};
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------
-// Function classification constants
+// Function classification enums
 // ---------------------------------------------------------------------------
+//
+// Each special-function category has its own enum whose variants are the
+// canonical source of truth for the function names in that category.
+// The `classify_special_fn` function maps a string to one of these.
 
-/// Aggregation functions recognized as special forms (not registered as builtins).
-pub const AGGREGATION_FNS: &[&str] = &["sum", "min", "max", "mean", "count"];
+/// Aggregation functions: operate on indexed collections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregationFn {
+    Sum,
+    Min,
+    Max,
+    Mean,
+    Count,
+}
+
+impl AggregationFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "sum" => Some(Self::Sum),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            "mean" => Some(Self::Mean),
+            "count" => Some(Self::Count),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Mean => "mean",
+            Self::Count => "count",
+        }
+    }
+}
+
+/// Type conversion functions: `to_float`, `to_int`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeConversionFn {
+    ToFloat,
+    ToInt,
+}
+
+impl TypeConversionFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "to_float" => Some(Self::ToFloat),
+            "to_int" => Some(Self::ToInt),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToFloat => "to_float",
+            Self::ToInt => "to_int",
+        }
+    }
+}
+
+/// Datetime constructor functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstructorFn {
+    Datetime,
+    Epoch,
+}
+
+impl ConstructorFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "datetime" => Some(Self::Datetime),
+            "epoch" => Some(Self::Epoch),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Datetime => "datetime",
+            Self::Epoch => "epoch",
+        }
+    }
+}
+
+/// Datetime extraction functions: extract a component from a `Datetime`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatetimeExtractFn {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+    Weekday,
+    DayOfYear,
+}
+
+impl DatetimeExtractFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "year" => Some(Self::Year),
+            "month" => Some(Self::Month),
+            "day" => Some(Self::Day),
+            "hour" => Some(Self::Hour),
+            "minute" => Some(Self::Minute),
+            "second" => Some(Self::Second),
+            "weekday" => Some(Self::Weekday),
+            "day_of_year" => Some(Self::DayOfYear),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Year => "year",
+            Self::Month => "month",
+            Self::Day => "day",
+            Self::Hour => "hour",
+            Self::Minute => "minute",
+            Self::Second => "second",
+            Self::Weekday => "weekday",
+            Self::DayOfYear => "day_of_year",
+        }
+    }
+}
+
+/// Datetime-from-numeric constructors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatetimeFromFn {
+    FromJd,
+    FromMjd,
+    FromUnix,
+}
+
+impl DatetimeFromFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "from_jd" => Some(Self::FromJd),
+            "from_mjd" => Some(Self::FromMjd),
+            "from_unix" => Some(Self::FromUnix),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FromJd => "from_jd",
+            Self::FromMjd => "from_mjd",
+            Self::FromUnix => "from_unix",
+        }
+    }
+}
+
+/// Datetime-to-numeric functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatetimeToFn {
+    ToJd,
+    ToMjd,
+    ToUnix,
+}
+
+impl DatetimeToFn {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "to_jd" => Some(Self::ToJd),
+            "to_mjd" => Some(Self::ToMjd),
+            "to_unix" => Some(Self::ToUnix),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToJd => "to_jd",
+            Self::ToMjd => "to_mjd",
+            Self::ToUnix => "to_unix",
+        }
+    }
+}
 
 /// Classification of special built-in functions.
+///
+/// Each variant carries a sub-enum identifying the specific function, so
+/// downstream handlers can match on typed variants instead of raw strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialFnKind {
     /// Aggregation functions: `sum`, `min`, `max`, `mean`, `count`.
-    Aggregation,
-    /// Conversion functions: `to_float`, `to_int`, `to_utc`, etc.
-    Conversion,
+    Aggregation(AggregationFn),
+    /// Type conversion functions: `to_float`, `to_int`.
+    TypeConversion(TypeConversionFn),
+    /// Time-scale conversion functions: `to_utc`, `to_tai`, etc.
+    /// These are further resolved by [`crate::registry::time_scale::time_scale_from_conversion_fn`].
+    TimeScaleConversion,
     /// Constructor functions: `datetime`, `epoch`.
-    Constructor,
+    Constructor(ConstructorFn),
     /// Datetime extraction functions: `year`, `month`, `day`, etc.
-    DatetimeExtract,
+    DatetimeExtract(DatetimeExtractFn),
     /// Datetime-from-numeric functions: `from_jd`, `from_mjd`, `from_unix`.
-    DatetimeFrom,
+    DatetimeFrom(DatetimeFromFn),
     /// Datetime-to-numeric functions: `to_jd`, `to_mjd`, `to_unix`.
-    DatetimeTo,
+    DatetimeTo(DatetimeToFn),
 }
 
 /// Classify a function name as a special built-in function.
@@ -38,24 +234,34 @@ pub enum SpecialFnKind {
 /// Returns `None` if the name is not a recognized special function.
 #[must_use]
 pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
-    match name {
-        "sum" | "min" | "max" | "mean" | "count" => Some(SpecialFnKind::Aggregation),
-        "to_float" | "to_int" | "to_utc" | "to_tai" | "to_tt" | "to_tdb" | "to_et" | "to_gpst"
-        | "to_gst" | "to_bdt" | "to_qzsst" => Some(SpecialFnKind::Conversion),
-        "datetime" | "epoch" => Some(SpecialFnKind::Constructor),
-        "year" | "month" | "day" | "hour" | "minute" | "second" | "weekday" | "day_of_year" => {
-            Some(SpecialFnKind::DatetimeExtract)
-        }
-        "from_jd" | "from_mjd" | "from_unix" => Some(SpecialFnKind::DatetimeFrom),
-        "to_jd" | "to_mjd" | "to_unix" => Some(SpecialFnKind::DatetimeTo),
-        _ => None,
+    if let Some(f) = AggregationFn::parse(name) {
+        return Some(SpecialFnKind::Aggregation(f));
     }
+    if let Some(f) = TypeConversionFn::parse(name) {
+        return Some(SpecialFnKind::TypeConversion(f));
+    }
+    if crate::registry::time_scale::time_scale_from_conversion_fn(name).is_some() {
+        return Some(SpecialFnKind::TimeScaleConversion);
+    }
+    if let Some(f) = ConstructorFn::parse(name) {
+        return Some(SpecialFnKind::Constructor(f));
+    }
+    if let Some(f) = DatetimeExtractFn::parse(name) {
+        return Some(SpecialFnKind::DatetimeExtract(f));
+    }
+    if let Some(f) = DatetimeFromFn::parse(name) {
+        return Some(SpecialFnKind::DatetimeFrom(f));
+    }
+    if let Some(f) = DatetimeToFn::parse(name) {
+        return Some(SpecialFnKind::DatetimeTo(f));
+    }
+    None
 }
 
 /// Returns `true` if `name` is a built-in aggregation function (`sum`, `min`, etc.).
 #[must_use]
 pub fn is_aggregation_fn(name: &str) -> bool {
-    AGGREGATION_FNS.contains(&name)
+    AggregationFn::parse(name).is_some()
 }
 
 /// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).

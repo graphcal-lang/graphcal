@@ -188,18 +188,8 @@ impl Parser<'_> {
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LBrace) {
             self.lexer.next_token(); // consume '{'
-            let mut bindings = Vec::new();
-            loop {
-                if self.lexer.peek() == Some(&Token::RBrace) {
-                    break;
-                }
-                bindings.push(self.parse_pattern_binding()?);
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                } else {
-                    break;
-                }
-            }
+            let bindings =
+                self.parse_comma_separated(Token::RBrace, Self::parse_pattern_binding)?;
             let (_, rbrace_span) = self.expect(Token::RBrace)?;
             (bindings, rbrace_span)
         } else {
@@ -259,33 +249,20 @@ impl Parser<'_> {
         type_args: Vec<TypeExpr>,
     ) -> Result<Expr, ParseError> {
         self.expect(Token::LBrace)?;
-        let mut fields = Vec::new();
-
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-            let field_name = self.parse_any_ident()?.into_spanned::<FieldName>();
-
+        let fields = self.parse_comma_separated(Token::RBrace, |p| {
+            let field_name = p.parse_any_ident()?.into_spanned::<FieldName>();
             // Check for `:` (explicit value) or shorthand (just name)
-            let value = if self.lexer.peek() == Some(&Token::Colon) {
-                self.lexer.next_token(); // consume ':'
-                Some(self.parse_expr()?)
+            let value = if p.lexer.peek() == Some(&Token::Colon) {
+                p.lexer.next_token(); // consume ':'
+                Some(p.parse_expr()?)
             } else {
                 None // shorthand: field name matches variable name
             };
-
-            fields.push(FieldInit {
+            Ok(FieldInit {
                 name: field_name,
                 value,
-            });
-
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+            })
+        })?;
 
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = type_name.span.merge(end_span);
