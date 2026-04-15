@@ -166,22 +166,52 @@ impl TypeDef {
     }
 }
 
+/// Data for a concrete numeric range index (e.g., `linspace(0.0 s, 100.0 s, step: 0.1 s)`).
+#[derive(Debug, Clone)]
+pub struct RangeIndexData {
+    pub start: f64,
+    pub end: f64,
+    pub step: f64,
+    pub dimension: Dimension,
+    /// Display unit label (e.g., `"s"`) for formatting step values.
+    pub display_label: Option<String>,
+    /// Scale factor from SI to display unit: `display_value = si_value / scale`.
+    pub display_scale: f64,
+}
+
+impl RangeIndexData {
+    /// Returns the SI value at step `i`.
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "range step indices are small enough for exact f64 representation"
+    )]
+    pub fn step_value(&self, i: usize) -> f64 {
+        (i as f64).mul_add(self.step, self.start)
+    }
+
+    /// Returns the number of steps in this range.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range is validated: start <= end, step > 0, so n >= 0"
+    )]
+    pub fn step_count(&self) -> usize {
+        let n = (self.end - self.start) / self.step;
+        // Use round() to avoid off-by-one from floating-point imprecision
+        // (e.g., 0.3 / 0.1 = 2.9999... should give 3, not 2).
+        n.round() as usize + 1
+    }
+}
+
 /// The kind of an index: either named variants or a numeric range.
 #[derive(Debug, Clone)]
 pub enum IndexKind {
     /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
     Named { variants: Vec<VariantName> },
     /// A numeric range, e.g. `index T = linspace(0.0 s, 100.0 s, step: 0.1 s);`
-    Range {
-        start: f64,
-        end: f64,
-        step: f64,
-        dimension: Dimension,
-        /// Display unit label (e.g., `"s"`) for formatting step values.
-        display_label: Option<String>,
-        /// Scale factor from SI to display unit: `display_value = si_value / scale`.
-        display_scale: f64,
-    },
+    Range(RangeIndexData),
     /// Required named index (no variants): must be bound via parameterized import.
     RequiredNamed,
     /// Required range index with dimension constraint: must be bound via parameterized import.
@@ -213,8 +243,8 @@ impl IndexDef {
     pub fn variants(&self) -> Vec<VariantName> {
         match &self.kind {
             IndexKind::Named { variants } => variants.clone(),
-            IndexKind::Range { .. } => {
-                let count = self.step_count();
+            IndexKind::Range(data) => {
+                let count = data.step_count();
                 (0..count)
                     .map(|i| VariantName::new(format!("#{i}")))
                     .collect()
@@ -237,50 +267,18 @@ impl IndexDef {
     pub fn step_count(&self) -> usize {
         match &self.kind {
             IndexKind::Named { variants } => variants.len(),
-            IndexKind::Range {
-                start, end, step, ..
-            } => {
-                let n = (end - start) / step;
-                // Use round() to avoid off-by-one from floating-point imprecision
-                // (e.g., 0.3 / 0.1 = 2.9999... should give 3, not 2).
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "range is validated: start <= end, step > 0, so n >= 0"
-                )]
-                {
-                    n.round() as usize + 1
-                }
-            }
+            IndexKind::Range(data) => data.step_count(),
             IndexKind::NatRange { size } => *size as usize,
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }
     }
 
-    /// Returns the SI value at step `i` for a range index.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error message if this is a named, required, or nat range index.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "range step indices are small enough for exact f64 representation"
-    )]
-    pub fn step_value(&self, i: usize) -> Result<f64, String> {
+    /// Returns the range data if this is a concrete range index.
+    #[must_use]
+    pub const fn range_data(&self) -> Option<&RangeIndexData> {
         match &self.kind {
-            IndexKind::Named { .. } | IndexKind::RequiredNamed => Err(format!(
-                "step_value() called on named index `{}`",
-                self.name
-            )),
-            IndexKind::Range { start, step, .. } => Ok(start + (i as f64) * step),
-            IndexKind::RequiredRange { .. } => Err(format!(
-                "step_value() called on required range index `{}`",
-                self.name
-            )),
-            IndexKind::NatRange { .. } => Err(format!(
-                "step_value() called on nat range index `{}`",
-                self.name
-            )),
+            IndexKind::Range(data) => Some(data),
+            _ => None,
         }
     }
 
@@ -289,7 +287,7 @@ impl IndexDef {
     pub const fn is_range(&self) -> bool {
         matches!(
             self.kind,
-            IndexKind::Range { .. } | IndexKind::RequiredRange { .. }
+            IndexKind::Range(_) | IndexKind::RequiredRange { .. }
         )
     }
 
