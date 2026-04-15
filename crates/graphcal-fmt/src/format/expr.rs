@@ -502,8 +502,14 @@ fn format_table_2d_body(
     for (ei, e) in entries.iter().enumerate() {
         let row_label = e.keys[row_idx].variant.value.as_str();
         let col_label = e.keys[col_idx].variant.value.as_str();
-        let ri = row_labels.iter().position(|r| r == row_label).unwrap_or(0);
-        let ci = col_labels.iter().position(|c| c == col_label).unwrap_or(0);
+        // Labels were built from the same entries, so lookup cannot miss.
+        // If it somehow does, skip this entry rather than silently using row/col 0.
+        let Some(ri) = row_labels.iter().position(|r| r == row_label) else {
+            continue;
+        };
+        let Some(ci) = col_labels.iter().position(|c| c == col_label) else {
+            continue;
+        };
         grid[ri][ci] = render_doc_to_string(&format_expr(fmt, &e.value));
         entry_indices[ri][ci] = Some(ei);
     }

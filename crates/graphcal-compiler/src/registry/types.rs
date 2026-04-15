@@ -232,8 +232,7 @@ impl IndexDef {
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "range is validated: start <= end, step > 0"
+        reason = "NatRange size u64 -> usize: practically bounded by registry validation"
     )]
     pub fn step_count(&self) -> usize {
         match &self.kind {
@@ -242,9 +241,16 @@ impl IndexDef {
                 start, end, step, ..
             } => {
                 let n = (end - start) / step;
-                // Use floor + epsilon to avoid off-by-one from floating-point imprecision
+                // Use round() to avoid off-by-one from floating-point imprecision
                 // (e.g., 0.3 / 0.1 = 2.9999... should give 3, not 2).
-                (n + 0.5_f64.powi(40)).floor() as usize + 1
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "range is validated: start <= end, step > 0, so n >= 0"
+                )]
+                {
+                    n.round() as usize + 1
+                }
             }
             IndexKind::NatRange { size } => *size as usize,
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,

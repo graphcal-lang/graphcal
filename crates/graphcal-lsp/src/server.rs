@@ -583,7 +583,7 @@ fn collect_imported_definitions(
                 // It only fails for non-absolute paths, which should not occur for loaded files.
                 let uri =
                     Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| root_uri.clone());
-                let src = Arc::new(loaded_file.source.to_string());
+                let src = Arc::clone(&loaded_file.source);
                 (table, uri, src)
             });
 
