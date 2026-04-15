@@ -271,9 +271,10 @@ pub(super) fn eval_unfold(
     // Steps 1..N: evaluate body with prev_t and t bindings
     // Pre-allocate scan_locals with the two loop-variable keys (reused across iterations).
     let mut scan_locals = HashMap::with_capacity(2);
+    // Clone values once before the loop; only the self-reference entry changes per iteration.
+    let mut overlay_values = values.clone();
     for i in 1..step_count {
-        // Build a scoped overlay: values + partial result for @self[prev_t]
-        let mut overlay_values = values.clone();
+        // Update the self-reference entry with the partial result so far.
         overlay_values.insert(
             self_name.to_string(),
             RuntimeValue::Indexed {
@@ -424,8 +425,9 @@ fn eval_for_comp(
 
     let variants = idx_def.variants();
     let mut entries = IndexMap::new();
+    // Clone local_values once before the loop; only the binding value changes per iteration.
+    let mut inner_locals = local_values.clone();
     for variant in &variants {
-        let mut inner_locals = local_values.clone();
         let binding_value = match &idx_def.kind {
             crate::registry::IndexKind::Named { .. }
             | crate::registry::IndexKind::RequiredNamed => RuntimeValue::Label {
