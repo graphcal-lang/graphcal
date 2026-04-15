@@ -94,7 +94,7 @@ Dimensions are represented as `BTreeMap<BaseDimId, Rational>` (exponent map over
 
 `exec_plan::compile()` does two topological sorts:
 
-1. **Const sort**: order consts by `const_deps`, evaluate each in sequence via
+1. **Const sort**: order const nodes by `const_deps`, evaluate each in sequence via
    `eval_expr`, store results in `const_values`.
 2. **Runtime sort**: order params + nodes by `runtime_deps`, producing `topo_order`.
 
@@ -139,42 +139,42 @@ graphcal-lsp          (binary: Language Server)
 
 The core language crate. Contains everything up to and including TIR.
 
-| Module | Purpose |
-|--------|---------|
-| `syntax/lexer.rs` | Tokenizer (logos-based, 2-token lookahead) |
-| `syntax/token.rs` | `Token` enum definition |
-| `syntax/parser/` | Recursive-descent parser producing AST |
-| `syntax/ast.rs` | AST node types (`File`, `Declaration`, `Expr`, `TypeExpr`) |
-| `syntax/names.rs` | Newtype wrappers: `DeclName`, `DimName`, `UnitName`, etc. |
-| `syntax/dimension.rs` | `BaseDimId`, `Dimension`, `Rational` (dimension algebra) |
-| `syntax/span.rs` | Byte-offset source locations |
-| `syntax/visitor.rs` | Visitor pattern for AST traversal |
-| `syntax/comments.rs` | Comment extraction for the formatter |
-| `ir/lower.rs` | `IR` struct, `lower()` function (AST -> IR) |
-| `ir/resolve/` | Name resolution, scope checking, visibility, dependency extraction |
-| `tir/typed.rs` | `TIR` struct, `resolve()` function (IR -> TIR) |
-| `tir/dim_check/` | Dimension inference and type matching |
-| `registry/types.rs` | Core registry struct and type definitions |
-| `registry/` | Type system: dimensions, units, indexes, structs, functions, builtins, errors |
+| Module                | Purpose                                                                       |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `syntax/lexer.rs`     | Tokenizer (logos-based, 2-token lookahead)                                    |
+| `syntax/token.rs`     | `Token` enum definition                                                       |
+| `syntax/parser/`      | Recursive-descent parser producing AST                                        |
+| `syntax/ast.rs`       | AST node types (`File`, `Declaration`, `Expr`, `TypeExpr`)                    |
+| `syntax/names.rs`     | Newtype wrappers: `DeclName`, `DimName`, `UnitName`, etc.                     |
+| `syntax/dimension.rs` | `BaseDimId`, `Dimension`, `Rational` (dimension algebra)                      |
+| `syntax/span.rs`      | Byte-offset source locations                                                  |
+| `syntax/visitor.rs`   | Visitor pattern for AST traversal                                             |
+| `syntax/comments.rs`  | Comment extraction for the formatter                                          |
+| `ir/lower.rs`         | `IR` struct, `lower()` function (AST -> IR)                                   |
+| `ir/resolve/`         | Name resolution, scope checking, visibility, dependency extraction            |
+| `tir/typed.rs`        | `TIR` struct, `resolve()` function (IR -> TIR)                                |
+| `tir/dim_check/`      | Dimension inference and type matching                                         |
+| `registry/types.rs`   | Core registry struct and type definitions                                     |
+| `registry/`           | Type system: dimensions, units, indexes, structs, functions, builtins, errors |
 
 ### 2.2 graphcal-eval
 
 Evaluation engine. Depends on `graphcal-compiler` and re-exports most of its types.
 
-| Module | Purpose |
-|--------|---------|
-| `eval/mod.rs` | Public API: `compile_and_eval`, `compile_to_tir_project`, etc. |
-| `eval/runtime.rs` | Core eval loop, `RuntimeValue` -> `Value` conversion |
-| `eval/display.rs` | Display unit extraction and attachment |
-| `eval/types.rs` | `Value`, `EvalResult`, `DisplayUnit` definitions |
-| `eval/format.rs` | Output formatting helpers |
-| `eval/project/` | Multi-file project compilation (split into submodules) |
-| `eval/project/imports.rs` | Import and include processing |
-| `eval/project/lowering.rs` | IR lowering and registry merging |
-| `eval/project/pipeline.rs` | Evaluation orchestration |
-| `eval_expr/` | Expression evaluator: arithmetic, control flow, functions, collections |
-| `exec_plan.rs` | `ExecPlan` struct, topological sorts, const evaluation |
-| `loader.rs` | Project loading with circular import detection |
+| Module                     | Purpose                                                                |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `eval/mod.rs`              | Public API: `compile_and_eval`, `compile_to_tir_project`, etc.         |
+| `eval/runtime.rs`          | Core eval loop, `RuntimeValue` -> `Value` conversion                   |
+| `eval/display.rs`          | Display unit extraction and attachment                                 |
+| `eval/types.rs`            | `Value`, `EvalResult`, `DisplayUnit` definitions                       |
+| `eval/format.rs`           | Output formatting helpers                                              |
+| `eval/project/`            | Multi-file project compilation (split into submodules)                 |
+| `eval/project/imports.rs`  | Import and include processing                                          |
+| `eval/project/lowering.rs` | IR lowering and registry merging                                       |
+| `eval/project/pipeline.rs` | Evaluation orchestration                                               |
+| `eval_expr/`               | Expression evaluator: arithmetic, control flow, functions, collections |
+| `exec_plan.rs`             | `ExecPlan` struct, topological sorts, const evaluation                 |
+| `loader.rs`                | Project loading with circular import detection                         |
 
 ### 2.3 graphcal-dag
 
@@ -205,13 +205,13 @@ Filesystem abstraction layer.
 
 Binary crate. CLI entry point with subcommands:
 
-| Subcommand | Purpose |
-|------------|---------|
-| `eval` | Compile and evaluate a `.gcl` file; display as table or JSON |
-| `format` | Format `.gcl` files (check or write mode) |
-| `typecheck` | Parse + type-check without evaluation |
-| `lsp` | Start Language Server Protocol server |
-| `shell` | Interactive REPL |
+| Subcommand  | Purpose                                                      |
+| ----------- | ------------------------------------------------------------ |
+| `eval`      | Compile and evaluate a `.gcl` file; display as table or JSON |
+| `format`    | Format `.gcl` files (check or write mode)                    |
+| `typecheck` | Parse + type-check without evaluation                        |
+| `lsp`       | Start Language Server Protocol server                        |
+| `shell`     | Interactive REPL                                             |
 
 Key options: `--set name=expr` (override params), `--input file.json`,
 `--format text|json`, `--plot browser|json|file.html`.
@@ -220,25 +220,25 @@ Key options: `--set name=expr` (override params), `--input file.json`,
 
 Language Server Protocol implementation (async, tower-lsp).
 
-| Module | Feature |
-|--------|---------|
-| `server.rs` | Main server loop, `run_analysis()` with 4-case dispatch |
-| `hover.rs` | Hover information |
-| `completion.rs` | Autocomplete |
-| `goto_definition.rs` | Jump to definition |
-| `references.rs` | Find all references |
-| `diagnostics.rs` | Error highlighting |
-| `inlay_hints.rs` | Computed value hints |
-| `formatting.rs` | Format on save |
-| `document_symbols.rs` | Outline view |
-| `rename.rs` | Rename refactoring |
-| `signature_help.rs` | Function signature popup |
-| `document_links.rs` | Import link navigation |
-| `code_actions.rs` | Code actions (e.g., add `pub` keyword) |
-| `cursor_context.rs` | Context resolution at cursor position |
-| `resolve.rs` | Symbol resolution helpers |
-| `convert.rs` | Type conversions for LSP protocol types |
-| `symbol_table.rs` | Symbol table management for analysis |
+| Module                | Feature                                                 |
+| --------------------- | ------------------------------------------------------- |
+| `server.rs`           | Main server loop, `run_analysis()` with 4-case dispatch |
+| `hover.rs`            | Hover information                                       |
+| `completion.rs`       | Autocomplete                                            |
+| `goto_definition.rs`  | Jump to definition                                      |
+| `references.rs`       | Find all references                                     |
+| `diagnostics.rs`      | Error highlighting                                      |
+| `inlay_hints.rs`      | Computed value hints                                    |
+| `formatting.rs`       | Format on save                                          |
+| `document_symbols.rs` | Outline view                                            |
+| `rename.rs`           | Rename refactoring                                      |
+| `signature_help.rs`   | Function signature popup                                |
+| `document_links.rs`   | Import link navigation                                  |
+| `code_actions.rs`     | Code actions (e.g., add `pub` keyword)                  |
+| `cursor_context.rs`   | Context resolution at cursor position                   |
+| `resolve.rs`          | Symbol resolution helpers                               |
+| `convert.rs`          | Type conversions for LSP protocol types                 |
+| `symbol_table.rs`     | Symbol table management for analysis                    |
 
 ---
 
@@ -287,7 +287,7 @@ Same shape as IR but with:
 
 - `resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>` -- every declaration
   has a concrete type with resolved dimensions.
-- `domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>` -- min/max bounds.
+- `domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>` -- min/max bounds.
 
 ### 3.4 ExecPlan
 
@@ -343,14 +343,15 @@ they are evaluated:
 All declarations are **private by default**. The `pub` keyword makes them
 visible to other files. Required params and indexes must be marked `pub`.
 
-| Category | Keyword | Evaluated | Can Reference | Naming Convention |
-|----------|---------|-----------|---------------|-------------------|
-| Type system | `base dim`, `dim`, `unit`, `type`, `index`, `fn` | At registry build | Other type-system decls | PascalCase (types) or snake_case (units) |
-| Const node | `const node` | Compile-time (ExecPlan) | Other const nodes via `@`, built-in constants | `lower_snake_case` |
-| Param | `param` | Runtime (input) | Const nodes, other params/nodes | `lower_snake_case` |
-| Node | `node` | Runtime (computed) | Const nodes, params, other nodes | `lower_snake_case` |
-| Assert | `assert` | After all nodes | Const nodes, params, nodes | `lower_snake_case` |
-| Plot/Figure/Layer | `plot`, `figure`, `layer` | After all nodes | Const nodes, params, nodes | `lower_snake_case` |
+| Category          | Keyword                                          | Evaluated                                               | Can Reference                                        | Visibility                                     | Naming Convention                                |
+| ----------------- | ------------------------------------------------ | ------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------ |
+| Type system       | `base dim`, `dim`, `unit`, `type`, `index`, `fn` | At registry build                                       | Other type-system decls                              | `pub` optional; required `index` must be `pub` | PascalCase (types/indexes) or snake_case (units) |
+| DAG               | `dag`                                            | At include-time (body compiled/merged on instantiation) | Parent-scope imports, local params/nodes/const nodes | `pub` optional                                 | `lower_snake_case`                               |
+| Const node        | `const node`                                     | Compile-time (ExecPlan)                                 | Other const nodes via `@`, built-in constants        | `pub` optional                                 | `lower_snake_case`                               |
+| Param             | `param`                                          | Runtime (input)                                         | Const nodes, other params/nodes                      | `pub` optional; required params must be `pub`  | `lower_snake_case`                               |
+| Node              | `node`                                           | Runtime (computed)                                      | Const nodes, params, other nodes                     | `pub` optional                                 | `lower_snake_case`                               |
+| Assert            | `assert`                                         | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional                                 | `lower_snake_case`                               |
+| Plot/Figure/Layer | `plot`, `figure`, `layer`                        | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional                                 | `lower_snake_case`                               |
 
 The `@name` syntax references params, nodes, and const nodes. Built-in
 constants (PI, E, TAU) use bare `UPPER_SNAKE_CASE` names without `@`.
@@ -364,7 +365,7 @@ Dependency tracking is central to Graphcal's reactive computation model:
 1. **Const dependencies** (`const_deps`): extracted during name resolution.
    Const nodes form a DAG; cycles are detected and reported.
 2. **Runtime dependencies** (`runtime_deps`): extracted from `@` references in
-   params, nodes, and const nodes. Also forms a DAG.
+   params and nodes. Also forms a DAG.
 3. **Assert assumptions** (`assumes_map`): which nodes/params an assert checks,
    declared via `#[assumes(...)]`.
 
@@ -391,8 +392,8 @@ GraphcalError               // 50+ variants, each with miette diagnostic annotat
   TypeAnnotationMismatch (D002)
   UnknownUnit (D003)
   ImportRuntimeItem (M020)    // import used for runtime items (use include instead)
-  ImportPrivateItem (V001)    // importing a non-pub item
-  RequiredNotPub (V002)       // required param/index missing pub
+  ImportPrivateItem (V001)      // importing a non-pub item
+  RequiredItemMustBePub (V002)  // required param/index missing pub
   PrivateInPublic (V003)      // pub item exposes private type
   PubIndexVariantLiteral (V004)
   ...
@@ -405,23 +406,34 @@ Error codes are searchable (e.g., `D001` for dimension mismatch).
 
 ## 7. Import and Module System
 
-Graphcal splits cross-file references into two keywords:
+Graphcal splits cross-file and DAG reuse into two keywords:
 
-- **`import`** -- compile-time items only: `const node`, `dim`, `unit`, `type`,
-  `index`, `fn`, `dag`. Using `import` for runtime items (params/nodes) is an
-  error (M020).
-- **`include`** -- runtime instantiation of params and nodes from another file.
+- **`import`** -- compile-time names only: `const node`, `dim`, `unit`, `type`,
+  `index`, `fn`, `dag`, and evaluated `assert` declarations. Using `import` for
+  runtime items (`param`, `node`) is an error (M020). `import` does not accept
+  parameter bindings and cannot target cross-file DAG paths.
+- **`include`** -- selective/module inclusion with optional param/index bindings.
+  It is used for runtime items and for DAG instantiation (inline, cross-file, or
+  bare-module DAG references).
 
-| Style | Syntax | Effect |
-|-------|--------|--------|
-| Selective import | `import "./lib.gcl" { fn_a, const_b as alias }` | Import specific compile-time names |
-| Module import | `import "./lib.gcl" as ns` | Import under namespace (`ns::name`) |
-| Parent scope | `import ..` | Access enclosing DAG scope |
-| Cross-file DAG | `import "./file.gcl"/dag_name` | Import a specific DAG block |
-| Include | `include "./model.gcl"` | Instantiate runtime nodes/params |
-| Parameterized include | `include "./model.gcl" { param_x = 42 }` | Override params during include |
+| Style                   | Syntax                                           | Effect                                                  |
+| ----------------------- | ------------------------------------------------ | ------------------------------------------------------- |
+| Selective import        | `import "./lib.gcl" { fn_a, const_b as alias }`  | Import specific compile-time names                      |
+| Module import           | `import "./lib.gcl" as ns`                       | Import under namespace (`ns::name`)                     |
+| Parent scope            | `import .. { name1, name2 }`                     | Access enclosing DAG scope from inside a `dag`          |
+| Selective include       | `include "./model.gcl" { x, y as z }`            | Bring selected exported names into scope                |
+| Module include          | `include "./model.gcl" as model`                 | Bring exported names under a module prefix              |
+| Parameterized include   | `include "./model.gcl"(param_x: 42.0) { y }`     | Bind params/indexes, then include selected outputs      |
+| Inline DAG include      | `include orbital_velocity(gm: @gm, r: @r) { v }` | Instantiate a same-file `dag` block                     |
+| Cross-file DAG include  | `include "./file.gcl"/dag_name(x: 1.0) { y }`    | Instantiate a named `dag` from another file             |
+| Bare-module DAG include | `include pkg/lib/dag_name(x: 1.0) { y }`         | Instantiate a `dag` defined in the resolved module file |
 
 Only `pub` items can be imported/included across files (V001).
+
+When an `include` has any bindings, Graphcal enters strict binding mode:
+all params and indexes with defaults must be bound explicitly unless the
+declaration has `#[allow_defaults]`. Required params/indexes must always be
+bound.
 
 Circular imports are detected during project loading via depth-first traversal
 with cycle tracking. Files are loaded in topological order (dependencies first).
@@ -465,16 +477,16 @@ cargo insta review               # review snapshot changes
 
 ## 9. Design Patterns and Conventions
 
-| Pattern | Where | Why |
-|---------|-------|-----|
-| Trait-based I/O | `graphcal-io` | Pluggable filesystem for WASM and testing |
-| Visitor pattern | `syntax/visitor.rs` | Safe recursive AST traversal |
-| `IndexMap` ordering | Throughout eval | Deterministic output preserving declaration order |
-| `Arc<String>` source sharing | Diagnostics | Minimize clones across error reports |
-| Separated const/runtime phases | `exec_plan.rs` | Consts evaluated at compile time, runtime values lazily |
-| Display units separate from dimensions | `eval/display.rs` | Compute in SI, display in user-chosen units |
-| `Result<T, GraphcalError>` everywhere | All crates | Composable error handling with `?` |
-| Per-node error containment | `runtime.rs` | Independent nodes evaluate even if siblings fail |
+| Pattern                                | Where               | Why                                                     |
+| -------------------------------------- | ------------------- | ------------------------------------------------------- |
+| Trait-based I/O                        | `graphcal-io`       | Pluggable filesystem for WASM and testing               |
+| Visitor pattern                        | `syntax/visitor.rs` | Safe recursive AST traversal                            |
+| `IndexMap` ordering                    | Throughout eval     | Deterministic output preserving declaration order       |
+| `Arc<String>` source sharing           | Diagnostics         | Minimize clones across error reports                    |
+| Separated const/runtime phases         | `exec_plan.rs`      | Consts evaluated at compile time, runtime values lazily |
+| Display units separate from dimensions | `eval/display.rs`   | Compute in SI, display in user-chosen units             |
+| `Result<T, GraphcalError>` everywhere  | All crates          | Composable error handling with `?`                      |
+| Per-node error containment             | `runtime.rs`        | Independent nodes evaluate even if siblings fail        |
 
 ---
 
