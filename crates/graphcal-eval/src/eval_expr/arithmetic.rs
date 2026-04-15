@@ -7,6 +7,8 @@ use graphcal_compiler::syntax::ast::{BinOp, Expr, UnaryOp};
 use graphcal_compiler::syntax::names::{FieldName, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 
+use graphcal_compiler::gcl_err;
+
 use crate::error::GraphcalError;
 use crate::runtime_value::RuntimeValue;
 
@@ -284,17 +286,13 @@ pub(super) fn check_finite(
     span: Span,
 ) -> Result<f64, GraphcalError> {
     if value.is_nan() {
-        Err(GraphcalError::EvalError {
+        Err(gcl_err!(EvalError {
             message: format!("invalid argument for {context} (result is NaN)"),
-            src: src.clone(),
-            span: span.into(),
-        })
+        } @ src, span))
     } else if value.is_infinite() {
-        Err(GraphcalError::EvalError {
+        Err(gcl_err!(EvalError {
             message: format!("{context} produced infinite result"),
-            src: src.clone(),
-            span: span.into(),
-        })
+        } @ src, span))
     } else {
         Ok(value)
     }
@@ -316,11 +314,9 @@ fn eval_comparison(
         BinOp::Gt => Ok(l > r),
         BinOp::Le => Ok(l <= r),
         BinOp::Ge => Ok(l >= r),
-        _ => Err(GraphcalError::InternalError {
+        _ => Err(gcl_err!(InternalError {
             message: format!("unexpected operator {op:?} in comparison"),
-            src: src.clone(),
-            span: span.into(),
-        }),
+        } @ src, span)),
     }
 }
 
@@ -338,52 +334,40 @@ fn eval_int_binop(
         BinOp::Mul => l.checked_mul(r),
         BinOp::Div => {
             if r == 0 {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: "integer division by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             l.checked_div(r)
         }
         BinOp::Mod => {
             if r == 0 {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: "integer modulo by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             l.checked_rem(r)
         }
         BinOp::Pow => {
             if r < 0 {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: "integer exponent must be non-negative".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
-            let exp = u32::try_from(r).map_err(|_| GraphcalError::EvalError {
+            let exp = u32::try_from(r).map_err(|_| gcl_err!(EvalError {
                 message: "integer exponent too large".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })?;
+            } @ src, span))?;
             l.checked_pow(exp)
         }
         _ => {
-            return Err(GraphcalError::InternalError {
+            return Err(gcl_err!(InternalError {
                 message: format!("unexpected operator {op:?} in integer arithmetic"),
-                src: src.clone(),
-                span: span.into(),
-            });
+            } @ src, span));
         }
     }
-    .ok_or_else(|| GraphcalError::EvalError {
+    .ok_or_else(|| gcl_err!(EvalError {
         message: "integer arithmetic overflow".to_string(),
-        src: src.clone(),
-        span: span.into(),
-    })
+    } @ src, span))
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
@@ -400,38 +384,30 @@ fn eval_scalar_binop(
         BinOp::Mul => l * r,
         BinOp::Div => {
             if r == 0.0 {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: "division by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             l / r
         }
         BinOp::Pow => l.powf(r),
         _ => {
-            return Err(GraphcalError::InternalError {
+            return Err(gcl_err!(InternalError {
                 message: format!("unexpected operator {op:?} in arithmetic"),
-                src: src.clone(),
-                span: span.into(),
-            });
+            } @ src, span));
         }
     };
 
     // Post-check: if inputs were finite but result is not, report an error.
     if l.is_finite() && r.is_finite() && !result.is_finite() {
         if result.is_nan() {
-            Err(GraphcalError::EvalError {
+            Err(gcl_err!(EvalError {
                 message: "invalid arithmetic operation (result is NaN)".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })
+            } @ src, span))
         } else {
-            Err(GraphcalError::EvalError {
+            Err(gcl_err!(EvalError {
                 message: "arithmetic overflow (result is infinite)".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })
+            } @ src, span))
         }
     } else {
         Ok(result)
@@ -460,13 +436,11 @@ fn eval_struct_binop(
                 RuntimeValue::Int(eval_int_binop(op, *l, *r, src, span)?)
             }
             _ => {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: format!(
                         "field `{field_name}` of struct `{type_name}` has unsupported type for component-wise operation"
                     ),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
         };
         result_fields.insert(field_name.clone(), result_val);
@@ -489,20 +463,16 @@ fn eval_struct_neg(
         let result_val = match val {
             RuntimeValue::Scalar(v) => RuntimeValue::Scalar(-v),
             RuntimeValue::Int(i) => {
-                RuntimeValue::Int(i.checked_neg().ok_or_else(|| GraphcalError::EvalError {
+                RuntimeValue::Int(i.checked_neg().ok_or_else(|| gcl_err!(EvalError {
                     message: "integer negation overflow".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                })?)
+                } @ src, span))?)
             }
             _ => {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: format!(
                         "field `{field_name}` of struct `{type_name}` has unsupported type for component-wise negation"
                     ),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
         };
         result_fields.insert(field_name.clone(), result_val);

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::syntax::span::Span;
@@ -62,11 +63,7 @@ pub(super) fn check_no_runtime_graph_refs(
         forbidden: runtime_names,
         src,
         make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
-            GraphcalError::GraphRefInConst {
-                name: name.into(),
-                src: src.clone(),
-                span: span.into(),
-            }
+            gcl_err!(GraphRefInConst { name: name.into() } @ src, span)
         },
     };
     checker.visit_expr(expr)
@@ -84,11 +81,7 @@ pub(super) fn check_no_assert_graph_refs(
         forbidden: assert_names,
         src,
         make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
-            GraphcalError::GraphRefToAssert {
-                name: name.into(),
-                src: src.clone(),
-                span: span.into(),
-            }
+            gcl_err!(GraphRefToAssert { name: name.into() } @ src, span)
         },
     };
     checker.visit_expr(expr)
@@ -193,13 +186,11 @@ pub(super) fn check_no_variant_literals(
                      span: Span,
                      src: &NamedSource<Arc<String>>|
               -> Result<(), GraphcalError> {
-            Err(GraphcalError::VariantLiteralInNonRebindable {
+            Err(gcl_err!(VariantLiteralInNonRebindable {
                 index: index.to_string(),
                 variant: variant.to_string(),
                 context: context.clone(),
-                src: src.clone(),
-                span: span.into(),
-            })
+            } @ src, span))
         },
         src,
     };
@@ -225,12 +216,10 @@ pub(super) fn check_no_pub_index_variant_literals(
                 src: &NamedSource<Arc<String>>|
          -> Result<(), GraphcalError> {
             if pub_index_names.contains(index) {
-                return Err(GraphcalError::PubIndexVariantLiteral {
+                return Err(gcl_err!(PubIndexVariantLiteral {
                     index: index.to_string(),
                     variant: variant.to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             Ok(())
         },

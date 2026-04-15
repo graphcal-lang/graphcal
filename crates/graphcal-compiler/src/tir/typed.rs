@@ -14,6 +14,7 @@ use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
 
+use crate::gcl_err;
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
@@ -510,11 +511,7 @@ pub fn normalize_nat_expr(
             let gp = nat_params
                 .iter()
                 .find(|p| p.as_str() == ident.name)
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: IndexName::new(&ident.name),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                })?;
+                .ok_or_else(|| gcl_err!(UnknownIndex { name: IndexName::new(&ident.name) } @ src, ident.span))?;
             Ok(NatPolyForm::from_var(gp.clone()))
         }
         NatExpr::Add(lhs, rhs, _) => {
@@ -770,16 +767,12 @@ pub fn resolved_to_declared_type(
             }
             Ok(DeclaredType::Struct(name.clone(), declared_args))
         }
-        ResolvedTypeExpr::GenericDimParam(name, span) => Err(GraphcalError::EvalError {
+        ResolvedTypeExpr::GenericDimParam(name, span) => Err(gcl_err!(EvalError {
             message: format!("cannot use generic dimension parameter `{name}` as a concrete type"),
-            src: src.clone(),
-            span: (*span).into(),
-        }),
-        ResolvedTypeExpr::GenericDimExpr { span, .. } => Err(GraphcalError::EvalError {
+        } @ src, *span)),
+        ResolvedTypeExpr::GenericDimExpr { span, .. } => Err(gcl_err!(EvalError {
             message: "cannot use generic dimension expression as a concrete type".to_string(),
-            src: src.clone(),
-            span: (*span).into(),
-        }),
+        } @ src, *span)),
         ResolvedTypeExpr::Indexed { base, indexes } => {
             let mut result = resolved_to_declared_type(base, src)?;
             for idx in indexes.iter().rev() {
@@ -792,14 +785,12 @@ pub fn resolved_to_declared_type(
                     }
                     ResolvedIndex::NatExpr(form, span) => {
                         if !form.is_constant() {
-                            return Err(GraphcalError::EvalError {
+                            return Err(gcl_err!(EvalError {
                                 message: format!(
                                     "cannot use generic nat expression `{}` as a concrete type",
                                     form.format()
                                 ),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            });
+                            } @ src, *span));
                         }
                         let idx_name = IndexName::new(
                             crate::registry::types::nat_range_index_name(form.constant()),
@@ -810,13 +801,11 @@ pub fn resolved_to_declared_type(
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
-                        return Err(GraphcalError::EvalError {
+                        return Err(gcl_err!(EvalError {
                             message: format!(
                                 "cannot use generic index parameter `{name}` as a concrete type"
                             ),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        });
+                        } @ src, *span));
                     }
                 }
             }
@@ -852,12 +841,10 @@ fn unify_nat_poly_form(
     for (mono, coeff) in &form.terms {
         let Some((remaining_mono, factor)) = mono.substitute(nat_sub) else {
             // Arithmetic overflow during substitution
-            return Err(GraphcalError::IndexMismatch {
+            return Err(gcl_err!(IndexMismatch {
                 expected: IndexName::new(format!("range({})", form.format())),
                 found: actual_idx.clone(),
-                src: src.clone(),
-                span: span.into(),
-            });
+            } @ src, span));
         };
         let term_value = coeff * factor;
         if remaining_mono.is_constant() {
@@ -872,14 +859,12 @@ fn unify_nat_poly_form(
     if reduced_terms.is_empty() {
         // All variables bound — check equality
         if reduced_constant != target {
-            return Err(GraphcalError::IndexMismatch {
+            return Err(gcl_err!(IndexMismatch {
                 expected: IndexName::new(crate::registry::types::nat_range_index_name(
                     form.evaluate(nat_sub).unwrap_or(0),
                 )),
                 found: actual_idx.clone(),
-                src: src.clone(),
-                span: span.into(),
-            });
+            } @ src, span));
         }
         return Ok(());
     }
@@ -903,30 +888,24 @@ fn unify_nat_poly_form(
             // Solve: coeff * var + reduced_constant = target
             let total_coeff: u64 = reduced_terms.values().sum();
             if target < reduced_constant {
-                return Err(GraphcalError::IndexMismatch {
+                return Err(gcl_err!(IndexMismatch {
                     expected: IndexName::new(format!("range({})", form.format())),
                     found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             let remainder = target - reduced_constant;
             if total_coeff == 0 || !remainder.is_multiple_of(total_coeff) {
-                return Err(GraphcalError::IndexMismatch {
+                return Err(gcl_err!(IndexMismatch {
                     expected: IndexName::new(format!("range({})", form.format())),
                     found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             let value = remainder / total_coeff;
             bind_or_check(nat_sub, var, value, |prev, _| {
-                GraphcalError::IndexMismatch {
+                gcl_err!(IndexMismatch {
                     expected: IndexName::new(crate::registry::types::nat_range_index_name(*prev)),
                     found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                }
+                } @ src, span)
             })?;
             return Ok(());
         }
@@ -934,15 +913,13 @@ fn unify_nat_poly_form(
 
     // Multiple unbound variables or non-linear — ambiguous
     let var_names: Vec<&str> = unbound_vars.iter().map(GenericParamName::as_str).collect();
-    Err(GraphcalError::EvalError {
+    Err(gcl_err!(EvalError {
         message: format!(
             "cannot infer Nat parameters [{}] from a single index — \
              provide more arguments or use explicit type annotations",
             var_names.join(", ")
         ),
-        src: src.clone(),
-        span: span.into(),
-    })
+    } @ src, span))
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,45 +995,37 @@ pub fn unify_resolved_type(
                     index: actual_idx,
                 } = current
                 else {
-                    return Err(GraphcalError::DimensionMismatch {
+                    return Err(gcl_err!(DimensionMismatch {
                         expected: "indexed type".to_string(),
                         found: crate::tir::dim_check::format_inferred_type(current, registry),
-                        src: src.clone(),
-                        span: span.into(),
                         help: "expected an indexed value".to_string(),
-                    });
+                    } @ src, span));
                 };
                 match idx {
                     ResolvedIndex::GenericParam(gp, _) => {
                         bind_or_check(index_sub, gp.clone(), actual_idx.clone(), |prev, _| {
-                            GraphcalError::IndexMismatch {
+                            gcl_err!(IndexMismatch {
                                 expected: prev.clone(),
                                 found: actual_idx.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            }
+                            } @ src, span)
                         })?;
                     }
                     ResolvedIndex::Concrete(name, _) => {
                         if *name != *actual_idx {
-                            return Err(GraphcalError::IndexMismatch {
+                            return Err(gcl_err!(IndexMismatch {
                                 expected: name.clone(),
                                 found: actual_idx.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
+                            } @ src, span));
                         }
                     }
                     ResolvedIndex::NatExpr(form, _) => {
                         // Extract the concrete nat value from the actual index name
                         let actual_nat =
                             crate::registry::types::parse_nat_range_index_name(actual_idx.as_str())
-                                .ok_or_else(|| GraphcalError::IndexMismatch {
+                                .ok_or_else(|| gcl_err!(IndexMismatch {
                                     expected: IndexName::new(format!("range({})", form.format())),
                                     found: actual_idx.clone(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                })?;
+                                } @ src, span))?;
                         // Solve the polynomial equation: form = actual_nat
                         unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }
@@ -1070,26 +1039,22 @@ pub fn unify_resolved_type(
 
         ResolvedTypeExpr::Bool => {
             if *actual != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: "Bool".to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "expected Bool argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
 
         ResolvedTypeExpr::Int => {
             if !actual.is_int_like() {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: "Int".to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "expected Int argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1101,34 +1066,28 @@ pub fn unify_resolved_type(
                 } else {
                     format!("Datetime<{expected_scale}>")
                 };
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: expected_str,
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "expected Datetime argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
 
         ResolvedTypeExpr::Label(expected_index, _) => {
             let InferredType::Label(actual_index) = actual else {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: format!("Label({expected_index})"),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: format!("expected a label of index `{expected_index}`"),
-                });
+                } @ src, span));
             };
             if *expected_index != *actual_index {
-                return Err(GraphcalError::IndexMismatch {
+                return Err(gcl_err!(IndexMismatch {
                     expected: expected_index.clone(),
                     found: actual_index.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1136,13 +1095,11 @@ pub fn unify_resolved_type(
         ResolvedTypeExpr::Dimensionless => {
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if !actual_dim.is_dimensionless() {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: "Dimensionless".to_string(),
                     found: registry.dimensions.format_dimension(&actual_dim),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "expected Dimensionless argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1150,13 +1107,11 @@ pub fn unify_resolved_type(
         ResolvedTypeExpr::Scalar(expected_dim) => {
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             if *expected_dim != actual_dim {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: registry.dimensions.format_dimension(expected_dim),
                     found: registry.dimensions.format_dimension(&actual_dim),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1166,22 +1121,18 @@ pub fn unify_resolved_type(
             // Type args matching is not needed here since function generics
             // don't use TypeApplication in their signatures (yet).
             let InferredType::Struct(actual_name, _) = actual else {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: name.to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: format!("expected struct type `{name}`"),
-                });
+                } @ src, span));
             };
             if *name != *actual_name {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: name.to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    src: src.clone(),
-                    span: span.into(),
                     help: format!("expected struct type `{name}`"),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1189,17 +1140,15 @@ pub fn unify_resolved_type(
         ResolvedTypeExpr::GenericDimParam(gp, _) => {
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
             bind_or_check(dim_sub, gp.clone(), actual_dim, |prev, new| {
-                GraphcalError::DimensionMismatch {
+                gcl_err!(DimensionMismatch {
                     expected: registry.dimensions.format_dimension(prev),
                     found: registry.dimensions.format_dimension(new),
-                    src: src.clone(),
-                    span: span.into(),
                     help: format!(
                         "generic `{gp}` was bound to {} but this argument requires {}",
                         registry.dimensions.format_dimension(prev),
                         registry.dimensions.format_dimension(new),
                     ),
-                }
+                } @ src, span)
             })
         }
 
@@ -1219,25 +1168,21 @@ pub fn unify_resolved_type(
                     actual_dim
                 } else {
                     let exponent =
-                        Rational::try_new(1, *power).map_err(|_| GraphcalError::InternalError {
+                        Rational::try_new(1, *power).map_err(|_| gcl_err!(InternalError {
                             message: format!("generic dimension parameter `{gp}` has zero power"),
-                            src: src.clone(),
-                            span: span.into(),
-                        })?;
+                        } @ src, span))?;
                     actual_dim.pow(exponent)
                 };
                 bind_or_check(dim_sub, gp.clone(), bound_dim, |prev, new| {
-                    GraphcalError::DimensionMismatch {
+                    gcl_err!(DimensionMismatch {
                         expected: registry.dimensions.format_dimension(prev),
                         found: registry.dimensions.format_dimension(new),
-                        src: src.clone(),
-                        span: span.into(),
                         help: format!(
                             "generic `{gp}` was bound to {} but this argument requires {}",
                             registry.dimensions.format_dimension(prev),
                             registry.dimensions.format_dimension(new),
                         ),
-                    }
+                    } @ src, span)
                 })?;
                 return Ok(());
             }
@@ -1255,15 +1200,13 @@ pub fn unify_resolved_type(
                         if let Some(prev) = dim_sub.get(gp) {
                             prev.pow(Rational::from_int(*power))
                         } else {
-                            return Err(GraphcalError::DimensionMismatch {
+                            return Err(gcl_err!(DimensionMismatch {
                                 expected: format!("generic `{gp}` (unresolved)"),
                                 found: registry.dimensions.format_dimension(&actual_dim),
-                                src: src.clone(),
-                                span: span.into(),
                                 help: format!(
                                     "generic `{gp}` could not be inferred from this argument"
                                 ),
-                            });
+                            } @ src, span));
                         }
                     }
                 };
@@ -1274,13 +1217,11 @@ pub fn unify_resolved_type(
             }
 
             if expected_dim != actual_dim {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&expected_dim),
                     found: registry.dimensions.format_dimension(&actual_dim),
-                    src: src.clone(),
-                    span: span.into(),
                     help: "dimension mismatch in function argument".to_string(),
-                });
+                } @ src, span));
             }
             Ok(())
         }
@@ -1329,11 +1270,9 @@ pub fn substitute_resolved_type(
 
         ResolvedTypeExpr::GenericDimParam(gp, span) => dim_sub.get(gp).map_or_else(
             || {
-                Err(GraphcalError::EvalError {
+                Err(gcl_err!(EvalError {
                     message: format!("generic `{gp}` not bound during substitution"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
+                } @ src, *span))
             },
             |dim| Ok(InferredType::Scalar(dim.clone())),
         ),
@@ -1351,11 +1290,9 @@ pub fn substitute_resolved_type(
                         span: term_span,
                         ..
                     } => {
-                        let base = dim_sub.get(gp).ok_or_else(|| GraphcalError::EvalError {
+                        let base = dim_sub.get(gp).ok_or_else(|| gcl_err!(EvalError {
                             message: format!("generic `{gp}` not bound during substitution"),
-                            src: src.clone(),
-                            span: (*term_span).into(),
-                        })?;
+                        } @ src, *term_span))?;
                         base.pow(Rational::from_int(*power))
                     }
                 };
@@ -1375,11 +1312,9 @@ pub fn substitute_resolved_type(
                     ResolvedIndex::GenericParam(gp, span) => index_sub
                         .get(gp)
                         .cloned()
-                        .ok_or_else(|| GraphcalError::EvalError {
+                        .ok_or_else(|| gcl_err!(EvalError {
                             message: format!("generic index `{gp}` not bound during substitution"),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        })?,
+                        } @ src, *span))?,
                     ResolvedIndex::NatExpr(form, span) => {
                         let n = form.evaluate(nat_sub).ok_or_else(|| {
                             let vars = form.variables();
@@ -1388,14 +1323,12 @@ pub fn substitute_resolved_type(
                                 .filter(|k| !nat_sub.contains_key(*k))
                                 .map(GenericParamName::as_str)
                                 .collect();
-                            GraphcalError::EvalError {
+                            gcl_err!(EvalError {
                                 message: format!(
                                     "generic nat parameter(s) [{}] not bound during substitution",
                                     unbound.join(", ")
                                 ),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            }
+                            } @ src, *span)
                         })?;
                         IndexName::new(crate::registry::types::nat_range_index_name(n))
                     }
@@ -1423,13 +1356,11 @@ fn expect_scalar_from_inferred(
 ) -> Result<Dimension, GraphcalError> {
     match inferred {
         crate::tir::dim_check::InferredType::Scalar(d) => Ok(d.clone()),
-        other => Err(GraphcalError::DimensionMismatch {
+        other => Err(gcl_err!(DimensionMismatch {
             expected: "scalar dimension".to_string(),
             found: crate::tir::dim_check::format_inferred_type(other, registry),
-            src: src.clone(),
-            span: span.into(),
             help: "expected a scalar value, not a struct or indexed type".to_string(),
-        }),
+        } @ src, span)),
     }
 }
 
@@ -1495,11 +1426,9 @@ pub fn resolve_type_expr(
                                 ident.span,
                             ));
                         } else {
-                            return Err(GraphcalError::UnknownIndex {
+                            return Err(gcl_err!(UnknownIndex {
                                 name: ident.as_index_name(),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
+                            } @ src, ident.span));
                         }
                     }
                 }
@@ -1593,11 +1522,9 @@ fn resolve_dim_expr(
                     op,
                 });
             } else {
-                return Err(GraphcalError::UnknownDimension {
+                return Err(gcl_err!(UnknownDimension {
                     name: DimName::new(name),
-                    src: src.clone(),
-                    span: item.term.span.into(),
-                });
+                } @ src, item.term.span));
             }
         }
         Ok(ResolvedTypeExpr::GenericDimExpr {
@@ -1610,11 +1537,9 @@ fn resolve_dim_expr(
         for item in &dim_expr.terms {
             let name = &item.term.name.name;
             let base = registry.dimensions.get_dimension(name).ok_or_else(|| {
-                GraphcalError::UnknownDimension {
+                gcl_err!(UnknownDimension {
                     name: DimName::new(name),
-                    src: src.clone(),
-                    span: item.term.span.into(),
-                }
+                } @ src, item.term.span)
             })?;
             let exp = item.term.power.unwrap_or(1);
             let powered = base.pow(Rational::from_int(exp));
@@ -1651,14 +1576,12 @@ fn resolve_type_application(
     // Special case: Datetime<TimeScale>
     if type_name == "Datetime" {
         if type_args.len() != 1 {
-            return Err(GraphcalError::EvalError {
+            return Err(gcl_err!(EvalError {
                 message: format!(
                     "type `Datetime` expects 0 or 1 type argument(s), got {}",
                     type_args.len()
                 ),
-                src: src.clone(),
-                span: type_ann.span.into(),
-            });
+            } @ src, type_ann.span));
         }
         let arg = &type_args[0];
         let scale_name = match &arg.kind {
@@ -1668,22 +1591,18 @@ fn resolve_type_application(
                 &dim_expr.terms[0].term.name.name
             }
             _ => {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
                         .to_string(),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
+                } @ src, arg.span));
             }
         };
-        let scale: TimeScale = scale_name.parse().map_err(|_| GraphcalError::EvalError {
+        let scale: TimeScale = scale_name.parse().map_err(|_| gcl_err!(EvalError {
             message: format!(
                 "unknown time scale `{scale_name}`; \
                      expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
             ),
-            src: src.clone(),
-            span: arg.span.into(),
-        })?;
+        } @ src, arg.span))?;
         return Ok(ResolvedTypeExpr::Datetime(scale));
     }
 
@@ -1692,11 +1611,9 @@ fn resolve_type_application(
         registry
             .types
             .get_type(type_name)
-            .ok_or_else(|| GraphcalError::UnknownStructType {
+            .ok_or_else(|| gcl_err!(UnknownStructType {
                 name: StructTypeName::new(type_name),
-                src: src.clone(),
-                span: name.span.into(),
-            })?;
+            } @ src, name.span))?;
     let total_params = type_def.generic_params.len();
     let required_count = type_def
         .generic_params
@@ -1709,14 +1626,12 @@ fn resolve_type_application(
         } else {
             format!("{required_count}..{total_params}")
         };
-        return Err(GraphcalError::EvalError {
+        return Err(gcl_err!(EvalError {
             message: format!(
                 "type `{type_name}` expects {hint} type argument(s), got {}",
                 type_args.len()
             ),
-            src: src.clone(),
-            span: type_ann.span.into(),
-        });
+        } @ src, type_ann.span));
     }
     // Resolve each explicit type argument, then fill in defaults
     let mut resolved_args = Vec::with_capacity(total_params);
@@ -1729,14 +1644,12 @@ fn resolve_type_application(
         let default_expr = param
             .default
             .as_ref()
-            .ok_or_else(|| GraphcalError::EvalError {
+            .ok_or_else(|| gcl_err!(EvalError {
                 message: format!(
                     "internal: generic parameter `{}` has no default",
                     param.name
                 ),
-                src: src.clone(),
-                span: type_ann.span.into(),
-            })?;
+            } @ src, type_ann.span))?;
         let resolved = resolve_type_expr(
             default_expr,
             registry,

@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::gcl_err;
+
 use crate::error::GraphcalError;
 use crate::eval::CompileError;
 use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
@@ -384,11 +386,9 @@ fn resolve_import_path<F: FileSystemReader>(
         ImportPath::FilePath { path, span } => {
             let file_path = parent_dir.join(path);
             fs.canonicalize(&file_path).map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                CompileError::Eval(gcl_err!(ImportFileNotFound {
                     path: path.clone(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
+                } @ src, *span))
             })
         }
         ImportPath::ModulePath { segments, span } => {
@@ -397,11 +397,9 @@ fn resolve_import_path<F: FileSystemReader>(
         ImportPath::ParentScope { span, .. } => {
             // Parent scope paths (`import .. { ... }`) are resolved at eval time,
             // not during file loading. They should be skipped by load_file_dfs.
-            Err(CompileError::Eval(GraphcalError::EvalError {
+            Err(CompileError::Eval(gcl_err!(EvalError {
                 message: "`..` parent scope paths cannot be resolved to files".to_string(),
-                src: src.clone(),
-                span: (*span).into(),
-            }))
+            } @ src, *span)))
         }
         ImportPath::CrossFileDag {
             file_path, span, ..
@@ -410,11 +408,9 @@ fn resolve_import_path<F: FileSystemReader>(
             // The DAG name is resolved at eval time.
             let full_path = parent_dir.join(file_path);
             fs.canonicalize(&full_path).map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
+                CompileError::Eval(gcl_err!(ImportFileNotFound {
                     path: file_path.clone(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
+                } @ src, *span))
             })
         }
     }
@@ -439,11 +435,9 @@ fn resolve_module_path<F: FileSystemReader>(
 
     // Check for stdlib imports (deferred).
     if !segments.is_empty() && segments[0].name == "graphcal" {
-        return Err(CompileError::Eval(GraphcalError::StdlibNotImplemented {
+        return Err(CompileError::Eval(gcl_err!(StdlibNotImplemented {
             path: display_path,
-            src: src.clone(),
-            span: span.into(),
-        }));
+        } @ src, span)));
     }
 
     // Load manifest if not already cached.
@@ -451,11 +445,9 @@ fn resolve_module_path<F: FileSystemReader>(
         let manifest_path = project_root.join("graphcal.toml");
         if !fs.exists(&manifest_path) {
             return Err(CompileError::Eval(
-                GraphcalError::BareImportWithoutManifest {
+                gcl_err!(BareImportWithoutManifest {
                     path: display_path,
-                    src: src.clone(),
-                    span: span.into(),
-                },
+                } @ src, span),
             ));
         }
         let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
@@ -477,12 +469,10 @@ fn resolve_module_path<F: FileSystemReader>(
 
     // Validate first segment matches package name.
     if !segments.is_empty() && segments[0].name != m.package_name {
-        return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
+        return Err(CompileError::Eval(gcl_err!(PackageNameMismatch {
             path_first: segments[0].name.clone(),
             package_name: m.package_name.clone(),
-            src: src.clone(),
-            span: span.into(),
-        }));
+        } @ src, span)));
     }
 
     // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
@@ -511,11 +501,9 @@ fn resolve_module_path<F: FileSystemReader>(
         }
     }
 
-    Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+    Err(CompileError::Eval(gcl_err!(ImportFileNotFound {
         path: display_path,
-        src: src.clone(),
-        span: span.into(),
-    }))
+    } @ src, span)))
 }
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
