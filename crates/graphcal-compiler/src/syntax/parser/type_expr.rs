@@ -228,14 +228,7 @@ impl Parser<'_> {
             let inner = self.parse_dim_expr()?;
             self.expect(Token::RParen)?;
 
-            // Optional outer exponent: `(A * B)^2`
-            let outer_power = if self.lexer.peek() == Some(&Token::Caret) {
-                self.lexer.next_token();
-                let (neg, value, _span) = self.parse_integer_literal()?;
-                if neg { -value } else { value }
-            } else {
-                1
-            };
+            let outer_power = self.parse_outer_power()?;
 
             // Flatten: distribute the outer power to each inner term
             let items = inner
@@ -269,20 +262,41 @@ impl Parser<'_> {
         let name = self.parse_any_ident()?;
         let mut end_span = name.span;
 
-        let power = if self.lexer.peek() == Some(&Token::Caret) {
-            self.lexer.next_token();
-            let (neg, value, span) = self.parse_integer_literal()?;
-            end_span = span;
-            Some(if neg { -value } else { value })
-        } else {
-            None
-        };
+        let power = self.parse_term_power(&mut end_span)?;
 
         Ok(DimTerm {
             span: name.span.merge(end_span),
             name,
             power,
         })
+    }
+
+    /// Parse an optional `^` power suffix, returning the exponent (defaulting to 1).
+    ///
+    /// Used for parenthesized groups: `(A * B)^2` → returns `2`.
+    fn parse_outer_power(&mut self) -> Result<i32, ParseError> {
+        if self.lexer.peek() == Some(&Token::Caret) {
+            self.lexer.next_token();
+            let (neg, value, _span) = self.parse_integer_literal()?;
+            Ok(if neg { -value } else { value })
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Parse an optional `^` power suffix, returning `Some(power)` or `None`.
+    ///
+    /// Used for individual terms: `m^2` → `Some(2)`, `m` → `None`.
+    /// Updates `end_span` to cover the power literal when present.
+    fn parse_term_power(&mut self, end_span: &mut Span) -> Result<Option<i32>, ParseError> {
+        if self.lexer.peek() == Some(&Token::Caret) {
+            self.lexer.next_token();
+            let (neg, value, span) = self.parse_integer_literal()?;
+            *end_span = span;
+            Ok(Some(if neg { -value } else { value }))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
@@ -351,13 +365,7 @@ impl Parser<'_> {
             let inner = self.parse_unit_expr()?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
 
-            let outer_power = if self.lexer.peek() == Some(&Token::Caret) {
-                self.lexer.next_token();
-                let (neg, value, _span) = self.parse_integer_literal()?;
-                if neg { -value } else { value }
-            } else {
-                1
-            };
+            let outer_power = self.parse_outer_power()?;
 
             let end_span = rparen_span;
             let items = inner
@@ -382,14 +390,7 @@ impl Parser<'_> {
             let start_span = ident.span;
             let mut end_span = ident.span;
             let name = ident.into_spanned::<UnitName>();
-            let power = if self.lexer.peek() == Some(&Token::Caret) {
-                self.lexer.next_token();
-                let (neg, value, span) = self.parse_integer_literal()?;
-                end_span = span;
-                Some(if neg { -value } else { value })
-            } else {
-                None
-            };
+            let power = self.parse_term_power(&mut end_span)?;
             Ok((
                 vec![UnitExprItem {
                     op: outer_op,
