@@ -21,7 +21,6 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use graphcal_compiler::syntax::ast::DeclKind;
 use graphcal_compiler::syntax::names::VariantName;
 use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
@@ -45,10 +44,15 @@ pub struct ImportedDefinition {
     pub definition: DefinitionInfo,
 }
 
-/// Info about an `import` declaration for Document Links.
-pub struct ImportDeclInfo {
-    /// The import path (file or module).
-    pub path: graphcal_compiler::syntax::ast::ImportPath,
+/// A loader-resolved import link for Document Links.
+///
+/// Pairs the source-text span of the import path with the loader-resolved
+/// target URI, so `document_links` doesn't need to re-resolve paths.
+pub struct ResolvedImportLink {
+    /// Span of the import path in the source text.
+    pub path_span: graphcal_compiler::syntax::span::Span,
+    /// Loader-resolved target URI.
+    pub target_uri: Url,
 }
 
 /// Structured function signature for Signature Help.
@@ -75,8 +79,8 @@ pub struct AnalysisResult {
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
-    /// Use declarations in this file (for Document Links).
-    pub import_decls: Vec<ImportDeclInfo>,
+    /// Loader-resolved import links (for Document Links).
+    pub import_links: Vec<ResolvedImportLink>,
 }
 
 /// Debounce delay for `did_change` notifications (milliseconds).
@@ -103,7 +107,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("diagnostics_count", &self.diagnostics.len())
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
-            .field("import_decls_count", &self.import_decls.len())
+            .field("import_links_count", &self.import_links.len())
             .finish()
     }
 }
@@ -205,12 +209,13 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics: compile_error_to_diagnostics(&e, text),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
-                import_decls: Vec::new(),
+                import_links: Vec::new(),
             };
         }
     };
 
     let root_ast = &project.files[&project.root].ast;
+    let import_links = collect_import_links(&project);
 
     // Stage 2: Compile TIR from the project.
     match compile_to_tir_from_project(&project) {
@@ -221,7 +226,6 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 
             let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
             let fn_signatures = build_fn_signatures();
-            let import_decls = collect_import_decl_info(root_ast);
             let (diagnostics, eval_values) = run_eval_from_project(&project, text);
 
             AnalysisResult {
@@ -231,7 +235,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values,
                 fn_signatures,
-                import_decls,
+                import_links,
             }
         }
         Err(e) => {
@@ -239,7 +243,6 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let symbol_table = symbol_table::build_from_ast(root_ast);
             let imported_definitions = collect_imported_definitions(uri, &project, None);
             let diagnostics = compile_error_to_diagnostics(&e, text);
-            let import_decls = collect_import_decl_info(root_ast);
 
             AnalysisResult {
                 source: text.to_string(),
@@ -248,7 +251,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 diagnostics,
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
-                import_decls,
+                import_links,
             }
         }
     }
@@ -272,18 +275,30 @@ fn run_eval_from_project(
     }
 }
 
-/// Extract import/include-declaration info from an AST for Document Links.
-fn collect_import_decl_info(ast: &graphcal_compiler::syntax::ast::File) -> Vec<ImportDeclInfo> {
-    ast.declarations
-        .iter()
-        .filter_map(|decl| match &decl.kind {
-            DeclKind::Import(u) => Some(ImportDeclInfo {
-                path: u.path.clone(),
-            }),
-            DeclKind::Include(u) => Some(ImportDeclInfo {
-                path: u.path.clone(),
-            }),
-            _ => None,
+/// Collect loader-resolved import links from the project for Document Links.
+///
+/// Uses `imports_with_paths()` and `includes_with_paths()` from the loader,
+/// so document links agree with actual compilation behavior.
+fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
+    let Some(root_file) = project.files.get(&project.root) else {
+        return Vec::new();
+    };
+
+    let import_links = root_file.imports_with_paths().map(|(_, import_decl, path)| {
+        (import_decl.path.span(), path)
+    });
+    let include_links = root_file.includes_with_paths().map(|(_, include_decl, path)| {
+        (include_decl.path.span(), path)
+    });
+
+    import_links
+        .chain(include_links)
+        .filter_map(|(span, path)| {
+            let uri = Url::from_file_path(path).ok()?;
+            Some(ResolvedImportLink {
+                path_span: span,
+                target_uri: uri,
+            })
         })
         .collect()
 }
@@ -874,7 +889,7 @@ impl LanguageServer for Backend {
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
         self.with_analysis(&uri, |analysis| {
-            crate::document_links::document_links(analysis, &uri)
+            crate::document_links::document_links(analysis)
         })
         .await
     }

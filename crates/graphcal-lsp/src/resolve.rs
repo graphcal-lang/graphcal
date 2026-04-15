@@ -150,7 +150,7 @@ mod tests {
             diagnostics: Vec::new(),
             eval_values: std::collections::HashMap::new(),
             fn_signatures: build_fn_signatures(),
-            import_decls: Vec::new(),
+            import_links: Vec::new(),
         }
     }
 
