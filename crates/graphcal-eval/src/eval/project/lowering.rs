@@ -141,21 +141,20 @@ pub(super) fn process_deferred_instantiated_imports(
                 && let crate::registry::IndexKind::RequiredRange { dimension: dep_dim } =
                     &dep_idx_def.kind
                 && let Some(imp_idx_def) = builder.get_index(importer_idx_name)
-                && let crate::registry::IndexKind::Range(
-                    crate::registry::RangeIndexData { dimension: imp_dim, .. },
-                )
+                && let crate::registry::IndexKind::Range(crate::registry::RangeIndexData {
+                    dimension: imp_dim,
+                    ..
+                })
                 | crate::registry::IndexKind::RequiredRange { dimension: imp_dim } =
                     &imp_idx_def.kind
                 && dep_dim != imp_dim
             {
-                return Err(CompileError::Eval(
-                    gcl_err!(IndexBindingDimensionMismatch {
+                return Err(CompileError::Eval(gcl_err!(IndexBindingDimensionMismatch {
                         dep_index: dep_idx_name.clone(),
                         expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
                         bound_index: importer_idx_name.clone(),
                         found_dim: builder.format_dimension(imp_dim),
-                    } @ dep_src, deferred.import_span),
-                ));
+                    } @ dep_src, deferred.import_span)));
             }
         }
 

@@ -1022,10 +1022,12 @@ pub fn unify_resolved_type(
                         // Extract the concrete nat value from the actual index name
                         let actual_nat =
                             crate::registry::types::parse_nat_range_index_name(actual_idx.as_str())
-                                .ok_or_else(|| gcl_err!(IndexMismatch {
+                                .ok_or_else(|| {
+                                    gcl_err!(IndexMismatch {
                                     expected: IndexName::new(format!("range({})", form.format())),
                                     found: actual_idx.clone(),
-                                } @ src, span))?;
+                                } @ src, span)
+                                })?;
                         // Solve the polynomial equation: form = actual_nat
                         unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
                     }
@@ -1167,10 +1169,11 @@ pub fn unify_resolved_type(
                 let bound_dim = if *power == 1 {
                     actual_dim
                 } else {
-                    let exponent =
-                        Rational::try_new(1, *power).map_err(|_| gcl_err!(InternalError {
+                    let exponent = Rational::try_new(1, *power).map_err(|_| {
+                        gcl_err!(InternalError {
                             message: format!("generic dimension parameter `{gp}` has zero power"),
-                        } @ src, span))?;
+                        } @ src, span)
+                    })?;
                     actual_dim.pow(exponent)
                 };
                 bind_or_check(dim_sub, gp.clone(), bound_dim, |prev, new| {
@@ -1290,9 +1293,11 @@ pub fn substitute_resolved_type(
                         span: term_span,
                         ..
                     } => {
-                        let base = dim_sub.get(gp).ok_or_else(|| gcl_err!(EvalError {
+                        let base = dim_sub.get(gp).ok_or_else(|| {
+                            gcl_err!(EvalError {
                             message: format!("generic `{gp}` not bound during substitution"),
-                        } @ src, *term_span))?;
+                        } @ src, *term_span)
+                        })?;
                         base.pow(Rational::from_int(*power))
                     }
                 };
@@ -1309,12 +1314,13 @@ pub fn substitute_resolved_type(
             for idx in indexes.iter().rev() {
                 let resolved_idx = match idx {
                     ResolvedIndex::Concrete(name, _) => name.clone(),
-                    ResolvedIndex::GenericParam(gp, span) => index_sub
-                        .get(gp)
-                        .cloned()
-                        .ok_or_else(|| gcl_err!(EvalError {
+                    ResolvedIndex::GenericParam(gp, span) => {
+                        index_sub.get(gp).cloned().ok_or_else(|| {
+                            gcl_err!(EvalError {
                             message: format!("generic index `{gp}` not bound during substitution"),
-                        } @ src, *span))?,
+                        } @ src, *span)
+                        })?
+                    }
                     ResolvedIndex::NatExpr(form, span) => {
                         let n = form.evaluate(nat_sub).ok_or_else(|| {
                             let vars = form.variables();
@@ -1597,23 +1603,23 @@ fn resolve_type_application(
                 } @ src, arg.span));
             }
         };
-        let scale: TimeScale = scale_name.parse().map_err(|_| gcl_err!(EvalError {
+        let scale: TimeScale = scale_name.parse().map_err(|_| {
+            gcl_err!(EvalError {
             message: format!(
                 "unknown time scale `{scale_name}`; \
                      expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
             ),
-        } @ src, arg.span))?;
+        } @ src, arg.span)
+        })?;
         return Ok(ResolvedTypeExpr::Datetime(scale));
     }
 
     // Verify this is a known generic type
-    let type_def =
-        registry
-            .types
-            .get_type(type_name)
-            .ok_or_else(|| gcl_err!(UnknownStructType {
+    let type_def = registry.types.get_type(type_name).ok_or_else(|| {
+        gcl_err!(UnknownStructType {
                 name: StructTypeName::new(type_name),
-            } @ src, name.span))?;
+            } @ src, name.span)
+    })?;
     let total_params = type_def.generic_params.len();
     let required_count = type_def
         .generic_params
@@ -1641,15 +1647,14 @@ fn resolve_type_application(
     }
     // Fill in defaults for any remaining params
     for param in type_def.generic_params.iter().skip(type_args.len()) {
-        let default_expr = param
-            .default
-            .as_ref()
-            .ok_or_else(|| gcl_err!(EvalError {
+        let default_expr = param.default.as_ref().ok_or_else(|| {
+            gcl_err!(EvalError {
                 message: format!(
                     "internal: generic parameter `{}` has no default",
                     param.name
                 ),
-            } @ src, type_ann.span))?;
+            } @ src, type_ann.span)
+        })?;
         let resolved = resolve_type_expr(
             default_expr,
             registry,

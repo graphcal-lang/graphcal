@@ -299,14 +299,18 @@ fn eval_datetime_constructor(
                         message: "datetime() received non-string timezone argument".to_string(),
                     } @ src, args[1].span));
                 };
-                datetime_with_timezone(s, tz_name).map_err(|e| gcl_err!(EvalError {
+                datetime_with_timezone(s, tz_name).map_err(|e| {
+                    gcl_err!(EvalError {
                     message: format!("invalid datetime with timezone: {e}"),
-                } @ src, args[0].span))?
+                } @ src, args[0].span)
+                })?
             } else {
                 // One-arg form: datetime("2024-11-05T12:00:00Z")
-                hifitime::Epoch::from_gregorian_str(s).map_err(|e| gcl_err!(EvalError {
+                hifitime::Epoch::from_gregorian_str(s).map_err(|e| {
+                    gcl_err!(EvalError {
                     message: format!("invalid datetime string: {e}"),
-                } @ src, args[0].span))?
+                } @ src, args[0].span)
+                })?
             };
             Ok(RuntimeValue::Datetime(epoch))
         }

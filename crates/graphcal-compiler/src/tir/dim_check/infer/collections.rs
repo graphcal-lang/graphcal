@@ -179,9 +179,11 @@ pub(super) fn infer_map_or_table_literal(
         let idx_def = registry
             .indexes
             .get_index(key.index.value.as_str())
-            .ok_or_else(|| gcl_err!(UnknownIndex {
+            .ok_or_else(|| {
+                gcl_err!(UnknownIndex {
                 name: key.index.value.clone(),
-            } @ src, key.index.span))?;
+            } @ src, key.index.span)
+            })?;
         if idx_def.is_range() {
             return Err(gcl_err!(EvalError {
                 message: format!(
@@ -395,9 +397,11 @@ pub(super) fn infer_index_access(
                 let idx_def = registry
                     .indexes
                     .get_index(idx_name.as_str())
-                    .ok_or_else(|| gcl_err!(UnknownIndex {
+                    .ok_or_else(|| {
+                        gcl_err!(UnknownIndex {
                         name: idx_name.clone(),
-                    } @ src, index.span))?;
+                    } @ src, index.span)
+                    })?;
                 if !idx_def
                     .variants()
                     .iter()
@@ -411,12 +415,11 @@ pub(super) fn infer_index_access(
             }
             IndexArg::Var(ident) => {
                 // Must be a loop variable with matching index
-                let var_type =
-                    local_types
-                        .get(&ident.name)
-                        .ok_or_else(|| gcl_err!(UnknownLocalRef {
+                let var_type = local_types.get(&ident.name).ok_or_else(|| {
+                    gcl_err!(UnknownLocalRef {
                             name: ident.name.clone(),
-                        } @ src, ident.span))?;
+                        } @ src, ident.span)
+                })?;
                 match var_type {
                     InferredType::Label(label_index) => {
                         if label_index.as_str() != idx_name.as_str() {
@@ -441,9 +444,11 @@ pub(super) fn infer_index_access(
                             registry
                                 .indexes
                                 .get_index(idx_name.as_str())
-                                .ok_or_else(|| gcl_err!(UnknownIndex {
+                                .ok_or_else(|| {
+                                    gcl_err!(UnknownIndex {
                                     name: idx_name.clone(),
-                                } @ src, ident.span))?;
+                                } @ src, ident.span)
+                                })?;
                         if !idx_def.is_range() {
                             return Err(gcl_err!(EvalError {
                                 message: format!("`{}` is not a loop variable", ident.name),
@@ -470,11 +475,10 @@ pub(super) fn infer_index_access(
                     InferredType::Fin(fin_bound) => {
                         // Fin(N) can index into nat-range indexes with bounds checking.
                         // Extract the index size as a NatLinearForm and check: fin_bound <= size.
-                        let index_form = if let Some(idx_def) =
-                            registry.indexes.get_index(idx_name.as_str())
-                        {
-                            if !idx_def.is_nat_range() {
-                                return Err(gcl_err!(EvalError {
+                        let index_form =
+                            if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str()) {
+                                if !idx_def.is_nat_range() {
+                                    return Err(gcl_err!(EvalError {
                                     message: format!(
                                         "`{}` (Fin({})) cannot index into non-nat-range index `{}`",
                                         ident.name,
@@ -482,12 +486,12 @@ pub(super) fn infer_index_access(
                                         idx_name
                                     ),
                                 } @ src, ident.span));
-                            }
-                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                        } else {
-                            // Index not in registry: symbolic nat range (generic param).
-                            NatLinearForm::from_index_name(idx_name.as_str())
-                        };
+                                }
+                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                            } else {
+                                // Index not in registry: symbolic nat range (generic param).
+                                NatLinearForm::from_index_name(idx_name.as_str())
+                            };
                         if let Some(index_form) = &index_form
                             && !fin_bound.is_leq(index_form)
                         {
@@ -729,9 +733,10 @@ pub(super) fn infer_unfold(
 
     if let Some((_index_name, idx_def)) = &owner_range_index {
         let dimension = match &idx_def.kind {
-            crate::registry::types::IndexKind::Range(
-                crate::registry::types::RangeIndexData { dimension, .. },
-            )
+            crate::registry::types::IndexKind::Range(crate::registry::types::RangeIndexData {
+                dimension,
+                ..
+            })
             | crate::registry::types::IndexKind::RequiredRange { dimension } => Some(dimension),
             _ => None,
         };
@@ -825,10 +830,12 @@ pub(super) fn infer_field_access(
                 .fields()
                 .iter()
                 .find(|f| f.name.as_str() == field.value.as_str())
-                .ok_or_else(|| gcl_err!(UnknownField {
+                .ok_or_else(|| {
+                    gcl_err!(UnknownField {
                     type_name: type_name.clone(),
                     field_name: field.value.clone(),
-                } @ src, field.span))?;
+                } @ src, field.span)
+                })?;
             resolve_field_type(&field_def.type_ann, type_def, type_args, registry, src)
         }
         _ => Err(gcl_err!(NotAStruct {
@@ -857,9 +864,11 @@ pub(super) fn infer_struct_construction(
     let type_def = registry
         .types
         .get_type(type_name.value.as_str())
-        .ok_or_else(|| gcl_err!(UnknownStructType {
+        .ok_or_else(|| {
+            gcl_err!(UnknownStructType {
             name: type_name.value.clone(),
-        } @ src, type_name.span))?;
+        } @ src, type_name.span)
+        })?;
     if type_def.is_union() {
         return Err(gcl_err!(UnknownStructType {
             name: type_name.value.clone(),
@@ -868,79 +877,77 @@ pub(super) fn infer_struct_construction(
     let owning_type_name = type_def.name.clone();
 
     // Resolve constructor type args for generic structs
-    let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty()
-        && type_def.generic_params.is_empty()
-    {
-        vec![]
-    } else if !type_def.generic_params.is_empty() {
-        let total_params = type_def.generic_params.len();
-        let required_count = type_def
-            .generic_params
-            .iter()
-            .take_while(|p| p.default.is_none())
-            .count();
-        if constructor_type_args.len() < required_count
-            || constructor_type_args.len() > total_params
-        {
-            let hint = if required_count == total_params {
-                format!("{total_params}")
-            } else {
-                format!("{required_count}..{total_params}")
-            };
-            return Err(gcl_err!(EvalError {
+    let resolved_type_args: Vec<InferredType> =
+        if constructor_type_args.is_empty() && type_def.generic_params.is_empty() {
+            vec![]
+        } else if !type_def.generic_params.is_empty() {
+            let total_params = type_def.generic_params.len();
+            let required_count = type_def
+                .generic_params
+                .iter()
+                .take_while(|p| p.default.is_none())
+                .count();
+            if constructor_type_args.len() < required_count
+                || constructor_type_args.len() > total_params
+            {
+                let hint = if required_count == total_params {
+                    format!("{total_params}")
+                } else {
+                    format!("{required_count}..{total_params}")
+                };
+                return Err(gcl_err!(EvalError {
                 message: format!(
                     "type `{}` expects {hint} type argument(s), got {}",
                     type_name.value,
                     constructor_type_args.len()
                 ),
             } @ src, type_name.span));
-        }
-        let no_dim_params: &[GenericParamName] = &[];
-        let no_index_params: &[GenericParamName] = &[];
-        let no_nat_params: &[GenericParamName] = &[];
-        let mut args = Vec::with_capacity(total_params);
-        for arg in constructor_type_args {
-            let resolved = crate::tir::typed::resolve_type_expr(
-                arg,
-                registry,
-                no_dim_params,
-                no_index_params,
-                no_nat_params,
-                src,
-            )?;
-            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(InferredType::from(&dt));
-        }
-        // Fill in defaults for remaining params
-        for param in type_def
-            .generic_params
-            .iter()
-            .skip(constructor_type_args.len())
-        {
-            let default_expr = param
-                .default
-                .as_ref()
-                .ok_or_else(|| gcl_err!(EvalError {
+            }
+            let no_dim_params: &[GenericParamName] = &[];
+            let no_index_params: &[GenericParamName] = &[];
+            let no_nat_params: &[GenericParamName] = &[];
+            let mut args = Vec::with_capacity(total_params);
+            for arg in constructor_type_args {
+                let resolved = crate::tir::typed::resolve_type_expr(
+                    arg,
+                    registry,
+                    no_dim_params,
+                    no_index_params,
+                    no_nat_params,
+                    src,
+                )?;
+                let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+                args.push(InferredType::from(&dt));
+            }
+            // Fill in defaults for remaining params
+            for param in type_def
+                .generic_params
+                .iter()
+                .skip(constructor_type_args.len())
+            {
+                let default_expr = param.default.as_ref().ok_or_else(|| {
+                    gcl_err!(EvalError {
                     message: format!(
                         "internal: generic parameter `{}` has no default",
                         param.name
                     ),
-                } @ src, type_name.span))?;
-            let resolved = crate::tir::typed::resolve_type_expr(
-                default_expr,
-                registry,
-                no_dim_params,
-                no_index_params,
-                no_nat_params,
-                src,
-            )?;
-            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(InferredType::from(&dt));
-        }
-        args
-    } else {
-        vec![]
-    };
+                } @ src, type_name.span)
+                })?;
+                let resolved = crate::tir::typed::resolve_type_expr(
+                    default_expr,
+                    registry,
+                    no_dim_params,
+                    no_index_params,
+                    no_nat_params,
+                    src,
+                )?;
+                let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+                args.push(InferredType::from(&dt));
+            }
+            args
+        } else {
+            vec![]
+        };
 
     // Check for extra fields
     let def_field_names: std::collections::HashSet<&str> =
@@ -979,12 +986,14 @@ pub(super) fn infer_struct_construction(
             .fields()
             .iter()
             .find(|f| f.name.as_str() == field_init.name.value.as_str())
-            .ok_or_else(|| gcl_err!(EvalError {
+            .ok_or_else(|| {
+                gcl_err!(EvalError {
                 message: format!(
                     "internal: unknown field `{}` in struct `{}`",
                     field_init.name.value, type_name.value
                 ),
-            } @ src, field_init.name.span))?;
+            } @ src, field_init.name.span)
+            })?;
 
         let value_type = if let Some(value_expr) = &field_init.value {
             infer_type(
@@ -1000,9 +1009,11 @@ pub(super) fn infer_struct_construction(
             local_types
                 .get(field_init.name.value.as_str())
                 .cloned()
-                .ok_or_else(|| gcl_err!(UnknownLocalRef {
+                .ok_or_else(|| {
+                    gcl_err!(UnknownLocalRef {
                     name: field_init.name.value.to_string(),
-                } @ src, field_init.name.span))?
+                } @ src, field_init.name.span)
+                })?
         };
 
         let expected_field_type = resolve_field_type(

@@ -102,9 +102,11 @@ pub(super) fn infer_match(
             let index_def = registry
                 .indexes
                 .get_index(index_name.as_str())
-                .ok_or_else(|| gcl_err!(UnknownIndex {
+                .ok_or_else(|| {
+                    gcl_err!(UnknownIndex {
                     name: index_name.clone(),
-                } @ src, scrutinee.span))?;
+                } @ src, scrutinee.span)
+                })?;
 
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),
@@ -245,10 +247,12 @@ pub(super) fn infer_match(
                                 .fields()
                                 .iter()
                                 .find(|f| f.name.as_str() == field.value.as_str())
-                                .ok_or_else(|| gcl_err!(UnknownField {
+                                .ok_or_else(|| {
+                                    gcl_err!(UnknownField {
                                     type_name: type_name.clone(),
                                     field_name: field.value.clone(),
-                                } @ src, field.span))?;
+                                } @ src, field.span)
+                                })?;
                             let field_type = resolve_field_type(
                                 &field_def.type_ann,
                                 type_def,
