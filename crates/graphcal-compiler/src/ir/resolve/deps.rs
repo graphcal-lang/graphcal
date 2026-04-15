@@ -1,13 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
 use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::visitor::ExprVisitor;
+use miette::NamedSource;
 
 /// Extract const references from a const expression.
 pub(super) fn extract_const_refs(
@@ -59,7 +57,11 @@ fn collect_const_refs(
                 deps.insert(ident.value.to_string());
                 Ok(())
             } else {
-                Err(gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span))
+                Err(GraphcalError::UnknownConstRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
             }
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
@@ -69,7 +71,11 @@ fn collect_const_refs(
             {
                 Ok(())
             } else {
-                Err(gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span))
+                Err(GraphcalError::UnknownConstRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
             }
         }
         ExprKind::FnCall { name, args, .. } => {
@@ -78,9 +84,11 @@ fn collect_const_refs(
                 && !user_fn_names.contains(name_str)
                 && classify_special_fn(name_str).is_none()
             {
-                return Err(
-                    gcl_err!(UnknownFunction { name: name.value.clone() } @ src, name.span),
-                );
+                return Err(GraphcalError::UnknownFunction {
+                    name: name.value.clone(),
+                    src: src.clone(),
+                    span: name.span.into(),
+                });
             }
             // Only check arity for builtins (user fn arity checked later in dim_check).
             // Skip arity check for aggregation/conversion functions.
@@ -88,11 +96,13 @@ fn collect_const_refs(
                 && args.len() != builtin.arity()
                 && !is_aggregation_fn(name_str)
             {
-                return Err(gcl_err!(WrongArity {
+                return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
                     expected: builtin.arity(),
                     got: args.len(),
-                } @ src, name.span));
+                    src: src.clone(),
+                    span: name.span.into(),
+                });
             }
             for arg in args {
                 collect_const_refs(
@@ -391,7 +401,11 @@ fn collect_all_refs(
                 const_refs.insert(ident.value.to_string());
                 Ok(())
             } else {
-                Err(gcl_err!(UnknownGraphRef { name: ident.value.clone() } @ src, ident.span))
+                Err(GraphcalError::UnknownGraphRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
             }
         }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
@@ -401,7 +415,11 @@ fn collect_all_refs(
             {
                 Ok(())
             } else {
-                Err(gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span))
+                Err(GraphcalError::UnknownConstRef {
+                    name: ident.value.clone(),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
             }
         }
         ExprKind::FnCall { name, args, .. } => {
@@ -410,19 +428,23 @@ fn collect_all_refs(
                 && !user_fn_names.contains(name_str)
                 && classify_special_fn(name_str).is_none()
             {
-                return Err(
-                    gcl_err!(UnknownFunction { name: name.value.clone() } @ src, name.span),
-                );
+                return Err(GraphcalError::UnknownFunction {
+                    name: name.value.clone(),
+                    src: src.clone(),
+                    span: name.span.into(),
+                });
             }
             if let Some(builtin) = builtin_fns.get(name_str)
                 && args.len() != builtin.arity()
                 && !is_aggregation_fn(name_str)
             {
-                return Err(gcl_err!(WrongArity {
+                return Err(GraphcalError::WrongArity {
                     name: name.value.clone(),
                     expected: builtin.arity(),
                     got: args.len(),
-                } @ src, name.span));
+                    src: src.clone(),
+                    span: name.span.into(),
+                });
             }
             for arg in args {
                 collect_all_refs(

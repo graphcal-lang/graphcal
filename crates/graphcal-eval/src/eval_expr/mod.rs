@@ -15,8 +15,6 @@ use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 
-use graphcal_compiler::gcl_err;
-
 use crate::builtins::BuiltinFunction;
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
@@ -55,9 +53,11 @@ impl EvalContext<'_> {
         message: impl Into<String>,
         span: graphcal_compiler::syntax::span::Span,
     ) -> GraphcalError {
-        gcl_err!(EvalError {
+        GraphcalError::EvalError {
             message: message.into(),
-        } @ self.src, span)
+            src: self.src.clone(),
+            span: span.into(),
+        }
     }
 
     /// Build a `GraphcalError::InternalError` using this context's source.
@@ -66,9 +66,11 @@ impl EvalContext<'_> {
         message: impl Into<String>,
         span: graphcal_compiler::syntax::span::Span,
     ) -> GraphcalError {
-        gcl_err!(InternalError {
+        GraphcalError::InternalError {
             message: message.into(),
-        } @ self.src, span)
+            src: self.src.clone(),
+            span: span.into(),
+        }
     }
 }
 

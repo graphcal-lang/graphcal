@@ -12,16 +12,6 @@ use miette::NamedSource;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::syntax::ast::{
-    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
-    TypeExpr,
-};
-use crate::syntax::dimension::Rational;
-use crate::syntax::names::{DeclName, DimName, FnName};
-use crate::syntax::span::Span;
-use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
-
-use crate::gcl_err;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
@@ -33,6 +23,14 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ScopedName;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
+use crate::syntax::ast::{
+    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
+    TypeExpr,
+};
+use crate::syntax::dimension::Rational;
+use crate::syntax::names::{DeclName, DimName, FnName};
+use crate::syntax::span::Span;
+use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
@@ -290,11 +288,14 @@ fn build_ir_from_resolved(
         .consts
         .into_iter()
         .map(|entry| {
-            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
-                gcl_err!(EvalError {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span)
-            })?;
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
             Ok(ConstEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -307,11 +308,14 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
-                gcl_err!(EvalError {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span)
-            })?;
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
             Ok(ParamEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -324,11 +328,14 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
-                gcl_err!(EvalError {
+            let type_ann =
+                type_anns
+                    .remove(&entry.name)
+                    .ok_or_else(|| GraphcalError::EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span)
-            })?;
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    })?;
             Ok(NodeEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -1290,7 +1297,11 @@ fn topo_sort_derived_dims<'a>(
     let sorted_indices = toposort(&graph, None).map_err(|cycle| {
         let cycle_name = graph[cycle.node_id()];
         let pos = idx_to_pos[&cycle.node_id()];
-        gcl_err!(CyclicDimension { name: DimName::new(cycle_name) } @ src, dims[pos].name.span)
+        GraphcalError::CyclicDimension {
+            name: DimName::new(cycle_name),
+            src: src.clone(),
+            span: dims[pos].name.span.into(),
+        }
     })?;
 
     // toposort returns dependencies-last order; reverse for dependencies-first.
@@ -1340,7 +1351,11 @@ fn topo_sort_units<'a>(
 
     let sorted_indices = toposort(&graph, None).map_err(|cycle| {
         let pos = idx_to_pos[&cycle.node_id()];
-        gcl_err!(CyclicUnit { name: units[pos].name.value.clone() } @ src, units[pos].name.span)
+        GraphcalError::CyclicUnit {
+            name: units[pos].name.value.clone(),
+            src: src.clone(),
+            span: units[pos].name.span.into(),
+        }
     })?;
 
     // toposort returns dependencies-last order; reverse for dependencies-first.
@@ -1368,9 +1383,13 @@ fn register_dimension_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(
-        || gcl_err!(UnknownDimension { name: d.name.value.clone() } @ src, d.name.span),
-    )?;
+    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(|| {
+        GraphcalError::UnknownDimension {
+            name: d.name.value.clone(),
+            src: src.clone(),
+            span: d.name.span.into(),
+        }
+    })?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
@@ -1380,11 +1399,14 @@ fn register_unit_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
-        gcl_err!(UnknownDimension {
+    let dim =
+        registry
+            .resolve_dim_expr(&u.dim_type)
+            .ok_or_else(|| GraphcalError::UnknownDimension {
                 name: DimName::new(u.name.value.as_str()),
-            } @ src, u.name.span)
-    })?;
+                src: src.clone(),
+                span: u.name.span.into(),
+            })?;
     let scale = if let Some(def) = &u.definition {
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
@@ -1396,9 +1418,14 @@ fn register_unit_decl(
             }
         } else {
             // Static unit: scale is a compile-time constant.
-            let (_unit_dim, base_scale) = registry.resolve_unit_expr(&def.unit_expr).ok_or_else(
-                || gcl_err!(UnknownUnit { name: u.name.value.clone() } @ src, def.span),
-            )?;
+            let (_unit_dim, base_scale) =
+                registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
+                    GraphcalError::UnknownUnit {
+                        name: u.name.value.clone(),
+                        src: src.clone(),
+                        span: def.span.into(),
+                    }
+                })?;
             UnitScale::Static(eval_scale_expr(&def.scale_expr, src)? * base_scale)
         }
     } else {
@@ -1431,11 +1458,14 @@ fn resolve_base_unit_static_scale(
     unit_expr: &crate::syntax::ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<f64, GraphcalError> {
-    let (_dim, base_scale) = registry.resolve_unit_expr(unit_expr).ok_or_else(|| {
-        gcl_err!(UnknownUnit {
+    let (_dim, base_scale) =
+        registry
+            .resolve_unit_expr(unit_expr)
+            .ok_or_else(|| GraphcalError::UnknownUnit {
                 name: format_unit_expr(unit_expr).into(),
-            } @ src, unit_expr.span)
-    })?;
+                src: src.clone(),
+                span: unit_expr.span.into(),
+            })?;
     Ok(base_scale)
 }
 
@@ -1697,9 +1727,11 @@ fn register_index_decl(
         crate::syntax::ast::IndexDeclKind::RequiredNamed => types::IndexKind::RequiredNamed,
         crate::syntax::ast::IndexDeclKind::RequiredRange { dimension } => {
             let dim = registry.resolve_dim_expr(dimension).ok_or_else(|| {
-                gcl_err!(UnknownDimension {
+                GraphcalError::UnknownDimension {
                     name: crate::syntax::names::DimName::new(idx.name.value.as_str()),
-                } @ src, dimension.span)
+                    src: src.clone(),
+                    span: dimension.span.into(),
+                }
             })?;
             types::IndexKind::RequiredRange { dimension: dim }
         }
@@ -1804,12 +1836,14 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
         ExprKind::ConstRef(ident) => match ident.value.as_str() {
             "PI" => Ok(std::f64::consts::PI),
             "E" => Ok(std::f64::consts::E),
-            _ => Err(gcl_err!(EvalError {
+            _ => Err(GraphcalError::EvalError {
                 message: format!(
                     "unknown constant `{}` in scale expression; only `PI` and `E` are supported",
                     ident.value
                 ),
-            } @ src, ident.span)),
+                src: src.clone(),
+                span: ident.span.into(),
+            }),
         },
         ExprKind::BinOp { op, lhs, rhs } => {
             use crate::syntax::ast::BinOp;
@@ -1821,23 +1855,27 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
                 BinOp::Mul => Ok(l * r),
                 BinOp::Div => Ok(l / r),
                 BinOp::Pow => Ok(l.powf(r)),
-                _ => Err(gcl_err!(EvalError {
+                _ => Err(GraphcalError::EvalError {
                     message: format!(
                         "unsupported operator `{op:?}` in scale expression; \
                          only `+`, `-`, `*`, `/`, `^` are allowed"
                     ),
-                } @ src, expr.span)),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                }),
             }
         }
         ExprKind::UnaryOp {
             op: crate::syntax::ast::UnaryOp::Neg,
             operand,
         } => Ok(-eval_scale_expr(operand, src)?),
-        _ => Err(gcl_err!(EvalError {
+        _ => Err(GraphcalError::EvalError {
             message: "scale expression must be a constant expression \
                       (numbers, PI, E, and arithmetic)"
                 .to_string(),
-        } @ src, expr.span)),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
     }
 }
 
@@ -1858,11 +1896,14 @@ fn eval_range_expr(
     match &expr.kind {
         ExprKind::Number(n) => Ok((*n, Dimension::dimensionless())),
         ExprKind::UnitLiteral { value, unit } => {
-            let (dim, scale) = registry.resolve_unit_expr(unit).ok_or_else(|| {
-                gcl_err!(EvalError {
+            let (dim, scale) =
+                registry
+                    .resolve_unit_expr(unit)
+                    .ok_or_else(|| GraphcalError::EvalError {
                         message: "unknown unit in range expression".to_string(),
-                    } @ src, unit.span)
-            })?;
+                        src: src.clone(),
+                        span: unit.span.into(),
+                    })?;
             Ok((*value * scale, dim))
         }
         ExprKind::UnaryOp {
@@ -1872,9 +1913,11 @@ fn eval_range_expr(
             let (val, dim) = eval_range_expr(operand, registry, src)?;
             Ok((-val, dim))
         }
-        _ => Err(gcl_err!(EvalError {
+        _ => Err(GraphcalError::EvalError {
             message: "range expression must be a numeric or unit literal".to_string(),
-        } @ src, expr.span)),
+            src: src.clone(),
+            span: expr.span.into(),
+        }),
     }
 }
 
@@ -1894,28 +1937,34 @@ fn lower_range_index(
 
     // All three must have the same dimension
     if start_dim != end_dim || start_dim != step_dim {
-        return Err(gcl_err!(RangeIndexDimensionMismatch {
+        return Err(GraphcalError::RangeIndexDimensionMismatch {
             name: name.clone(),
             start_dim: format!("Dimension({})", registry.format_dimension(&start_dim)),
             end_dim: format!("Dimension({})", registry.format_dimension(&end_dim)),
             step_dim: format!("Dimension({})", registry.format_dimension(&step_dim)),
-        } @ src, decl_span));
+            src: src.clone(),
+            span: decl_span.into(),
+        });
     }
 
     // Validate: start <= end
     if start_val > end_val {
-        return Err(gcl_err!(RangeIndexInvalid {
+        return Err(GraphcalError::RangeIndexInvalid {
             name: name.clone(),
             message: format!("start ({start_val}) must be <= end ({end_val})"),
-        } @ src, decl_span));
+            src: src.clone(),
+            span: decl_span.into(),
+        });
     }
 
     // Validate: step > 0
     if step_val <= 0.0 {
-        return Err(gcl_err!(RangeIndexInvalid {
+        return Err(GraphcalError::RangeIndexInvalid {
             name: name.clone(),
             message: format!("step ({step_val}) must be > 0"),
-        } @ src, decl_span));
+            src: src.clone(),
+            span: decl_span.into(),
+        });
     }
 
     // Extract display unit from the start expression's unit annotation.

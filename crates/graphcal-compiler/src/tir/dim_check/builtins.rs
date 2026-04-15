@@ -3,13 +3,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::Expr;
-use crate::syntax::dimension::Dimension;
-
-use crate::gcl_err;
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
+use crate::syntax::ast::Expr;
+use crate::syntax::dimension::Dimension;
 
 pub(super) fn infer_fn_dim(
     sig: &DimSignature,
@@ -24,7 +22,7 @@ pub(super) fn infer_fn_dim(
         match &param.dim {
             ParamDim::Fixed(expected) => {
                 if arg_dims[i] != *expected {
-                    return Err(gcl_err!(DimensionMismatch {
+                    return Err(GraphcalError::DimensionMismatch {
                         expected: registry.dimensions.format_dimension(expected),
                         found: registry.dimensions.format_dimension(&arg_dims[i]),
                         help: format!(
@@ -32,7 +30,9 @@ pub(super) fn infer_fn_dim(
                             param.name,
                             registry.dimensions.format_dimension(expected),
                         ),
-                    } @ src, args[i].span));
+                        src: src.clone(),
+                        span: args[i].span.into(),
+                    });
                 }
             }
             ParamDim::Bind(var) => {
@@ -46,14 +46,16 @@ pub(super) fn infer_fn_dim(
                         .iter()
                         .find(|p| matches!(&p.dim, ParamDim::Bind(v) if v == var))
                         .map_or("?", |p| &p.name);
-                    return Err(gcl_err!(DimensionMismatch {
+                    return Err(GraphcalError::DimensionMismatch {
                         expected: registry.dimensions.format_dimension(bound),
                         found: registry.dimensions.format_dimension(&arg_dims[i]),
                         help: format!(
                             "parameter `{}` must have the same dimension as `{}`",
                             param.name, bind_param_name,
                         ),
-                    } @ src, args[i].span));
+                        src: src.clone(),
+                        span: args[i].span.into(),
+                    });
                 }
             }
         }

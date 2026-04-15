@@ -3,13 +3,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::registry::error::GraphcalError;
+use crate::registry::types::Registry;
 use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, IndexName, VariantName};
-
-use crate::gcl_err;
-use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
 
 use super::{DeclaredType, InferredType};
 
@@ -134,10 +132,10 @@ pub(super) fn resolve_field_type(
         let dim = registry
             .dimensions
             .resolve_type_expr(field_type_ann)
-            .ok_or_else(|| {
-                gcl_err!(EvalError {
+            .ok_or_else(|| GraphcalError::EvalError {
                 message: "cannot resolve field type expression".to_string(),
-            } @ src, field_type_ann.span)
+                src: src.clone(),
+                span: field_type_ann.span.into(),
             })?;
         return Ok(InferredType::Scalar(dim));
     }
@@ -223,31 +221,38 @@ pub(super) fn check_derived_binop(
         return Ok(None);
     };
     let InferredType::Struct(rhs_name, rhs_args) = rhs_type else {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(lhs_type, registry),
             found: format_inferred_type(rhs_type, registry),
             help: "both operands must be the same struct type".to_string(),
-        } @ src, rhs_span));
+            src: src.clone(),
+            span: rhs_span.into(),
+        });
     };
     if lhs_name != rhs_name || lhs_args != rhs_args {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(lhs_type, registry),
             found: format_inferred_type(rhs_type, registry),
             help: "both operands must be the same struct type with the same type arguments"
                 .to_string(),
-        } @ src, rhs_span));
+            src: src.clone(),
+            span: rhs_span.into(),
+        });
     }
-    let type_def = registry
-        .types
-        .get_type(lhs_name.as_str())
-        .ok_or_else(|| gcl_err!(UnknownStructType { name: lhs_name.clone() } @ src, lhs_span))?;
+    let type_def = registry.types.get_type(lhs_name.as_str()).ok_or_else(|| {
+        GraphcalError::UnknownStructType {
+            name: lhs_name.clone(),
+            src: src.clone(),
+            span: lhs_span.into(),
+        }
+    })?;
     let op_name = match derive_op {
         crate::syntax::ast::DeriveOp::Add => "Add",
         crate::syntax::ast::DeriveOp::Sub => "Sub",
         crate::syntax::ast::DeriveOp::Neg => "Neg",
     };
     if !type_def.derives.contains(&derive_op) {
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: format!(
                 "type `{}` does not derive `{op_name}`, cannot use `{}` operator",
                 lhs_name,
@@ -257,7 +262,9 @@ pub(super) fn check_derived_binop(
                     "-"
                 }
             ),
-        } @ src, lhs_span));
+            src: src.clone(),
+            span: lhs_span.into(),
+        });
     }
     Ok(Some(lhs_type.clone()))
 }
@@ -273,18 +280,24 @@ pub(super) fn check_derived_neg(
     let InferredType::Struct(name, _args) = operand_type else {
         return Ok(None);
     };
-    let type_def = registry.types.get_type(name.as_str()).ok_or_else(|| {
-        gcl_err!(UnknownStructType {
+    let type_def =
+        registry
+            .types
+            .get_type(name.as_str())
+            .ok_or_else(|| GraphcalError::UnknownStructType {
                 name: name.clone(),
-            } @ src, operand_span)
-    })?;
+                src: src.clone(),
+                span: operand_span.into(),
+            })?;
     if !type_def
         .derives
         .contains(&crate::syntax::ast::DeriveOp::Neg)
     {
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: format!("type `{name}` does not derive `Neg`, cannot use unary `-` operator"),
-        } @ src, operand_span));
+            src: src.clone(),
+            span: operand_span.into(),
+        });
     }
     Ok(Some(operand_type.clone()))
 }
@@ -300,18 +313,22 @@ pub(super) fn check_arm_types_match(
     if let Some(first) = arm_types.first() {
         for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
             if arm_type != first {
-                return Err(gcl_err!(DimensionMismatch {
+                return Err(GraphcalError::DimensionMismatch {
                     expected: format_inferred_type(first, registry),
                     found: format_inferred_type(arm_type, registry),
                     help: "all match arms must return the same type".to_string(),
-                } @ src, arms[i].body.span));
+                    src: src.clone(),
+                    span: arms[i].body.span.into(),
+                });
             }
         }
         Ok(first.clone())
     } else {
-        Err(gcl_err!(EvalError {
+        Err(GraphcalError::EvalError {
             message: "match expression has no arms".to_string(),
-        } @ src, expr.span))
+            src: src.clone(),
+            span: expr.span.into(),
+        })
     }
 }
 
@@ -323,11 +340,15 @@ pub(super) fn expect_scalar(
 ) -> Result<Dimension, GraphcalError> {
     match inferred {
         InferredType::Scalar(d) => Ok(d.clone()),
-        other => Err(gcl_err!(DimensionMismatch {
+        other => Err(GraphcalError::DimensionMismatch {
             expected: "scalar dimension".to_string(),
             found: format_inferred_type(other, registry),
-            help: "expected a scalar value, not an indexed value or struct".to_string(),
-        } @ src, span)),
+            help: "expected a scalar value,
+            not an indexed value or struct"
+                .to_string(),
+            src: src.clone(),
+            span: span.into(),
+        }),
     }
 }
 

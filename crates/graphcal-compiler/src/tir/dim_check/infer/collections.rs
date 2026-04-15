@@ -11,7 +11,6 @@ use crate::syntax::ast::{BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, Ind
 use crate::syntax::names::{FieldName, GenericParamName, IndexName, StructTypeName};
 use crate::tir::typed::NatLinearForm;
 
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
@@ -78,9 +77,11 @@ pub(super) fn infer_for_comp(
             ForBindingIndex::Named(spanned_idx) => {
                 let idx_name = spanned_idx.value.as_str();
                 let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
-                    gcl_err!(UnknownIndex {
+                    GraphcalError::UnknownIndex {
                         name: spanned_idx.value.clone(),
-                    } @ src, spanned_idx.span)
+                        src: src.clone(),
+                        span: spanned_idx.span.into(),
+                    }
                 })?;
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
@@ -140,25 +141,31 @@ pub(super) fn infer_map_or_table_literal(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if entries.is_empty() {
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: "empty map literal".to_string(),
-        } @ src, expr.span));
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
     let arity = entries[0].keys.len();
     if arity == 0 {
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: "map literal entry has no keys".to_string(),
-        } @ src, expr.span));
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
     // Validate all entries have the same arity
     for entry in &entries[1..] {
         if entry.keys.len() != arity {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: format!(
                     "map literal entries have inconsistent key arity: expected {arity}, found {}",
                     entry.keys.len()
                 ),
-            } @ src, expr.span));
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
     }
     // Validate index names: all entries must use the same indexes in the same order
@@ -166,10 +173,12 @@ pub(super) fn infer_map_or_table_literal(
     for entry in &entries[1..] {
         for (i, key) in entry.keys.iter().enumerate() {
             if key.index.value != *index_names[i] {
-                return Err(gcl_err!(IndexMismatch {
+                return Err(GraphcalError::IndexMismatch {
                     expected: index_names[i].clone(),
                     found: key.index.value.clone(),
-                } @ src, key.index.span));
+                    src: src.clone(),
+                    span: key.index.span.into(),
+                });
             }
         }
     }
@@ -179,18 +188,20 @@ pub(super) fn infer_map_or_table_literal(
         let idx_def = registry
             .indexes
             .get_index(key.index.value.as_str())
-            .ok_or_else(|| {
-                gcl_err!(UnknownIndex {
+            .ok_or_else(|| GraphcalError::UnknownIndex {
                 name: key.index.value.clone(),
-            } @ src, key.index.span)
+                src: src.clone(),
+                span: key.index.span.into(),
             })?;
         if idx_def.is_range() {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: format!(
                     "range index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
                     key.index.value
                 ),
-            } @ src, key.index.span));
+                src: src.clone(),
+                span: key.index.span.into(),
+            });
         }
         axes_variants.push(idx_def.variants());
     }
@@ -207,7 +218,7 @@ pub(super) fn infer_map_or_table_literal(
             .map(|k| k.variant.value.as_str())
             .collect();
         if !provided_tuples.insert(tuple.clone()) {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: format!(
                     "duplicate map literal entry for key tuple ({})",
                     entry
@@ -217,7 +228,9 @@ pub(super) fn infer_map_or_table_literal(
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-            } @ src, expr.span));
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
         // For multi-axis, validate each variant exists in its respective index.
         // For single-axis, skip this check — extra/missing set difference
@@ -228,10 +241,12 @@ pub(super) fn infer_map_or_table_literal(
                     .iter()
                     .any(|v| v.as_str() == key.variant.value.as_str())
                 {
-                    return Err(gcl_err!(UnknownVariant {
+                    return Err(GraphcalError::UnknownVariant {
                         index_name: key.index.value.clone(),
                         variant_name: key.variant.value.clone(),
-                    } @ src, key.variant.span));
+                        src: src.clone(),
+                        span: key.variant.span.into(),
+                    });
                 }
             }
         }
@@ -247,10 +262,12 @@ pub(super) fn infer_map_or_table_literal(
                 .iter()
                 .map(|t| crate::syntax::names::VariantName::new(t[0]))
                 .collect();
-            return Err(gcl_err!(ExtraVariants {
+            return Err(GraphcalError::ExtraVariants {
                 index_name: index_names[0].clone(),
                 extra: extra_variants,
-            } @ src, expr.span));
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
         let extra_strs: Vec<String> = extra
             .iter()
@@ -262,12 +279,14 @@ pub(super) fn infer_map_or_table_literal(
                     .join(", ")
             })
             .collect();
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: format!(
                 "extra entries in map literal: ({})",
                 extra_strs.join("), (")
             ),
-        } @ src, expr.span));
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
     // Check for missing tuples
     let missing: Vec<Vec<&str>> = expected_tuples
@@ -280,10 +299,12 @@ pub(super) fn infer_map_or_table_literal(
                 .iter()
                 .map(|t| crate::syntax::names::VariantName::new(t[0]))
                 .collect();
-            return Err(gcl_err!(MissingVariants {
+            return Err(GraphcalError::MissingVariants {
                 index_name: index_names[0].clone(),
                 missing: missing_variants,
-            } @ src, expr.span));
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
         let missing_strs: Vec<String> = missing
             .iter()
@@ -295,12 +316,14 @@ pub(super) fn infer_map_or_table_literal(
                     .join(", ")
             })
             .collect();
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: format!(
                 "non-exhaustive map literal: missing entries for ({})",
                 missing_strs.join("), (")
             ),
-        } @ src, expr.span));
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
     // Infer element type from first entry, check all entries match
     let first_type = infer_type(
@@ -321,9 +344,11 @@ pub(super) fn infer_map_or_table_literal(
             .get_index(index.as_str())
             .is_some_and(|def| !def.is_range());
         if inner_is_label {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
-            } @ src, entries[0].value.span));
+                src: src.clone(),
+                span: entries[0].value.span.into(),
+            });
         }
     }
     for entry in &entries[1..] {
@@ -336,10 +361,12 @@ pub(super) fn infer_map_or_table_literal(
             src,
         )?;
         if entry_type != first_type {
-            return Err(gcl_err!(DimensionMismatchInAnnotation {
+            return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: format_inferred_type(&first_type, registry),
                 inferred: format_inferred_type(&entry_type, registry),
-            } @ src, entry.value.span));
+                src: src.clone(),
+                span: entry.value.span.into(),
+            });
         }
     }
     // Wrap in nested Indexed layers (reverse order, matching `for` comprehension)
@@ -380,61 +407,74 @@ pub(super) fn infer_index_access(
             index: idx_name,
         } = current
         else {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: "indexing a non-indexed value".to_string(),
-            } @ src, expr.span));
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         };
         // Validate the argument matches the index
         match arg {
             IndexArg::Variant { index, variant } => {
                 if index.value.as_str() != idx_name.as_str() {
-                    return Err(gcl_err!(IndexMismatch {
+                    return Err(GraphcalError::IndexMismatch {
                         expected: idx_name,
                         found: index.value.clone(),
-                    } @ src, index.span));
+                        src: src.clone(),
+                        span: index.span.into(),
+                    });
                 }
                 // Validate variant exists
                 let idx_def = registry
                     .indexes
                     .get_index(idx_name.as_str())
-                    .ok_or_else(|| {
-                        gcl_err!(UnknownIndex {
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
                         name: idx_name.clone(),
-                    } @ src, index.span)
+                        src: src.clone(),
+                        span: index.span.into(),
                     })?;
                 if !idx_def
                     .variants()
                     .iter()
                     .any(|v| v.as_str() == variant.value.as_str())
                 {
-                    return Err(gcl_err!(UnknownVariant {
+                    return Err(GraphcalError::UnknownVariant {
                         index_name: idx_name,
                         variant_name: variant.value.clone(),
-                    } @ src, variant.span));
+                        src: src.clone(),
+                        span: variant.span.into(),
+                    });
                 }
             }
             IndexArg::Var(ident) => {
                 // Must be a loop variable with matching index
-                let var_type = local_types.get(&ident.name).ok_or_else(|| {
-                    gcl_err!(UnknownLocalRef {
+                let var_type =
+                    local_types
+                        .get(&ident.name)
+                        .ok_or_else(|| GraphcalError::UnknownLocalRef {
                             name: ident.name.clone(),
-                        } @ src, ident.span)
-                })?;
+                            src: src.clone(),
+                            span: ident.span.into(),
+                        })?;
                 match var_type {
                     InferredType::Label(label_index) => {
                         if label_index.as_str() != idx_name.as_str() {
-                            return Err(gcl_err!(IndexMismatch {
+                            return Err(GraphcalError::IndexMismatch {
                                 expected: idx_name,
                                 found: label_index.clone(),
-                            } @ src, ident.span));
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
                         }
                     }
                     InferredType::Struct(type_name, args) => {
                         if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
-                            return Err(gcl_err!(IndexMismatch {
+                            return Err(GraphcalError::IndexMismatch {
                                 expected: idx_name,
                                 found: IndexName::new(type_name.as_str()),
-                            } @ src, ident.span));
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
                         }
                     }
                     InferredType::Scalar(_) => {
@@ -444,15 +484,17 @@ pub(super) fn infer_index_access(
                             registry
                                 .indexes
                                 .get_index(idx_name.as_str())
-                                .ok_or_else(|| {
-                                    gcl_err!(UnknownIndex {
+                                .ok_or_else(|| GraphcalError::UnknownIndex {
                                     name: idx_name.clone(),
-                                } @ src, ident.span)
+                                    src: src.clone(),
+                                    span: ident.span.into(),
                                 })?;
                         if !idx_def.is_range() {
-                            return Err(gcl_err!(EvalError {
+                            return Err(GraphcalError::EvalError {
                                 message: format!("`{}` is not a loop variable", ident.name),
-                            } @ src, ident.span));
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
                         }
                     }
                     InferredType::Int => {
@@ -461,12 +503,14 @@ pub(super) fn infer_index_access(
                         if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
                             && !idx_def.is_nat_range()
                         {
-                            return Err(gcl_err!(EvalError {
+                            return Err(GraphcalError::EvalError {
                                 message: format!(
                                     "`{}` (Int) cannot index into non-nat-range index `{}`",
                                     ident.name, idx_name
                                 ),
-                            } @ src, ident.span));
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
                         }
                         // Int has no static bound — no bounds checking possible.
                         // If the index is not in registry (generic nat param),
@@ -475,42 +519,49 @@ pub(super) fn infer_index_access(
                     InferredType::Fin(fin_bound) => {
                         // Fin(N) can index into nat-range indexes with bounds checking.
                         // Extract the index size as a NatLinearForm and check: fin_bound <= size.
-                        let index_form =
-                            if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str()) {
-                                if !idx_def.is_nat_range() {
-                                    return Err(gcl_err!(EvalError {
+                        let index_form = if let Some(idx_def) =
+                            registry.indexes.get_index(idx_name.as_str())
+                        {
+                            if !idx_def.is_nat_range() {
+                                return Err(GraphcalError::EvalError {
                                     message: format!(
                                         "`{}` (Fin({})) cannot index into non-nat-range index `{}`",
                                         ident.name,
                                         fin_bound.format(),
                                         idx_name
                                     ),
-                                } @ src, ident.span));
-                                }
-                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                            } else {
-                                // Index not in registry: symbolic nat range (generic param).
-                                NatLinearForm::from_index_name(idx_name.as_str())
-                            };
+                                    src: src.clone(),
+                                    span: ident.span.into(),
+                                });
+                            }
+                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                        } else {
+                            // Index not in registry: symbolic nat range (generic param).
+                            NatLinearForm::from_index_name(idx_name.as_str())
+                        };
                         if let Some(index_form) = &index_form
                             && !fin_bound.is_leq(index_form)
                         {
-                            return Err(gcl_err!(EvalError {
+                            return Err(GraphcalError::EvalError {
                                 message: format!(
                                     "index out of bounds: `{}` has type Fin({}) but array has size {}",
                                     ident.name,
                                     fin_bound.format(),
                                     index_form.format(),
                                 ),
-                            } @ src, ident.span));
+                                src: src.clone(),
+                                span: ident.span.into(),
+                            });
                         }
                         // If we can't determine the index size, allow it —
                         // the check will happen at the call site.
                     }
                     _ => {
-                        return Err(gcl_err!(EvalError {
+                        return Err(GraphcalError::EvalError {
                             message: format!("`{}` is not a loop variable", ident.name),
-                        } @ src, ident.span));
+                            src: src.clone(),
+                            span: ident.span.into(),
+                        });
                     }
                 }
             }
@@ -525,22 +576,26 @@ pub(super) fn infer_index_access(
                     src,
                 )?;
                 if !expr_type.is_int_like() {
-                    return Err(gcl_err!(EvalError {
+                    return Err(GraphcalError::EvalError {
                         message: format!(
                             "index expression must be an integer type, got {}",
                             format_inferred_type(&expr_type, registry),
                         ),
-                    } @ src, index_expr.span));
+                        src: src.clone(),
+                        span: index_expr.span.into(),
+                    });
                 }
                 // Check that the indexed type is a nat-range index.
                 if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
                     && !idx_def.is_nat_range()
                 {
-                    return Err(gcl_err!(EvalError {
+                    return Err(GraphcalError::EvalError {
                         message: format!(
                             "expression index cannot be used with non-nat-range index `{idx_name}`",
                         ),
-                    } @ src, index_expr.span));
+                        src: src.clone(),
+                        span: index_expr.span.into(),
+                    });
                 }
                 // Try to compute a static Fin bound for bounds checking.
                 if let Some(fin_bound) = compute_index_fin_bound(index_expr, local_types) {
@@ -552,13 +607,15 @@ pub(super) fn infer_index_access(
                     if let Some(index_form) = &index_form
                         && !fin_bound.is_leq(index_form)
                     {
-                        return Err(gcl_err!(EvalError {
+                        return Err(GraphcalError::EvalError {
                             message: format!(
                                 "index out of bounds: expression has type Fin({}) but array has size {}",
                                 fin_bound.format(),
                                 index_form.format(),
                             ),
-                        } @ src, index_expr.span));
+                            src: src.clone(),
+                            span: index_expr.span.into(),
+                        });
                     }
                 }
             }
@@ -646,9 +703,11 @@ pub(super) fn infer_scan(
         src,
     )?;
     let InferredType::Indexed { element, index } = source_type else {
-        return Err(gcl_err!(EvalError {
+        return Err(GraphcalError::EvalError {
             message: "scan source must be an indexed value".to_string(),
-        } @ src, source.span));
+            src: src.clone(),
+            span: source.span.into(),
+        });
     };
     let init_type = infer_type(
         init,
@@ -660,11 +719,13 @@ pub(super) fn infer_scan(
     )?;
     // init and element must have the same type
     if init_type != *element {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(&element, registry),
             found: format_inferred_type(&init_type, registry),
             help: "scan init value must match element type of source".to_string(),
-        } @ src, init.span));
+            src: src.clone(),
+            span: init.span.into(),
+        });
     }
     // Bind acc and val as locals with element type
     let mut scan_locals = local_types.clone();
@@ -679,11 +740,13 @@ pub(super) fn infer_scan(
         src,
     )?;
     if body_type != *element {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(&element, registry),
             found: format_inferred_type(&body_type, registry),
             help: "scan body must return the same type as the accumulator".to_string(),
-        } @ src, body.span));
+            src: src.clone(),
+            span: body.span.into(),
+        });
     }
     // scan produces an indexed result with the same index
     Ok(InferredType::Indexed { element, index })
@@ -771,11 +834,13 @@ pub(super) fn infer_unfold(
         src,
     )?;
     if body_type != init_type {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(&init_type, registry),
             found: format_inferred_type(&body_type, registry),
             help: "time scan body must return the same type as the init value".to_string(),
-        } @ src, body.span));
+            src: src.clone(),
+            span: body.span.into(),
+        });
     }
 
     // The result type is Indexed { element: init_type, index: <range_index> }
@@ -811,36 +876,44 @@ pub(super) fn infer_field_access(
     match &inner_type {
         InferredType::Struct(type_name, type_args) => {
             let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
-                gcl_err!(UnknownStructType {
+                GraphcalError::UnknownStructType {
                     name: type_name.clone(),
-                } @ src, inner.span)
+                    src: src.clone(),
+                    span: inner.span.into(),
+                }
             })?;
             // Field access is only allowed on record types (not union or unit types)
             if type_def.is_union() {
-                return Err(gcl_err!(NotAStruct {
+                return Err(GraphcalError::NotAStruct {
                     name: format!("union type `{type_name}` (use `match` to access fields)"),
-                } @ src, inner.span));
+                    src: src.clone(),
+                    span: inner.span.into(),
+                });
             }
             if type_def.is_unit() {
-                return Err(gcl_err!(NotAStruct {
+                return Err(GraphcalError::NotAStruct {
                     name: format!("unit type `{type_name}` has no fields"),
-                } @ src, inner.span));
+                    src: src.clone(),
+                    span: inner.span.into(),
+                });
             }
             let field_def = type_def
                 .fields()
                 .iter()
                 .find(|f| f.name.as_str() == field.value.as_str())
-                .ok_or_else(|| {
-                    gcl_err!(UnknownField {
+                .ok_or_else(|| GraphcalError::UnknownField {
                     type_name: type_name.clone(),
                     field_name: field.value.clone(),
-                } @ src, field.span)
+                    src: src.clone(),
+                    span: field.span.into(),
                 })?;
             resolve_field_type(&field_def.type_ann, type_def, type_args, registry, src)
         }
-        _ => Err(gcl_err!(NotAStruct {
+        _ => Err(GraphcalError::NotAStruct {
             name: format_inferred_type(&inner_type, registry),
-        } @ src, inner.span)),
+            src: src.clone(),
+            span: inner.span.into(),
+        }),
     }
 }
 
@@ -864,90 +937,98 @@ pub(super) fn infer_struct_construction(
     let type_def = registry
         .types
         .get_type(type_name.value.as_str())
-        .ok_or_else(|| {
-            gcl_err!(UnknownStructType {
+        .ok_or_else(|| GraphcalError::UnknownStructType {
             name: type_name.value.clone(),
-        } @ src, type_name.span)
+            src: src.clone(),
+            span: type_name.span.into(),
         })?;
     if type_def.is_union() {
-        return Err(gcl_err!(UnknownStructType {
+        return Err(GraphcalError::UnknownStructType {
             name: type_name.value.clone(),
-        } @ src, type_name.span));
+            src: src.clone(),
+            span: type_name.span.into(),
+        });
     }
     let owning_type_name = type_def.name.clone();
 
     // Resolve constructor type args for generic structs
-    let resolved_type_args: Vec<InferredType> =
-        if constructor_type_args.is_empty() && type_def.generic_params.is_empty() {
-            vec![]
-        } else if !type_def.generic_params.is_empty() {
-            let total_params = type_def.generic_params.len();
-            let required_count = type_def
-                .generic_params
-                .iter()
-                .take_while(|p| p.default.is_none())
-                .count();
-            if constructor_type_args.len() < required_count
-                || constructor_type_args.len() > total_params
-            {
-                let hint = if required_count == total_params {
-                    format!("{total_params}")
-                } else {
-                    format!("{required_count}..{total_params}")
-                };
-                return Err(gcl_err!(EvalError {
+    let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty()
+        && type_def.generic_params.is_empty()
+    {
+        vec![]
+    } else if !type_def.generic_params.is_empty() {
+        let total_params = type_def.generic_params.len();
+        let required_count = type_def
+            .generic_params
+            .iter()
+            .take_while(|p| p.default.is_none())
+            .count();
+        if constructor_type_args.len() < required_count
+            || constructor_type_args.len() > total_params
+        {
+            let hint = if required_count == total_params {
+                format!("{total_params}")
+            } else {
+                format!("{required_count}..{total_params}")
+            };
+            return Err(GraphcalError::EvalError {
                 message: format!(
                     "type `{}` expects {hint} type argument(s), got {}",
                     type_name.value,
                     constructor_type_args.len()
                 ),
-            } @ src, type_name.span));
-            }
-            let no_dim_params: &[GenericParamName] = &[];
-            let no_index_params: &[GenericParamName] = &[];
-            let no_nat_params: &[GenericParamName] = &[];
-            let mut args = Vec::with_capacity(total_params);
-            for arg in constructor_type_args {
-                let resolved = crate::tir::typed::resolve_type_expr(
-                    arg,
-                    registry,
-                    no_dim_params,
-                    no_index_params,
-                    no_nat_params,
-                    src,
-                )?;
-                let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-                args.push(InferredType::from(&dt));
-            }
-            // Fill in defaults for remaining params
-            for param in type_def
-                .generic_params
-                .iter()
-                .skip(constructor_type_args.len())
-            {
-                let default_expr = param.default.as_ref().ok_or_else(|| {
-                    gcl_err!(EvalError {
+                src: src.clone(),
+                span: type_name.span.into(),
+            });
+        }
+        let no_dim_params: &[GenericParamName] = &[];
+        let no_index_params: &[GenericParamName] = &[];
+        let no_nat_params: &[GenericParamName] = &[];
+        let mut args = Vec::with_capacity(total_params);
+        for arg in constructor_type_args {
+            let resolved = crate::tir::typed::resolve_type_expr(
+                arg,
+                registry,
+                no_dim_params,
+                no_index_params,
+                no_nat_params,
+                src,
+            )?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+            args.push(InferredType::from(&dt));
+        }
+        // Fill in defaults for remaining params
+        for param in type_def
+            .generic_params
+            .iter()
+            .skip(constructor_type_args.len())
+        {
+            let default_expr = param
+                .default
+                .as_ref()
+                .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
                         "internal: generic parameter `{}` has no default",
                         param.name
                     ),
-                } @ src, type_name.span)
+                    src: src.clone(),
+                    span: type_name.span.into(),
                 })?;
-                let resolved = crate::tir::typed::resolve_type_expr(
-                    default_expr,
-                    registry,
-                    no_dim_params,
-                    no_index_params,
-                    no_nat_params,
-                    src,
-                )?;
-                let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-                args.push(InferredType::from(&dt));
-            }
-            args
-        } else {
-            vec![]
-        };
+            let resolved = crate::tir::typed::resolve_type_expr(
+                default_expr,
+                registry,
+                no_dim_params,
+                no_index_params,
+                no_nat_params,
+                src,
+            )?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+            args.push(InferredType::from(&dt));
+        }
+        args
+    } else {
+        vec![]
+    };
 
     // Check for extra fields
     let def_field_names: std::collections::HashSet<&str> =
@@ -959,10 +1040,12 @@ pub(super) fn infer_struct_construction(
         .map(|n| FieldName::new(*n))
         .collect();
     if !extra.is_empty() {
-        return Err(gcl_err!(ExtraFields {
+        return Err(GraphcalError::ExtraFields {
             type_name: type_name.value.clone(),
-            extra: extra,
-        } @ src, expr.span));
+            extra,
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
 
     // Check for missing fields
@@ -974,10 +1057,12 @@ pub(super) fn infer_struct_construction(
         .map(|f| f.name.clone())
         .collect();
     if !missing.is_empty() {
-        return Err(gcl_err!(MissingFields {
+        return Err(GraphcalError::MissingFields {
             type_name: type_name.value.clone(),
-            missing: missing,
-        } @ src, expr.span));
+            missing,
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
 
     // Type-check each field's value
@@ -986,13 +1071,13 @@ pub(super) fn infer_struct_construction(
             .fields()
             .iter()
             .find(|f| f.name.as_str() == field_init.name.value.as_str())
-            .ok_or_else(|| {
-                gcl_err!(EvalError {
+            .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: unknown field `{}` in struct `{}`",
                     field_init.name.value, type_name.value
                 ),
-            } @ src, field_init.name.span)
+                src: src.clone(),
+                span: field_init.name.span.into(),
             })?;
 
         let value_type = if let Some(value_expr) = &field_init.value {
@@ -1009,10 +1094,10 @@ pub(super) fn infer_struct_construction(
             local_types
                 .get(field_init.name.value.as_str())
                 .cloned()
-                .ok_or_else(|| {
-                    gcl_err!(UnknownLocalRef {
+                .ok_or_else(|| GraphcalError::UnknownLocalRef {
                     name: field_init.name.value.to_string(),
-                } @ src, field_init.name.span)
+                    src: src.clone(),
+                    span: field_init.name.span.into(),
                 })?
         };
 
@@ -1024,12 +1109,14 @@ pub(super) fn infer_struct_construction(
             src,
         )?;
         if value_type != expected_field_type {
-            return Err(gcl_err!(FieldDimensionMismatch {
+            return Err(GraphcalError::FieldDimensionMismatch {
                 type_name: type_name.value.clone(),
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),
-            } @ src, field_init.name.span));
+                src: src.clone(),
+                span: field_init.name.span.into(),
+            });
         }
     }
 
