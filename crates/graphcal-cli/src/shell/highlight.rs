@@ -142,7 +142,6 @@ const fn token_color(token: &Token) -> Option<&'static str> {
         | Token::Dimension
         | Token::Unit
         | Token::Type
-        | Token::Fn
         | Token::For
         | Token::Import
         | Token::Match

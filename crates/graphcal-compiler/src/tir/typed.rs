@@ -240,16 +240,6 @@ impl Monomial {
         Some((Self(remaining), factor))
     }
 
-    /// Get the total degree of this monomial (sum of exponents).
-    #[must_use]
-    #[expect(
-        dead_code,
-        reason = "useful for future non-linear unification extensions"
-    )]
-    fn degree(&self) -> u64 {
-        self.0.values().sum()
-    }
-
     /// Format as a human-readable string, e.g. `""` (empty/constant), `"N"`, `"M * N"`, `"N^2"`.
     #[must_use]
     fn format(&self) -> String {

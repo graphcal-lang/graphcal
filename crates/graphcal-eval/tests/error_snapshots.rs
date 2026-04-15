@@ -165,13 +165,6 @@ fn error_missing_struct_field() {
 }
 
 #[test]
-fn error_at_in_fn() {
-    let source = include_str!("../../../tests/fixtures/errors/at_in_fn.gcl");
-    let rendered = render_error(source, "at_in_fn.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn error_recursive_fn() {
     let source = include_str!("../../../tests/fixtures/errors/recursive_fn.gcl");
     let rendered = render_error(source, "recursive_fn.gcl");

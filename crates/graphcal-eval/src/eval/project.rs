@@ -150,10 +150,10 @@ struct CompiledFile {
 }
 
 /// Return type for [`build_dep_imported_values`].
-type DepImportedValues = (
-    ImportedValueNames,
-    HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-);
+struct DepImportedValues {
+    names: ImportedValueNames,
+    values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+}
 
 /// An instantiated import that needs IR merging (deferred until after lowering).
 struct DeferredInstantiatedImport {
@@ -1632,8 +1632,8 @@ fn process_deferred_instantiated_imports(
         let (dep_builder, dep_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
             &dep_loaded.ast,
             dep_src,
-            &dep_imported.0,
-            dep_imported.1,
+            &dep_imported.names,
+            dep_imported.values,
         )?;
 
         // Merge the dependency's type-system declarations into the importer's registry.
@@ -2135,7 +2135,10 @@ fn build_dep_imported_values(
         );
     }
 
-    Ok((imported_names, imported_values))
+    Ok(DepImportedValues {
+        names: imported_names,
+        values: imported_values,
+    })
 }
 
 /// Helper: import values from a dependency according to the import kind.

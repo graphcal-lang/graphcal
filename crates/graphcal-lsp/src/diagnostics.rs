@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::{
 
 use graphcal_eval::eval::CompileError;
 
-use crate::convert::byte_offset_to_position;
+use crate::convert::{offset_len_to_range, span_to_range};
 
 /// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
 pub fn eval_result_to_diagnostics(
@@ -60,11 +60,8 @@ pub fn eval_result_to_diagnostics(
                     ),
                 };
 
-                let start = byte_offset_to_position(source, span.offset());
-                let end = byte_offset_to_position(source, span.offset() + span.len());
-
                 Some(Diagnostic {
-                    range: Range { start, end },
+                    range: span_to_range(source, *span),
                     severity: Some(severity),
                     code: Some(NumberOrString::String("graphcal::A001".to_string())),
                     source: Some("graphcal".to_string()),
@@ -119,8 +116,7 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
         let labels: Vec<_> = labels.collect();
 
         if let Some(primary) = labels.first() {
-            let primary_start = byte_offset_to_position(source, primary.offset());
-            let primary_end = byte_offset_to_position(source, primary.offset() + primary.len());
+            let primary_range = offset_len_to_range(source, primary.offset(), primary.len());
 
             let primary_msg = primary.label().map_or_else(
                 || format!("{message}{help_suffix}"),
@@ -130,24 +126,17 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
             // Remaining labels become related information.
             let related: Vec<DiagnosticRelatedInformation> = labels[1..]
                 .iter()
-                .map(|label| {
-                    let start = byte_offset_to_position(source, label.offset());
-                    let end = byte_offset_to_position(source, label.offset() + label.len());
-                    DiagnosticRelatedInformation {
-                        location: Location {
-                            uri: doc_uri.clone(),
-                            range: Range { start, end },
-                        },
-                        message: label.label().unwrap_or("related location").to_string(),
-                    }
+                .map(|label| DiagnosticRelatedInformation {
+                    location: Location {
+                        uri: doc_uri.clone(),
+                        range: offset_len_to_range(source, label.offset(), label.len()),
+                    },
+                    message: label.label().unwrap_or("related location").to_string(),
                 })
                 .collect();
 
             diagnostics.push(Diagnostic {
-                range: Range {
-                    start: primary_start,
-                    end: primary_end,
-                },
+                range: primary_range,
                 severity: Some(DiagnosticSeverity::ERROR),
                 code: code.clone(),
                 source: Some("graphcal".to_string()),

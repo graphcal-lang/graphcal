@@ -570,6 +570,34 @@ fn invert_indexed_variants(
     (index_name.clone(), inverted_entries)
 }
 
+/// Format a list of indexed paths for assertion failure messages.
+///
+/// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
+/// For single-index paths, formats as `Mode::Boost, Mode::Cruise`.
+/// For multi-index paths, formats as `(Phase::Launch, Maneuver::Correction), (Phase::Cruise, Maneuver::Insertion)`.
+fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index: bool) -> String {
+    let formatted: Vec<String> = if is_multi_index {
+        paths
+            .iter()
+            .map(|p| {
+                format!(
+                    "({})",
+                    p.iter()
+                        .map(|(idx, var)| format!("{idx}::{var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .collect()
+    } else {
+        paths
+            .iter()
+            .map(|p| format!("{}::{}", p[0].0, p[0].1))
+            .collect()
+    };
+    formatted.join(", ")
+}
+
 /// Check an indexed assertion with expected-fail variant awareness.
 ///
 /// After inversion, the semantics are:
@@ -608,49 +636,17 @@ fn check_indexed_assert_with_expected_fail(
             let mut parts = Vec::new();
 
             if !unexpected_passes.is_empty() {
-                let formatted: Vec<String> = if is_multi_index {
-                    unexpected_passes
-                        .iter()
-                        .map(|p| {
-                            format!(
-                                "({})",
-                                p.iter()
-                                    .map(|(idx, var)| format!("{idx}::{var}"))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )
-                        })
-                        .collect()
-                } else {
-                    unexpected_passes
-                        .iter()
-                        .map(|p| format!("{}::{}", p[0].0, p[0].1))
-                        .collect()
-                };
-                parts.push(format!("unexpected pass at {}", formatted.join(", ")));
+                parts.push(format!(
+                    "unexpected pass at {}",
+                    format_indexed_paths(&unexpected_passes, is_multi_index)
+                ));
             }
 
             if !unexpected_fails.is_empty() {
-                let formatted: Vec<String> = if is_multi_index {
-                    unexpected_fails
-                        .iter()
-                        .map(|p| {
-                            format!(
-                                "({})",
-                                p.iter()
-                                    .map(|(idx, var)| format!("{idx}::{var}"))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )
-                        })
-                        .collect()
-                } else {
-                    unexpected_fails
-                        .iter()
-                        .map(|p| format!("{}::{}", p[0].0, p[0].1))
-                        .collect()
-                };
-                parts.push(format!("failed at {}", formatted.join(", ")));
+                parts.push(format!(
+                    "failed at {}",
+                    format_indexed_paths(&unexpected_fails, is_multi_index)
+                ));
             }
 
             AssertResult::Fail {
@@ -678,27 +674,11 @@ pub(super) fn check_indexed_assert(
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
         Ok(paths) => {
             let is_multi_index = paths.iter().any(|p| p.len() > 1);
-            let formatted: Vec<String> = if is_multi_index {
-                paths
-                    .iter()
-                    .map(|p| {
-                        format!(
-                            "({})",
-                            p.iter()
-                                .map(|(idx, var)| format!("{idx}::{var}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    })
-                    .collect()
-            } else {
-                paths
-                    .iter()
-                    .map(|p| format!("{}::{}", p[0].0, p[0].1))
-                    .collect()
-            };
             AssertResult::Fail {
-                message: format!("failed at {}", formatted.join(", ")),
+                message: format!(
+                    "failed at {}",
+                    format_indexed_paths(&paths.iter().collect::<Vec<_>>(), is_multi_index)
+                ),
             }
         }
         Err(msg) => AssertResult::Error { message: msg },
