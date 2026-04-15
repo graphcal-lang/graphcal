@@ -12,8 +12,6 @@ use graphcal_compiler::syntax::names::{DeclName, Spanned};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
-use graphcal_compiler::gcl_err;
-
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
 use crate::registry::{Registry, RegistryBuilder};
@@ -42,9 +40,11 @@ pub(super) fn derive_module_name_from_import_path(
     match import_path {
         ImportPath::FilePath { path, span } => {
             crate::loader::derive_module_name(path).map_err(|stem| {
-                CompileError::Eval(gcl_err!(InvalidModuleName {
-                    stem: stem,
-                } @ src, *span))
+                CompileError::Eval(GraphcalError::InvalidModuleName {
+                    stem,
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
             })
         }
         ImportPath::ModulePath { segments, .. } => {

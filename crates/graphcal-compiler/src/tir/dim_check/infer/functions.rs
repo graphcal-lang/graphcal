@@ -9,7 +9,6 @@ use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::FnName;
 
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
     ConstructorFn, SpecialFnKind, TypeConversionFn, classify_special_fn,
@@ -70,38 +69,46 @@ impl InferCtx<'_> {
         match kind {
             TypeConversionFn::ToFloat => {
                 if self.args.len() != 1 {
-                    return Err(gcl_err!(WrongArity {
+                    return Err(GraphcalError::WrongArity {
                         name: FnName::new(TypeConversionFn::ToFloat.as_str()),
                         expected: 1,
                         got: self.args.len(),
-                    } @ self.src, self.name.span));
+                        src: self.src.clone(),
+                        span: self.name.span.into(),
+                    });
                 }
                 let arg_type = self.infer_arg(&self.args[0])?;
                 if !arg_type.is_int_like() {
-                    return Err(gcl_err!(DimensionMismatch {
+                    return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
                         found: format_inferred_type(&arg_type, self.registry),
                         help: "to_float() requires an Int argument".to_string(),
-                    } @ self.src, self.args[0].span));
+                        src: self.src.clone(),
+                        span: self.args[0].span.into(),
+                    });
                 }
                 Ok(InferredType::Scalar(Dimension::dimensionless()))
             }
             TypeConversionFn::ToInt => {
                 if self.args.len() != 1 {
-                    return Err(gcl_err!(WrongArity {
+                    return Err(GraphcalError::WrongArity {
                         name: FnName::new(TypeConversionFn::ToInt.as_str()),
                         expected: 1,
                         got: self.args.len(),
-                    } @ self.src, self.name.span));
+                        src: self.src.clone(),
+                        span: self.name.span.into(),
+                    });
                 }
                 let arg_type = self.infer_arg(&self.args[0])?;
                 let arg_dim = expect_scalar(&arg_type, self.registry, self.src, self.args[0].span)?;
                 if !arg_dim.is_dimensionless() {
-                    return Err(gcl_err!(DimensionMismatch {
+                    return Err(GraphcalError::DimensionMismatch {
                         expected: "Dimensionless".to_string(),
                         found: self.registry.dimensions.format_dimension(&arg_dim),
                         help: "to_int() requires a Dimensionless argument".to_string(),
-                    } @ self.src, self.args[0].span));
+                        src: self.src.clone(),
+                        span: self.args[0].span.into(),
+                    });
                 }
                 Ok(InferredType::Int)
             }
@@ -123,35 +130,41 @@ impl InferCtx<'_> {
     /// `datetime(string_literal, string_literal)` -> `Datetime(UTC)` (with timezone)
     fn infer_datetime_call(&self) -> Result<InferredType, GraphcalError> {
         if self.args.is_empty() || self.args.len() > 2 {
-            return Err(gcl_err!(EvalError {
+            return Err(GraphcalError::EvalError {
                 message: format!(
                     "datetime() expects 1 or 2 arguments, got {}",
                     self.args.len()
                 ),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         match &self.args[0].kind {
             ExprKind::StringLiteral(_) => {}
             _ => {
-                return Err(gcl_err!(DimensionMismatch {
+                return Err(GraphcalError::DimensionMismatch {
                     expected: "string literal".to_string(),
                     found: format_inferred_type(&self.infer_arg(&self.args[0])?, self.registry),
                     help: "datetime() requires a string literal argument".to_string(),
-                } @ self.src, self.args[0].span));
+                    src: self.src.clone(),
+                    span: self.args[0].span.into(),
+                });
             }
         }
         if self.args.len() == 2 {
             match &self.args[1].kind {
                 ExprKind::StringLiteral(_) => {}
                 _ => {
-                    return Err(gcl_err!(DimensionMismatch {
-                        expected: "string literal (IANA timezone)".to_string(),
-                        found: format_inferred_type(
+                    return Err(GraphcalError::DimensionMismatch {
+                                   expected: "string literal (IANA timezone)".to_string(),
+                                   found: format_inferred_type(
                             &self.infer_arg(&self.args[1])?,
                             self.registry,
                         ),
-                        help: "datetime() second argument must be a timezone string literal (e.g. \"Asia/Tokyo\")".to_string(),
-                    } @ self.src, self.args[1].span));
+                                   help: "datetime() second argument must be a timezone string literal (e.g. \"Asia/Tokyo\")".to_string(),
+                                   src: self.src.clone(),
+                                   span: self.args[1].span.into(),
+                               });
                 }
             }
         }
@@ -163,31 +176,39 @@ impl InferCtx<'_> {
     /// `epoch(string_literal, TimeScale)` -> `Datetime(scale)`
     fn infer_epoch_call(&self) -> Result<InferredType, GraphcalError> {
         if self.args.len() != 2 {
-            return Err(gcl_err!(WrongArity {
+            return Err(GraphcalError::WrongArity {
                 name: FnName::new("epoch"),
                 expected: 2,
                 got: self.args.len(),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         // First arg must be a string literal
         if !matches!(&self.args[0].kind, ExprKind::StringLiteral(_)) {
-            return Err(gcl_err!(DimensionMismatch {
+            return Err(GraphcalError::DimensionMismatch {
                 expected: "string literal".to_string(),
                 found: format_inferred_type(&self.infer_arg(&self.args[0])?, self.registry),
                 help: "epoch() requires a string literal as its first argument".to_string(),
-            } @ self.src, self.args[0].span));
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+            });
         }
         // Second arg must be a time scale identifier
         let ExprKind::ConstRef(scale_ident) = &self.args[1].kind else {
-            return Err(gcl_err!(DimensionMismatch {
+            return Err(GraphcalError::DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
                 found: format_inferred_type(&self.infer_arg(&self.args[1])?, self.registry),
                 help: "epoch() requires a time scale identifier as its second argument".to_string(),
-            } @ self.src, self.args[1].span));
+                src: self.src.clone(),
+                span: self.args[1].span.into(),
+            });
         };
-        let scale: crate::registry::time_scale::TimeScale =
-            scale_ident.value.as_str().parse().map_err(|_| {
-                gcl_err!(DimensionMismatch {
+        let scale: crate::registry::time_scale::TimeScale = scale_ident
+            .value
+            .as_str()
+            .parse()
+            .map_err(|_| GraphcalError::DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
                 found: scale_ident.value.to_string(),
                 help: format!(
@@ -195,7 +216,8 @@ impl InferCtx<'_> {
                     scale_ident.value.as_str(),
                     crate::registry::time_scale::TimeScale::ALL_NAMES.join(", ")
                 ),
-            } @ self.src, self.args[1].span)
+                src: self.src.clone(),
+                span: self.args[1].span.into(),
             })?;
         Ok(InferredType::Datetime(scale))
     }
@@ -207,22 +229,26 @@ impl InferCtx<'_> {
         target_scale: crate::registry::time_scale::TimeScale,
     ) -> Result<InferredType, GraphcalError> {
         if self.args.len() != 1 {
-            return Err(gcl_err!(WrongArity {
+            return Err(GraphcalError::WrongArity {
                 name: self.name.value.clone(),
                 expected: 1,
                 got: self.args.len(),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
-            return Err(gcl_err!(DimensionMismatch {
+            return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
                 found: format_inferred_type(&arg_type, self.registry),
                 help: format!(
                     "{}() requires a Datetime argument",
                     self.name.value.as_str()
                 ),
-            } @ self.src, self.args[0].span));
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+            });
         }
         Ok(InferredType::Datetime(target_scale))
     }
@@ -230,22 +256,26 @@ impl InferCtx<'_> {
     /// Infer datetime extraction: `year`, `month`, `day`, etc. -> `Int`.
     fn infer_datetime_extract_fn_call(&self) -> Result<InferredType, GraphcalError> {
         if self.args.len() != 1 {
-            return Err(gcl_err!(WrongArity {
+            return Err(GraphcalError::WrongArity {
                 name: self.name.value.clone(),
                 expected: 1,
                 got: self.args.len(),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
-            return Err(gcl_err!(DimensionMismatch {
+            return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
                 found: format_inferred_type(&arg_type, self.registry),
                 help: format!(
                     "{}() requires a Datetime argument",
                     self.name.value.as_str()
                 ),
-            } @ self.src, self.args[0].span));
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+            });
         }
         Ok(InferredType::Int)
     }
@@ -253,25 +283,29 @@ impl InferCtx<'_> {
     /// Infer datetime from-numeric constructors: `from_jd`, `from_mjd`, `from_unix` -> `Datetime(UTC)`.
     fn infer_datetime_from_fn_call(&self) -> Result<InferredType, GraphcalError> {
         if self.args.len() != 1 {
-            return Err(gcl_err!(WrongArity {
+            return Err(GraphcalError::WrongArity {
                 name: self.name.value.clone(),
                 expected: 1,
                 got: self.args.len(),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         let arg_type = self.infer_arg(&self.args[0])?;
         match &arg_type {
             InferredType::Scalar(dim) if dim.is_dimensionless() => {}
             t if t.is_int_like() => {}
             _ => {
-                return Err(gcl_err!(DimensionMismatch {
+                return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless or Int".to_string(),
                     found: format_inferred_type(&arg_type, self.registry),
                     help: format!(
                         "{}() requires a dimensionless numeric argument",
                         self.name.value.as_str()
                     ),
-                } @ self.src, self.args[0].span));
+                    src: self.src.clone(),
+                    span: self.args[0].span.into(),
+                });
             }
         }
         Ok(InferredType::Datetime(
@@ -282,22 +316,26 @@ impl InferCtx<'_> {
     /// Infer datetime to-numeric functions: `to_jd`, `to_mjd`, `to_unix` -> `Dimensionless`.
     fn infer_datetime_to_fn_call(&self) -> Result<InferredType, GraphcalError> {
         if self.args.len() != 1 {
-            return Err(gcl_err!(WrongArity {
+            return Err(GraphcalError::WrongArity {
                 name: self.name.value.clone(),
                 expected: 1,
                 got: self.args.len(),
-            } @ self.src, self.name.span));
+                src: self.src.clone(),
+                span: self.name.span.into(),
+            });
         }
         let arg_type = self.infer_arg(&self.args[0])?;
         if !matches!(&arg_type, InferredType::Datetime(_)) {
-            return Err(gcl_err!(DimensionMismatch {
+            return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
                 found: format_inferred_type(&arg_type, self.registry),
                 help: format!(
                     "{}() requires a Datetime argument",
                     self.name.value.as_str()
                 ),
-            } @ self.src, self.args[0].span));
+                src: self.src.clone(),
+                span: self.args[0].span.into(),
+            });
         }
         Ok(InferredType::Scalar(Dimension::dimensionless()))
     }
@@ -317,9 +355,11 @@ impl InferCtx<'_> {
                 .map(InferredType::Scalar);
         }
 
-        Err(gcl_err!(UnknownFunction {
+        Err(GraphcalError::UnknownFunction {
             name: self.name.value.clone(),
-        } @ self.src, self.name.span))
+            src: self.src.clone(),
+            span: self.name.span.into(),
+        })
     }
 }
 

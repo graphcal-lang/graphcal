@@ -153,12 +153,14 @@ pub(super) fn compile_single_file_in_project(
 
         // Find the target file's AST from the project.
         let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
-            CompileError::Eval(gcl_err!(EvalError {
+            CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
                     "cross-file DAG target file not found in project: {}",
                     include_canonical.display()
                 ),
-            } @ file_src, include_decl.path.span()))
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            })
         })?;
 
         // Find the named DAG definition in the target file's AST.
@@ -171,13 +173,15 @@ pub(super) fn compile_single_file_in_project(
                 _ => None,
             })
             .ok_or_else(|| {
-                CompileError::Eval(gcl_err!(EvalError {
+                CompileError::Eval(GraphcalError::EvalError {
                     message: format!(
                         "DAG `{}` not found in file `{}`",
                         dag_name.name,
                         include_canonical.display()
                     ),
-                } @ file_src, dag_name.span))
+                    src: file_src.clone(),
+                    span: dag_name.span.into(),
+                })
             })?;
 
         // Reuse the same inline DAG processing, but with the target file's AST
@@ -219,12 +223,14 @@ pub(super) fn compile_single_file_in_project(
 
         // Find the target file's AST from the project.
         let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
-            CompileError::Eval(gcl_err!(EvalError {
+            CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
                     "bare module DAG target file not found in project: {}",
                     include_canonical.display()
                 ),
-            } @ file_src, include_decl.path.span()))
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            })
         })?;
 
         // Find the named DAG definition in the target file's AST.
@@ -237,13 +243,15 @@ pub(super) fn compile_single_file_in_project(
                 _ => None,
             })
             .ok_or_else(|| {
-                CompileError::Eval(gcl_err!(EvalError {
+                CompileError::Eval(GraphcalError::EvalError {
                     message: format!(
                         "DAG `{}` not found in file `{}`",
                         dag_name,
                         include_canonical.display()
                     ),
-                } @ file_src, include_decl.path.span()))
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                })
             })?;
 
         // Reuse the same inline DAG processing, with the target file's AST
@@ -346,13 +354,15 @@ pub(super) fn evaluate_project_perfile(
                     *target_path == project.root && orig_name.as_str() == p.name.value.as_str()
                 });
                 if !is_overridden {
-                    return Err(CompileError::Eval(gcl_err!(DefaultParamNotProvided {
+                    return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
                         name: p.name.value.to_string(),
                         help: format!(
                             "provide via `--set '{name}=<value>'` or use `--allow-defaults`",
                             name = p.name.value,
                         ),
-                    } @ root_src, decl.span)));
+                        src: root_src.clone(),
+                        span: decl.span.into(),
+                    }));
                 }
             }
         }
@@ -386,12 +396,16 @@ pub(super) fn evaluate_project_perfile(
                             let local_name = item.local_name();
                             let is_overridden = overrides.keys().any(|k| k.as_str() == local_name);
                             if !is_overridden {
-                                return Err(CompileError::Eval(gcl_err!(DefaultParamNotProvided {
+                                return Err(CompileError::Eval(
+                                    GraphcalError::DefaultParamNotProvided {
                                         name: local_name.to_string(),
                                         help: format!(
                                             "provide via `--set '{local_name}=<value>'` or use `--allow-defaults`",
                                         ),
-                                    } @ dep_src, dep_decl.span)));
+                                        src: dep_src.clone(),
+                                        span: dep_decl.span.into(),
+                                    },
+                                ));
                             }
                         }
                     }
@@ -451,9 +465,11 @@ pub(super) fn evaluate_project_perfile(
                                 }
                             })
                             .unwrap_or_else(|| miette::SourceSpan::from((0, 0)));
-                        return Err(CompileError::Eval(gcl_err!(RequiredIndexNotBound {
+                        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
                             name: idx_def.name.to_string(),
-                        } @ file_src, span)));
+                            src: file_src.clone(),
+                            span,
+                        }));
                     }
                 }
             }
@@ -566,9 +582,11 @@ pub(super) fn evaluate_project_perfile(
 
     // Should not reach here — root file should have returned above.
     let internal_src = NamedSource::new("internal", Arc::new(String::new()));
-    Err(CompileError::Eval(gcl_err!(EvalError {
+    Err(CompileError::Eval(GraphcalError::EvalError {
         message: "internal: root file not found in load_order".to_string(),
-    } @ internal_src, (0, 0))))
+        src: internal_src,
+        span: (0, 0).into(),
+    }))
 }
 
 /// Map each dependency file to the root-level import statement span that brought it in.
@@ -668,9 +686,11 @@ pub(super) fn compile_to_tir_project_perfile(
     }
 
     let internal_src = NamedSource::new("internal", Arc::new(String::new()));
-    Err(CompileError::Eval(gcl_err!(EvalError {
+    Err(CompileError::Eval(GraphcalError::EvalError {
         message: "internal: root file not found in load_order".to_string(),
-    } @ internal_src, (0, 0))))
+        src: internal_src,
+        span: (0, 0).into(),
+    }))
 }
 
 /// Route `--set` / `--input` overrides to the files that own the targeted params.

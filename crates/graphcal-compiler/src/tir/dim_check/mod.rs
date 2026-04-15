@@ -7,13 +7,11 @@ use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, StructTypeName};
 
-use crate::registry::time_scale::TimeScale;
-use crate::tir::typed::NatLinearForm;
-
-use crate::gcl_err;
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
+use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
+use crate::tir::typed::NatLinearForm;
 
 pub(crate) use helpers::format_inferred_type;
 use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
@@ -93,10 +91,12 @@ fn check_decl_expr_type(
         src,
     )?;
     if !types_match(declared, &inferred, registry) {
-        return Err(gcl_err!(DimensionMismatchInAnnotation {
+        return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, registry),
             inferred: format_inferred_type(&inferred, registry),
-        } @ src, *type_ann_span));
+            src: src.clone(),
+            span: (*type_ann_span).into(),
+        });
     }
     Ok(())
 }
@@ -125,9 +125,11 @@ fn check_assert_body(
                 src,
             )?;
             if !is_bool_type(&inferred) {
-                return Err(gcl_err!(AssertBodyNotBool {
+                return Err(GraphcalError::AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
-                } @ src, span));
+                    src: src.clone(),
+                    span: span.into(),
+                });
             }
         }
         crate::syntax::ast::AssertBody::Tolerance {
@@ -165,12 +167,14 @@ fn check_assert_body(
             let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
             let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
             if actual_dim != expected_dim {
-                return Err(gcl_err!(DimensionMismatch {
+                return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
                     found: registry.dimensions.format_dimension(&expected_dim),
                     help: "actual and expected in tolerance assertion must have the same dimension"
                         .to_string(),
-                } @ src, expected.span));
+                    src: src.clone(),
+                    span: expected.span.into(),
+                });
             }
 
             // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
@@ -194,11 +198,13 @@ fn check_assert_body(
                             .to_string(),
                     )
                 };
-                return Err(gcl_err!(DimensionMismatch {
+                return Err(GraphcalError::DimensionMismatch {
                     expected: expected_str,
                     found: format_inferred_type(&tolerance_type, registry),
                     help: help_str,
-                } @ src, tolerance.span));
+                    src: src.clone(),
+                    span: tolerance.span.into(),
+                });
             }
         }
     }
@@ -315,14 +321,16 @@ pub fn check_override_dimension(
     )?;
 
     if !types_match(declared, &inferred, registry) {
-        return Err(gcl_err!(DimensionMismatch {
+        return Err(GraphcalError::DimensionMismatch {
             expected: format_declared_type(declared, registry),
             found: format_inferred_type(&inferred, registry),
             help: format!(
                 "override for `{param_name}` must have dimension {}",
                 format_declared_type(declared, registry)
             ),
-        } @ src, expr.span));
+            src: src.clone(),
+            span: expr.span.into(),
+        });
     }
     Ok(())
 }

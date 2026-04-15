@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use miette::NamedSource;
-
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
 use crate::syntax::ast::AttributeArg;
 use crate::syntax::names::{IndexName, VariantName};
+use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
 ///
@@ -31,7 +29,10 @@ pub(super) fn parse_expected_fail_args(
                         IndexName::new(&index.name),
                         VariantName::new(&variant.name),
                     )]),
-                    _ => Err(gcl_err!(ExpectedFailInvalidArg {} @ src, *span)),
+                    _ => Err(GraphcalError::ExpectedFailInvalidArg {
+                        src: src.clone(),
+                        span: (*span).into(),
+                    }),
                 }
             }
             AttributeArg::Group { elements, span } => {
@@ -46,16 +47,25 @@ pub(super) fn parse_expected_fail_args(
                             [index, variant] => {
                                 Ok((IndexName::new(&index.name), VariantName::new(&variant.name)))
                             }
-                            _ => Err(gcl_err!(ExpectedFailInvalidArg {} @ src, *elem_span)),
+                            _ => Err(GraphcalError::ExpectedFailInvalidArg {
+                                src: src.clone(),
+                                span: (*elem_span).into(),
+                            }),
                         },
                         AttributeArg::Group { span: g_span, .. } => {
-                            Err(gcl_err!(ExpectedFailInvalidArg {} @ src, *g_span))
+                            Err(GraphcalError::ExpectedFailInvalidArg {
+                                src: src.clone(),
+                                span: (*g_span).into(),
+                            })
                         }
                     })
                     .collect();
                 let key = key?;
                 if key.is_empty() {
-                    Err(gcl_err!(ExpectedFailInvalidArg {} @ src, *span))
+                    Err(GraphcalError::ExpectedFailInvalidArg {
+                        src: src.clone(),
+                        span: (*span).into(),
+                    })
                 } else {
                     Ok(key)
                 }

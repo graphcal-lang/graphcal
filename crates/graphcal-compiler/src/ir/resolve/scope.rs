@@ -3,13 +3,11 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use miette::NamedSource;
-
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
+use miette::NamedSource;
 
 // ---------------------------------------------------------------------------
 // Graph-reference checkers
@@ -62,7 +60,13 @@ pub(super) fn check_no_runtime_graph_refs(
     let mut checker = ForbiddenGraphRefChecker {
         forbidden: runtime_names,
         src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| gcl_err!(GraphRefInConst { name: name.into() } @ src, span),
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
+            GraphcalError::GraphRefInConst {
+                name: name.into(),
+                src: src.clone(),
+                span: span.into(),
+            }
+        },
     };
     checker.visit_expr(expr)
 }
@@ -78,7 +82,13 @@ pub(super) fn check_no_assert_graph_refs(
     let mut checker = ForbiddenGraphRefChecker {
         forbidden: assert_names,
         src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| gcl_err!(GraphRefToAssert { name: name.into() } @ src, span),
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
+            GraphcalError::GraphRefToAssert {
+                name: name.into(),
+                src: src.clone(),
+                span: span.into(),
+            }
+        },
     };
     checker.visit_expr(expr)
 }
@@ -182,11 +192,13 @@ pub(super) fn check_no_variant_literals(
                      span: Span,
                      src: &NamedSource<Arc<String>>|
               -> Result<(), GraphcalError> {
-            Err(gcl_err!(VariantLiteralInNonRebindable {
+            Err(GraphcalError::VariantLiteralInNonRebindable {
                 index: index.to_string(),
                 variant: variant.to_string(),
                 context: context.clone(),
-            } @ src, span))
+                src: src.clone(),
+                span: span.into(),
+            })
         },
         src,
     };
@@ -212,10 +224,12 @@ pub(super) fn check_no_pub_index_variant_literals(
                 src: &NamedSource<Arc<String>>|
          -> Result<(), GraphcalError> {
             if pub_index_names.contains(index) {
-                return Err(gcl_err!(PubIndexVariantLiteral {
+                return Err(GraphcalError::PubIndexVariantLiteral {
                     index: index.to_string(),
                     variant: variant.to_string(),
-                } @ src, span));
+                    src: src.clone(),
+                    span: span.into(),
+                });
             }
             Ok(())
         },

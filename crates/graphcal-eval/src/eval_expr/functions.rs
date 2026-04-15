@@ -7,8 +7,6 @@ use miette::NamedSource;
 use graphcal_compiler::syntax::ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::VariantName;
 
-use graphcal_compiler::gcl_err;
-
 use crate::error::GraphcalError;
 use crate::resolve_types::{
     AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
@@ -169,9 +167,11 @@ fn eval_aggregation_fn(
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let type_err = |e: graphcal_compiler::registry::runtime_value::RuntimeValueError| {
-        gcl_err!(EvalError {
+        GraphcalError::EvalError {
             message: e.to_string(),
-        } @ src, expr.span)
+            src: src.clone(),
+            span: expr.span.into(),
+        }
     };
     Ok(match kind {
         AggregationFn::Sum => {
@@ -288,49 +288,59 @@ fn eval_datetime_constructor(
     match kind {
         ConstructorFn::Datetime => {
             let ExprKind::StringLiteral(s) = &args[0].kind else {
-                return Err(gcl_err!(InternalError {
+                return Err(GraphcalError::InternalError {
                     message: "datetime() received non-string argument".to_string(),
-                } @ src, args[0].span));
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
             };
             let epoch = if args.len() == 2 {
                 // Two-arg form: datetime("2024-11-05T10:00", "Asia/Tokyo")
                 let ExprKind::StringLiteral(tz_name) = &args[1].kind else {
-                    return Err(gcl_err!(InternalError {
+                    return Err(GraphcalError::InternalError {
                         message: "datetime() received non-string timezone argument".to_string(),
-                    } @ src, args[1].span));
+                        src: src.clone(),
+                        span: args[1].span.into(),
+                    });
                 };
-                datetime_with_timezone(s, tz_name).map_err(|e| {
-                    gcl_err!(EvalError {
+                datetime_with_timezone(s, tz_name).map_err(|e| GraphcalError::EvalError {
                     message: format!("invalid datetime with timezone: {e}"),
-                } @ src, args[0].span)
+                    src: src.clone(),
+                    span: args[0].span.into(),
                 })?
             } else {
                 // One-arg form: datetime("2024-11-05T12:00:00Z")
-                hifitime::Epoch::from_gregorian_str(s).map_err(|e| {
-                    gcl_err!(EvalError {
+                hifitime::Epoch::from_gregorian_str(s).map_err(|e| GraphcalError::EvalError {
                     message: format!("invalid datetime string: {e}"),
-                } @ src, args[0].span)
+                    src: src.clone(),
+                    span: args[0].span.into(),
                 })?
             };
             Ok(RuntimeValue::Datetime(epoch))
         }
         ConstructorFn::Epoch => {
             let ExprKind::StringLiteral(s) = &args[0].kind else {
-                return Err(gcl_err!(InternalError {
+                return Err(GraphcalError::InternalError {
                     message: "epoch() received non-string first argument".to_string(),
-                } @ src, args[0].span));
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
             };
             let ExprKind::ConstRef(scale_ident) = &args[1].kind else {
-                return Err(gcl_err!(InternalError {
+                return Err(GraphcalError::InternalError {
                     message: "epoch() received non-identifier second argument".to_string(),
-                } @ src, args[1].span));
+                    src: src.clone(),
+                    span: args[1].span.into(),
+                });
             };
             // Append the time scale suffix for hifitime's parser
             let with_scale = format!("{s} {}", scale_ident.value);
             let epoch = hifitime::Epoch::from_gregorian_str(&with_scale).map_err(|e| {
-                gcl_err!(EvalError {
+                GraphcalError::EvalError {
                     message: format!("invalid epoch string: {e}"),
-                } @ src, args[0].span)
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                }
             })?;
             Ok(RuntimeValue::Datetime(epoch))
         }

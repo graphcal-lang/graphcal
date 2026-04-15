@@ -1123,28 +1123,3 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 }
-
-/// Construct a [`GraphcalError`] variant with automatic `src.clone()` and `span.into()`.
-///
-/// Reduces boilerplate at the ~400 error construction sites that follow the common
-/// `src: src.clone(), span: expr.span.into()` pattern.
-///
-/// # Usage
-///
-/// ```ignore
-/// // Simple: variant with only src + span
-/// gcl_err!(UnknownGraphRef { name: n.clone() } @ src, expr.span)
-///
-/// // With help:
-/// gcl_err!(DimensionMismatch { expected: e, found: f, help: h } @ src, span)
-/// ```
-#[macro_export]
-macro_rules! gcl_err {
-    ($variant:ident { $($field:ident : $val:expr),* $(,)? } @ $src:expr, $span:expr) => {
-        $crate::registry::error::GraphcalError::$variant {
-            $($field: $val,)*
-            src: $src.clone(),
-            span: $span.into(),
-        }
-    };
-}

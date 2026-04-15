@@ -48,10 +48,12 @@ pub(super) fn process_instantiated_include<'a>(
 
     // Check for duplicate module names (instantiated includes occupy the same namespace).
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
-        return Err(CompileError::Eval(gcl_err!(DuplicateModuleName {
+        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
             first: (*first_span).into(),
-        } @ file_src, include_decl.path.span())));
+            src: file_src.clone(),
+            span: include_decl.path.span().into(),
+        }));
     }
     ctx.module_map.insert(
         prefix.clone(),
@@ -118,10 +120,12 @@ pub(super) fn process_instantiated_include<'a>(
             };
 
             if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
-                return Err(CompileError::Eval(gcl_err!(IndexBindingNotAnIndex {
+                return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
                     dep_index: binding_name.clone(),
                     value: rhs_name,
-                } @ file_src, binding.value.span)));
+                    src: file_src.clone(),
+                    span: binding.value.span.into(),
+                }));
             }
 
             // Validate kind matching (named-to-named, range-to-range).
@@ -146,12 +150,14 @@ pub(super) fn process_instantiated_include<'a>(
             if let Some(imp_named) = imp_is_named
                 && dep_is_named != imp_named
             {
-                return Err(CompileError::Eval(gcl_err!(IndexKindMismatch {
+                return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                     dep_index: binding_name.clone(),
                     dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
                     bound_index: rhs_name,
                     bound_kind: if imp_named { "named" } else { "range" }.to_string(),
-                } @ file_src, binding.name.span)));
+                    src: file_src.clone(),
+                    span: binding.name.span.into(),
+                }));
             }
             // Dimension matching for range indexes is deferred to
             // process_deferred_instantiated_imports() where registries are available.
@@ -174,15 +180,19 @@ pub(super) fn process_instantiated_include<'a>(
                 _ => None,
             });
         if let Some(kind) = actual_kind {
-            return Err(CompileError::Eval(gcl_err!(BindingNotAParam {
+            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
                 name: binding_name.clone(),
                 actual_kind: kind.to_string(),
-            } @ file_src, binding.name.span)));
+                src: file_src.clone(),
+                span: binding.name.span.into(),
+            }));
         }
-        return Err(CompileError::Eval(gcl_err!(UnknownParamBinding {
+        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
             name: binding_name.clone(),
             file_path: include_decl.path.display_path(),
-        } @ file_src, binding.name.span)));
+            src: file_src.clone(),
+            span: binding.name.span.into(),
+        }));
     }
 
     // Register the dependency's declaration names in the importer's scope
@@ -200,10 +210,12 @@ pub(super) fn process_instantiated_include<'a>(
 
                 // Verify the name exists in the dependency.
                 if !file_has_declaration(&dep_loaded.ast, orig_name) {
-                    return Err(CompileError::Eval(gcl_err!(ImportNameNotFound {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                         name: orig_name.clone(),
                         file_path: include_decl.path.display_path(),
-                    } @ file_src, import_item.name.span)));
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
                 }
 
                 // Collect import-item attributes for deferred processing.
@@ -288,9 +300,13 @@ pub(super) fn process_instantiated_include<'a>(
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(gcl_err!(RequiredParamNotProvided {
+            return Err(CompileError::Eval(
+                GraphcalError::RequiredParamNotProvided {
                     name: idx.name.value.to_string(),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                },
+            ));
         }
     }
 
@@ -306,26 +322,30 @@ pub(super) fn process_instantiated_include<'a>(
                 && p.value.is_some()
                 && !bindings.contains_key(p.name.value.as_str())
             {
-                return Err(CompileError::Eval(gcl_err!(DefaultParamNotProvided {
+                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
                     name: p.name.value.to_string(),
                     help: format!(
                         "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
                         name = p.name.value,
                     ),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                }));
             }
             // Indexes with defaults (Named/Range, not Required*) must also be bound.
             if let DeclKind::Index(idx) = &dep_decl.kind
                 && !idx.kind.is_required()
                 && !index_bindings.contains_key(idx.name.value.as_str())
             {
-                return Err(CompileError::Eval(gcl_err!(DefaultIndexNotProvided {
+                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
                     name: idx.name.value.to_string(),
                     help: format!(
                         "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
                         name = idx.name.value,
                     ),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                }));
             }
         }
     }
@@ -384,10 +404,12 @@ pub(super) fn process_inline_dag_include(
     // We use a sentinel path for inline DAGs in the module_map.
     let sentinel_path = PathBuf::from(format!("<dag:{dag_name}>"));
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
-        return Err(CompileError::Eval(gcl_err!(DuplicateModuleName {
+        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
             first: (*first_span).into(),
-        } @ file_src, include_decl.path.span())));
+            src: file_src.clone(),
+            span: include_decl.path.span().into(),
+        }));
     }
     ctx.module_map
         .insert(prefix.clone(), (sentinel_path, include_decl.path.span()));
@@ -471,15 +493,19 @@ pub(super) fn process_inline_dag_include(
             _ => None,
         });
         if let Some(kind) = actual_kind {
-            return Err(CompileError::Eval(gcl_err!(BindingNotAParam {
+            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
                 name: binding_name.clone(),
                 actual_kind: kind.to_string(),
-            } @ file_src, binding.name.span)));
+                src: file_src.clone(),
+                span: binding.name.span.into(),
+            }));
         }
-        return Err(CompileError::Eval(gcl_err!(UnknownParamBinding {
+        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
             name: binding_name.clone(),
             file_path: dag_name.to_string(),
-        } @ file_src, binding.name.span)));
+            src: file_src.clone(),
+            span: binding.name.span.into(),
+        }));
     }
 
     // Register imported names in the importer's scope.
@@ -496,10 +522,12 @@ pub(super) fn process_inline_dag_include(
 
                 // Verify the name exists in the DAG body.
                 if !file_has_declaration(&dag_body, orig_name) {
-                    return Err(CompileError::Eval(gcl_err!(ImportNameNotFound {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                         name: orig_name.clone(),
                         file_path: dag_name.to_string(),
-                    } @ file_src, import_item.name.span)));
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
                 }
 
                 if !import_item.attributes.is_empty() {
@@ -561,9 +589,13 @@ pub(super) fn process_inline_dag_include(
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(gcl_err!(RequiredParamNotProvided {
+            return Err(CompileError::Eval(
+                GraphcalError::RequiredParamNotProvided {
                     name: idx.name.value.to_string(),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                },
+            ));
         }
     }
 
@@ -577,25 +609,29 @@ pub(super) fn process_inline_dag_include(
                 && p.value.is_some()
                 && !bindings.contains_key(p.name.value.as_str())
             {
-                return Err(CompileError::Eval(gcl_err!(DefaultParamNotProvided {
+                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
                     name: p.name.value.to_string(),
                     help: format!(
                         "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
                         name = p.name.value,
                     ),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                }));
             }
             if let DeclKind::Index(idx) = &dep_decl.kind
                 && !idx.kind.is_required()
                 && !index_bindings.contains_key(idx.name.value.as_str())
             {
-                return Err(CompileError::Eval(gcl_err!(DefaultIndexNotProvided {
+                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
                     name: idx.name.value.to_string(),
                     help: format!(
                         "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
                         name = idx.name.value,
                     ),
-                } @ file_src, include_decl.path.span())));
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                }));
             }
         }
     }
@@ -630,9 +666,11 @@ pub(super) fn process_parent_scope_import(
         graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
             // `import .. as alias;` or `import ..;` — not supported (semantics unclear).
             // Only selective parent scope imports are supported.
-            return Err(CompileError::Eval(gcl_err!(EvalError {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
-            } @ file_src, 0..0)));
+                src: file_src.clone(),
+                span: (0..0).into(),
+            }));
         }
     };
 
@@ -655,10 +693,12 @@ pub(super) fn process_parent_scope_import(
         });
 
         let parent_decl = parent_decl.ok_or_else(|| {
-            CompileError::Eval(gcl_err!(ImportNameNotFound {
+            CompileError::Eval(GraphcalError::ImportNameNotFound {
                 name: orig_name.clone(),
                 file_path: "..".to_string(),
-            } @ file_src, import_item.name.span))
+                src: file_src.clone(),
+                span: import_item.name.span.into(),
+            })
         })?;
 
         // Classify the imported item.
@@ -702,9 +742,11 @@ pub(super) fn process_cross_file_parent_scope_import(
     let names = match import_kind {
         graphcal_compiler::syntax::ast::ImportKind::Selective(names) => names,
         graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
-            return Err(CompileError::Eval(gcl_err!(EvalError {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
-            } @ file_src, 0..0)));
+                src: file_src.clone(),
+                span: (0..0).into(),
+            }));
         }
     };
 
@@ -725,10 +767,12 @@ pub(super) fn process_cross_file_parent_scope_import(
         });
 
         let parent_decl = parent_decl.ok_or_else(|| {
-            CompileError::Eval(gcl_err!(ImportNameNotFound {
+            CompileError::Eval(GraphcalError::ImportNameNotFound {
                 name: orig_name.clone(),
                 file_path: "..".to_string(),
-            } @ file_src, import_item.name.span))
+                src: file_src.clone(),
+                span: import_item.name.span.into(),
+            })
         })?;
 
         match &parent_decl.kind {
@@ -798,6 +842,10 @@ pub(super) fn is_bare_module_dag_ref(
     clippy::too_many_arguments,
     reason = "import processing needs all these context parameters"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "visibility check adds necessary logic to the import processing"
+)]
 pub(super) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_canonical: &PathBuf,
@@ -809,12 +857,14 @@ pub(super) fn process_non_instantiated_import<'a>(
     is_import: bool,
 ) -> Result<(), CompileError> {
     let dep = evaluated_files.get(import_canonical).ok_or_else(|| {
-        CompileError::Eval(gcl_err!(EvalError {
+        CompileError::Eval(GraphcalError::EvalError {
             message: format!(
                 "internal: dependency {} not yet evaluated",
                 import_canonical.display()
             ),
-        } @ file_src, import_path.span()))
+            src: file_src.clone(),
+            span: import_path.span().into(),
+        })
     })?;
 
     match import_kind {
@@ -833,15 +883,19 @@ pub(super) fn process_non_instantiated_import<'a>(
                         || dep.has_assert(orig_name)
                         || file_has_declaration(&dep_loaded.ast, orig_name);
                     if exists {
-                        return Err(CompileError::Eval(gcl_err!(ImportPrivateItem {
+                        return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
                             name: orig_name.clone(),
                             file_path: import_path.display_path(),
-                        } @ file_src, import_item.name.span)));
+                            src: file_src.clone(),
+                            span: import_item.name.span.into(),
+                        }));
                     }
-                    return Err(CompileError::Eval(gcl_err!(ImportNameNotFound {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                         name: orig_name.clone(),
                         file_path: import_path.display_path(),
-                    } @ file_src, import_item.name.span)));
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
                 }
 
                 match import_selective_item(
@@ -856,9 +910,11 @@ pub(super) fn process_non_instantiated_import<'a>(
                     SelectiveImportResult::Const => {}
                     SelectiveImportResult::Runtime => {
                         if is_import {
-                            return Err(CompileError::Eval(gcl_err!(ImportRuntimeItem {
+                            return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
                                 name: orig_name.clone(),
-                            } @ file_src, import_item.name.span)));
+                                src: file_src.clone(),
+                                span: import_item.name.span.into(),
+                            }));
                         }
                     }
                     SelectiveImportResult::Assert => {
@@ -878,10 +934,12 @@ pub(super) fn process_non_instantiated_import<'a>(
                                 .or_default()
                                 .insert(orig_name.clone());
                         } else {
-                            return Err(CompileError::Eval(gcl_err!(ImportNameNotFound {
+                            return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                                 name: orig_name.clone(),
                                 file_path: import_path.display_path(),
-                            } @ file_src, import_item.name.span)));
+                                src: file_src.clone(),
+                                span: import_item.name.span.into(),
+                            }));
                         }
                     }
                 }
@@ -894,10 +952,12 @@ pub(super) fn process_non_instantiated_import<'a>(
                 derive_module_name_from_import_path(import_path, file_src)?
             };
             if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
-                return Err(CompileError::Eval(gcl_err!(DuplicateModuleName {
+                return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                     name: module_name,
                     first: (*first_span).into(),
-                } @ file_src, import_path.span())));
+                    src: file_src.clone(),
+                    span: import_path.span().into(),
+                }));
             }
             ctx.module_map.insert(
                 module_name.clone(),
@@ -991,9 +1051,11 @@ pub(super) fn check_dag_recursion(
     for name in dag_definitions.keys() {
         if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
             let cycle_str = cycle.join(" -> ");
-            return Err(CompileError::Eval(gcl_err!(EvalError {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: format!("recursive DAG instantiation: {cycle_str}"),
-            } @ file_src, dag_definitions[name.as_str()].span)));
+                src: file_src.clone(),
+                span: dag_definitions[name.as_str()].span.into(),
+            }));
         }
     }
     Ok(())

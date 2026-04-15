@@ -149,12 +149,16 @@ pub(super) fn process_deferred_instantiated_imports(
                     &imp_idx_def.kind
                 && dep_dim != imp_dim
             {
-                return Err(CompileError::Eval(gcl_err!(IndexBindingDimensionMismatch {
+                return Err(CompileError::Eval(
+                    GraphcalError::IndexBindingDimensionMismatch {
                         dep_index: dep_idx_name.clone(),
                         expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
                         bound_index: importer_idx_name.clone(),
                         found_dim: builder.format_dimension(imp_dim),
-                    } @ dep_src, deferred.import_span)));
+                        src: dep_src.clone(),
+                        span: deferred.import_span.into(),
+                    },
+                ));
             }
         }
 
@@ -500,9 +504,11 @@ pub(super) fn extract_index_name_from_binding_expr(
             type_args,
             fields,
         } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
-        _ => Err(CompileError::Eval(gcl_err!(BindingTargetsIndex {
+        _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_index_name.to_string(),
-        } @ file_src, expr.span))),
+            src: file_src.clone(),
+            span: expr.span.into(),
+        })),
     }
 }
 
@@ -525,12 +531,14 @@ pub(super) fn build_dep_imported_values(
     // Process import declarations (non-instantiated).
     for (_decl, import_decl, trans_canonical) in dep_loaded.imports_with_paths() {
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
-            CompileError::Eval(gcl_err!(EvalError {
+            CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
                     "internal: transitive dependency {} not yet evaluated",
                     trans_canonical.display()
                 ),
-            } @ dep_src, import_decl.path.span()))
+                src: dep_src.clone(),
+                span: import_decl.path.span().into(),
+            })
         })?;
 
         build_dep_import_values_for_kind(
@@ -548,18 +556,22 @@ pub(super) fn build_dep_imported_values(
     for (_decl, include_decl, trans_canonical) in dep_loaded.includes_with_paths() {
         if !include_decl.param_bindings.is_empty() {
             // Nested instantiated includes are not supported in this initial implementation.
-            return Err(CompileError::Eval(gcl_err!(EvalError {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: "nested instantiated includes are not yet supported".to_string(),
-            } @ dep_src, include_decl.path.span())));
+                src: dep_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
         }
 
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
-            CompileError::Eval(gcl_err!(EvalError {
+            CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
                     "internal: transitive dependency {} not yet evaluated",
                     trans_canonical.display()
                 ),
-            } @ dep_src, include_decl.path.span()))
+                src: dep_src.clone(),
+                span: include_decl.path.span().into(),
+            })
         })?;
 
         build_dep_import_values_for_kind(
