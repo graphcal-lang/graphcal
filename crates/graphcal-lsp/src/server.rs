@@ -603,10 +603,27 @@ fn collect_imported_definitions(
                     }
                 }
             }
-            graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
+            graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
+                // Derive the module name from alias or filename stem.
+                let module_name = alias.as_ref().map_or_else(
+                    || {
+                        graphcal_eval::loader::derive_module_name(&import_decl.path.display_path())
+                            .unwrap_or_else(|stem| stem)
+                    },
+                    |alias_ident| alias_ident.name.clone(),
+                );
                 for (key, def) in &imported_table.definitions {
+                    // Only re-key TopLevel definitions; builtins, variants,
+                    // fields, and expr-scoped locals keep their original key.
+                    let qualified_key = match key {
+                        SymbolKey::TopLevel(name) => SymbolKey::Qualified {
+                            module: module_name.clone(),
+                            name: name.clone(),
+                        },
+                        other => other.clone(),
+                    };
                     result.insert(
-                        key.clone(),
+                        qualified_key,
                         ImportedDefinition {
                             uri: imported_uri.clone(),
                             source: source.clone(),
