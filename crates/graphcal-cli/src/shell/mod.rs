@@ -2,6 +2,14 @@
 //!
 //! Provides a REPL that accumulates declarations, evaluates the graph after
 //! each input, and displays values with propagation diffs.
+//!
+//! `print_stdout` and `print_stderr` lints are suppressed module-wide because
+//! this is an interactive REPL — direct terminal output is the expected behavior.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "interactive shell: direct terminal I/O is intentional"
+)]
 
 mod commands;
 mod format;
@@ -121,7 +129,6 @@ impl ShellState {
 ///
 /// If `file` is provided, it is loaded as the base project (like `python -i`).
 /// `set_overrides` and `input_overrides` are applied to the loaded file.
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 pub fn run_shell(
     file: Option<&Path>,
     overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
@@ -341,7 +348,6 @@ fn extract_decl_name(kind: &DeclKind) -> Option<String> {
 }
 
 /// Print propagation: show new and changed values.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
 fn print_propagation(primary_name: &str, new_result: &EvalResult, old_result: Option<&EvalResult>) {
     let symbols = &new_result.base_dim_symbols;
 
@@ -390,7 +396,6 @@ fn print_propagation(primary_name: &str, new_result: &EvalResult, old_result: Op
 }
 
 /// Print assertion failures (only newly failing ones).
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn print_assertion_failures(new_result: &EvalResult, old_result: Option<&EvalResult>) {
     let old_failures: HashSet<&str> = old_result
         .map(|r| {
@@ -416,8 +421,6 @@ fn print_assertion_failures(new_result: &EvalResult, old_result: Option<&EvalRes
 }
 
 /// Handle a `:command`.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_command(cmd_str: &str, state: &mut ShellState) {
     match parse_command(cmd_str) {
         Command::Help => {
@@ -476,7 +479,6 @@ fn handle_command(cmd_str: &str, state: &mut ShellState) {
 }
 
 /// Handle `:list` command.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
 fn handle_list(state: &ShellState) {
     let Some(result) = &state.prev_result else {
         println!("  (no declarations)");
@@ -506,7 +508,6 @@ fn handle_list(state: &ShellState) {
 }
 
 /// Handle `:set param = expr` command.
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_set(name: &str, expr_str: &str, state: &mut ShellState) {
     // Parse the expression.
     let expr = match graphcal_compiler::syntax::parser::Parser::new(expr_str).parse_single_expr() {
@@ -536,8 +537,6 @@ fn handle_set(name: &str, expr_str: &str, state: &mut ShellState) {
 }
 
 /// Handle `:clear-set` command.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_clear_set(name: Option<&str>, state: &mut ShellState) {
     if let Some(name) = name {
         let decl_name = DeclName::new(name);
@@ -568,8 +567,6 @@ fn handle_clear_set(name: Option<&str>, state: &mut ShellState) {
 }
 
 /// Handle `:remove` command.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_remove(name: &str, cascade: bool, state: &mut ShellState) {
     if !state.is_user_defined(name) {
         eprintln!(
@@ -627,8 +624,6 @@ fn handle_remove(name: &str, cascade: bool, state: &mut ShellState) {
 }
 
 /// Handle `:type name` command.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_type(name: &str, state: &ShellState) {
     let Some(tir) = &state.prev_tir else {
         eprintln!("  (no declarations)");
@@ -647,8 +642,6 @@ fn handle_type(name: &str, state: &ShellState) {
 /// Handle a bare name query.
 ///
 /// Lookup order: declared values → builtin constants → units → dimensions.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_name_query(name: &str, state: &ShellState) {
     // 1. Search in declared values.
     if let Some(result) = &state.prev_result {
@@ -726,8 +719,6 @@ fn looks_like_compound_expr(s: &str) -> bool {
 /// Handle a compound expression query (e.g., `m/s`, `Length / Time`).
 ///
 /// Tries to parse as a unit expression first, then as a dimension expression.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
-#[expect(clippy::print_stderr, reason = "interactive shell error output")]
 fn handle_compound_query(input: &str, state: &ShellState) {
     let Some(tir) = &state.prev_tir else {
         eprintln!("  error: no declarations loaded (cannot resolve units/dimensions)");
@@ -761,7 +752,6 @@ fn handle_compound_query(input: &str, state: &ShellState) {
 }
 
 /// Load a base file and evaluate it.
-#[expect(clippy::print_stdout, reason = "interactive shell output")]
 #[expect(
     clippy::result_large_err,
     reason = "CompileError size is fixed by the eval crate"
