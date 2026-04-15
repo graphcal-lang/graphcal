@@ -54,13 +54,16 @@ pub struct LayerBodyEntry {
 #[derive(Debug)]
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
+    /// Key-lookup only, order irrelevant.
     pub(crate) const_values: HashMap<DeclName, RuntimeValue>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
+    /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
     pub(crate) imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub(crate) topo_order: Vec<DeclName>,
     /// Runtime expressions keyed by declaration name (params + nodes).
+    /// Key-lookup only, order irrelevant.
     pub(crate) expressions: HashMap<DeclName, Expr>,
     /// Assert bodies in source order.
     pub(crate) assert_bodies: Vec<AssertBodyEntry>,
@@ -71,10 +74,13 @@ pub struct ExecPlan {
     /// Layer declarations in source order.
     pub(crate) layer_bodies: Vec<LayerBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
+    /// Key-lookup only, order irrelevant.
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
+    /// Key-lookup only, order irrelevant.
     pub(crate) expected_fail: HashMap<DeclName, crate::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
+    /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>,
 }
 
