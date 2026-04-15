@@ -1978,14 +1978,14 @@ fn lower_range_index(
         _ => (None, 1.0),
     };
 
-    Ok(types::IndexKind::Range {
+    Ok(types::IndexKind::Range(types::RangeIndexData {
         start: start_val,
         end: end_val,
         step: step_val,
         dimension: start_dim,
         display_label,
         display_scale,
-    })
+    }))
 }
 
 /// Extract a map of type annotations from const/param/node declarations.

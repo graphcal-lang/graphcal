@@ -1646,9 +1646,9 @@ fn process_deferred_instantiated_imports(
                 && let crate::registry::IndexKind::RequiredRange { dimension: dep_dim } =
                     &dep_idx_def.kind
                 && let Some(imp_idx_def) = builder.get_index(importer_idx_name)
-                && let crate::registry::IndexKind::Range {
-                    dimension: imp_dim, ..
-                }
+                && let crate::registry::IndexKind::Range(
+                    crate::registry::RangeIndexData { dimension: imp_dim, .. },
+                )
                 | crate::registry::IndexKind::RequiredRange { dimension: imp_dim } =
                     &imp_idx_def.kind
                 && dep_dim != imp_dim

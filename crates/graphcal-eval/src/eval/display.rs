@@ -144,24 +144,18 @@ fn resolve_display_unit_scale(
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
 pub(super) fn format_range_step(idx_def: &crate::registry::IndexDef, step_index: usize) -> String {
-    let Ok(si_value) = idx_def.step_value(step_index) else {
-        return format!("#{step_index}");
-    };
-    if let crate::registry::IndexKind::Range {
-        display_label,
-        display_scale,
-        ..
-    } = &idx_def.kind
-    {
-        let display_value = si_value / display_scale;
-        let formatted = format_number(display_value);
-        match display_label {
-            Some(label) => format!("{formatted} {label}"),
-            None => formatted,
-        }
-    } else {
-        format!("#{step_index}")
-    }
+    idx_def.range_data().map_or_else(
+        || format!("#{step_index}"),
+        |data| {
+            let si_value = data.step_value(step_index);
+            let display_value = si_value / data.display_scale;
+            let formatted = format_number(display_value);
+            match &data.display_label {
+                Some(label) => format!("{formatted} {label}"),
+                None => formatted,
+            }
+        },
+    )
 }
 
 /// Set display unit on a scalar value. No-op for non-scalar values.

@@ -88,7 +88,9 @@ pub(super) fn infer_for_comp(
                     | crate::registry::types::IndexKind::RequiredNamed => {
                         InferredType::Label(spanned_idx.value.clone())
                     }
-                    crate::registry::types::IndexKind::Range { dimension, .. }
+                    crate::registry::types::IndexKind::Range(
+                        crate::registry::types::RangeIndexData { dimension, .. },
+                    )
                     | crate::registry::types::IndexKind::RequiredRange { dimension } => {
                         InferredType::Scalar(dimension.clone())
                     }
@@ -794,7 +796,9 @@ pub(super) fn infer_unfold(
 
     if let Some((_index_name, idx_def)) = &owner_range_index {
         let dimension = match &idx_def.kind {
-            crate::registry::types::IndexKind::Range { dimension, .. }
+            crate::registry::types::IndexKind::Range(
+                crate::registry::types::RangeIndexData { dimension, .. },
+            )
             | crate::registry::types::IndexKind::RequiredRange { dimension } => Some(dimension),
             _ => None,
         };

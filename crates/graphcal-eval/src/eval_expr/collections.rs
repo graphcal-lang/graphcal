@@ -251,6 +251,12 @@ pub(super) fn eval_unfold(
 
     let step_count = idx_def.step_count();
     let variants = idx_def.variants();
+    let range_data = idx_def.range_data().ok_or_else(|| {
+        ctx.eval_error(
+            format!("unfold requires a range index, but `{index_name}` is not a range"),
+            Span::new(0, 0),
+        )
+    })?;
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
     // Evaluate init expression
@@ -276,18 +282,8 @@ pub(super) fn eval_unfold(
             },
         );
 
-        let prev_value = idx_def.step_value(i - 1).map_err(|e| {
-            ctx.eval_error(
-                format!("internal: range index step {} out of bounds: {e}", i - 1),
-                Span::new(0, 0),
-            )
-        })?;
-        let curr_value = idx_def.step_value(i).map_err(|e| {
-            ctx.eval_error(
-                format!("internal: range index step {i} out of bounds: {e}"),
-                Span::new(0, 0),
-            )
-        })?;
+        let prev_value = range_data.step_value(i - 1);
+        let curr_value = range_data.step_value(i);
 
         scan_locals.insert(
             prev_name.name.clone(),
@@ -436,8 +432,7 @@ fn eval_for_comp(
                 index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
-            crate::registry::IndexKind::Range { .. }
-            | crate::registry::IndexKind::RequiredRange { .. } => {
+            crate::registry::IndexKind::Range(data) => {
                 let step_index = variant
                     .as_str()
                     .strip_prefix('#')
@@ -452,13 +447,15 @@ fn eval_for_comp(
                     })?;
                 RuntimeValue::RangeLabel {
                     step_index,
-                    value: idx_def.step_value(step_index).map_err(|e| {
-                        ctx.internal_error(
-                            format!("range index step {step_index} out of bounds: {e}"),
-                            error_span,
-                        )
-                    })?,
+                    value: data.step_value(step_index),
                 }
+            }
+            // RequiredRange has 0 variants, so this loop body is never reached.
+            crate::registry::IndexKind::RequiredRange { .. } => {
+                return Err(ctx.internal_error(
+                    "RequiredRange should have been bound before evaluation".to_string(),
+                    error_span,
+                ));
             }
             crate::registry::IndexKind::NatRange { .. } => {
                 // Nat range loop variable: integer value

@@ -1364,11 +1364,11 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }
-                        IndexKind::Range {
-                            start, end, step, ..
-                        } => {
-                            def_mut.type_description =
-                                Some(format!("range({start}, {end}, step: {step})"));
+                        IndexKind::Range(data) => {
+                            def_mut.type_description = Some(format!(
+                                "range({}, {}, step: {})",
+                                data.start, data.end, data.step
+                            ));
                         }
                         IndexKind::RequiredNamed => {
                             def_mut.type_description = Some("(required)".to_string());
