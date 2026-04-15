@@ -21,7 +21,6 @@ use crate::syntax::names::UnitName;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
-use super::helpers::declared_to_inferred;
 use super::{DeclaredType, InferredType};
 
 /// Infer the type (dimension or struct) of an expression.
@@ -127,7 +126,7 @@ pub(super) fn infer_type_with_owner(
                     span: ident.span.into(),
                 }
             })?;
-            Ok(declared_to_inferred(dt))
+            Ok(InferredType::from(dt))
         }
 
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
@@ -138,7 +137,7 @@ pub(super) fn infer_type_with_owner(
                     span: ident.span.into(),
                 }
             })?;
-            Ok(declared_to_inferred(dt))
+            Ok(InferredType::from(dt))
         }
 
         ExprKind::LocalRef(ident) => {

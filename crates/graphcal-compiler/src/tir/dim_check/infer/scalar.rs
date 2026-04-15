@@ -13,8 +13,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
 use super::super::helpers::{
-    check_derived_binop, check_derived_neg, declared_to_inferred, expect_scalar,
-    format_inferred_type,
+    check_derived_binop, check_derived_neg, expect_scalar, format_inferred_type,
 };
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
@@ -495,7 +494,7 @@ pub(super) fn infer_as_cast(
         src,
     )?;
     let target_declared = crate::tir::typed::resolved_to_declared_type(&resolved_target, src)?;
-    let target_inferred = declared_to_inferred(&target_declared);
+    let target_inferred = InferredType::from(&target_declared);
 
     // Both must be structs with the same name
     let InferredType::Struct(source_name, source_args) = &inner_type else {

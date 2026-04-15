@@ -920,20 +920,14 @@ fn unify_nat_poly_form(
                 });
             }
             let value = remainder / total_coeff;
-            if let Some(prev) = nat_sub.get(&var) {
-                if *prev != value {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: IndexName::new(crate::registry::types::nat_range_index_name(
-                            *prev,
-                        )),
-                        found: actual_idx.clone(),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
+            bind_or_check(nat_sub, var, value, |prev, _| {
+                GraphcalError::IndexMismatch {
+                    expected: IndexName::new(crate::registry::types::nat_range_index_name(*prev)),
+                    found: actual_idx.clone(),
+                    src: src.clone(),
+                    span: span.into(),
                 }
-            } else {
-                nat_sub.insert(var, value);
-            }
+            })?;
             return Ok(());
         }
     }
@@ -954,6 +948,31 @@ fn unify_nat_poly_form(
 // ---------------------------------------------------------------------------
 // Unification
 // ---------------------------------------------------------------------------
+
+/// Bind a generic parameter in a substitution map, or check consistency if already bound.
+///
+/// If `key` is not yet in `sub`, inserts `(key, value)`. If `key` is already bound
+/// to a value equal to `value`, succeeds. Otherwise, calls `on_conflict` with the
+/// previously bound value and the new value to produce an error.
+fn bind_or_check<K, V, E>(
+    sub: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+    on_conflict: impl FnOnce(&V, &V) -> E,
+) -> Result<(), E>
+where
+    K: Eq + std::hash::Hash,
+    V: PartialEq,
+{
+    if let Some(prev) = sub.get(&key) {
+        if *prev != value {
+            return Err(on_conflict(prev, &value));
+        }
+    } else {
+        sub.insert(key, value);
+    }
+    Ok(())
+}
 
 /// Unify a resolved type expression against an actual inferred type,
 /// binding generic dimension and index parameters.
@@ -1009,18 +1028,14 @@ pub fn unify_resolved_type(
                 };
                 match idx {
                     ResolvedIndex::GenericParam(gp, _) => {
-                        if let Some(prev) = index_sub.get(gp) {
-                            if *prev != *actual_idx {
-                                return Err(GraphcalError::IndexMismatch {
-                                    expected: prev.clone(),
-                                    found: actual_idx.clone(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                });
+                        bind_or_check(index_sub, gp.clone(), actual_idx.clone(), |prev, _| {
+                            GraphcalError::IndexMismatch {
+                                expected: prev.clone(),
+                                found: actual_idx.clone(),
+                                src: src.clone(),
+                                span: span.into(),
                             }
-                        } else {
-                            index_sub.insert(gp.clone(), actual_idx.clone());
-                        }
+                        })?;
                     }
                     ResolvedIndex::Concrete(name, _) => {
                         if *name != *actual_idx {
@@ -1173,24 +1188,19 @@ pub fn unify_resolved_type(
 
         ResolvedTypeExpr::GenericDimParam(gp, _) => {
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
-            if let Some(prev) = dim_sub.get(gp) {
-                if *prev != actual_dim {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: registry.dimensions.format_dimension(prev),
-                        found: registry.dimensions.format_dimension(&actual_dim),
-                        src: src.clone(),
-                        span: span.into(),
-                        help: format!(
-                            "generic `{gp}` was bound to {} but this argument requires {}",
-                            registry.dimensions.format_dimension(prev),
-                            registry.dimensions.format_dimension(&actual_dim),
-                        ),
-                    });
+            bind_or_check(dim_sub, gp.clone(), actual_dim, |prev, new| {
+                GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(prev),
+                    found: registry.dimensions.format_dimension(new),
+                    src: src.clone(),
+                    span: span.into(),
+                    help: format!(
+                        "generic `{gp}` was bound to {} but this argument requires {}",
+                        registry.dimensions.format_dimension(prev),
+                        registry.dimensions.format_dimension(new),
+                    ),
                 }
-            } else {
-                dim_sub.insert(gp.clone(), actual_dim);
-            }
-            Ok(())
+            })
         }
 
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
@@ -1216,23 +1226,19 @@ pub fn unify_resolved_type(
                         })?;
                     actual_dim.pow(exponent)
                 };
-                if let Some(prev) = dim_sub.get(gp) {
-                    if *prev != bound_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: registry.dimensions.format_dimension(prev),
-                            found: registry.dimensions.format_dimension(&bound_dim),
-                            src: src.clone(),
-                            span: span.into(),
-                            help: format!(
-                                "generic `{gp}` was bound to {} but this argument requires {}",
-                                registry.dimensions.format_dimension(prev),
-                                registry.dimensions.format_dimension(&bound_dim),
-                            ),
-                        });
+                bind_or_check(dim_sub, gp.clone(), bound_dim, |prev, new| {
+                    GraphcalError::DimensionMismatch {
+                        expected: registry.dimensions.format_dimension(prev),
+                        found: registry.dimensions.format_dimension(new),
+                        src: src.clone(),
+                        span: span.into(),
+                        help: format!(
+                            "generic `{gp}` was bound to {} but this argument requires {}",
+                            registry.dimensions.format_dimension(prev),
+                            registry.dimensions.format_dimension(new),
+                        ),
                     }
-                } else {
-                    dim_sub.insert(gp.clone(), bound_dim);
-                }
+                })?;
                 return Ok(());
             }
 
@@ -1440,10 +1446,6 @@ fn expect_scalar_from_inferred(
 ///
 /// Returns a [`GraphcalError`] if a name cannot be resolved (not a known
 /// dimension, struct, index, or in-scope generic parameter).
-#[expect(
-    clippy::too_many_lines,
-    reason = "single match over all TypeExprKind variants including TypeApplication"
-)]
 pub fn resolve_type_expr(
     type_ann: &TypeExpr,
     registry: &Registry,
@@ -1508,208 +1510,248 @@ pub fn resolve_type_expr(
             })
         }
 
-        TypeExprKind::DimExpr(dim_expr) => {
-            // Single-term, no power: could be struct, generic dim param, or dimension
-            if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
-                let name = &dim_expr.terms[0].term.name.name;
-                let span = dim_expr.terms[0].term.span;
+        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr(dim_expr, registry, dim_params, src),
 
-                // Check named index → Label type
-                if let Some(idx_def) = registry.indexes.get_index(name)
-                    && matches!(
-                        idx_def.kind,
-                        crate::registry::types::IndexKind::Named { .. }
-                            | crate::registry::types::IndexKind::RequiredNamed
-                    )
-                {
-                    return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
-                }
+        TypeExprKind::TypeApplication { name, type_args } => resolve_type_application(
+            type_ann,
+            name,
+            type_args,
+            registry,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+        ),
+    }
+}
 
-                // Check type (struct sugar or tagged union) first
-                if registry.types.get_type(name).is_some() {
-                    return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
-                }
+/// Resolve a dimension expression to either a [`ResolvedTypeExpr::Scalar`],
+/// [`ResolvedTypeExpr::GenericDimExpr`], [`ResolvedTypeExpr::Label`],
+/// [`ResolvedTypeExpr::Struct`], or [`ResolvedTypeExpr::GenericDimParam`].
+///
+/// A single-term, no-power expression is first checked against named indexes,
+/// struct types, and generic dimension parameters. Multi-term expressions with
+/// generic params become `GenericDimExpr`; fully concrete expressions become `Scalar`.
+fn resolve_dim_expr(
+    dim_expr: &crate::syntax::ast::DimExpr,
+    registry: &Registry,
+    dim_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    // Single-term, no power: could be struct, generic dim param, or dimension
+    if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
+        let name = &dim_expr.terms[0].term.name.name;
+        let span = dim_expr.terms[0].term.span;
 
-                // Check generic dim param
-                if let Some(gp) = dim_params.iter().find(|p| p.as_str() == name) {
-                    return Ok(ResolvedTypeExpr::GenericDimParam(gp.clone(), span));
-                }
-            }
-
-            // Check if any term is a generic dim param
-            let has_generic = dim_expr
-                .terms
-                .iter()
-                .any(|item| dim_params.iter().any(|p| p.as_str() == item.term.name.name));
-
-            if has_generic {
-                // Build GenericDimExpr with mixed concrete/generic terms
-                let mut terms = Vec::with_capacity(dim_expr.terms.len());
-                for item in &dim_expr.terms {
-                    let name = &item.term.name.name;
-                    let power = item.term.power.unwrap_or(1);
-                    let op = item.op;
-
-                    if let Some(gp) = dim_params.iter().find(|p| p.as_str() == name) {
-                        terms.push(ResolvedDimTerm::GenericParam {
-                            name: gp.clone(),
-                            power,
-                            op,
-                            span: item.term.span,
-                        });
-                    } else if let Some(dim) = registry.dimensions.get_dimension(name) {
-                        terms.push(ResolvedDimTerm::Concrete {
-                            dim: dim.clone(),
-                            power,
-                            op,
-                        });
-                    } else {
-                        return Err(GraphcalError::UnknownDimension {
-                            name: DimName::new(name),
-                            src: src.clone(),
-                            span: item.term.span.into(),
-                        });
-                    }
-                }
-                Ok(ResolvedTypeExpr::GenericDimExpr {
-                    terms,
-                    span: dim_expr.span,
-                })
-            } else {
-                // All terms are concrete dimensions — resolve to Scalar
-                let mut result = Dimension::dimensionless();
-                for item in &dim_expr.terms {
-                    let name = &item.term.name.name;
-                    let base = registry.dimensions.get_dimension(name).ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: DimName::new(name),
-                            src: src.clone(),
-                            span: item.term.span.into(),
-                        }
-                    })?;
-                    let exp = item.term.power.unwrap_or(1);
-                    let powered = base.pow(Rational::from_int(exp));
-                    result = match item.op {
-                        MulDivOp::Mul => result * powered,
-                        MulDivOp::Div => result / powered,
-                    };
-                }
-                Ok(ResolvedTypeExpr::Scalar(result))
-            }
+        // Check named index → Label type
+        if let Some(idx_def) = registry.indexes.get_index(name)
+            && matches!(
+                idx_def.kind,
+                crate::registry::types::IndexKind::Named { .. }
+                    | crate::registry::types::IndexKind::RequiredNamed
+            )
+        {
+            return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
         }
 
-        TypeExprKind::TypeApplication { name, type_args } => {
-            let type_name = &name.name;
+        // Check type (struct sugar or tagged union) first
+        if registry.types.get_type(name).is_some() {
+            return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
+        }
 
-            // Special case: Datetime<TimeScale>
-            if type_name == "Datetime" {
-                if type_args.len() != 1 {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "type `Datetime` expects 0 or 1 type argument(s), got {}",
-                            type_args.len()
-                        ),
-                        src: src.clone(),
-                        span: type_ann.span.into(),
-                    });
-                }
-                // The type arg should be a bare identifier naming a time scale
-                let arg = &type_args[0];
-                let scale_name = match &arg.kind {
-                    TypeExprKind::DimExpr(dim_expr)
-                        if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
-                    {
-                        &dim_expr.terms[0].term.name.name
-                    }
-                    _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
-                                .to_string(),
-                            src: src.clone(),
-                            span: arg.span.into(),
-                        });
-                    }
-                };
-                let scale: TimeScale =
-                    scale_name.parse().map_err(|_| GraphcalError::EvalError {
-                        message: format!(
-                            "unknown time scale `{scale_name}`; \
-                                 expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
-                        ),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    })?;
-                return Ok(ResolvedTypeExpr::Datetime(scale));
-            }
-
-            // Verify this is a known generic type
-            let type_def = registry.types.get_type(type_name).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
-                    name: StructTypeName::new(type_name),
-                    src: src.clone(),
-                    span: name.span.into(),
-                }
-            })?;
-            let total_params = type_def.generic_params.len();
-            // Count required params (those without defaults)
-            let required_count = type_def
-                .generic_params
-                .iter()
-                .take_while(|p| p.default.is_none())
-                .count();
-            if type_args.len() < required_count || type_args.len() > total_params {
-                let hint = if required_count == total_params {
-                    format!("{total_params}")
-                } else {
-                    format!("{required_count}..{total_params}")
-                };
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "type `{type_name}` expects {hint} type argument(s), got {}",
-                        type_args.len()
-                    ),
-                    src: src.clone(),
-                    span: type_ann.span.into(),
-                });
-            }
-            // Resolve each explicit type argument, then fill in defaults
-            let mut resolved_args = Vec::with_capacity(total_params);
-            for arg in type_args {
-                let resolved =
-                    resolve_type_expr(arg, registry, dim_params, index_params, nat_params, src)?;
-                resolved_args.push(resolved);
-            }
-            // Fill in defaults for any remaining params
-            for param in type_def.generic_params.iter().skip(type_args.len()) {
-                let default_expr =
-                    param
-                        .default
-                        .as_ref()
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!(
-                                "internal: generic parameter `{}` has no default",
-                                param.name
-                            ),
-                            src: src.clone(),
-                            span: type_ann.span.into(),
-                        })?;
-                let resolved = resolve_type_expr(
-                    default_expr,
-                    registry,
-                    dim_params,
-                    index_params,
-                    nat_params,
-                    src,
-                )?;
-                resolved_args.push(resolved);
-            }
-            Ok(ResolvedTypeExpr::GenericStruct {
-                name: StructTypeName::new(type_name),
-                type_args: resolved_args,
-                span: type_ann.span,
-            })
+        // Check generic dim param
+        if let Some(gp) = dim_params.iter().find(|p| p.as_str() == name) {
+            return Ok(ResolvedTypeExpr::GenericDimParam(gp.clone(), span));
         }
     }
+
+    // Check if any term is a generic dim param
+    let has_generic = dim_expr
+        .terms
+        .iter()
+        .any(|item| dim_params.iter().any(|p| p.as_str() == item.term.name.name));
+
+    if has_generic {
+        // Build GenericDimExpr with mixed concrete/generic terms
+        let mut terms = Vec::with_capacity(dim_expr.terms.len());
+        for item in &dim_expr.terms {
+            let name = &item.term.name.name;
+            let power = item.term.power.unwrap_or(1);
+            let op = item.op;
+
+            if let Some(gp) = dim_params.iter().find(|p| p.as_str() == name) {
+                terms.push(ResolvedDimTerm::GenericParam {
+                    name: gp.clone(),
+                    power,
+                    op,
+                    span: item.term.span,
+                });
+            } else if let Some(dim) = registry.dimensions.get_dimension(name) {
+                terms.push(ResolvedDimTerm::Concrete {
+                    dim: dim.clone(),
+                    power,
+                    op,
+                });
+            } else {
+                return Err(GraphcalError::UnknownDimension {
+                    name: DimName::new(name),
+                    src: src.clone(),
+                    span: item.term.span.into(),
+                });
+            }
+        }
+        Ok(ResolvedTypeExpr::GenericDimExpr {
+            terms,
+            span: dim_expr.span,
+        })
+    } else {
+        // All terms are concrete dimensions — resolve to Scalar
+        let mut result = Dimension::dimensionless();
+        for item in &dim_expr.terms {
+            let name = &item.term.name.name;
+            let base = registry.dimensions.get_dimension(name).ok_or_else(|| {
+                GraphcalError::UnknownDimension {
+                    name: DimName::new(name),
+                    src: src.clone(),
+                    span: item.term.span.into(),
+                }
+            })?;
+            let exp = item.term.power.unwrap_or(1);
+            let powered = base.pow(Rational::from_int(exp));
+            result = match item.op {
+                MulDivOp::Mul => result * powered,
+                MulDivOp::Div => result / powered,
+            };
+        }
+        Ok(ResolvedTypeExpr::Scalar(result))
+    }
+}
+
+/// Resolve a `TypeApplication` (e.g., `Datetime<TT>`, `Vec3<Length, ECI>`) to a
+/// [`ResolvedTypeExpr`].
+///
+/// Handles the special case of `Datetime<TimeScale>` separately, then falls
+/// through to generic struct resolution with default parameter filling.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes full type resolution context from resolve_type_expr"
+)]
+fn resolve_type_application(
+    type_ann: &TypeExpr,
+    name: &crate::syntax::ast::Ident,
+    type_args: &[TypeExpr],
+    registry: &Registry,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let type_name = &name.name;
+
+    // Special case: Datetime<TimeScale>
+    if type_name == "Datetime" {
+        if type_args.len() != 1 {
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "type `Datetime` expects 0 or 1 type argument(s), got {}",
+                    type_args.len()
+                ),
+                src: src.clone(),
+                span: type_ann.span.into(),
+            });
+        }
+        let arg = &type_args[0];
+        let scale_name = match &arg.kind {
+            TypeExprKind::DimExpr(dim_expr)
+                if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
+            {
+                &dim_expr.terms[0].term.name.name
+            }
+            _ => {
+                return Err(GraphcalError::EvalError {
+                    message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
+                        .to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+        };
+        let scale: TimeScale = scale_name.parse().map_err(|_| GraphcalError::EvalError {
+            message: format!(
+                "unknown time scale `{scale_name}`; \
+                     expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
+            ),
+            src: src.clone(),
+            span: arg.span.into(),
+        })?;
+        return Ok(ResolvedTypeExpr::Datetime(scale));
+    }
+
+    // Verify this is a known generic type
+    let type_def =
+        registry
+            .types
+            .get_type(type_name)
+            .ok_or_else(|| GraphcalError::UnknownStructType {
+                name: StructTypeName::new(type_name),
+                src: src.clone(),
+                span: name.span.into(),
+            })?;
+    let total_params = type_def.generic_params.len();
+    let required_count = type_def
+        .generic_params
+        .iter()
+        .take_while(|p| p.default.is_none())
+        .count();
+    if type_args.len() < required_count || type_args.len() > total_params {
+        let hint = if required_count == total_params {
+            format!("{total_params}")
+        } else {
+            format!("{required_count}..{total_params}")
+        };
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `{type_name}` expects {hint} type argument(s), got {}",
+                type_args.len()
+            ),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        });
+    }
+    // Resolve each explicit type argument, then fill in defaults
+    let mut resolved_args = Vec::with_capacity(total_params);
+    for arg in type_args {
+        let resolved = resolve_type_expr(arg, registry, dim_params, index_params, nat_params, src)?;
+        resolved_args.push(resolved);
+    }
+    // Fill in defaults for any remaining params
+    for param in type_def.generic_params.iter().skip(type_args.len()) {
+        let default_expr = param
+            .default
+            .as_ref()
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "internal: generic parameter `{}` has no default",
+                    param.name
+                ),
+                src: src.clone(),
+                span: type_ann.span.into(),
+            })?;
+        let resolved = resolve_type_expr(
+            default_expr,
+            registry,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+        )?;
+        resolved_args.push(resolved);
+    }
+    Ok(ResolvedTypeExpr::GenericStruct {
+        name: StructTypeName::new(type_name),
+        type_args: resolved_args,
+        span: type_ann.span,
+    })
 }
 
 #[cfg(test)]
