@@ -12,21 +12,21 @@ categories.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+graphcal-compiler = { workspace = true }
 graphcal-dag = { workspace = true }
 graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-lsp = { workspace = true }
-graphcal-compiler = { workspace = true }
-miette = { workspace = true, features = ["fancy"] }
-rustyline = { workspace = true }
 indexmap = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+open = { workspace = true }
 petgraph = { workspace = true }
+rustyline = { workspace = true }
 serde_json = { workspace = true }
 tabled = { workspace = true }
-tokio = { workspace = true }
-open = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]

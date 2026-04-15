@@ -13,12 +13,12 @@ categories.workspace = true
 [dependencies]
 graphcal-compiler = { workspace = true }
 graphcal-io = { workspace = true }
+hifitime.workspace = true
 indexmap.workspace = true
+jiff.workspace = true
 miette.workspace = true
 petgraph = { workspace = true }
 thiserror.workspace = true
-hifitime.workspace = true
-jiff.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

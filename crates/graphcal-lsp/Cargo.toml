@@ -11,10 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+graphcal-compiler = { workspace = true }
 graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
-graphcal-compiler = { workspace = true }
 indexmap = { workspace = true }
 miette = { workspace = true }
 tokio = { workspace = true }
