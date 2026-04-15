@@ -284,12 +284,12 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
         return Vec::new();
     };
 
-    let import_links = root_file.imports_with_paths().map(|(_, import_decl, path)| {
-        (import_decl.path.span(), path)
-    });
-    let include_links = root_file.includes_with_paths().map(|(_, include_decl, path)| {
-        (include_decl.path.span(), path)
-    });
+    let import_links = root_file
+        .imports_with_paths()
+        .map(|(_, import_decl, path)| (import_decl.path.span(), path));
+    let include_links = root_file
+        .includes_with_paths()
+        .map(|(_, include_decl, path)| (include_decl.path.span(), path));
 
     import_links
         .chain(include_links)
