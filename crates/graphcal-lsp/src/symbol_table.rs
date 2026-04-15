@@ -33,6 +33,10 @@ pub enum SymbolKey {
     /// Top-level declaration: param, node, const, dim, unit, type, index,
     /// assert, plot, figure, builtins.
     TopLevel(String),
+    /// Module-qualified reference: e.g., `@params::dry_mass` or `math::PI`.
+    /// Preserves the module namespace so that two modules exporting the same
+    /// member name are distinguished.
+    Qualified { module: String, name: String },
     /// Variant of a type or index: e.g., `Season::Winter`.
     Variant { parent: String, variant: String },
     /// Field reference: e.g., `field::thrust`.
@@ -49,6 +53,7 @@ impl std::fmt::Display for SymbolKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TopLevel(name) => write!(f, "{name}"),
+            Self::Qualified { module, name } => write!(f, "{module}::{name}"),
             Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
             Self::Field(name) => write!(f, "field::{name}"),
             Self::ExprScoped {
@@ -83,6 +88,15 @@ impl SymbolKey {
     pub fn top_level_name(&self) -> Option<&str> {
         match self {
             Self::TopLevel(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Returns the member name: the bare name for `TopLevel`, or the member
+    /// name for `Qualified`.
+    pub fn member_name(&self) -> Option<&str> {
+        match self {
+            Self::TopLevel(name) | Self::Qualified { name, .. } => Some(name),
             _ => None,
         }
     }
@@ -703,13 +717,20 @@ fn collect_expr_refs(
     scopes: &mut ScopeStack,
 ) {
     match &expr.kind {
-        ExprKind::GraphRef(name)
-        | ExprKind::QualifiedGraphRef { name, .. }
-        | ExprKind::ConstRef(name)
-        | ExprKind::QualifiedConstRef { name, .. } => {
+        ExprKind::GraphRef(name) | ExprKind::ConstRef(name) => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: SymbolKey::TopLevel(name.value.to_string()),
+            });
+        }
+        ExprKind::QualifiedGraphRef { module, name }
+        | ExprKind::QualifiedConstRef { module, name } => {
+            table.references.push(ReferenceInfo {
+                span: name.span,
+                target: SymbolKey::Qualified {
+                    module: module.name.clone(),
+                    name: name.value.to_string(),
+                },
             });
         }
         ExprKind::FnCall { name, args, .. } => {
@@ -1469,6 +1490,14 @@ mod tests {
     fn symbol_key_display() {
         assert_eq!(SymbolKey::TopLevel("x".to_string()).to_string(), "x");
         assert_eq!(
+            SymbolKey::Qualified {
+                module: "params".to_string(),
+                name: "dry_mass".to_string()
+            }
+            .to_string(),
+            "params::dry_mass"
+        );
+        assert_eq!(
             SymbolKey::Variant {
                 parent: "Phase".to_string(),
                 variant: "Launch".to_string()
@@ -1508,5 +1537,52 @@ mod tests {
             Some("x")
         );
         assert_eq!(SymbolKey::Field("x".to_string()).top_level_name(), None);
+
+        // member_name
+        assert_eq!(
+            SymbolKey::TopLevel("x".to_string()).member_name(),
+            Some("x")
+        );
+        assert_eq!(
+            SymbolKey::Qualified {
+                module: "params".to_string(),
+                name: "dry_mass".to_string()
+            }
+            .member_name(),
+            Some("dry_mass")
+        );
+        assert_eq!(SymbolKey::Field("x".to_string()).member_name(), None);
+    }
+
+    #[test]
+    fn qualified_graph_ref_creates_qualified_key() {
+        // When source has `@mod::name`, the reference target should be
+        // SymbolKey::Qualified, not SymbolKey::TopLevel.
+        let source = concat!(
+            "import \"./lib.gcl\";\n",
+            "node y: Dimensionless = @lib::x + 1.0;\n",
+        );
+        let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let table = build_from_ast(&ast);
+
+        let expected_key = SymbolKey::Qualified {
+            module: "lib".to_string(),
+            name: "x".to_string(),
+        };
+        let refs = table.find_all_references(&expected_key);
+        assert_eq!(
+            refs.len(),
+            1,
+            "should find one qualified reference to lib::x"
+        );
+
+        // Ensure no TopLevel("x") reference was created for the qualified ref.
+        let top_level_refs = table.find_all_references(&SymbolKey::TopLevel("x".to_string()));
+        assert!(
+            top_level_refs.is_empty(),
+            "qualified ref should not create a TopLevel key"
+        );
     }
 }

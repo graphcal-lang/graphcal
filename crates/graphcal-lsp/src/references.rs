@@ -3,6 +3,7 @@
 use tower_lsp::lsp_types::{Location, Url};
 
 use crate::convert::span_to_range;
+use crate::resolve::{SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
 
 /// Find all references to the symbol at the given byte offset.
@@ -12,20 +13,21 @@ pub fn references(
     offset: usize,
     include_declaration: bool,
 ) -> Option<Vec<Location>> {
-    // Determine the target key: either from a reference or a definition at cursor.
-    let target_key = match (
-        analysis.symbol_table.find_reference_at(offset),
-        analysis.symbol_table.find_definition_at(offset),
-    ) {
-        (Some(reference), _) => reference.target.clone(),
-        (None, Some(definition)) if definition.is_builtin() => return None,
-        (None, Some(definition)) => analysis.symbol_table.find_definition_key(definition),
-        (None, None) => return None,
-    };
+    let resolved = resolve_symbol_at(analysis, offset)?;
+
+    // If cursor is on a builtin *definition* (not a reference to one), skip.
+    if !resolved.is_reference
+        && let SymbolLocation::Local(def) = &resolved.location
+        && def.is_builtin()
+    {
+        return None;
+    }
+
+    let target_key = &resolved.key;
 
     let mut locations: Vec<Location> = analysis
         .symbol_table
-        .find_all_references(&target_key)
+        .find_all_references(target_key)
         .into_iter()
         .map(|r| Location {
             uri: uri.clone(),
@@ -38,7 +40,7 @@ pub fn references(
         let declaration_location = analysis
             .symbol_table
             .definitions
-            .get(&target_key)
+            .get(target_key)
             .filter(|def| def.is_navigable())
             .map(|def| Location {
                 uri: uri.clone(),
@@ -47,7 +49,7 @@ pub fn references(
             .or_else(|| {
                 analysis
                     .imported_definitions
-                    .get(&target_key)
+                    .get(target_key)
                     .filter(|imported| !imported.definition.name_span.is_empty())
                     .map(|imported| Location {
                         uri: imported.uri.clone(),
