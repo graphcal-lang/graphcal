@@ -1,51 +1,59 @@
+use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
+use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
 
-/// Visitor that checks for runtime graph references in const expressions.
-///
-/// Const node expressions may reference other const nodes via `@`, but must not
-/// reference runtime names (params or nodes). This checker rejects only `@` references
-/// whose names appear in the `runtime_names` set.
-struct NoRuntimeGraphRefChecker<'a> {
-    runtime_names: &'a HashSet<&'a str>,
+// ---------------------------------------------------------------------------
+// Graph-reference checkers
+// ---------------------------------------------------------------------------
+
+/// Generic visitor that rejects `@`-references whose names appear in a
+/// forbidden set. The `make_error` closure produces the appropriate
+/// [`GraphcalError`] variant for the use-site.
+struct ForbiddenGraphRefChecker<'a, S, F> {
+    forbidden: &'a HashSet<S>,
     src: &'a NamedSource<Arc<String>>,
+    make_error: F,
 }
 
-impl ExprVisitor for NoRuntimeGraphRefChecker<'_> {
+impl<S, F> ExprVisitor for ForbiddenGraphRefChecker<'_, S, F>
+where
+    S: Eq + Hash + Borrow<str>,
+    F: Fn(&str, &NamedSource<Arc<String>>, Span) -> GraphcalError,
+{
     type Error = GraphcalError;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::GraphRef(ident) = &expr.kind
-            && self.runtime_names.contains(ident.value.as_str())
+            && self.forbidden.contains(ident.value.as_str())
         {
-            Err(GraphcalError::GraphRefInConst {
-                name: ident.value.clone(),
-                src: self.src.clone(),
-                span: expr.span.into(),
-            })
-        } else {
-            Ok(())
+            return Err((self.make_error)(
+                ident.value.as_str(),
+                self.src,
+                expr.span,
+            ));
         }
+        Ok(())
     }
 
     fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
-            && self.runtime_names.contains(ident.value.as_str())
+            && self.forbidden.contains(ident.value.as_str())
         {
-            Err(GraphcalError::GraphRefInConst {
-                name: ident.value.clone(),
-                src: self.src.clone(),
-                span: expr.span.into(),
-            })
-        } else {
-            Ok(())
+            return Err((self.make_error)(
+                ident.value.as_str(),
+                self.src,
+                expr.span,
+            ));
         }
+        Ok(())
     }
 }
 
@@ -58,44 +66,18 @@ pub(super) fn check_no_runtime_graph_refs(
     runtime_names: &HashSet<&str>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let mut checker = NoRuntimeGraphRefChecker { runtime_names, src };
+    let mut checker = ForbiddenGraphRefChecker {
+        forbidden: runtime_names,
+        src,
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
+            GraphcalError::GraphRefInConst {
+                name: name.into(),
+                src: src.clone(),
+                span: span.into(),
+            }
+        },
+    };
     checker.visit_expr(expr)
-}
-
-/// Visitor that checks for assert graph references.
-struct NoAssertGraphRefChecker<'a> {
-    assert_names: &'a HashSet<String>,
-    src: &'a NamedSource<Arc<String>>,
-}
-
-impl ExprVisitor for NoAssertGraphRefChecker<'_> {
-    type Error = GraphcalError;
-
-    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind
-            && self.assert_names.contains(ident.value.as_str())
-        {
-            return Err(GraphcalError::GraphRefToAssert {
-                name: ident.value.clone(),
-                src: self.src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
-            && self.assert_names.contains(ident.value.as_str())
-        {
-            return Err(GraphcalError::GraphRefToAssert {
-                name: ident.value.clone(),
-                src: self.src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        Ok(())
-    }
 }
 
 /// Check that an expression does not reference any assert name via `@`.
@@ -106,60 +88,60 @@ pub(super) fn check_no_assert_graph_refs(
     assert_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let mut checker = NoAssertGraphRefChecker { assert_names, src };
+    let mut checker = ForbiddenGraphRefChecker {
+        forbidden: assert_names,
+        src,
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
+            GraphcalError::GraphRefToAssert {
+                name: name.into(),
+                src: src.clone(),
+                span: span.into(),
+            }
+        },
+    };
     checker.visit_expr(expr)
 }
 
-/// Visitor that checks for variant literals in non-rebindable contexts.
-///
-/// Variant literals (e.g., `Phase::Design`) cannot appear in node, const, assert,
-/// or plot expressions because they prevent the file from being reused as a
-/// library with a different index definition. Users must extract variant-specific
-/// logic into `param` declarations instead.
-///
-/// This checker catches variant literals in four forms:
-/// 1. `ExprKind::VariantLiteral` — standalone variant references
-/// 2. `IndexArg::Variant` in `IndexAccess` — e.g., `@cost[Phase::Design]`
-/// 3. `MapEntryKey` in map/table literals — e.g., `{ Phase::Design: 1.0 }`
-/// 4. `MatchPattern.qualified_index` in match arms — e.g., `Phase::Design => ...`
-struct VariantLiteralChecker<'a> {
-    context: &'a str,
+// ---------------------------------------------------------------------------
+// Variant-literal checkers
+// ---------------------------------------------------------------------------
+
+/// Generic visitor that rejects variant literals according to a caller-provided
+/// predicate. The `check` closure inspects the index/variant pair and returns
+/// `Err(GraphcalError)` when the variant literal is forbidden.
+struct VariantLiteralChecker<'a, F> {
+    check: F,
     src: &'a NamedSource<Arc<String>>,
 }
 
-impl VariantLiteralChecker<'_> {
-    fn make_error(
-        &self,
-        index: &impl std::fmt::Display,
-        variant: &impl std::fmt::Display,
-        span: crate::syntax::span::Span,
-    ) -> GraphcalError {
-        GraphcalError::VariantLiteralInNonRebindable {
-            index: index.to_string(),
-            variant: variant.to_string(),
-            context: self.context.to_string(),
-            src: self.src.clone(),
-            span: span.into(),
-        }
-    }
-}
-
-impl ExprVisitor for VariantLiteralChecker<'_> {
+impl<F> ExprVisitor for VariantLiteralChecker<'_, F>
+where
+    F: Fn(&str, &str, Span, &NamedSource<Arc<String>>) -> Result<(), GraphcalError>,
+{
     type Error = GraphcalError;
 
     fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, variant } = &expr.kind {
-            return Err(self.make_error(&index.value, &variant.value, expr.span));
+            (self.check)(
+                index.value.as_ref(),
+                variant.value.as_ref(),
+                expr.span,
+                self.src,
+            )?;
         }
         Ok(())
     }
 
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
-        // Check IndexAccess args for variant literals before recursing into inner expr.
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
                 if let IndexArg::Variant { index, variant } = arg {
-                    return Err(self.make_error(&index.value, &variant.value, expr.span));
+                    (self.check)(
+                        index.value.as_ref(),
+                        variant.value.as_ref(),
+                        expr.span,
+                        self.src,
+                    )?;
                 }
             }
         }
@@ -169,7 +151,12 @@ impl ExprVisitor for VariantLiteralChecker<'_> {
     fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
         for entry in entries {
             if let Some(key) = entry.keys.first() {
-                return Err(self.make_error(&key.index.value, &key.variant.value, key.index.span));
+                (self.check)(
+                    key.index.value.as_ref(),
+                    key.variant.value.as_ref(),
+                    key.index.span,
+                    self.src,
+                )?;
             }
             self.visit_expr(&entry.value)?;
         }
@@ -185,11 +172,12 @@ impl ExprVisitor for VariantLiteralChecker<'_> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
             if let Some(qi) = &arm.pattern.qualified_index {
-                return Err(self.make_error(
-                    &qi.value,
-                    &arm.pattern.variant_name.value,
+                (self.check)(
+                    qi.value.as_ref(),
+                    arm.pattern.variant_name.value.as_ref(),
                     arm.pattern.span,
-                ));
+                    self.src,
+                )?;
             }
             self.visit_expr(&arm.body)?;
         }
@@ -206,88 +194,24 @@ pub(super) fn check_no_variant_literals(
     context: &str,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let mut checker = VariantLiteralChecker { context, src };
-    checker.visit_expr(expr)
-}
-
-/// Visitor that checks for variant literals of `pub index` declarations.
-///
-/// Pub indexes may be overridden by importers, so their variant literals must not
-/// appear anywhere in the defining file's expressions (including param defaults).
-struct PubIndexVariantLiteralChecker<'a> {
-    pub_index_names: &'a HashSet<String>,
-    src: &'a NamedSource<Arc<String>>,
-}
-
-impl PubIndexVariantLiteralChecker<'_> {
-    fn check_index(
-        &self,
-        index: &str,
-        variant: &impl std::fmt::Display,
-        span: crate::syntax::span::Span,
-    ) -> Result<(), GraphcalError> {
-        if self.pub_index_names.contains(index) {
-            return Err(GraphcalError::PubIndexVariantLiteral {
+    let context = context.to_string();
+    let mut checker = VariantLiteralChecker {
+        check: move |index: &str,
+                     variant: &str,
+                     span: Span,
+                     src: &NamedSource<Arc<String>>|
+              -> Result<(), GraphcalError> {
+            Err(GraphcalError::VariantLiteralInNonRebindable {
                 index: index.to_string(),
                 variant: variant.to_string(),
-                src: self.src.clone(),
+                context: context.clone(),
+                src: src.clone(),
                 span: span.into(),
-            });
-        }
-        Ok(())
-    }
-}
-
-impl ExprVisitor for PubIndexVariantLiteralChecker<'_> {
-    type Error = GraphcalError;
-
-    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::VariantLiteral { index, variant } = &expr.kind {
-            self.check_index(index.value.as_ref(), &variant.value, expr.span)?;
-        }
-        Ok(())
-    }
-
-    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::IndexAccess { args, .. } = &expr.kind {
-            for arg in args {
-                if let IndexArg::Variant { index, variant } = arg {
-                    self.check_index(index.value.as_ref(), &variant.value, expr.span)?;
-                }
-            }
-        }
-        self.visit_expr(inner)
-    }
-
-    fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
-        for entry in entries {
-            if let Some(key) = entry.keys.first() {
-                self.check_index(key.index.value.as_ref(), &key.variant.value, key.index.span)?;
-            }
-            self.visit_expr(&entry.value)?;
-        }
-        Ok(())
-    }
-
-    fn visit_match(
-        &mut self,
-        _expr: &Expr,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
-    ) -> Result<(), Self::Error> {
-        self.visit_expr(scrutinee)?;
-        for arm in arms {
-            if let Some(qi) = &arm.pattern.qualified_index {
-                self.check_index(
-                    qi.value.as_ref(),
-                    &arm.pattern.variant_name.value,
-                    arm.pattern.span,
-                )?;
-            }
-            self.visit_expr(&arm.body)?;
-        }
-        Ok(())
-    }
+            })
+        },
+        src,
+    };
+    checker.visit_expr(expr)
 }
 
 /// Check that an expression contains no variant literals of `pub index` declarations.
@@ -302,8 +226,22 @@ pub(super) fn check_no_pub_index_variant_literals(
     if pub_index_names.is_empty() {
         return Ok(());
     }
-    let mut checker = PubIndexVariantLiteralChecker {
-        pub_index_names,
+    let mut checker = VariantLiteralChecker {
+        check: |index: &str,
+                variant: &str,
+                span: Span,
+                src: &NamedSource<Arc<String>>|
+         -> Result<(), GraphcalError> {
+            if pub_index_names.contains(index) {
+                return Err(GraphcalError::PubIndexVariantLiteral {
+                    index: index.to_string(),
+                    variant: variant.to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            Ok(())
+        },
         src,
     };
     checker.visit_expr(expr)

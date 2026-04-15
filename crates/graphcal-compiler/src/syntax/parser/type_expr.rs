@@ -12,10 +12,6 @@ impl Parser<'_> {
     // --- Type expressions ---
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "type expression parser handles many keyword cases"
-    )]
     pub(super) fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
         // Parse the base type first
         let mut base = if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
@@ -110,19 +106,7 @@ impl Parser<'_> {
         // Supports named indexes (`Phase`), generic params (`I`, `N`), and nat literals (`3`)
         if self.lexer.peek() == Some(&Token::LBracket) {
             let (_, _bracket_span) = self.advance()?;
-            let mut indexes = Vec::new();
-            loop {
-                if self.lexer.peek() == Some(&Token::RBracket) {
-                    break;
-                }
-                let idx_expr = self.parse_index_expr()?;
-                indexes.push(idx_expr);
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                } else {
-                    break;
-                }
-            }
+            let indexes = self.parse_comma_separated(Token::RBracket, Self::parse_index_expr)?;
             let (_, end_span) = self.expect(Token::RBracket)?;
             let span = base.span.merge(end_span);
             base = TypeExpr {
@@ -495,18 +479,7 @@ impl Parser<'_> {
     /// Parse a type argument list: `<TypeExpr, TypeExpr, ...>`
     pub(super) fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
         self.expect(Token::Lt)?;
-        let mut args = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::Gt) {
-                break;
-            }
-            args.push(self.parse_type_expr()?);
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+        let args = self.parse_comma_separated(Token::Gt, Self::parse_type_expr)?;
         self.expect(Token::Gt)?;
         Ok(args)
     }

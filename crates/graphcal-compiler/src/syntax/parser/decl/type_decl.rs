@@ -85,26 +85,17 @@ impl Parser<'_> {
 
     /// Parse a comma-separated field list: `field: Type, field: Type, ...`
     pub(super) fn parse_field_list(&mut self) -> Result<Vec<FieldDecl>, ParseError> {
-        let mut fields = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-            let field_name = self
+        let fields = self.parse_comma_separated(Token::RBrace, |p| {
+            let field_name = p
                 .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
                 .into_spanned::<FieldName>();
-            self.expect(Token::Colon)?;
-            let type_ann = self.parse_type_expr()?;
-            fields.push(FieldDecl {
+            p.expect(Token::Colon)?;
+            let type_ann = p.parse_type_expr()?;
+            Ok(FieldDecl {
                 name: field_name,
                 type_ann,
-            });
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+            })
+        })?;
         if fields.is_empty() {
             let (tok, span) = self.advance()?;
             return Err(self.unexpected_token("at least one field", &tok.to_string(), span));

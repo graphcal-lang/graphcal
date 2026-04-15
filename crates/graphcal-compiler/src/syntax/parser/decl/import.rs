@@ -239,70 +239,59 @@ impl Parser<'_> {
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
-        let mut names = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-
+        let names = self.parse_comma_separated(Token::RBrace, |p| {
             // Collect any leading attributes on this import item
             let mut item_attributes = Vec::new();
-            while self.lexer.peek() == Some(&Token::Hash) {
-                item_attributes.push(self.parse_attribute()?);
+            while p.lexer.peek() == Some(&Token::Hash) {
+                item_attributes.push(p.parse_attribute()?);
             }
 
             // Accept any identifier (imports can be any casing)
-            let (name_str, name_span) = match self.lexer.next_token() {
-                Some((Token::Ident, span)) => (self.lexer.slice_at(span).to_string(), span),
+            let (name_str, name_span) = match p.lexer.next_token() {
+                Some((Token::Ident, span)) => (p.lexer.slice_at(span).to_string(), span),
                 Some((tok, span)) => {
-                    return Err(self.unexpected_token("an identifier", &tok.to_string(), span));
+                    return Err(p.unexpected_token("an identifier", &tok.to_string(), span));
                 }
                 None => {
-                    return Err(self.unexpected_eof("an identifier or `}`"));
+                    return Err(p.unexpected_eof("an identifier or `}`"));
                 }
             };
 
             // Check for optional `as` alias
-            let alias = if self.lexer.peek() == Some(&Token::As) {
-                self.lexer.next_token(); // consume `as`
-                match self.lexer.next_token() {
+            let alias = if p.lexer.peek() == Some(&Token::As) {
+                p.lexer.next_token(); // consume `as`
+                match p.lexer.next_token() {
                     Some((Token::Ident, alias_span)) => {
-                        let alias_str = self.lexer.slice_at(alias_span).to_string();
+                        let alias_str = p.lexer.slice_at(alias_span).to_string();
                         Some(crate::syntax::ast::Ident {
                             name: alias_str,
                             span: alias_span,
                         })
                     }
                     Some((tok, span)) => {
-                        return Err(self.unexpected_token(
+                        return Err(p.unexpected_token(
                             "an identifier after `as`",
                             &tok.to_string(),
                             span,
                         ));
                     }
                     None => {
-                        return Err(self.unexpected_eof("an identifier after `as`"));
+                        return Err(p.unexpected_eof("an identifier after `as`"));
                     }
                 }
             } else {
                 None
             };
 
-            names.push(crate::syntax::ast::ImportItem {
+            Ok(crate::syntax::ast::ImportItem {
                 attributes: item_attributes,
                 name: crate::syntax::ast::Ident {
                     name: name_str,
                     span: name_span,
                 },
                 alias,
-            });
-
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+            })
+        })?;
 
         self.expect(Token::RBrace)?;
         Ok(names)
@@ -314,27 +303,18 @@ impl Parser<'_> {
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;
 
-        let mut bindings = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::RParen) {
-                break;
-            }
-            let name_ident = self.parse_any_ident()?;
+        let bindings = self.parse_comma_separated(Token::RParen, |p| {
+            let name_ident = p.parse_any_ident()?;
             let name_span = name_ident.span;
-            self.expect(Token::Colon)?;
-            let value = self.parse_expr()?;
+            p.expect(Token::Colon)?;
+            let value = p.parse_expr()?;
             let binding_span = name_span.merge(value.span);
-            bindings.push(crate::syntax::ast::ParamBinding {
+            Ok(crate::syntax::ast::ParamBinding {
                 name: name_ident,
                 value,
                 span: binding_span,
-            });
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+            })
+        })?;
 
         if bindings.is_empty() {
             let (tok, span) = self.advance()?;
