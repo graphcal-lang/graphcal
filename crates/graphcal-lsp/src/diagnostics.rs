@@ -126,14 +126,12 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
             // Remaining labels become related information.
             let related: Vec<DiagnosticRelatedInformation> = labels[1..]
                 .iter()
-                .map(|label| {
-                    DiagnosticRelatedInformation {
-                        location: Location {
-                            uri: doc_uri.clone(),
-                            range: offset_len_to_range(source, label.offset(), label.len()),
-                        },
-                        message: label.label().unwrap_or("related location").to_string(),
-                    }
+                .map(|label| DiagnosticRelatedInformation {
+                    location: Location {
+                        uri: doc_uri.clone(),
+                        range: offset_len_to_range(source, label.offset(), label.len()),
+                    },
+                    message: label.label().unwrap_or("related location").to_string(),
                 })
                 .collect();
 

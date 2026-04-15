@@ -465,7 +465,6 @@ mod tests {
                 Token::Dimension,
                 Token::Unit,
                 Token::Type,
-
                 Token::Index,
                 Token::For,
                 Token::Import,

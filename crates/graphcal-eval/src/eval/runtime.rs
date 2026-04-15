@@ -575,10 +575,7 @@ fn invert_indexed_variants(
 /// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode::Boost, Mode::Cruise`.
 /// For multi-index paths, formats as `(Phase::Launch, Maneuver::Correction), (Phase::Cruise, Maneuver::Insertion)`.
-fn format_indexed_paths(
-    paths: &[&Vec<(IndexName, VariantName)>],
-    is_multi_index: bool,
-) -> String {
+fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index: bool) -> String {
     let formatted: Vec<String> = if is_multi_index {
         paths
             .iter()
