@@ -546,8 +546,6 @@ impl Parser<'_> {
     }
 
     /// Parse a brace-delimited expression (map literal).
-    ///
-    /// Block expressions (`{ let ...; expr }`) are no longer supported.
     fn parse_brace_expr(&mut self) -> Result<Expr, ParseError> {
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
@@ -584,16 +582,15 @@ impl Parser<'_> {
                 } else {
                     // PascalCase ident not followed by `::` — not a map literal
                     Err(self.unexpected_token(
-                        "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                        "map literal (`{ Index::Variant: expr, ... }`)",
                         &saved_text,
                         start_span,
                     ))
                 }
             } else {
-                // lowercase ident — block expressions are no longer supported
                 let found = self.lexer.slice_at(ident_span).to_string();
                 Err(self.unexpected_token(
-                    "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                    "map literal (`{ Index::Variant: expr, ... }`)",
                     &found,
                     start_span,
                 ))
@@ -602,13 +599,12 @@ impl Parser<'_> {
             // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
-            // Block expressions are no longer supported
             let found = self
                 .lexer
                 .peek()
                 .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
             Err(self.unexpected_token(
-                "map literal (`{ Index::Variant: expr, ... }`); block expressions are no longer supported",
+                "map literal (`{ Index::Variant: expr, ... }`)",
                 &found,
                 start_span,
             ))

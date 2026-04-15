@@ -65,7 +65,6 @@ impl Parser<'_> {
             Some(Token::Dimension) => self.parse_dimension_decl(),
             Some(Token::Unit) => self.parse_unit_decl(),
             Some(Token::Type) => self.parse_type_decl(),
-            Some(Token::Fn) => return self.parse_fn_error(),
             Some(Token::Index) => self.parse_index_decl(),
             Some(Token::Import) => self.parse_import_decl(),
             Some(Token::Include) => self.parse_include_decl(),

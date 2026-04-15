@@ -1,47 +1,10 @@
-use crate::syntax::ast::{Declaration, GenericConstraint, GenericParam};
+use crate::syntax::ast::{GenericConstraint, GenericParam};
 use crate::syntax::names::GenericParamName;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
 
 impl Parser<'_> {
-    /// Emit an error when the `fn` keyword is encountered.
-    /// `fn` declarations are no longer supported; users should use `dag` blocks instead.
-    pub(super) fn parse_fn_error(&mut self) -> Result<Declaration, ParseError> {
-        let (_, span) = self.expect(Token::Fn)?;
-        // Attempt error recovery: consume tokens up to `;` or a `{...}` block.
-        let mut brace_depth = 0u32;
-        loop {
-            match self.lexer.peek() {
-                None => break,
-                Some(Token::Semicolon) if brace_depth == 0 => {
-                    self.lexer.next_token(); // consume ';'
-                    break;
-                }
-                Some(Token::LBrace) => {
-                    brace_depth += 1;
-                    self.lexer.next_token();
-                }
-                Some(Token::RBrace) => {
-                    if brace_depth <= 1 {
-                        self.lexer.next_token(); // consume final '}'
-                        break;
-                    }
-                    brace_depth -= 1;
-                    self.lexer.next_token();
-                }
-                _ => {
-                    self.lexer.next_token();
-                }
-            }
-        }
-        Err(self.unexpected_token(
-            "fn is no longer supported; use dag blocks instead",
-            "fn",
-            span,
-        ))
-    }
-
     /// Parse generic parameters: `<D: Dim, E: Dim>`
     pub(super) fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, ParseError> {
         self.expect(Token::Lt)?;

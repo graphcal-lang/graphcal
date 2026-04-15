@@ -58,9 +58,14 @@ pub fn position_to_byte_offset(source: &str, position: Position) -> usize {
 
 /// Convert a `Span` to an LSP `Range`.
 pub fn span_to_range(source: &str, span: Span) -> Range {
+    offset_len_to_range(source, span.offset(), span.len())
+}
+
+/// Convert a byte offset and length to an LSP `Range`.
+pub fn offset_len_to_range(source: &str, offset: usize, len: usize) -> Range {
     Range {
-        start: byte_offset_to_position(source, span.offset()),
-        end: byte_offset_to_position(source, span.offset() + span.len()),
+        start: byte_offset_to_position(source, offset),
+        end: byte_offset_to_position(source, offset + len),
     }
 }
 

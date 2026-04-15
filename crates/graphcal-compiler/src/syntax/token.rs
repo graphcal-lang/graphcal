@@ -27,8 +27,6 @@ pub enum Token {
     Unit,
     #[token("type")]
     Type,
-    #[token("fn")]
-    Fn,
     #[token("index")]
     Index,
     #[token("for")]
@@ -171,7 +169,6 @@ impl std::fmt::Display for Token {
             Self::Dimension => write!(f, "dim"),
             Self::Unit => write!(f, "unit"),
             Self::Type => write!(f, "type"),
-            Self::Fn => write!(f, "fn"),
             Self::Index => write!(f, "index"),
             Self::For => write!(f, "for"),
             Self::Import => write!(f, "import"),
@@ -454,7 +451,7 @@ mod tests {
     fn lex_keywords_not_identifiers() {
         // "param" should be Token::Param, not Ident
         let tokens = lex_tokens(
-            "param node const if else base dim unit type fn index for import include dag match as assert table plot figure scan unfold linspace step pub",
+            "param node const if else base dim unit type index for import include dag match as assert table plot figure scan unfold linspace step pub",
         );
         assert_eq!(
             tokens,
@@ -468,7 +465,7 @@ mod tests {
                 Token::Dimension,
                 Token::Unit,
                 Token::Type,
-                Token::Fn,
+
                 Token::Index,
                 Token::For,
                 Token::Import,
@@ -663,78 +660,6 @@ mod tests {
         let mut lexer = Token::lexer("typedef");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "typedef");
-    }
-
-    // Phase 3 specific tests
-
-    #[test]
-    fn lex_fn_decl_short() {
-        let tokens = lex_tokens("fn lerp(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;");
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Fn,
-                Token::Ident, // lerp
-                Token::LParen,
-                Token::Ident, // a
-                Token::Colon,
-                Token::Ident, // D
-                Token::Comma,
-                Token::Ident, // b
-                Token::Colon,
-                Token::Ident, // D
-                Token::Comma,
-                Token::Ident, // t
-                Token::Colon,
-                Token::Ident, // Dimensionless
-                Token::RParen,
-                Token::Arrow,
-                Token::Ident, // D
-                Token::Eq,
-                Token::Ident, // a
-                Token::Plus,
-                Token::LParen,
-                Token::Ident, // b
-                Token::Minus,
-                Token::Ident, // a
-                Token::RParen,
-                Token::Star,
-                Token::Ident, // t
-                Token::Semicolon,
-            ]
-        );
-    }
-
-    #[test]
-    fn lex_fn_with_generics() {
-        let tokens = lex_tokens("fn abs<D: Dim>(x: D) -> D");
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Fn,
-                Token::Ident, // abs
-                Token::Lt,    // <
-                Token::Ident, // D
-                Token::Colon,
-                Token::Ident, // Dim
-                Token::Gt,    // >
-                Token::LParen,
-                Token::Ident, // x
-                Token::Colon,
-                Token::Ident, // D
-                Token::RParen,
-                Token::Arrow,
-                Token::Ident, // D
-            ]
-        );
-    }
-
-    #[test]
-    fn lex_identifier_starting_with_fn() {
-        // "fnord" should be Ident, not Fn + "ord"
-        let mut lexer = Token::lexer("fnord");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "fnord");
     }
 
     // Phase 4 specific tests
