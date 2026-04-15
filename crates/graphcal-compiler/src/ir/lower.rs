@@ -5,7 +5,7 @@
 //! single `IR` value that downstream stages can consume without reaching
 //! back to the raw AST.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -124,9 +124,13 @@ pub struct IR {
     /// Layer declarations in source order.
     pub layers: Vec<LayerEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
-    pub runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
+    /// Outer map is keyed by declaration name (key-lookup only, order irrelevant).
+    /// Inner set uses `BTreeSet` for deterministic iteration when building the DAG.
+    pub runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
-    pub const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
+    /// Outer map is keyed by declaration name (key-lookup only, order irrelevant).
+    /// Inner set uses `BTreeSet` for deterministic iteration when building the DAG.
+    pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names.
@@ -142,7 +146,7 @@ pub struct IR {
 }
 
 /// Convert a `String`-keyed dep map from the resolver to a `ScopedName`-keyed map.
-fn wrap_dep_map(map: HashMap<String, HashSet<String>>) -> HashMap<ScopedName, HashSet<ScopedName>> {
+fn wrap_dep_map(map: HashMap<String, HashSet<String>>) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
     map.into_iter()
         .map(|(k, v)| {
             (
@@ -426,13 +430,16 @@ pub struct UnfrozenIR {
     plots: Vec<PlotEntry>,
     figures: Vec<FigureEntry>,
     layers: Vec<LayerEntry>,
-    runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
-    const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
+    runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+    const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     assert_names: HashSet<ScopedName>,
+    // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+    // Key-lookup only, order irrelevant.
     expected_fail: HashMap<ScopedName, ExpectedFail>,
+    // Key-lookup only, order irrelevant.
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
@@ -470,7 +477,7 @@ impl UnfrozenIR {
         span: Span,
         target: ScopedName,
     ) {
-        let mut deps = HashSet::new();
+        let mut deps = BTreeSet::new();
         deps.insert(target);
         self.const_deps.insert(name.clone(), deps);
         self.consts.push(ConstEntry {
@@ -493,7 +500,7 @@ impl UnfrozenIR {
         span: Span,
         target: ScopedName,
     ) {
-        let mut deps = HashSet::new();
+        let mut deps = BTreeSet::new();
         deps.insert(target);
         self.runtime_deps.insert(name.clone(), deps);
         self.nodes.push(NodeEntry {
@@ -575,7 +582,7 @@ impl UnfrozenIR {
             }
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             // Rebuild runtime deps for the (possibly rewritten) expression
-            let mut graph_refs = HashSet::new();
+            let mut graph_refs = BTreeSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
                 if bindings.contains_key(entry.name.member()) {
                     // Binding expression — deps are already in the importer's namespace.
@@ -1061,7 +1068,7 @@ pub fn substitute_type_expr_index_names(
 
 /// Visitor that collects graph references from expressions.
 struct GraphRefCollector<'a> {
-    refs: &'a mut HashSet<ScopedName>,
+    refs: &'a mut BTreeSet<ScopedName>,
 }
 
 impl ExprVisitor for GraphRefCollector<'_> {
@@ -1088,7 +1095,7 @@ impl ExprVisitor for GraphRefCollector<'_> {
 /// This is a simpler version of `resolve::collect_graph_refs` that operates on
 /// arbitrary expressions without requiring a known-names set. Used for building
 /// runtime deps from binding expressions.
-fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut HashSet<ScopedName>) {
+fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut BTreeSet<ScopedName>) {
     let mut collector = GraphRefCollector { refs };
     let _ = collector.visit_expr(expr);
 }

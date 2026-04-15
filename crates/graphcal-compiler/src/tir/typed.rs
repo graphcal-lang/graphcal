@@ -4,7 +4,7 @@
 //! `TypeExprKind::Indexed::indexes`) into concrete dimensions, struct types,
 //! generic dimension parameters, or generic index parameters.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -593,23 +593,33 @@ pub struct TIR {
     /// Layer declarations in source order.
     pub layers: Vec<crate::ir::lower::LayerEntry>,
     /// For each param/node, the set of `@`-references (runtime deps).
-    pub runtime_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
+    /// Outer map: key-lookup only, order irrelevant.
+    /// Inner set: `BTreeSet` for deterministic iteration when building the DAG.
+    pub runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// For each const, the set of const-references (const deps).
-    pub const_deps: HashMap<ScopedName, std::collections::HashSet<ScopedName>>,
+    /// Outer map: key-lookup only, order irrelevant.
+    /// Inner set: `BTreeSet` for deterministic iteration when building the DAG.
+    pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Set of all assert names.
+    /// Set of all assert names. Membership-only, never iterated.
     pub assert_names: std::collections::HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
+    /// Iterated during merge; feeds into `ExecPlan` `HashMap` (key-lookup only).
     pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
+    /// Iterated during merge; feeds into `ExecPlan` `HashMap` (key-lookup only).
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
+    /// Iterated in `build_declared_types`; feeds into `HashMap` (key-lookup only).
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     /// Resolved domain constraints for declarations that have them.
+    /// Key-lookup only, order irrelevant.
     pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
+    /// Iterated in `build_declared_types` and `ExecPlan` construction;
+    /// feeds into `HashMap`s (key-lookup only).
     pub imported_values: HashMap<
         ScopedName,
         (
