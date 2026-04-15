@@ -34,11 +34,7 @@ where
         if let ExprKind::GraphRef(ident) = &expr.kind
             && self.forbidden.contains(ident.value.as_str())
         {
-            return Err((self.make_error)(
-                ident.value.as_str(),
-                self.src,
-                expr.span,
-            ));
+            return Err((self.make_error)(ident.value.as_str(), self.src, expr.span));
         }
         Ok(())
     }
@@ -47,11 +43,7 @@ where
         if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
             && self.forbidden.contains(ident.value.as_str())
         {
-            return Err((self.make_error)(
-                ident.value.as_str(),
-                self.src,
-                expr.span,
-            ));
+            return Err((self.make_error)(ident.value.as_str(), self.src, expr.span));
         }
         Ok(())
     }

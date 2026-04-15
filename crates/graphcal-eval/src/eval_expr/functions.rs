@@ -9,8 +9,8 @@ use graphcal_compiler::syntax::names::VariantName;
 
 use crate::error::GraphcalError;
 use crate::resolve_types::{
-    AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn,
-    SpecialFnKind, TypeConversionFn, classify_special_fn,
+    AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
+    TypeConversionFn, classify_special_fn,
 };
 use crate::runtime_value::RuntimeValue;
 
@@ -47,17 +47,14 @@ pub(super) fn eval_fn_call(
                 clippy::expect_used,
                 reason = "TimeScaleConversion variant guarantees a valid time scale name"
             )]
-            let scale =
-                crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
-                    .expect("TimeScaleConversion variant guarantees a valid time scale name");
+            let scale = crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
+                .expect("TimeScaleConversion variant guarantees a valid time scale name");
             fn_ctx.dispatch_timescale(scale)
         }
         Some(SpecialFnKind::Constructor(kind)) => {
             eval_datetime_constructor(kind, expr, name, args, ctx.src)
         }
-        Some(SpecialFnKind::DatetimeExtract(kind)) => {
-            fn_ctx.dispatch_datetime_extract(kind)
-        }
+        Some(SpecialFnKind::DatetimeExtract(kind)) => fn_ctx.dispatch_datetime_extract(kind),
         Some(SpecialFnKind::DatetimeFrom(kind)) => fn_ctx.dispatch_datetime_from(kind),
         Some(SpecialFnKind::DatetimeTo(kind)) => fn_ctx.dispatch_datetime_to(kind),
         _ => fn_ctx.dispatch_timescale_or_builtin(),
@@ -127,25 +124,37 @@ impl FnDispatch<'_, '_> {
         kind: DatetimeExtractFn,
     ) -> Result<RuntimeValue, GraphcalError> {
         eval_datetime_extract_fn(
-            kind, self.expr, self.name, self.args, self.values, self.local_values, self.ctx,
+            kind,
+            self.expr,
+            self.name,
+            self.args,
+            self.values,
+            self.local_values,
+            self.ctx,
         )
     }
 
-    fn dispatch_datetime_from(
-        &self,
-        kind: DatetimeFromFn,
-    ) -> Result<RuntimeValue, GraphcalError> {
+    fn dispatch_datetime_from(&self, kind: DatetimeFromFn) -> Result<RuntimeValue, GraphcalError> {
         eval_datetime_from_fn(
-            kind, self.expr, self.name, self.args, self.values, self.local_values, self.ctx,
+            kind,
+            self.expr,
+            self.name,
+            self.args,
+            self.values,
+            self.local_values,
+            self.ctx,
         )
     }
 
-    fn dispatch_datetime_to(
-        &self,
-        kind: DatetimeToFn,
-    ) -> Result<RuntimeValue, GraphcalError> {
+    fn dispatch_datetime_to(&self, kind: DatetimeToFn) -> Result<RuntimeValue, GraphcalError> {
         eval_datetime_to_fn(
-            kind, self.expr, self.name, self.args, self.values, self.local_values, self.ctx,
+            kind,
+            self.expr,
+            self.name,
+            self.args,
+            self.values,
+            self.local_values,
+            self.ctx,
         )
     }
 }

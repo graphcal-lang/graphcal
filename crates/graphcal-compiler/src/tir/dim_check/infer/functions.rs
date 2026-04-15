@@ -395,9 +395,7 @@ pub(super) fn infer_fn_call(
                     .expect("TimeScaleConversion variant guarantees a valid time scale name");
             ctx.infer_timescale_fn_call(target_scale)
         }
-        Some(SpecialFnKind::Constructor(kind)) => {
-            ctx.infer_datetime_constructor_call_typed(kind)
-        }
+        Some(SpecialFnKind::Constructor(kind)) => ctx.infer_datetime_constructor_call_typed(kind),
         Some(SpecialFnKind::DatetimeExtract(_)) => ctx.infer_datetime_extract_fn_call(),
         Some(SpecialFnKind::DatetimeFrom(_)) => ctx.infer_datetime_from_fn_call(),
         Some(SpecialFnKind::DatetimeTo(_)) => ctx.infer_datetime_to_fn_call(),
