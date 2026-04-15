@@ -14,6 +14,8 @@ use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
+use graphcal_compiler::gcl_err;
+
 use crate::builtins::{builtin_constants, builtin_functions};
 use crate::error::GraphcalError;
 use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
@@ -213,11 +215,9 @@ fn eval_consts_from_tir(
             .iter()
             .find(|e| e.name.to_string() == *cycle_node)
             .map_or_else(|| Span::new(0, 0), |e| e.span);
-        GraphcalError::CyclicDependency {
+        gcl_err!(CyclicDependency {
             name: cycle_node.clone().into(),
-            src: src.clone(),
-            span: span.into(),
-        }
+        } @ src, span)
     })?;
 
     let const_exprs: HashMap<String, &Expr> = tir
@@ -298,11 +298,9 @@ fn build_runtime_dag(
                         expressions.insert(DeclName::new(name_str), expr.clone());
                     }
                     None => {
-                        return Err(GraphcalError::RequiredParamNotProvided {
+                        return Err(gcl_err!(RequiredParamNotProvided {
                             name: name_str,
-                            src: src.clone(),
-                            span: entry.span.into(),
-                        });
+                        } @ src, entry.span));
                     }
                 }
             }
@@ -336,11 +334,9 @@ fn build_runtime_dag(
             .chain(tir.params.iter().map(|e| (e.name.to_string(), e.span)))
             .find(|(n, _)| n == cycle_node)
             .map_or_else(|| Span::new(0, 0), |(_, s)| s);
-        GraphcalError::CyclicDependency {
+        gcl_err!(CyclicDependency {
             name: cycle_node.clone().into(),
-            src: src.clone(),
-            span: span.into(),
-        }
+        } @ src, span)
     })?;
 
     let topo_order: Vec<DeclName> = topo_indices
@@ -435,14 +431,12 @@ fn resolve_domain_constraints(
                 )]
                 RuntimeValue::Int(i) => *i as f64,
                 _ => {
-                    return Err(GraphcalError::EvalError {
+                    return Err(gcl_err!(EvalError {
                         message: format!(
                             "domain constraint `{}` must evaluate to a scalar value",
                             bound.kind,
                         ),
-                        src: src.clone(),
-                        span: bound.value.span.into(),
-                    });
+                    } @ src, bound.value.span));
                 }
             };
 
@@ -453,14 +447,12 @@ fn resolve_domain_constraints(
                 if let Some(bd) = &bound_dim
                     && bd != expected
                 {
-                    return Err(GraphcalError::DomainDimensionMismatch {
+                    return Err(gcl_err!(DomainDimensionMismatch {
                         name: name_str.clone(),
                         type_dim: tir.registry.dimensions.format_dimension(expected),
                         bound_name: bound.kind.to_string(),
                         bound_dim: tir.registry.dimensions.format_dimension(bd),
-                        src: src.clone(),
-                        span: bound.span.into(),
-                    });
+                    } @ src, bound.span));
                 }
             }
 
@@ -485,13 +477,11 @@ fn resolve_domain_constraints(
         if let (Some(min), Some(max)) = (min_val, max_val)
             && min > max
         {
-            return Err(GraphcalError::DomainMinExceedsMax {
+            return Err(gcl_err!(DomainMinExceedsMax {
                 name: name_str.clone(),
                 min: min_display.unwrap_or_else(|| format!("{min}")),
                 max: max_display.unwrap_or_else(|| format!("{max}")),
-                src: src.clone(),
-                span: constraint_span.into(),
-            });
+            } @ src, constraint_span));
         }
 
         constraints.insert(
@@ -548,28 +538,20 @@ fn validate_constraint_target(
         crate::tir::ResolvedTypeExpr::Scalar(_)
         | crate::tir::ResolvedTypeExpr::Dimensionless
         | crate::tir::ResolvedTypeExpr::Int => Ok(()),
-        crate::tir::ResolvedTypeExpr::Bool => Err(GraphcalError::InvalidDomainTarget {
+        crate::tir::ResolvedTypeExpr::Bool => Err(gcl_err!(InvalidDomainTarget {
             type_kind: "Bool".to_string(),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        crate::tir::ResolvedTypeExpr::Datetime(_) => Err(GraphcalError::InvalidDomainTarget {
+        } @ src, decl_span)),
+        crate::tir::ResolvedTypeExpr::Datetime(_) => Err(gcl_err!(InvalidDomainTarget {
             type_kind: "Datetime".to_string(),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        crate::tir::ResolvedTypeExpr::Label(idx, _) => Err(GraphcalError::InvalidDomainTarget {
+        } @ src, decl_span)),
+        crate::tir::ResolvedTypeExpr::Label(idx, _) => Err(gcl_err!(InvalidDomainTarget {
             type_kind: format!("Label({idx})"),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
+        } @ src, decl_span)),
         crate::tir::ResolvedTypeExpr::Struct(name_s, _)
         | crate::tir::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
-            Err(GraphcalError::InvalidDomainTarget {
+            Err(gcl_err!(InvalidDomainTarget {
                 type_kind: format!("struct `{name_s}`"),
-                src: src.clone(),
-                span: decl_span.into(),
-            })
+            } @ src, decl_span))
         }
         crate::tir::ResolvedTypeExpr::GenericDimParam(_, _)
         | crate::tir::ResolvedTypeExpr::GenericDimExpr { .. } => {

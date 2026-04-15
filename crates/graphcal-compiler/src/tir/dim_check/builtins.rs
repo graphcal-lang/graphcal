@@ -7,6 +7,7 @@ use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
+use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
@@ -23,17 +24,15 @@ pub(super) fn infer_fn_dim(
         match &param.dim {
             ParamDim::Fixed(expected) => {
                 if arg_dims[i] != *expected {
-                    return Err(GraphcalError::DimensionMismatch {
+                    return Err(gcl_err!(DimensionMismatch {
                         expected: registry.dimensions.format_dimension(expected),
                         found: registry.dimensions.format_dimension(&arg_dims[i]),
-                        src: src.clone(),
-                        span: args[i].span.into(),
                         help: format!(
                             "parameter `{}` requires {}",
                             param.name,
                             registry.dimensions.format_dimension(expected),
                         ),
-                    });
+                    } @ src, args[i].span));
                 }
             }
             ParamDim::Bind(var) => {
@@ -47,16 +46,14 @@ pub(super) fn infer_fn_dim(
                         .iter()
                         .find(|p| matches!(&p.dim, ParamDim::Bind(v) if v == var))
                         .map_or("?", |p| &p.name);
-                    return Err(GraphcalError::DimensionMismatch {
+                    return Err(gcl_err!(DimensionMismatch {
                         expected: registry.dimensions.format_dimension(bound),
                         found: registry.dimensions.format_dimension(&arg_dims[i]),
-                        src: src.clone(),
-                        span: args[i].span.into(),
                         help: format!(
                             "parameter `{}` must have the same dimension as `{}`",
                             param.name, bind_param_name,
                         ),
-                    });
+                    } @ src, args[i].span));
                 }
             }
         }

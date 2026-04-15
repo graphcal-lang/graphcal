@@ -11,6 +11,7 @@ use crate::registry::time_scale::TimeScale;
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::builtins::builtin_functions;
+use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
@@ -92,12 +93,10 @@ fn check_decl_expr_type(
         src,
     )?;
     if !types_match(declared, &inferred, registry) {
-        return Err(GraphcalError::DimensionMismatchInAnnotation {
+        return Err(gcl_err!(DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, registry),
             inferred: format_inferred_type(&inferred, registry),
-            src: src.clone(),
-            span: (*type_ann_span).into(),
-        });
+        } @ src, *type_ann_span));
     }
     Ok(())
 }
@@ -126,11 +125,9 @@ fn check_assert_body(
                 src,
             )?;
             if !is_bool_type(&inferred) {
-                return Err(GraphcalError::AssertBodyNotBool {
+                return Err(gcl_err!(AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                } @ src, span));
             }
         }
         crate::syntax::ast::AssertBody::Tolerance {
@@ -168,14 +165,12 @@ fn check_assert_body(
             let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
             let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
             if actual_dim != expected_dim {
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
                     found: registry.dimensions.format_dimension(&expected_dim),
-                    src: src.clone(),
-                    span: expected.span.into(),
                     help: "actual and expected in tolerance assertion must have the same dimension"
                         .to_string(),
-                });
+                } @ src, expected.span));
             }
 
             // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
@@ -199,13 +194,11 @@ fn check_assert_body(
                             .to_string(),
                     )
                 };
-                return Err(GraphcalError::DimensionMismatch {
+                return Err(gcl_err!(DimensionMismatch {
                     expected: expected_str,
                     found: format_inferred_type(&tolerance_type, registry),
-                    src: src.clone(),
-                    span: tolerance.span.into(),
                     help: help_str,
-                });
+                } @ src, tolerance.span));
             }
         }
     }
@@ -322,16 +315,14 @@ pub fn check_override_dimension(
     )?;
 
     if !types_match(declared, &inferred, registry) {
-        return Err(GraphcalError::DimensionMismatch {
+        return Err(gcl_err!(DimensionMismatch {
             expected: format_declared_type(declared, registry),
             found: format_inferred_type(&inferred, registry),
-            src: src.clone(),
-            span: expr.span.into(),
             help: format!(
                 "override for `{param_name}` must have dimension {}",
                 format_declared_type(declared, registry)
             ),
-        });
+        } @ src, expr.span));
     }
     Ok(())
 }

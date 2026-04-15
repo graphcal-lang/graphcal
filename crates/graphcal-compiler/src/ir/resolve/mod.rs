@@ -13,6 +13,7 @@ use crate::syntax::ast::TypeExpr;
 use crate::syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File};
 use crate::syntax::span::Span;
 
+use crate::gcl_err;
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -148,20 +149,16 @@ fn collect_local_declarations(
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Param(p) if p.value.is_none() && !decl.is_pub => {
-                return Err(GraphcalError::RequiredItemMustBePub {
+                return Err(gcl_err!(RequiredItemMustBePub {
                     kind: "param".to_string(),
                     name: p.name.value.to_string(),
-                    src: src.clone(),
-                    span: p.name.span.into(),
-                });
+                } @ src, p.name.span));
             }
             DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub => {
-                return Err(GraphcalError::RequiredItemMustBePub {
+                return Err(gcl_err!(RequiredItemMustBePub {
                     kind: "index".to_string(),
                     name: idx.name.value.to_string(),
-                    src: src.clone(),
-                    span: idx.name.span.into(),
-                });
+                } @ src, idx.name.span));
             }
             _ => {}
         }
@@ -261,18 +258,14 @@ fn collect_local_declarations(
         )]
         if is_const {
             if !is_lower_snake_case(&name) {
-                return Err(GraphcalError::EvalError {
+                return Err(gcl_err!(EvalError {
                     message: format!("const node name `{name}` must be lower_snake_case"),
-                    src: src.clone(),
-                    span: name_span.into(),
-                });
+                } @ src, name_span));
             }
         } else if !is_lower_snake_case(&name) {
-            return Err(GraphcalError::EvalError {
+            return Err(gcl_err!(EvalError {
                 message: format!("param/node name `{name}` must be lower_snake_case"),
-                src: src.clone(),
-                span: name_span.into(),
-            });
+            } @ src, name_span));
         }
     }
 
@@ -554,11 +547,7 @@ fn validate_attributes(
         for attr in &decl.attributes {
             let attr_name_str = attr.name.name.as_str();
             let attr_name = attr_name_str.parse::<AttributeName>().map_err(|()| {
-                GraphcalError::UnknownAttribute {
-                    name: attr_name_str.to_string(),
-                    src: src.clone(),
-                    span: attr.span.into(),
-                }
+                gcl_err!(UnknownAttribute { name: attr_name_str.to_string() } @ src, attr.span)
             })?;
 
             match attr_name {
@@ -581,30 +570,24 @@ fn validate_attributes(
                         DeclKind::Dag(_) => Some("dag"),
                     };
                     if let Some(kind) = kind {
-                        return Err(GraphcalError::InvalidAssumesTarget {
+                        return Err(gcl_err!(InvalidAssumesTarget {
                             kind: kind.to_string(),
-                            src: src.clone(),
-                            span: attr.span.into(),
-                        });
+                        } @ src, attr.span));
                     }
                     // Each argument must reference an existing assert declaration
                     for arg in &attr.args {
                         let ident =
                             arg.as_single_ident()
-                                .ok_or_else(|| GraphcalError::EvalError {
+                                .ok_or_else(|| gcl_err!(EvalError {
                                     message:
                                         "`#[assumes(...)]` arguments must be plain identifiers"
                                             .to_string(),
-                                    src: src.clone(),
-                                    span: arg.span().into(),
-                                })?;
+                                } @ src, arg.span()))?;
                         let arg_name = ident.name.as_str();
                         if !assert_names.contains(arg_name) {
-                            return Err(GraphcalError::UnknownAssertInAssumes {
+                            return Err(gcl_err!(UnknownAssertInAssumes {
                                 name: arg_name.to_string(),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
+                            } @ src, ident.span));
                         }
                         if let Some(ref dname) = decl_name {
                             assumes_map
@@ -627,10 +610,7 @@ fn validate_attributes(
                                     AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
                                 );
                                 if is_indexed {
-                                    return Err(GraphcalError::ExpectedFailAllOnIndexed {
-                                        src: src.clone(),
-                                        span: attr.span.into(),
-                                    });
+                                    return Err(gcl_err!(ExpectedFailAllOnIndexed {} @ src, attr.span));
                                 }
                             }
                             if let Some(ref dname) = decl_name {
@@ -653,11 +633,9 @@ fn validate_attributes(
                         DeclKind::Include(_) => "include",
                         DeclKind::Dag(_) => "dag",
                     };
-                    return Err(GraphcalError::InvalidExpectedFailTarget {
+                    return Err(gcl_err!(InvalidExpectedFailTarget {
                         kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
+                    } @ src, attr.span));
                 }
                 AttributeName::Lazy => {
                     // Recognized but semantics deferred — no validation needed
@@ -681,12 +659,10 @@ fn validate_attributes(
                         DeclKind::Import(_) => "import",
                         DeclKind::Dag(_) => "dag",
                     };
-                    return Err(GraphcalError::InvalidAttributeTarget {
+                    return Err(gcl_err!(InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),
                         kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
+                    } @ src, attr.span));
                 }
                 AttributeName::Derive => {
                     // #[derive(...)] is only valid on type declarations
@@ -695,25 +671,21 @@ fn validate_attributes(
                             // Validate derive arguments
                             for arg in &attr.args {
                                 let ident = arg.as_single_ident().ok_or_else(|| {
-                                    GraphcalError::EvalError {
+                                    gcl_err!(EvalError {
                                         message:
                                             "`#[derive(...)]` arguments must be `Add`, `Sub`, or `Neg`"
                                                 .to_string(),
-                                        src: src.clone(),
-                                        span: arg.span().into(),
-                                    }
+                                    } @ src, arg.span())
                                 })?;
                                 match ident.name.as_str() {
                                     "Add" | "Sub" | "Neg" => {}
                                     _ => {
-                                        return Err(GraphcalError::EvalError {
+                                        return Err(gcl_err!(EvalError {
                                             message: format!(
                                                 "unknown derive op `{}`; expected `Add`, `Sub`, or `Neg`",
                                                 ident.name
                                             ),
-                                            src: src.clone(),
-                                            span: ident.span.into(),
-                                        });
+                                        } @ src, ident.span));
                                     }
                                 }
                             }
@@ -735,12 +707,10 @@ fn validate_attributes(
                         DeclKind::Include(_) => "include",
                         DeclKind::Dag(_) => "dag",
                     };
-                    return Err(GraphcalError::InvalidAttributeTarget {
+                    return Err(gcl_err!(InvalidAttributeTarget {
                         attr_name: AttributeName::Derive.as_str().to_string(),
                         kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
+                    } @ src, attr.span));
                 }
             }
         }

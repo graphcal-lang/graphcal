@@ -18,6 +18,7 @@ use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::UnitName;
 
+use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
@@ -63,37 +64,31 @@ pub(super) fn infer_type_with_owner(
         ExprKind::Number(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ExprKind::Integer(_) => Ok(InferredType::Int),
         ExprKind::Bool(_) => Ok(InferredType::Bool),
-        ExprKind::StringLiteral(_) => Err(GraphcalError::DimensionMismatch {
+        ExprKind::StringLiteral(_) => Err(gcl_err!(DimensionMismatch {
             expected: "a numeric or boolean expression".to_string(),
             found: "string literal".to_string(),
-            src: src.clone(),
-            span: expr.span.into(),
             help: "string literals can only be used as arguments to datetime() or epoch()"
                 .to_string(),
-        }),
+        } @ src, expr.span)),
 
         ExprKind::VariantLiteral { index, variant } => {
             // Validate index exists
             let idx_def = registry
                 .indexes
                 .get_index(index.value.as_str())
-                .ok_or_else(|| GraphcalError::UnknownIndex {
+                .ok_or_else(|| gcl_err!(UnknownIndex {
                     name: index.value.clone(),
-                    src: src.clone(),
-                    span: index.span.into(),
-                })?;
+                } @ src, index.span))?;
             // Validate variant exists in this index
             if !idx_def
                 .variants()
                 .iter()
                 .any(|v| v.as_str() == variant.value.as_str())
             {
-                return Err(GraphcalError::UnknownVariant {
+                return Err(gcl_err!(UnknownVariant {
                     index_name: index.value.clone(),
                     variant_name: variant.value.clone(),
-                    src: src.clone(),
-                    span: variant.span.into(),
-                });
+                } @ src, variant.span));
             }
             Ok(InferredType::Label(index.value.clone()))
         }
@@ -102,40 +97,28 @@ pub(super) fn infer_type_with_owner(
             let dim = registry.units.resolve_unit_dimension(unit).ok_or_else(|| {
                 for item in &unit.terms {
                     if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                        return GraphcalError::UnknownUnit {
+                        return gcl_err!(UnknownUnit {
                             name: item.name.value.clone(),
-                            src: src.clone(),
-                            span: item.name.span.into(),
-                        };
+                        } @ src, item.name.span);
                     }
                 }
-                GraphcalError::UnknownUnit {
+                gcl_err!(UnknownUnit {
                     name: UnitName::new("unknown"),
-                    src: src.clone(),
-                    span: unit.span.into(),
-                }
+                } @ src, unit.span)
             })?;
             Ok(InferredType::Scalar(dim))
         }
 
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
             let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownConstRef {
-                    name: ident.value.clone(),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                }
+                gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span)
             })?;
             Ok(InferredType::from(dt))
         }
 
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownGraphRef {
-                    name: ident.value.clone(),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                }
+                gcl_err!(UnknownGraphRef { name: ident.value.clone() } @ src, ident.span)
             })?;
             Ok(InferredType::from(dt))
         }
@@ -144,11 +127,9 @@ pub(super) fn infer_type_with_owner(
             local_types
                 .get(&ident.name)
                 .cloned()
-                .ok_or_else(|| GraphcalError::UnknownLocalRef {
+                .ok_or_else(|| gcl_err!(UnknownLocalRef {
                     name: ident.name.clone(),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                })
+                } @ src, ident.span))
         }
 
         // --- Scalar operations ---
