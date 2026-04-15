@@ -73,42 +73,44 @@ pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
     if let InferredType::Fin(bound) = it {
         return format!("Fin({})", bound.format());
     }
-    inferred_to_declared(it).format(&registry.dimensions)
+    DeclaredType::from(it).format(&registry.dimensions)
 }
 
-/// Convert an `InferredType` to the corresponding `DeclaredType`.
-fn inferred_to_declared(it: &InferredType) -> DeclaredType {
-    match it {
-        InferredType::Scalar(d) => DeclaredType::Scalar(d.clone()),
-        InferredType::Bool => DeclaredType::Bool,
-        InferredType::Int | InferredType::Fin(_) => DeclaredType::Int,
-        InferredType::Datetime(scale) => DeclaredType::Datetime(*scale),
-        InferredType::Label(index) => DeclaredType::Label(index.clone()),
-        InferredType::Struct(n, args) => {
-            DeclaredType::Struct(n.clone(), args.iter().map(inferred_to_declared).collect())
+impl From<&InferredType> for DeclaredType {
+    fn from(it: &InferredType) -> Self {
+        match it {
+            InferredType::Scalar(d) => Self::Scalar(d.clone()),
+            InferredType::Bool => Self::Bool,
+            InferredType::Int | InferredType::Fin(_) => Self::Int,
+            InferredType::Datetime(scale) => Self::Datetime(*scale),
+            InferredType::Label(index) => Self::Label(index.clone()),
+            InferredType::Struct(n, args) => {
+                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
+            }
+            InferredType::Indexed { element, index } => Self::Indexed {
+                element: Box::new(Self::from(element.as_ref())),
+                index: index.clone(),
+            },
         }
-        InferredType::Indexed { element, index } => DeclaredType::Indexed {
-            element: Box::new(inferred_to_declared(element)),
-            index: index.clone(),
-        },
     }
 }
 
-/// Convert a `DeclaredType` to the corresponding `InferredType`.
-pub(super) fn declared_to_inferred(dt: &DeclaredType) -> InferredType {
-    match dt {
-        DeclaredType::Scalar(d) => InferredType::Scalar(d.clone()),
-        DeclaredType::Bool => InferredType::Bool,
-        DeclaredType::Int => InferredType::Int,
-        DeclaredType::Datetime(scale) => InferredType::Datetime(*scale),
-        DeclaredType::Label(index) => InferredType::Label(index.clone()),
-        DeclaredType::Struct(n, args) => {
-            InferredType::Struct(n.clone(), args.iter().map(declared_to_inferred).collect())
+impl From<&DeclaredType> for InferredType {
+    fn from(dt: &DeclaredType) -> Self {
+        match dt {
+            DeclaredType::Scalar(d) => Self::Scalar(d.clone()),
+            DeclaredType::Bool => Self::Bool,
+            DeclaredType::Int => Self::Int,
+            DeclaredType::Datetime(scale) => Self::Datetime(*scale),
+            DeclaredType::Label(index) => Self::Label(index.clone()),
+            DeclaredType::Struct(n, args) => {
+                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
+            }
+            DeclaredType::Indexed { element, index } => Self::Indexed {
+                element: Box::new(Self::from(element.as_ref())),
+                index: index.clone(),
+            },
         }
-        DeclaredType::Indexed { element, index } => InferredType::Indexed {
-            element: Box::new(declared_to_inferred(element)),
-            index: index.clone(),
-        },
     }
 }
 

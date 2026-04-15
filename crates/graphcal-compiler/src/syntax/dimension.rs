@@ -475,14 +475,14 @@ impl std::ops::Div for Dimension {
 impl std::ops::Mul for &Dimension {
     type Output = Dimension;
     fn mul(self, other: Self) -> Dimension {
-        self.clone() * other.clone()
+        self.clone().combine(other, CombineOp::Add)
     }
 }
 
 impl std::ops::Div for &Dimension {
     type Output = Dimension;
     fn div(self, other: Self) -> Dimension {
-        self.clone() / other.clone()
+        self.clone().combine(other, CombineOp::Sub)
     }
 }
 

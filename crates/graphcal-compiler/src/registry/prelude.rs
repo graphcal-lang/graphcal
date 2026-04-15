@@ -83,13 +83,13 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
 }
 
 fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    let velocity = ids.length.clone() / ids.time.clone();
-    let acceleration = ids.length.clone() / ids.time.pow_int(2);
-    let force = ids.mass.clone() * acceleration.clone();
-    let energy = force.clone() * ids.length.clone();
-    let power = energy.clone() / ids.time.clone();
+    let velocity = &ids.length / &ids.time;
+    let acceleration = &ids.length / &ids.time.pow_int(2);
+    let force = &ids.mass * &acceleration;
+    let energy = &force * &ids.length;
+    let power = &energy / &ids.time;
     let frequency = Dimension::dimensionless() / ids.time.clone();
-    let pressure = force.clone() / ids.length.pow_int(2);
+    let pressure = &force / &ids.length.pow_int(2);
     let area = ids.length.pow_int(2);
     let volume = ids.length.pow_int(3);
 
@@ -116,10 +116,10 @@ fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
 }
 
 fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    let force = ids.mass.clone() * ids.length.clone() / ids.time.pow_int(2);
-    let energy = force.clone() * ids.length.clone();
-    let power = energy.clone() / ids.time.clone();
-    let pressure = force.clone() / ids.length.pow_int(2);
+    let force = &ids.mass * &ids.length / ids.time.pow_int(2);
+    let energy = &force * &ids.length;
+    let power = &energy / &ids.time;
+    let pressure = &force / &ids.length.pow_int(2);
     let frequency = Dimension::dimensionless() / ids.time.clone();
 
     // Length

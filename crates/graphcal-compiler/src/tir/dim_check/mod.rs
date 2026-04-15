@@ -68,28 +68,162 @@ impl InferredType {
     }
 }
 
+/// Check that a declaration's expression type matches its declared type annotation.
+#[expect(clippy::too_many_arguments, reason = "passes compilation context")]
+fn check_decl_expr_type(
+    expr: &Expr,
+    name: &crate::registry::resolve_types::ScopedName,
+    type_ann_span: &crate::syntax::span::Span,
+    declared_types: &HashMap<String, DeclaredType>,
+    empty_locals: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let name_str = name.to_string();
+    let declared = &declared_types[name_str.as_str()];
+    let inferred = infer_type_with_owner(
+        expr,
+        Some(name_str.as_str()),
+        declared_types,
+        empty_locals,
+        registry,
+        builtin_fns,
+        src,
+    )?;
+    if !types_match(declared, &inferred, registry) {
+        return Err(GraphcalError::DimensionMismatchInAnnotation {
+            declared: format_declared_type(declared, registry),
+            inferred: format_inferred_type(&inferred, registry),
+            src: src.clone(),
+            span: (*type_ann_span).into(),
+        });
+    }
+    Ok(())
+}
+
+/// Check dimension consistency of an assert body.
+///
+/// For expression asserts, verifies the body is boolean. For tolerance asserts,
+/// verifies actual/expected have matching dimensions and tolerance is compatible.
+fn check_assert_body(
+    body: &crate::syntax::ast::AssertBody,
+    span: crate::syntax::span::Span,
+    declared_types: &HashMap<String, DeclaredType>,
+    empty_locals: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match body {
+        crate::syntax::ast::AssertBody::Expr(body_expr) => {
+            let inferred = infer_type(
+                body_expr,
+                declared_types,
+                empty_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            if !is_bool_type(&inferred) {
+                return Err(GraphcalError::AssertBodyNotBool {
+                    found: format_inferred_type(&inferred, registry),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+        }
+        crate::syntax::ast::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative,
+        } => {
+            let actual_type = infer_type(
+                actual,
+                declared_types,
+                empty_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            let expected_type = infer_type(
+                expected,
+                declared_types,
+                empty_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+            let tolerance_type = infer_type(
+                tolerance,
+                declared_types,
+                empty_locals,
+                registry,
+                builtin_fns,
+                src,
+            )?;
+
+            // actual and expected must have the same dimension
+            let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
+            let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
+            if actual_dim != expected_dim {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(&actual_dim),
+                    found: registry.dimensions.format_dimension(&expected_dim),
+                    src: src.clone(),
+                    span: expected.span.into(),
+                    help: "actual and expected in tolerance assertion must have the same dimension"
+                        .to_string(),
+                });
+            }
+
+            // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
+            let tolerance_ok = if *is_relative {
+                tolerance_type.is_int_like()
+                    || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
+            } else {
+                let tolerance_dim = expect_scalar(&tolerance_type, registry, src, tolerance.span)?;
+                tolerance_dim == actual_dim
+            };
+            if !tolerance_ok {
+                let (expected_str, help_str) = if *is_relative {
+                    (
+                        "Dimensionless".to_string(),
+                        "relative tolerance (%) must be dimensionless".to_string(),
+                    )
+                } else {
+                    (
+                        registry.dimensions.format_dimension(&actual_dim),
+                        "absolute tolerance must have the same dimension as actual/expected"
+                            .to_string(),
+                    )
+                };
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: expected_str,
+                    found: format_inferred_type(&tolerance_type, registry),
+                    src: src.clone(),
+                    span: tolerance.span.into(),
+                    help: help_str,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check dimensions for all declarations in a file.
 ///
 /// For each const/param/node, infers the dimension of the RHS expression
-/// and verifies it matches the declared type annotation.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if dimensions are inconsistent.
-/// Check dimensions for all declarations using a TIR.
-///
-/// Uses `tir.build_declared_types()` (derived from `resolved_decl_types`) to validate that
-/// every RHS expression matches its declared type annotation.
+/// and verifies it matches the declared type annotation. Uses
+/// `tir.build_declared_types()` (derived from `resolved_decl_types`) to validate
+/// that every RHS expression matches its declared type annotation.
 ///
 /// This is a pure validation step — returns `()` on success.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "dimension checking for all declaration kinds including assert tolerance"
-)]
 pub fn check_dimensions_tir(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -100,182 +234,58 @@ pub fn check_dimensions_tir(
     // Validate expressions against declared types
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
-    // Check consts (always have expressions)
+    // Check consts, nodes, and params against their declared types
     for entry in &tir.consts {
-        let name_str = entry.name.to_string();
-        let declared = &declared_types[name_str.as_str()];
-        let inferred = infer_type_with_owner(
+        check_decl_expr_type(
             &entry.expr,
-            Some(name_str.as_str()),
+            &entry.name,
+            &entry.type_ann.span,
             &declared_types,
             &empty_locals,
             &tir.registry,
             builtin_fns,
             src,
         )?;
-
-        if !types_match(declared, &inferred, &tir.registry) {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: format_declared_type(declared, &tir.registry),
-                inferred: format_inferred_type(&inferred, &tir.registry),
-                src: src.clone(),
-                span: entry.type_ann.span.into(),
-            });
-        }
     }
-
-    // Check nodes (always have expressions)
     for entry in &tir.nodes {
-        let name_str = entry.name.to_string();
-        let declared = &declared_types[name_str.as_str()];
-        let inferred = infer_type_with_owner(
+        check_decl_expr_type(
             &entry.expr,
-            Some(name_str.as_str()),
+            &entry.name,
+            &entry.type_ann.span,
             &declared_types,
             &empty_locals,
             &tir.registry,
             builtin_fns,
             src,
         )?;
-
-        if !types_match(declared, &inferred, &tir.registry) {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: format_declared_type(declared, &tir.registry),
-                inferred: format_inferred_type(&inferred, &tir.registry),
-                src: src.clone(),
-                span: entry.type_ann.span.into(),
-            });
-        }
     }
-
-    // Check params (may be required with no default expression to check)
     for entry in &tir.params {
         let Some(ref value_expr) = entry.default_expr else {
             continue;
         };
-        let name_str = entry.name.to_string();
-        let declared = &declared_types[name_str.as_str()];
-        let inferred = infer_type_with_owner(
+        check_decl_expr_type(
             value_expr,
-            Some(name_str.as_str()),
+            &entry.name,
+            &entry.type_ann.span,
             &declared_types,
             &empty_locals,
             &tir.registry,
             builtin_fns,
             src,
         )?;
-
-        if !types_match(declared, &inferred, &tir.registry) {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: format_declared_type(declared, &tir.registry),
-                inferred: format_inferred_type(&inferred, &tir.registry),
-                src: src.clone(),
-                span: entry.type_ann.span.into(),
-            });
-        }
     }
 
     // Validate assert bodies
     for entry in &tir.asserts {
-        let body = &entry.body;
-        let span = entry.span;
-        match body {
-            crate::syntax::ast::AssertBody::Expr(body_expr) => {
-                let inferred = infer_type(
-                    body_expr,
-                    &declared_types,
-                    &empty_locals,
-                    &tir.registry,
-                    builtin_fns,
-                    src,
-                )?;
-                let is_bool = is_bool_type(&inferred);
-                if !is_bool {
-                    return Err(GraphcalError::AssertBodyNotBool {
-                        found: format_inferred_type(&inferred, &tir.registry),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-                }
-            }
-            crate::syntax::ast::AssertBody::Tolerance {
-                actual,
-                expected,
-                tolerance,
-                is_relative,
-            } => {
-                let actual_type = infer_type(
-                    actual,
-                    &declared_types,
-                    &empty_locals,
-                    &tir.registry,
-                    builtin_fns,
-                    src,
-                )?;
-                let expected_type = infer_type(
-                    expected,
-                    &declared_types,
-                    &empty_locals,
-                    &tir.registry,
-                    builtin_fns,
-                    src,
-                )?;
-                let tolerance_type = infer_type(
-                    tolerance,
-                    &declared_types,
-                    &empty_locals,
-                    &tir.registry,
-                    builtin_fns,
-                    src,
-                )?;
-
-                // actual and expected must have the same dimension
-                let actual_dim = expect_scalar(&actual_type, &tir.registry, src, actual.span)?;
-                let expected_dim =
-                    expect_scalar(&expected_type, &tir.registry, src, expected.span)?;
-                if actual_dim != expected_dim {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: tir.registry.dimensions.format_dimension(&actual_dim),
-                        found: tir.registry.dimensions.format_dimension(&expected_dim),
-                        src: src.clone(),
-                        span: expected.span.into(),
-                        help: "actual and expected in tolerance assertion must have the same dimension".to_string(),
-                    });
-                }
-
-                // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
-                let tolerance_ok = if *is_relative {
-                    // Relative tolerance: accept Int/Fin or Dimensionless scalar
-                    tolerance_type.is_int_like()
-                        || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
-                } else {
-                    let tolerance_dim =
-                        expect_scalar(&tolerance_type, &tir.registry, src, tolerance.span)?;
-                    tolerance_dim == actual_dim
-                };
-                if !tolerance_ok {
-                    let (expected_str, help_str) = if *is_relative {
-                        (
-                            "Dimensionless".to_string(),
-                            "relative tolerance (%) must be dimensionless".to_string(),
-                        )
-                    } else {
-                        (
-                            tir.registry.dimensions.format_dimension(&actual_dim),
-                            "absolute tolerance must have the same dimension as actual/expected"
-                                .to_string(),
-                        )
-                    };
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: expected_str,
-                        found: format_inferred_type(&tolerance_type, &tir.registry),
-                        src: src.clone(),
-                        span: tolerance.span.into(),
-                        help: help_str,
-                    });
-                }
-            }
-        }
+        check_assert_body(
+            &entry.body,
+            entry.span,
+            &declared_types,
+            &empty_locals,
+            &tir.registry,
+            builtin_fns,
+            src,
+        )?;
     }
 
     Ok(())

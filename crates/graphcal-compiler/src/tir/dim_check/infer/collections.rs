@@ -14,9 +14,7 @@ use crate::tir::typed::NatLinearForm;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
-use super::super::helpers::{
-    cartesian_product, declared_to_inferred, format_inferred_type, resolve_field_type,
-};
+use super::super::helpers::{cartesian_product, format_inferred_type, resolve_field_type};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
@@ -992,7 +990,7 @@ pub(super) fn infer_struct_construction(
                 src,
             )?;
             let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(declared_to_inferred(&dt));
+            args.push(InferredType::from(&dt));
         }
         // Fill in defaults for remaining params
         for param in type_def
@@ -1020,7 +1018,7 @@ pub(super) fn infer_struct_construction(
                 src,
             )?;
             let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(declared_to_inferred(&dt));
+            args.push(InferredType::from(&dt));
         }
         args
     } else {
