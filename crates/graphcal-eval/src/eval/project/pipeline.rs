@@ -386,14 +386,12 @@ pub(super) fn evaluate_project_perfile(
                             let local_name = item.local_name();
                             let is_overridden = overrides.keys().any(|k| k.as_str() == local_name);
                             if !is_overridden {
-                                return Err(CompileError::Eval(
-                                    gcl_err!(DefaultParamNotProvided {
+                                return Err(CompileError::Eval(gcl_err!(DefaultParamNotProvided {
                                         name: local_name.to_string(),
                                         help: format!(
                                             "provide via `--set '{local_name}=<value>'` or use `--allow-defaults`",
                                         ),
-                                    } @ dep_src, dep_decl.span),
-                                ));
+                                    } @ dep_src, dep_decl.span)));
                             }
                         }
                     }
@@ -495,22 +493,37 @@ pub(super) fn evaluate_project_perfile(
 
             for (name, cat) in &compiled.imported_source_order {
                 if let Some((rv, dt)) = compiled.imported_values.get(name) {
-                    let value =
-                        super::super::runtime::runtime_to_value(rv, Some(dt), &compiled.tir.registry);
+                    let value = super::super::runtime::runtime_to_value(
+                        rv,
+                        Some(dt),
+                        &compiled.tir.registry,
+                    );
                     let decl_name = DeclName::new(name.to_string());
                     match cat {
                         DeclCategory::Const => {
                             all_consts.push((decl_name.clone(), value.clone()));
-                            all_all.push((decl_name, Ok(value), super::super::types::DeclType::Const));
+                            all_all.push((
+                                decl_name,
+                                Ok(value),
+                                super::super::types::DeclType::Const,
+                            ));
                         }
                         DeclCategory::Param => {
                             all_params.push((decl_name.clone(), Ok(value.clone())));
-                            all_all.push((decl_name, Ok(value), super::super::types::DeclType::Param));
+                            all_all.push((
+                                decl_name,
+                                Ok(value),
+                                super::super::types::DeclType::Param,
+                            ));
                         }
                         DeclCategory::Node => {
                             // Imported nodes appear as params in the output.
                             all_params.push((decl_name.clone(), Ok(value.clone())));
-                            all_all.push((decl_name, Ok(value), super::super::types::DeclType::Node));
+                            all_all.push((
+                                decl_name,
+                                Ok(value),
+                                super::super::types::DeclType::Node,
+                            ));
                         }
                         DeclCategory::Assert
                         | DeclCategory::Plot
@@ -564,7 +577,9 @@ pub(super) fn evaluate_project_perfile(
 /// Transitive imports inherit the root-level import span of the direct import
 /// that started the chain. When a transitive dependency is reachable from multiple
 /// root imports, the first root import in source order wins.
-pub(super) fn build_dep_import_spans(project: &crate::loader::LoadedProject) -> HashMap<PathBuf, Span> {
+pub(super) fn build_dep_import_spans(
+    project: &crate::loader::LoadedProject,
+) -> HashMap<PathBuf, Span> {
     let root_file = &project.files[&project.root];
     let mut spans: HashMap<PathBuf, Span> = HashMap::new();
 
@@ -776,8 +791,14 @@ pub(super) fn extract_runtime_values(
 ) -> HashMap<String, RuntimeValue> {
     let builtin_consts = crate::builtins::builtin_constants();
     let builtin_fns = crate::builtins::builtin_functions();
-    let result =
-        super::super::runtime::run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
+    let result = super::super::runtime::run_eval_loop(
+        plan,
+        tir,
+        declared_types,
+        src,
+        builtin_consts,
+        builtin_fns,
+    );
 
     // Return only locally-defined param/node values (not imported, not consts).
     let local_runtime_names: HashSet<String> = tir

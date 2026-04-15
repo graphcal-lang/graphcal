@@ -576,13 +576,13 @@ fn validate_attributes(
                     }
                     // Each argument must reference an existing assert declaration
                     for arg in &attr.args {
-                        let ident =
-                            arg.as_single_ident()
-                                .ok_or_else(|| gcl_err!(EvalError {
+                        let ident = arg.as_single_ident().ok_or_else(|| {
+                            gcl_err!(EvalError {
                                     message:
                                         "`#[assumes(...)]` arguments must be plain identifiers"
                                             .to_string(),
-                                } @ src, arg.span()))?;
+                                } @ src, arg.span())
+                        })?;
                         let arg_name = ident.name.as_str();
                         if !assert_names.contains(arg_name) {
                             return Err(gcl_err!(UnknownAssertInAssumes {
@@ -610,7 +610,9 @@ fn validate_attributes(
                                     AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
                                 );
                                 if is_indexed {
-                                    return Err(gcl_err!(ExpectedFailAllOnIndexed {} @ src, attr.span));
+                                    return Err(
+                                        gcl_err!(ExpectedFailAllOnIndexed {} @ src, attr.span),
+                                    );
                                 }
                             }
                             if let Some(ref dname) = decl_name {

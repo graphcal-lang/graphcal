@@ -134,9 +134,11 @@ pub(super) fn resolve_field_type(
         let dim = registry
             .dimensions
             .resolve_type_expr(field_type_ann)
-            .ok_or_else(|| gcl_err!(EvalError {
+            .ok_or_else(|| {
+                gcl_err!(EvalError {
                 message: "cannot resolve field type expression".to_string(),
-            } @ src, field_type_ann.span))?;
+            } @ src, field_type_ann.span)
+            })?;
         return Ok(InferredType::Scalar(dim));
     }
 
@@ -235,9 +237,10 @@ pub(super) fn check_derived_binop(
                 .to_string(),
         } @ src, rhs_span));
     }
-    let type_def = registry.types.get_type(lhs_name.as_str()).ok_or_else(|| {
-        gcl_err!(UnknownStructType { name: lhs_name.clone() } @ src, lhs_span)
-    })?;
+    let type_def = registry
+        .types
+        .get_type(lhs_name.as_str())
+        .ok_or_else(|| gcl_err!(UnknownStructType { name: lhs_name.clone() } @ src, lhs_span))?;
     let op_name = match derive_op {
         crate::syntax::ast::DeriveOp::Add => "Add",
         crate::syntax::ast::DeriveOp::Sub => "Sub",
@@ -270,13 +273,11 @@ pub(super) fn check_derived_neg(
     let InferredType::Struct(name, _args) = operand_type else {
         return Ok(None);
     };
-    let type_def =
-        registry
-            .types
-            .get_type(name.as_str())
-            .ok_or_else(|| gcl_err!(UnknownStructType {
+    let type_def = registry.types.get_type(name.as_str()).ok_or_else(|| {
+        gcl_err!(UnknownStructType {
                 name: name.clone(),
-            } @ src, operand_span))?;
+            } @ src, operand_span)
+    })?;
     if !type_def
         .derives
         .contains(&crate::syntax::ast::DeriveOp::Neg)

@@ -6,8 +6,8 @@ use miette::NamedSource;
 use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 
-use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::gcl_err;
+use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 

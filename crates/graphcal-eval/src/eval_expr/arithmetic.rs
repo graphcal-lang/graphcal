@@ -354,9 +354,11 @@ fn eval_int_binop(
                     message: "integer exponent must be non-negative".to_string(),
                 } @ src, span));
             }
-            let exp = u32::try_from(r).map_err(|_| gcl_err!(EvalError {
+            let exp = u32::try_from(r).map_err(|_| {
+                gcl_err!(EvalError {
                 message: "integer exponent too large".to_string(),
-            } @ src, span))?;
+            } @ src, span)
+            })?;
             l.checked_pow(exp)
         }
         _ => {
@@ -365,9 +367,11 @@ fn eval_int_binop(
             } @ src, span));
         }
     }
-    .ok_or_else(|| gcl_err!(EvalError {
+    .ok_or_else(|| {
+        gcl_err!(EvalError {
         message: "integer arithmetic overflow".to_string(),
-    } @ src, span))
+    } @ src, span)
+    })
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
@@ -462,11 +466,11 @@ fn eval_struct_neg(
     for (field_name, val) in fields {
         let result_val = match val {
             RuntimeValue::Scalar(v) => RuntimeValue::Scalar(-v),
-            RuntimeValue::Int(i) => {
-                RuntimeValue::Int(i.checked_neg().ok_or_else(|| gcl_err!(EvalError {
+            RuntimeValue::Int(i) => RuntimeValue::Int(i.checked_neg().ok_or_else(|| {
+                gcl_err!(EvalError {
                     message: "integer negation overflow".to_string(),
-                } @ src, span))?)
-            }
+                } @ src, span)
+            })?),
             _ => {
                 return Err(gcl_err!(EvalError {
                     message: format!(

@@ -10,8 +10,8 @@ use crate::syntax::names::{IndexName, StructTypeName};
 use crate::registry::time_scale::TimeScale;
 use crate::tir::typed::NatLinearForm;
 
-use crate::registry::builtins::builtin_functions;
 use crate::gcl_err;
+use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 

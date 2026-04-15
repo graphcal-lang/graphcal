@@ -471,9 +471,11 @@ pub(super) fn infer_as_cast(
     let type_def = registry
         .types
         .get_type(source_name.as_str())
-        .ok_or_else(|| gcl_err!(UnknownStructType {
+        .ok_or_else(|| {
+            gcl_err!(UnknownStructType {
             name: source_name.clone(),
-        } @ src, inner.span))?;
+        } @ src, inner.span)
+        })?;
     for (i, param) in type_def.generic_params.iter().enumerate() {
         if param.constraint != crate::registry::types::TypeGenericConstraint::Unconstrained {
             // Non-phantom param — must match exactly

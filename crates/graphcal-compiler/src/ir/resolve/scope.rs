@@ -62,9 +62,7 @@ pub(super) fn check_no_runtime_graph_refs(
     let mut checker = ForbiddenGraphRefChecker {
         forbidden: runtime_names,
         src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
-            gcl_err!(GraphRefInConst { name: name.into() } @ src, span)
-        },
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| gcl_err!(GraphRefInConst { name: name.into() } @ src, span),
     };
     checker.visit_expr(expr)
 }
@@ -80,9 +78,7 @@ pub(super) fn check_no_assert_graph_refs(
     let mut checker = ForbiddenGraphRefChecker {
         forbidden: assert_names,
         src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
-            gcl_err!(GraphRefToAssert { name: name.into() } @ src, span)
-        },
+        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| gcl_err!(GraphRefToAssert { name: name.into() } @ src, span),
     };
     checker.visit_expr(expr)
 }

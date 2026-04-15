@@ -76,9 +76,11 @@ pub(super) fn infer_type_with_owner(
             let idx_def = registry
                 .indexes
                 .get_index(index.value.as_str())
-                .ok_or_else(|| gcl_err!(UnknownIndex {
+                .ok_or_else(|| {
+                    gcl_err!(UnknownIndex {
                     name: index.value.clone(),
-                } @ src, index.span))?;
+                } @ src, index.span)
+                })?;
             // Validate variant exists in this index
             if !idx_def
                 .variants()
@@ -110,27 +112,24 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
-            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
-                gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span)
-            })?;
+            let dt = declared_types.get(ident.value.as_str()).ok_or_else(
+                || gcl_err!(UnknownConstRef { name: ident.value.clone() } @ src, ident.span),
+            )?;
             Ok(InferredType::from(dt))
         }
 
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
-            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
-                gcl_err!(UnknownGraphRef { name: ident.value.clone() } @ src, ident.span)
-            })?;
+            let dt = declared_types.get(ident.value.as_str()).ok_or_else(
+                || gcl_err!(UnknownGraphRef { name: ident.value.clone() } @ src, ident.span),
+            )?;
             Ok(InferredType::from(dt))
         }
 
-        ExprKind::LocalRef(ident) => {
-            local_types
-                .get(&ident.name)
-                .cloned()
-                .ok_or_else(|| gcl_err!(UnknownLocalRef {
+        ExprKind::LocalRef(ident) => local_types.get(&ident.name).cloned().ok_or_else(|| {
+            gcl_err!(UnknownLocalRef {
                     name: ident.name.clone(),
-                } @ src, ident.span))
-        }
+                } @ src, ident.span)
+        }),
 
         // --- Scalar operations ---
         ExprKind::BinOp { op, lhs, rhs } => scalar::infer_binop(

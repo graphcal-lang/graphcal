@@ -21,12 +21,12 @@ use crate::syntax::names::{DeclName, DimName, FnName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
+use crate::gcl_err;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
-use crate::gcl_err;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr;
 use crate::registry::prelude::load_prelude;
@@ -147,7 +147,9 @@ pub struct IR {
 }
 
 /// Convert a `String`-keyed dep map from the resolver to a `ScopedName`-keyed map.
-fn wrap_dep_map(map: HashMap<String, HashSet<String>>) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
+fn wrap_dep_map(
+    map: HashMap<String, HashSet<String>>,
+) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
     map.into_iter()
         .map(|(k, v)| {
             (
@@ -288,12 +290,11 @@ fn build_ir_from_resolved(
         .consts
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| gcl_err!(EvalError {
+            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
+                gcl_err!(EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span))?;
+                    } @ src, entry.span)
+            })?;
             Ok(ConstEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -306,12 +307,11 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| gcl_err!(EvalError {
+            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
+                gcl_err!(EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span))?;
+                    } @ src, entry.span)
+            })?;
             Ok(ParamEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -324,12 +324,11 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| gcl_err!(EvalError {
+            let type_ann = type_anns.remove(&entry.name).ok_or_else(|| {
+                gcl_err!(EvalError {
                         message: format!("internal: missing type annotation for `{}`", entry.name),
-                    } @ src, entry.span))?;
+                    } @ src, entry.span)
+            })?;
             Ok(NodeEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -1369,9 +1368,9 @@ fn register_dimension_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(|| {
-        gcl_err!(UnknownDimension { name: d.name.value.clone() } @ src, d.name.span)
-    })?;
+    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(
+        || gcl_err!(UnknownDimension { name: d.name.value.clone() } @ src, d.name.span),
+    )?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
@@ -1381,12 +1380,11 @@ fn register_unit_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim =
-        registry
-            .resolve_dim_expr(&u.dim_type)
-            .ok_or_else(|| gcl_err!(UnknownDimension {
+    let dim = registry.resolve_dim_expr(&u.dim_type).ok_or_else(|| {
+        gcl_err!(UnknownDimension {
                 name: DimName::new(u.name.value.as_str()),
-            } @ src, u.name.span))?;
+            } @ src, u.name.span)
+    })?;
     let scale = if let Some(def) = &u.definition {
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
@@ -1398,10 +1396,9 @@ fn register_unit_decl(
             }
         } else {
             // Static unit: scale is a compile-time constant.
-            let (_unit_dim, base_scale) =
-                registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
-                    gcl_err!(UnknownUnit { name: u.name.value.clone() } @ src, def.span)
-                })?;
+            let (_unit_dim, base_scale) = registry.resolve_unit_expr(&def.unit_expr).ok_or_else(
+                || gcl_err!(UnknownUnit { name: u.name.value.clone() } @ src, def.span),
+            )?;
             UnitScale::Static(eval_scale_expr(&def.scale_expr, src)? * base_scale)
         }
     } else {
@@ -1434,12 +1431,11 @@ fn resolve_base_unit_static_scale(
     unit_expr: &crate::syntax::ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<f64, GraphcalError> {
-    let (_dim, base_scale) =
-        registry
-            .resolve_unit_expr(unit_expr)
-            .ok_or_else(|| gcl_err!(UnknownUnit {
+    let (_dim, base_scale) = registry.resolve_unit_expr(unit_expr).ok_or_else(|| {
+        gcl_err!(UnknownUnit {
                 name: format_unit_expr(unit_expr).into(),
-            } @ src, unit_expr.span))?;
+            } @ src, unit_expr.span)
+    })?;
     Ok(base_scale)
 }
 
@@ -1862,12 +1858,11 @@ fn eval_range_expr(
     match &expr.kind {
         ExprKind::Number(n) => Ok((*n, Dimension::dimensionless())),
         ExprKind::UnitLiteral { value, unit } => {
-            let (dim, scale) =
-                registry
-                    .resolve_unit_expr(unit)
-                    .ok_or_else(|| gcl_err!(EvalError {
+            let (dim, scale) = registry.resolve_unit_expr(unit).ok_or_else(|| {
+                gcl_err!(EvalError {
                         message: "unknown unit in range expression".to_string(),
-                    } @ src, unit.span))?;
+                    } @ src, unit.span)
+            })?;
             Ok((*value * scale, dim))
         }
         ExprKind::UnaryOp {

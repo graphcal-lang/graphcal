@@ -444,11 +444,9 @@ fn resolve_module_path<F: FileSystemReader>(
     if manifest.is_none() {
         let manifest_path = project_root.join("graphcal.toml");
         if !fs.exists(&manifest_path) {
-            return Err(CompileError::Eval(
-                gcl_err!(BareImportWithoutManifest {
+            return Err(CompileError::Eval(gcl_err!(BareImportWithoutManifest {
                     path: display_path,
-                } @ src, span),
-            ));
+                } @ src, span)));
         }
         let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
             CompileError::Eval(GraphcalError::ManifestError {

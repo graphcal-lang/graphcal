@@ -185,11 +185,9 @@ impl InferCtx<'_> {
                 help: "epoch() requires a time scale identifier as its second argument".to_string(),
             } @ self.src, self.args[1].span));
         };
-        let scale: crate::registry::time_scale::TimeScale = scale_ident
-            .value
-            .as_str()
-            .parse()
-            .map_err(|_| gcl_err!(DimensionMismatch {
+        let scale: crate::registry::time_scale::TimeScale =
+            scale_ident.value.as_str().parse().map_err(|_| {
+                gcl_err!(DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
                 found: scale_ident.value.to_string(),
                 help: format!(
@@ -197,7 +195,8 @@ impl InferCtx<'_> {
                     scale_ident.value.as_str(),
                     crate::registry::time_scale::TimeScale::ALL_NAMES.join(", ")
                 ),
-            } @ self.src, self.args[1].span))?;
+            } @ self.src, self.args[1].span)
+            })?;
         Ok(InferredType::Datetime(scale))
     }
 

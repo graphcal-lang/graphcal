@@ -86,8 +86,11 @@ pub(super) fn process_instantiated_include<'a>(
             });
         if let Some(dep_idx) = dep_index {
             // Index binding: extract the RHS index name from the expression.
-            let rhs_name =
-                lowering::extract_index_name_from_binding_expr(&binding.value, binding_name, file_src)?;
+            let rhs_name = lowering::extract_index_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
 
             // Validate the RHS resolves to an index in the importer's scope.
             // Check 1: importer's own AST.
@@ -285,11 +288,9 @@ pub(super) fn process_instantiated_include<'a>(
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(
-                gcl_err!(RequiredParamNotProvided {
+            return Err(CompileError::Eval(gcl_err!(RequiredParamNotProvided {
                     name: idx.name.value.to_string(),
-                } @ file_src, include_decl.path.span()),
-            ));
+                } @ file_src, include_decl.path.span())));
         }
     }
 
@@ -454,8 +455,11 @@ pub(super) fn process_inline_dag_include(
             _ => None,
         });
         if let Some(_dep_idx) = dep_index {
-            let rhs_name =
-                lowering::extract_index_name_from_binding_expr(&binding.value, binding_name, file_src)?;
+            let rhs_name = lowering::extract_index_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
             index_bindings.insert(binding_name.clone(), rhs_name);
             continue;
         }
@@ -557,11 +561,9 @@ pub(super) fn process_inline_dag_include(
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(
-                gcl_err!(RequiredParamNotProvided {
+            return Err(CompileError::Eval(gcl_err!(RequiredParamNotProvided {
                     name: idx.name.value.to_string(),
-                } @ file_src, include_decl.path.span()),
-            ));
+                } @ file_src, include_decl.path.span())));
         }
     }
 
