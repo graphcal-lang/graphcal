@@ -172,6 +172,11 @@ pub struct SymbolTable {
     pub definitions: HashMap<SymbolKey, DefinitionInfo>,
     /// All reference occurrences sorted by span offset.
     pub references: Vec<ReferenceInfo>,
+    /// Secondary index: name-span byte offset → `SymbolKey`.
+    ///
+    /// Populated alongside `definitions` so that `find_definition_key` is O(1)
+    /// instead of a linear reverse scan.
+    name_span_to_key: HashMap<usize, SymbolKey>,
 }
 
 impl SymbolTable {
@@ -200,35 +205,31 @@ impl SymbolTable {
         })
     }
 
-    /// Find the key for a definition using pointer identity.
+    /// Look up the key for a definition by its name-span byte offset.
     ///
-    /// When `find_definition_at` returns a `&DefinitionInfo`, the caller may need the
-    /// corresponding `SymbolKey`. This method performs a reverse lookup using pointer
-    /// equality, falling back to a span-based lookup.
+    /// O(1) via the `name_span_to_key` secondary index — no linear scan needed.
     pub fn find_definition_key(&self, definition: &DefinitionInfo) -> SymbolKey {
-        // Primary: pointer identity (fast path when reference comes from our map).
-        if let Some((k, _)) = self
-            .definitions
-            .iter()
-            .find(|(_, d)| std::ptr::eq(*d, definition))
-        {
-            return k.clone();
+        if let Some(key) = self.name_span_to_key.get(&definition.name_span.offset()) {
+            return key.clone();
         }
-        // Fallback: match by name_span offset (handles cloned DefinitionInfo).
-        if let Some((k, _)) = self
-            .definitions
-            .iter()
-            .find(|(_, d)| d.name_span == definition.name_span)
-        {
-            return k.clone();
-        }
-        // Last resort: should not happen if the definition came from this table.
+        // Fallback: should not happen if the definition came from this table.
         debug_assert!(
             false,
-            "find_definition_key: no matching definition found for {:?}",
-            definition.name
+            "find_definition_key: no matching definition for {:?} at offset {}",
+            definition.name,
+            definition.name_span.offset()
         );
         SymbolKey::TopLevel(definition.name.clone())
+    }
+
+    /// Insert a definition and update the secondary `name_span_to_key` index.
+    fn insert_definition(&mut self, key: SymbolKey, definition: DefinitionInfo) {
+        // Only index non-empty spans (builtins and fields have empty spans).
+        if !definition.name_span.is_empty() {
+            self.name_span_to_key
+                .insert(definition.name_span.offset(), key.clone());
+        }
+        self.definitions.insert(key, definition);
     }
 
     /// Register a top-level definition from a named declaration.
@@ -247,7 +248,7 @@ impl SymbolTable {
         detail: Option<String>,
     ) {
         let name = name.as_ref().to_string();
-        self.definitions.insert(
+        self.insert_definition(
             SymbolKey::TopLevel(name.clone()),
             DefinitionInfo {
                 name,
@@ -349,7 +350,7 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
 
 fn register_builtins(table: &mut SymbolTable) {
     for name in builtin_constants().keys() {
-        table.definitions.insert(
+        table.insert_definition(
             SymbolKey::TopLevel((*name).to_string()),
             DefinitionInfo {
                 name: (*name).to_string(),
@@ -363,7 +364,7 @@ fn register_builtins(table: &mut SymbolTable) {
     }
 
     for (name, f) in builtin_functions() {
-        table.definitions.insert(
+        table.insert_definition(
             SymbolKey::TopLevel((*name).to_string()),
             DefinitionInfo {
                 name: (*name).to_string(),
@@ -550,7 +551,7 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
                     parent: name.clone(),
                     variant: vname.clone(),
                 };
-                table.definitions.insert(
+                table.insert_definition(
                     key,
                     DefinitionInfo {
                         name: vname,
@@ -871,7 +872,7 @@ fn collect_expr_refs(
                     offset: binding.var.span.offset(),
                     local: var_name.clone(),
                 };
-                table.definitions.insert(
+                table.insert_definition(
                     key.clone(),
                     DefinitionInfo {
                         name: var_name.clone(),
@@ -941,7 +942,7 @@ fn collect_expr_refs(
                 offset: scan_offset,
                 local: val_name.name.clone(),
             };
-            table.definitions.insert(
+            table.insert_definition(
                 acc_key.clone(),
                 DefinitionInfo {
                     name: acc_name.name.clone(),
@@ -952,7 +953,7 @@ fn collect_expr_refs(
                     detail: Some("scan accumulator".to_string()),
                 },
             );
-            table.definitions.insert(
+            table.insert_definition(
                 val_key.clone(),
                 DefinitionInfo {
                     name: val_name.name.clone(),
@@ -987,7 +988,7 @@ fn collect_expr_refs(
                 offset: unfold_offset,
                 local: curr_name.name.clone(),
             };
-            table.definitions.insert(
+            table.insert_definition(
                 prev_key.clone(),
                 DefinitionInfo {
                     name: prev_name.name.clone(),
@@ -998,7 +999,7 @@ fn collect_expr_refs(
                     detail: Some("unfold previous step".to_string()),
                 },
             );
-            table.definitions.insert(
+            table.insert_definition(
                 curr_key.clone(),
                 DefinitionInfo {
                     name: curr_name.name.clone(),
@@ -1070,7 +1071,7 @@ fn collect_expr_refs(
                                 offset: arm.span.offset(),
                                 local: var.name.clone(),
                             };
-                            table.definitions.insert(
+                            table.insert_definition(
                                 var_key.clone(),
                                 DefinitionInfo {
                                     name: var.name.clone(),
@@ -1419,17 +1420,19 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     for type_def in registry.types.all_types() {
         for field in type_def.fields() {
             let field_key = SymbolKey::Field(field.name.to_string());
-            table
-                .definitions
-                .entry(field_key)
-                .or_insert_with(|| DefinitionInfo {
-                    name: field.name.to_string(),
-                    category: SymbolCategory::Field,
-                    name_span: Span::new(0, 0),
-                    decl_span: Span::new(0, 0),
-                    type_description: None,
-                    detail: Some(format!("field of {}", type_def.name)),
-                });
+            if !table.definitions.contains_key(&field_key) {
+                table.insert_definition(
+                    field_key,
+                    DefinitionInfo {
+                        name: field.name.to_string(),
+                        category: SymbolCategory::Field,
+                        name_span: Span::new(0, 0),
+                        decl_span: Span::new(0, 0),
+                        type_description: None,
+                        detail: Some(format!("field of {}", type_def.name)),
+                    },
+                );
+            }
         }
     }
 }

@@ -5,16 +5,9 @@ use std::collections::HashMap;
 use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
 use crate::convert::span_to_range;
+use crate::resolve::{ResolvedSymbol, SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
-use crate::symbol_table::{SymbolCategory, SymbolKey};
-
-/// Internal target info for the symbol being renamed.
-struct RenameTarget {
-    /// The symbol table key for this target.
-    key: SymbolKey,
-    /// Whether the definition is local (in this file) vs imported.
-    is_local: bool,
-}
+use crate::symbol_table::SymbolCategory;
 
 /// Check whether a name is a valid Graphcal identifier.
 fn is_valid_identifier(name: &str) -> bool {
@@ -28,57 +21,24 @@ fn is_valid_identifier(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Find the rename target at the given byte offset.
-fn find_rename_target(analysis: &AnalysisResult, offset: usize) -> Option<RenameTarget> {
-    if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
-        let key = reference.target.clone();
-        // Reject builtins and fields.
-        if let Some(def) = analysis.symbol_table.definitions.get(&key) {
-            if def.is_builtin() || def.category == SymbolCategory::Field {
-                return None;
-            }
-        } else if analysis.imported_definitions.contains_key(&key) {
-            return Some(RenameTarget {
-                key,
-                is_local: false,
-            });
-        } else {
-            // Reference to something we can't find — might be a field reference.
-            if key.is_field() {
-                return None;
-            }
-        }
-        let is_local = analysis.symbol_table.definitions.contains_key(&key);
-        Some(RenameTarget { key, is_local })
-    } else if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        if definition.is_builtin() || definition.category == SymbolCategory::Field {
-            return None;
-        }
-        let actual_key = analysis.symbol_table.find_definition_key(definition);
-        Some(RenameTarget {
-            key: actual_key,
-            is_local: true,
-        })
-    } else {
-        None
-    }
+/// Check whether a resolved symbol is eligible for rename.
+fn is_renameable(resolved: &ResolvedSymbol<'_>) -> bool {
+    let def = match &resolved.location {
+        SymbolLocation::Local(def) => *def,
+        SymbolLocation::Imported(imported) => &imported.definition,
+    };
+    !def.is_builtin() && def.category != SymbolCategory::Field
 }
 
 /// Validate a rename and return the current name's range and placeholder.
 pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<PrepareRenameResponse> {
-    let target = find_rename_target(analysis, offset)?;
-
-    // Determine the span to highlight.
-    let span = if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
-        reference.span
-    } else if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        definition.name_span
-    } else {
+    let resolved = resolve_symbol_at(analysis, offset)?;
+    if !is_renameable(&resolved) {
         return None;
-    };
+    }
 
-    // Get the current name text for the placeholder.
-    let key_str = target.key.to_string();
+    let key_str = resolved.key.to_string();
+    let span = resolved.cursor_span;
     let placeholder = analysis
         .source
         .get(span.offset()..span.offset() + span.len())
@@ -102,46 +62,50 @@ pub fn rename(
         return None;
     }
 
-    let target = find_rename_target(analysis, offset)?;
+    let resolved = resolve_symbol_at(analysis, offset)?;
+    if !is_renameable(&resolved) {
+        return None;
+    }
 
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
 
     // Collect all reference edits in the current file.
-    let mut current_file_edits = Vec::new();
-    for r in analysis.symbol_table.find_all_references(&target.key) {
-        current_file_edits.push(TextEdit {
+    let mut current_file_edits: Vec<TextEdit> = analysis
+        .symbol_table
+        .find_all_references(&resolved.key)
+        .into_iter()
+        .map(|r| TextEdit {
             range: span_to_range(&analysis.source, r.span),
             new_text: new_name.to_string(),
-        });
-    }
+        })
+        .collect();
 
-    // Include the definition's name span if it's local.
-    if target.is_local
-        && let Some(def) = analysis.symbol_table.definitions.get(&target.key)
-        && !def.name_span.is_empty()
-    {
-        current_file_edits.push(TextEdit {
-            range: span_to_range(&analysis.source, def.name_span),
-            new_text: new_name.to_string(),
-        });
+    match &resolved.location {
+        SymbolLocation::Local(def) => {
+            // Include the definition's name span.
+            if !def.name_span.is_empty() {
+                current_file_edits.push(TextEdit {
+                    range: span_to_range(&analysis.source, def.name_span),
+                    new_text: new_name.to_string(),
+                });
+            }
+        }
+        SymbolLocation::Imported(imported) => {
+            // Also rename the definition in the source file.
+            if !imported.definition.name_span.is_empty() {
+                changes
+                    .entry(imported.uri.clone())
+                    .or_default()
+                    .push(TextEdit {
+                        range: span_to_range(&imported.source, imported.definition.name_span),
+                        new_text: new_name.to_string(),
+                    });
+            }
+        }
     }
 
     if !current_file_edits.is_empty() {
         changes.insert(uri.clone(), current_file_edits);
-    }
-
-    // For imported symbols, also rename the definition in the source file.
-    if !target.is_local
-        && let Some(imported) = analysis.imported_definitions.get(&target.key)
-        && !imported.definition.name_span.is_empty()
-    {
-        changes
-            .entry(imported.uri.clone())
-            .or_default()
-            .push(TextEdit {
-                range: span_to_range(&imported.source, imported.definition.name_span),
-                new_text: new_name.to_string(),
-            });
     }
 
     if changes.is_empty() {
@@ -182,7 +146,7 @@ mod tests {
             diagnostics: Vec::new(),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
-            import_decls: Vec::new(),
+            import_links: Vec::new(),
         }
     }
 
