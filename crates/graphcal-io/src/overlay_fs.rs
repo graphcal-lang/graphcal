@@ -8,7 +8,7 @@ use crate::FileSystemReader;
 /// A filesystem reader that intercepts reads to a single overlaid path,
 /// returning in-memory content instead of delegating to the base reader.
 ///
-/// Used by the LSP (unsaved editor buffer) and the REPL (accumulated source).
+/// Used by the LSP (unsaved editor buffer).
 pub struct OverlayFileSystem<F> {
     base: F,
     /// Canonical path of the overlaid file.

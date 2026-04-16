@@ -1,9 +1,0 @@
----
-source: crates/graphcal-dag/src/lib.rs
-expression: render(&g)
----
-           param a
-              │
-    ┌─────────┴┬─────────┐
-    │          │         │
- node b     node c    node d

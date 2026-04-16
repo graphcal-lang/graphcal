@@ -1,6 +1,5 @@
 mod json_input;
 mod plot;
-mod shell;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeMap;
@@ -66,20 +65,6 @@ enum Commands {
     },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
-    /// Start an interactive shell (REPL)
-    Shell {
-        /// Path to a .gcl file to pre-load
-        file: Option<PathBuf>,
-        /// Override a param value: --set 'name=expr'
-        #[arg(long)]
-        set: Vec<String>,
-        /// JSON input file for param values
-        #[arg(long)]
-        input: Option<PathBuf>,
-        /// Project root directory (overrides automatic graphcal.toml detection)
-        #[arg(long)]
-        root: Option<PathBuf>,
-    },
 }
 
 #[derive(ValueEnum, Clone)]
@@ -176,15 +161,6 @@ fn main() {
                 .build()
                 .expect("failed to build tokio runtime")
                 .block_on(graphcal_lsp::run());
-        }
-        Commands::Shell {
-            file,
-            set,
-            input,
-            root,
-        } => {
-            let overrides = parse_overrides(&set, input.as_deref());
-            shell::run_shell(file.as_deref(), overrides, root.as_deref());
         }
         Commands::Eval {
             file,
