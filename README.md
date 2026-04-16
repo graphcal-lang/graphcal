@@ -819,7 +819,6 @@ See the [GitHub issues](https://github.com/shunichironomura/graphcal/issues) for
 graphcal/
   crates/
     graphcal-compiler/ # lexer (logos) + recursive descent parser + AST
-    graphcal-dag/      # DAG construction and dependency analysis
     graphcal-eval/     # name resolution, dim check, const eval, runtime eval
     graphcal-fmt/      # code formatter
     graphcal-io/       # input/output (JSON, text)

@@ -117,7 +117,7 @@ using the now-known const values.
 
 ## 2. Crate Map
 
-The workspace contains 7 crates. Dependencies flow downward in this diagram:
+The workspace contains 6 crates. Dependencies flow downward in this diagram:
 
 ```text
 graphcal-cli          (binary: CLI entry point)
@@ -129,7 +129,6 @@ graphcal-lsp          (binary: Language Server)
     |         |         |
     |         |         +---> graphcal-io   (filesystem abstraction)
     |         |
-    +---> graphcal-dag        (DAG visualization)
     +---> graphcal-fmt        (source code formatter)
               |
               +---> graphcal-compiler
@@ -176,15 +175,7 @@ Evaluation engine. Depends on `graphcal-compiler` and re-exports most of its typ
 | `exec_plan.rs`             | `ExecPlan` struct, topological sorts, const evaluation                 |
 | `loader.rs`                | Project loading with circular import detection                         |
 
-### 2.3 graphcal-dag
-
-Standalone ASCII DAG renderer. No dependency on the compiler.
-
-- Takes `petgraph::DiGraph<String, ()>`, returns a `String` of Unicode box-drawing art.
-- Uses Sugiyama layered layout algorithm (layer assignment -> crossing reduction -> rendering).
-- The DAG is built by the CLI from TIR dependency maps; this crate only renders.
-
-### 2.4 graphcal-fmt
+### 2.3 graphcal-fmt
 
 Source code formatter.
 
@@ -192,7 +183,7 @@ Source code formatter.
   using the `pretty` crate's `DocAllocator`.
 - Declaration formatting is in `format/decl.rs`.
 
-### 2.5 graphcal-io
+### 2.4 graphcal-io
 
 Filesystem abstraction layer.
 
@@ -201,7 +192,7 @@ Filesystem abstraction layer.
   `OverlayFileSystem` (testing).
 - Enables WASM compatibility and deterministic testing.
 
-### 2.6 graphcal-cli
+### 2.5 graphcal-cli
 
 Binary crate. CLI entry point with subcommands:
 
@@ -211,12 +202,11 @@ Binary crate. CLI entry point with subcommands:
 | `format`    | Format `.gcl` files (check or write mode)                    |
 | `typecheck` | Parse + type-check without evaluation                        |
 | `lsp`       | Start Language Server Protocol server                        |
-| `shell`     | Interactive REPL                                             |
 
 Key options: `--set name=expr` (override params), `--input file.json`,
 `--format text|json`, `--plot browser|json|file.html`.
 
-### 2.7 graphcal-lsp
+### 2.6 graphcal-lsp
 
 Language Server Protocol implementation (async, tower-lsp).
 
@@ -452,7 +442,6 @@ Inline `#[test]` functions in each module. Modules use
 
 The `insta` crate is used extensively:
 
-- **DAG rendering**: `crates/graphcal-dag/src/snapshots/`
 - **Error output**: `crates/graphcal-eval/tests/snapshots/`
 - **Formatter**: `crates/graphcal-fmt/tests/snapshots/`
 
@@ -515,5 +504,5 @@ builds understanding incrementally:
 13. **`eval/types.rs`** -- `Value` and `EvalResult` definitions.
 14. **`graphcal-cli/src/main.rs`** -- see how the full pipeline is invoked.
 
-After this pass, the LSP, formatter, and DAG renderer can be read independently
+After this pass, the LSP and formatter can be read independently
 as they are self-contained consumers of the compiler/eval APIs.
