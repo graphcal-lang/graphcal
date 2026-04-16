@@ -203,10 +203,9 @@ fn gcd64(a: u64, b: u64) -> u64 {
 pub enum BaseDimId {
     /// Built-in prelude dimension (e.g., "Length", "Time", "Mass").
     Prelude(String),
-    /// User-defined dimension, identified by defining file path + name.
-    /// The file path is relative to the project root for cross-machine consistency.
+    /// User-defined dimension, identified by the defining DAG's identity + name.
     UserDefined {
-        file: std::path::PathBuf,
+        dag: super::dag_id::DagId,
         name: String,
     },
 }
@@ -704,7 +703,7 @@ mod tests {
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
         let info_id = BaseDimId::UserDefined {
-            file: std::path::PathBuf::from("test.gcl"),
+            dag: crate::syntax::dag_id::DagId::new(["test"]),
             name: "Information".to_string(),
         };
         let information = Dimension::base(info_id.clone());

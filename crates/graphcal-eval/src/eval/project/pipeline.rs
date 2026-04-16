@@ -18,12 +18,12 @@ use super::*;
 )]
 pub(super) fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
-    file_path: &Path,
-    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-    override_targets: &HashMap<DeclName, (PathBuf, DeclName)>,
+    override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
-    let loaded_file = &project.files[file_path];
+    let loaded_file = &project.files[file_dag_id];
     let file_src = &loaded_file.named_source;
 
     let mut ctx = ImportContext {
@@ -52,8 +52,8 @@ pub(super) fn compile_single_file_in_project(
     imports::check_dag_recursion(&dag_definitions, file_src)?;
 
     // Process all import declarations (non-instantiated, compile-time items only).
-    for (_decl, import_decl, import_canonical) in loaded_file.imports_with_paths() {
-        let import_canonical = import_canonical.to_path_buf();
+    for (_decl, import_decl, import_canonical) in loaded_file.imports_with_dag_ids() {
+        let import_canonical = import_canonical.clone();
         imports::process_non_instantiated_import(
             project,
             &import_canonical,
@@ -69,7 +69,7 @@ pub(super) fn compile_single_file_in_project(
     // Process all include declarations (file-based DAG instantiation).
     // Inline DAG includes (single-segment module paths matching a dag name),
     // cross-file DAG includes, and bare module path DAG includes are handled below.
-    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_dag_ids() {
         // Skip cross-file DAG includes — handled in the next section.
         if include_decl.path.is_cross_file_dag() {
             continue;
@@ -77,14 +77,10 @@ pub(super) fn compile_single_file_in_project(
         // Skip bare module path DAG references — handled after inline DAGs.
         // These are multi-segment ModulePath includes where the last segment
         // matches a DAG in the resolved target file.
-        if imports::is_bare_module_dag_ref(
-            &include_decl.path,
-            &include_canonical.to_path_buf(),
-            project,
-        ) {
+        if imports::is_bare_module_dag_ref(&include_decl.path, include_canonical, project) {
             continue;
         }
-        let include_canonical = include_canonical.to_path_buf();
+        let include_canonical = include_canonical.clone();
         if include_decl.param_bindings.is_empty() {
             imports::process_non_instantiated_import(
                 project,
@@ -99,7 +95,7 @@ pub(super) fn compile_single_file_in_project(
         } else {
             imports::process_instantiated_include(
                 project,
-                file_path,
+                file_dag_id,
                 &include_canonical,
                 include_decl,
                 decl,
@@ -144,19 +140,18 @@ pub(super) fn compile_single_file_in_project(
 
     // Process cross-file DAG includes (include "./file.gcl"/dag_name(...) { ... }).
     // These reference inline DAG definitions in other files.
-    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_dag_ids() {
         let ImportPath::CrossFileDag { dag_name, .. } = &include_decl.path else {
             continue;
         };
 
-        let include_canonical = include_canonical.to_path_buf();
+        let include_canonical = include_canonical.clone();
 
         // Find the target file's AST from the project.
         let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "cross-file DAG target file not found in project: {}",
-                    include_canonical.display()
+                    "cross-file DAG target file not found in project: {include_canonical}",
                 ),
                 src: file_src.clone(),
                 span: include_decl.path.span().into(),
@@ -175,9 +170,8 @@ pub(super) fn compile_single_file_in_project(
             .ok_or_else(|| {
                 CompileError::Eval(GraphcalError::EvalError {
                     message: format!(
-                        "DAG `{}` not found in file `{}`",
+                        "DAG `{}` not found in file `{include_canonical}`",
                         dag_name.name,
-                        include_canonical.display()
                     ),
                     src: file_src.clone(),
                     span: dag_name.span.into(),
@@ -201,16 +195,12 @@ pub(super) fn compile_single_file_in_project(
     // Process bare module path DAG includes (include pkg/mod/dag_name(...) { ... }).
     // These are multi-segment ModulePath includes where the last segment is a DAG
     // defined in the resolved parent file (e.g. `pkg/mod.gcl` contains `dag dag_name`).
-    for (decl, include_decl, include_canonical) in loaded_file.includes_with_paths() {
-        if !imports::is_bare_module_dag_ref(
-            &include_decl.path,
-            &include_canonical.to_path_buf(),
-            project,
-        ) {
+    for (decl, include_decl, include_canonical) in loaded_file.includes_with_dag_ids() {
+        if !imports::is_bare_module_dag_ref(&include_decl.path, include_canonical, project) {
             continue;
         }
 
-        let include_canonical = include_canonical.to_path_buf();
+        let include_canonical = include_canonical.clone();
         let ImportPath::ModulePath { segments, .. } = &include_decl.path else {
             // is_bare_module_dag_ref only returns true for ModulePath
             continue;
@@ -225,8 +215,7 @@ pub(super) fn compile_single_file_in_project(
         let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "bare module DAG target file not found in project: {}",
-                    include_canonical.display()
+                    "bare module DAG target file not found in project: {include_canonical}",
                 ),
                 src: file_src.clone(),
                 span: include_decl.path.span().into(),
@@ -244,11 +233,7 @@ pub(super) fn compile_single_file_in_project(
             })
             .ok_or_else(|| {
                 CompileError::Eval(GraphcalError::EvalError {
-                    message: format!(
-                        "DAG `{}` not found in file `{}`",
-                        dag_name,
-                        include_canonical.display()
-                    ),
+                    message: format!("DAG `{dag_name}` not found in file `{include_canonical}`",),
                     src: file_src.clone(),
                     span: include_decl.path.span().into(),
                 })
@@ -274,7 +259,7 @@ pub(super) fn compile_single_file_in_project(
     // Lower to IR and finalize compilation.
     lowering::lower_and_finalize(
         project,
-        file_path,
+        file_dag_id,
         file_src,
         &file_ast,
         ctx,
@@ -287,10 +272,10 @@ pub(super) fn compile_single_file_in_project(
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
 pub(super) fn evaluate_and_store_file(
     compiled: CompiledFile,
-    file_path: &Path,
+    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     pub_names: HashSet<String>,
-    evaluated_files: &mut HashMap<PathBuf, EvaluatedFile>,
+    evaluated_files: &mut HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
     let eval_result = evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
@@ -298,7 +283,7 @@ pub(super) fn evaluate_and_store_file(
         extract_runtime_values(&compiled.tir, &plan, &compiled.declared_types, file_src);
 
     evaluated_files.insert(
-        file_path.to_path_buf(),
+        file_dag_id.clone(),
         EvaluatedFile {
             values: file_runtime_values,
             const_values: plan
@@ -350,8 +335,8 @@ pub(super) fn evaluate_project_perfile(
             if let DeclKind::Param(p) = &decl.kind
                 && p.value.is_some()
             {
-                let is_overridden = override_targets.values().any(|(target_path, orig_name)| {
-                    *target_path == project.root && orig_name.as_str() == p.name.value.as_str()
+                let is_overridden = override_targets.values().any(|(target_dag_id, orig_name)| {
+                    *target_dag_id == project.root && orig_name.as_str() == p.name.value.as_str()
                 });
                 if !is_overridden {
                     return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
@@ -369,9 +354,9 @@ pub(super) fn evaluate_project_perfile(
 
         // Check params from non-parameterized selective imports and includes
         let selective_imports: Vec<_> = root_file
-            .imports_with_paths()
+            .imports_with_dag_ids()
             .map(|(_, d, c)| (&d.kind, c))
-            .chain(root_file.includes_with_paths().filter_map(|(_, d, c)| {
+            .chain(root_file.includes_with_dag_ids().filter_map(|(_, d, c)| {
                 if d.param_bindings.is_empty() {
                     Some((&d.kind, c))
                 } else {
@@ -414,13 +399,14 @@ pub(super) fn evaluate_project_perfile(
         }
     }
 
-    let mut evaluated_files: HashMap<PathBuf, EvaluatedFile> = HashMap::new();
+    let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
+        HashMap::new();
 
-    for file_path in &project.load_order {
-        let is_root = *file_path == project.root;
+    for file_dag_id in &project.load_order {
+        let is_root = *file_dag_id == project.root;
         let compiled = compile_single_file_in_project(
             project,
-            file_path,
+            file_dag_id,
             &evaluated_files,
             overrides,
             &override_targets,
@@ -448,10 +434,10 @@ pub(super) fn evaluate_project_perfile(
         if is_root {
             // Reject standalone evaluation of files with required indexes.
             if has_required_indexes {
-                let file_src = &project.files[file_path].named_source;
+                let file_src = &project.files[file_dag_id].named_source;
                 for idx_def in compiled.tir.registry.indexes.all_indexes() {
                     if idx_def.is_required() {
-                        let span = project.files[file_path]
+                        let span = project.files[file_dag_id]
                             .ast
                             .declarations
                             .iter()
@@ -473,7 +459,7 @@ pub(super) fn evaluate_project_perfile(
                     }
                 }
             }
-            let file_src = &project.files[file_path].named_source;
+            let file_src = &project.files[file_dag_id].named_source;
             let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
             let eval_result =
                 evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
@@ -485,13 +471,13 @@ pub(super) fn evaluate_project_perfile(
             // Aggregate assertions from all dependency files, replacing the
             // assertion's original span with the root file's import statement span.
             let mut all_assertions: Vec<(DeclName, AssertResult, Span)> = Vec::new();
-            for dep_path in &project.load_order {
-                if *dep_path == project.root {
+            for dep_dag_id in &project.load_order {
+                if *dep_dag_id == project.root {
                     continue;
                 }
-                if let Some(dep_eval) = evaluated_files.get(dep_path) {
+                if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
                     let import_span = dep_import_spans
-                        .get(dep_path)
+                        .get(dep_dag_id)
                         .copied()
                         .unwrap_or(Span::new(0, 0));
                     all_assertions.extend(dep_eval.assertions.iter().map(
@@ -569,11 +555,11 @@ pub(super) fn evaluate_project_perfile(
             });
         }
 
-        let file_src = &project.files[file_path].named_source;
-        let pub_names = extract_pub_names(&project.files[file_path].ast);
+        let file_src = &project.files[file_dag_id].named_source;
+        let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
         evaluate_and_store_file(
             compiled,
-            file_path,
+            file_dag_id,
             file_src,
             pub_names,
             &mut evaluated_files,
@@ -597,42 +583,42 @@ pub(super) fn evaluate_project_perfile(
 /// root imports, the first root import in source order wins.
 pub(super) fn build_dep_import_spans(
     project: &crate::loader::LoadedProject,
-) -> HashMap<PathBuf, Span> {
+) -> HashMap<graphcal_compiler::syntax::dag_id::DagId, Span> {
     let root_file = &project.files[&project.root];
-    let mut spans: HashMap<PathBuf, Span> = HashMap::new();
+    let mut spans: HashMap<graphcal_compiler::syntax::dag_id::DagId, Span> = HashMap::new();
 
     // Process root's direct imports/includes in source order.
     // For each, DFS into its transitive dependencies, propagating the root span.
     // `entry().or_insert()` ensures the first root import/include (in source order) to reach
     // a transitive dep determines its attribution.
-    let root_decl_paths: Vec<(Span, PathBuf)> = root_file
-        .imports_with_paths()
-        .map(|(d, _, c)| (d.span, c.to_path_buf()))
+    let root_decl_dag_ids: Vec<(Span, graphcal_compiler::syntax::dag_id::DagId)> = root_file
+        .imports_with_dag_ids()
+        .map(|(d, _, c)| (d.span, c.clone()))
         .chain(
             root_file
-                .includes_with_paths()
-                .map(|(d, _, c)| (d.span, c.to_path_buf())),
+                .includes_with_dag_ids()
+                .map(|(d, _, c)| (d.span, c.clone())),
         )
         .collect();
-    for (root_span, canonical) in root_decl_paths {
+    for (root_span, canonical) in root_decl_dag_ids {
         let mut stack = vec![canonical];
-        while let Some(path) = stack.pop() {
-            if path == project.root {
+        while let Some(dag_id) = stack.pop() {
+            if dag_id == project.root {
                 continue;
             }
             // Only process if not already attributed.
-            if let std::collections::hash_map::Entry::Vacant(entry) = spans.entry(path.clone()) {
+            if let std::collections::hash_map::Entry::Vacant(entry) = spans.entry(dag_id.clone()) {
                 entry.insert(root_span);
                 // Push this file's own imports/includes for transitive propagation.
-                if let Some(file) = project.files.get(&path) {
-                    for (_decl, _imp, c) in file.imports_with_paths() {
+                if let Some(file) = project.files.get(&dag_id) {
+                    for (_decl, _imp, c) in file.imports_with_dag_ids() {
                         if !spans.contains_key(c) {
-                            stack.push(c.to_path_buf());
+                            stack.push(c.clone());
                         }
                     }
-                    for (_decl, _inc, c) in file.includes_with_paths() {
+                    for (_decl, _inc, c) in file.includes_with_dag_ids() {
                         if !spans.contains_key(c) {
-                            stack.push(c.to_path_buf());
+                            stack.push(c.clone());
                         }
                     }
                 }
@@ -652,13 +638,14 @@ pub(super) fn compile_to_tir_project_perfile(
 ) -> Result<crate::tir::TIR, CompileError> {
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
-    let mut evaluated_files: HashMap<PathBuf, EvaluatedFile> = HashMap::new();
+    let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
+        HashMap::new();
 
-    for file_path in &project.load_order {
-        let is_root = *file_path == project.root;
+    for file_dag_id in &project.load_order {
+        let is_root = *file_dag_id == project.root;
         let compiled = compile_single_file_in_project(
             project,
-            file_path,
+            file_dag_id,
             &evaluated_files,
             &empty_overrides,
             &empty_targets,
@@ -674,11 +661,11 @@ pub(super) fn compile_to_tir_project_perfile(
             continue;
         }
 
-        let file_src = &project.files[file_path].named_source;
-        let pub_names = extract_pub_names(&project.files[file_path].ast);
+        let file_src = &project.files[file_dag_id].named_source;
+        let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
         evaluate_and_store_file(
             compiled,
-            file_path,
+            file_dag_id,
             file_src,
             pub_names,
             &mut evaluated_files,
@@ -695,19 +682,20 @@ pub(super) fn compile_to_tir_project_perfile(
 
 /// Route `--set` / `--input` overrides to the files that own the targeted params.
 ///
-/// Returns a map: `override_name` → (`owning_file_path`, `original_param_name`).
+/// Returns a map: `override_name` → (`owning_dag_id`, `original_param_name`).
 /// The `original_param_name` may differ from `override_name` when an alias is used.
 pub(super) fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-) -> Result<HashMap<DeclName, (PathBuf, DeclName)>, CompileError> {
+) -> Result<HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>, CompileError> {
     if overrides.is_empty() {
         return Ok(HashMap::new());
     }
 
     let root_file = &project.files[&project.root];
 
-    let mut result: HashMap<DeclName, (PathBuf, DeclName)> = HashMap::new();
+    let mut result: HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)> =
+        HashMap::new();
 
     for override_name in overrides.keys() {
         let name_str = override_name.as_str();
@@ -728,11 +716,11 @@ pub(super) fn route_overrides_to_files(
         // Check if the root file imports/includes this param from a dependency.
         let mut found = false;
         let selective_decls: Vec<_> = root_file
-            .imports_with_paths()
+            .imports_with_dag_ids()
             .map(|(_, d, c)| (&d.kind, c))
             .chain(
                 root_file
-                    .includes_with_paths()
+                    .includes_with_dag_ids()
                     .map(|(_, d, c)| (&d.kind, c)),
             )
             .collect();
@@ -751,10 +739,7 @@ pub(super) fn route_overrides_to_files(
                         if is_param {
                             result.insert(
                                 override_name.clone(),
-                                (
-                                    import_canonical.to_path_buf(),
-                                    DeclName::new(orig_name.clone()),
-                                ),
+                                (import_canonical.clone(), DeclName::new(orig_name.clone())),
                             );
                             found = true;
                             break;

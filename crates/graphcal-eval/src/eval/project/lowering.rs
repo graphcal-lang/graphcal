@@ -15,13 +15,13 @@ use super::*;
 )]
 pub(super) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
-    file_path: &Path,
+    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::syntax::ast::File,
     ctx: ImportContext<'_>,
-    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-    override_targets: &HashMap<DeclName, (PathBuf, DeclName)>,
+    override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     let saved_imported_values = ctx.imported_values.clone();
 
@@ -30,16 +30,18 @@ pub(super) fn lower_and_finalize(
         file_src,
         &ctx.imported_names,
         ctx.imported_values,
+        file_dag_id,
     )?;
 
     // Register type-system declarations from selectively imported files.
-    for (dep_path, names) in &ctx.imported_type_system_names {
-        let dep_loaded = &project.files[dep_path];
+    for (dep_dag_id, names) in &ctx.imported_type_system_names {
+        let dep_loaded = &project.files[dep_dag_id];
         crate::ir::register_selected_declarations(
             &dep_loaded.ast,
             &mut builder,
             &dep_loaded.named_source,
             names,
+            dep_dag_id,
         )?;
     }
 
@@ -76,7 +78,7 @@ pub(super) fn lower_and_finalize(
     let mut ir = ir;
     let file_overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr> = override_targets
         .iter()
-        .filter(|(_, (target_path, _))| target_path == file_path)
+        .filter(|(_, (target_dag_id, _))| target_dag_id == file_dag_id)
         .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
         .collect();
     if !file_overrides.is_empty() {
@@ -112,16 +114,17 @@ pub(super) fn lower_and_finalize(
 pub(super) fn process_deferred_instantiated_imports(
     project: &crate::loader::LoadedProject,
     deferred_imports: &[DeferredInstantiatedImport],
-    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
     for deferred in deferred_imports {
-        let dep_loaded = &project.files[&deferred.dep_path];
+        let dep_loaded = &project.files[&deferred.dep_dag_id];
         let dep_src = &dep_loaded.named_source;
 
         // Build imported values for the dependency from its own transitive imports.
-        let dep_imported = build_dep_imported_values(project, &deferred.dep_path, evaluated_files)?;
+        let dep_imported =
+            build_dep_imported_values(project, &deferred.dep_dag_id, evaluated_files)?;
 
         // Compile the dependency to IR.
         let (dep_builder, dep_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
@@ -129,6 +132,7 @@ pub(super) fn process_deferred_instantiated_imports(
             dep_src,
             &dep_imported.names,
             dep_imported.values,
+            &deferred.dep_dag_id,
         )?;
 
         // Merge the dependency's type-system declarations into the importer's registry.
@@ -200,11 +204,16 @@ pub(super) fn process_deferred_inline_dag_includes(
         // Compile the DAG body to IR.
         // The DAG body is lowered as if it were a standalone file, with only
         // prelude + explicitly imported items in scope.
+        let dag_dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
+            std::path::Path::new(file_src.name()),
+        )
+        .child(deferred.prefix.as_str());
         let (dag_builder, dag_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
             &deferred.dag_body,
             file_src,
             &deferred.dag_imported_names,
             HashMap::new(), // No pre-evaluated values for inline DAGs
+            &dag_dag_id,
         )?;
 
         // Register parent scope type-system declarations in the DAG's registry.
@@ -224,11 +233,15 @@ pub(super) fn process_deferred_inline_dag_includes(
                 _ => HashSet::new(),
             };
             if !all_names.is_empty() {
+                let parent_dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
+                    std::path::Path::new(file_src.name()),
+                );
                 crate::ir::register_selected_declarations(
                     &parent_ast,
                     &mut dag_builder,
                     file_src,
                     &all_names,
+                    &parent_dag_id,
                 )?;
             }
         }
@@ -519,22 +532,21 @@ pub(super) fn extract_index_name_from_binding_expr(
 /// evaluated and stored in `evaluated_files`).
 pub(super) fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
-    dep_path: &Path,
-    evaluated_files: &HashMap<PathBuf, EvaluatedFile>,
+    dep_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
 ) -> Result<DepImportedValues, CompileError> {
-    let dep_loaded = &project.files[dep_path];
+    let dep_loaded = &project.files[dep_dag_id];
     let dep_src = &dep_loaded.named_source;
 
     let mut imported_names = ImportedValueNames::default();
     let mut imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
 
     // Process import declarations (non-instantiated).
-    for (_decl, import_decl, trans_canonical) in dep_loaded.imports_with_paths() {
+    for (_decl, import_decl, trans_canonical) in dep_loaded.imports_with_dag_ids() {
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "internal: transitive dependency {} not yet evaluated",
-                    trans_canonical.display()
+                    "internal: transitive dependency {trans_canonical} not yet evaluated",
                 ),
                 src: dep_src.clone(),
                 span: import_decl.path.span().into(),
@@ -553,7 +565,7 @@ pub(super) fn build_dep_imported_values(
     }
 
     // Process include declarations.
-    for (_decl, include_decl, trans_canonical) in dep_loaded.includes_with_paths() {
+    for (_decl, include_decl, trans_canonical) in dep_loaded.includes_with_dag_ids() {
         if !include_decl.param_bindings.is_empty() {
             // Nested instantiated includes are not supported in this initial implementation.
             return Err(CompileError::Eval(GraphcalError::EvalError {
@@ -566,8 +578,7 @@ pub(super) fn build_dep_imported_values(
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "internal: transitive dependency {} not yet evaluated",
-                    trans_canonical.display()
+                    "internal: transitive dependency {trans_canonical} not yet evaluated",
                 ),
                 src: dep_src.clone(),
                 span: include_decl.path.span().into(),

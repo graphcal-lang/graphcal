@@ -7,43 +7,46 @@ use miette::NamedSource;
 use crate::error::GraphcalError;
 use crate::eval::CompileError;
 use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
+use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::FileSystemReader;
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
 pub struct LoadedFile {
-    /// Canonical path of this file.
+    /// Canonical path of this file (retained for I/O: diagnostics, LSP URIs).
     pub path: PathBuf,
+    /// Abstract DAG identity (filesystem-independent).
+    pub dag_id: DagId,
     /// Raw source text.
     pub source: Arc<String>,
     /// Parsed AST.
     pub ast: File,
     /// Named source for diagnostics.
     pub named_source: NamedSource<Arc<String>>,
-    /// Loader-resolved canonical paths for each import declaration, keyed by the
+    /// Loader-resolved DAG identities for each import declaration, keyed by the
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
-    pub resolved_imports: HashMap<String, PathBuf>,
+    pub resolved_imports: HashMap<String, DagId>,
 }
 
 impl LoadedFile {
     /// Iterate over `import` declarations together with their loader-resolved
-    /// canonical paths.
-    pub fn imports_with_paths(
+    /// DAG identities.
+    pub fn imports_with_dag_ids(
         &self,
     ) -> impl Iterator<
         Item = (
             &graphcal_compiler::syntax::ast::Declaration,
             &graphcal_compiler::syntax::ast::ImportDecl,
-            &Path,
+            &DagId,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Import(import_decl) = &decl.kind {
                 self.resolved_imports
                     .get(&import_decl.path.display_path())
-                    .map(|path| (decl, import_decl, path.as_path()))
+                    .map(|dag_id| (decl, import_decl, dag_id))
             } else {
                 None
             }
@@ -51,21 +54,21 @@ impl LoadedFile {
     }
 
     /// Iterate over `include` declarations together with their loader-resolved
-    /// canonical paths.
-    pub fn includes_with_paths(
+    /// DAG identities.
+    pub fn includes_with_dag_ids(
         &self,
     ) -> impl Iterator<
         Item = (
             &graphcal_compiler::syntax::ast::Declaration,
             &graphcal_compiler::syntax::ast::IncludeDecl,
-            &Path,
+            &DagId,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Include(include_decl) = &decl.kind {
                 self.resolved_imports
                     .get(&include_decl.path.display_path())
-                    .map(|path| (decl, include_decl, path.as_path()))
+                    .map(|dag_id| (decl, include_decl, dag_id))
             } else {
                 None
             }
@@ -76,13 +79,13 @@ impl LoadedFile {
 /// A loaded project: a root file plus all transitively imported files.
 #[derive(Debug)]
 pub struct LoadedProject {
-    /// All loaded files keyed by canonical path.
-    pub files: HashMap<PathBuf, LoadedFile>,
-    /// The canonical path of the root file.
-    pub root: PathBuf,
+    /// All loaded files keyed by DAG identity.
+    pub files: HashMap<DagId, LoadedFile>,
+    /// The DAG identity of the root file.
+    pub root: DagId,
     /// Topological load order: dependencies before dependents.
     /// The root file is last.
-    pub load_order: Vec<PathBuf>,
+    pub load_order: Vec<DagId>,
 }
 
 impl LoadedProject {
@@ -103,19 +106,21 @@ impl LoadedProject {
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
         graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
         let path = PathBuf::from(name);
+        let dag_id = DagId::from_relative_path(&path);
         let loaded_file = LoadedFile {
-            path: path.clone(),
+            path,
+            dag_id: dag_id.clone(),
             source,
             ast,
             named_source,
             resolved_imports: HashMap::new(),
         };
         let mut files = HashMap::new();
-        files.insert(path.clone(), loaded_file);
+        files.insert(dag_id.clone(), loaded_file);
         Ok(Self {
             files,
-            root: path.clone(),
-            load_order: vec![path],
+            root: dag_id.clone(),
+            load_order: vec![dag_id],
         })
     }
 }
@@ -142,8 +147,9 @@ pub fn load_project<F: FileSystemReader>(
     let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
     let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
 
-    let mut files: HashMap<PathBuf, LoadedFile> = HashMap::new();
-    let mut load_order: Vec<PathBuf> = Vec::new();
+    let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
+    let mut path_to_dag_id: HashMap<PathBuf, DagId> = HashMap::new();
+    let mut load_order: Vec<DagId> = Vec::new();
     let mut loading: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
@@ -153,6 +159,7 @@ pub fn load_project<F: FileSystemReader>(
         &root_canonical,
         &project_root,
         &mut files,
+        &mut path_to_dag_id,
         &mut load_order,
         &mut loading,
         &mut stack,
@@ -160,9 +167,10 @@ pub fn load_project<F: FileSystemReader>(
         fs,
     )?;
 
+    let root_dag_id = path_to_dag_id[&root_canonical].clone();
     Ok(LoadedProject {
         files,
-        root: root_canonical,
+        root: root_dag_id,
         load_order,
     })
 }
@@ -178,15 +186,16 @@ pub fn load_project<F: FileSystemReader>(
 fn load_file_dfs<F: FileSystemReader>(
     canonical_path: &Path,
     project_root: &Path,
-    files: &mut HashMap<PathBuf, LoadedFile>,
-    load_order: &mut Vec<PathBuf>,
+    files: &mut HashMap<DagId, LoadedFile>,
+    path_to_dag_id: &mut HashMap<PathBuf, DagId>,
+    load_order: &mut Vec<DagId>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
     manifest: &mut Option<crate::manifest::Manifest>,
     fs: &F,
 ) -> Result<(), CompileError> {
     // Already fully loaded — skip.
-    if files.contains_key(canonical_path) {
+    if path_to_dag_id.contains_key(canonical_path) {
         return Ok(());
     }
 
@@ -229,7 +238,7 @@ fn load_file_dfs<F: FileSystemReader>(
 
     // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut resolved_imports = HashMap::new();
+    let mut resolved_imports_paths: HashMap<String, PathBuf> = HashMap::new();
     for decl in &ast.declarations {
         let path = match &decl.kind {
             DeclKind::Import(import_decl) => &import_decl.path,
@@ -262,12 +271,13 @@ fn load_file_dfs<F: FileSystemReader>(
             }));
         }
 
-        resolved_imports.insert(path.display_path(), import_canonical.clone());
+        resolved_imports_paths.insert(path.display_path(), import_canonical.clone());
 
         load_file_dfs(
             &import_canonical,
             project_root,
             files,
+            path_to_dag_id,
             load_order,
             loading,
             stack,
@@ -276,15 +286,32 @@ fn load_file_dfs<F: FileSystemReader>(
         )?;
     }
 
+    // Compute the DagId from the path relative to the project root.
+    let relative_path = canonical_path
+        .strip_prefix(project_root)
+        .unwrap_or(canonical_path);
+    let dag_id = DagId::from_relative_path(relative_path);
+
+    // Convert resolved import paths to DagIds.
+    let resolved_imports: HashMap<String, DagId> = resolved_imports_paths
+        .iter()
+        .map(|(display, canonical)| {
+            let dep_dag_id = path_to_dag_id[canonical].clone();
+            (display.clone(), dep_dag_id)
+        })
+        .collect();
+
     // Post-order: add this file after its dependencies.
-    load_order.push(canonical_path.to_path_buf());
+    load_order.push(dag_id.clone());
     loading.remove(canonical_path);
     stack.pop();
 
+    path_to_dag_id.insert(canonical_path.to_path_buf(), dag_id.clone());
     files.insert(
-        canonical_path.to_path_buf(),
+        dag_id.clone(),
         LoadedFile {
             path: canonical_path.to_path_buf(),
+            dag_id,
             source,
             ast,
             named_source,
@@ -578,10 +605,10 @@ mod tests {
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper should be loaded before main (topological order)
-        let helper_canonical = dir.path().join("helper.gcl").canonicalize().unwrap();
-        let main_canonical = dir.path().join("main.gcl").canonicalize().unwrap();
-        assert_eq!(project.load_order[0], helper_canonical);
-        assert_eq!(project.load_order[1], main_canonical);
+        let helper_dag_id = DagId::new(["helper"]);
+        let main_dag_id = DagId::new(["main"]);
+        assert_eq!(project.load_order[0], helper_dag_id);
+        assert_eq!(project.load_order[1], main_dag_id);
     }
 
     #[test]
@@ -657,7 +684,6 @@ mod tests {
             ),
         ]);
         let root_path = dir.path().join("main.gcl");
-        let helper_canonical = dir.path().join("helper.gcl").canonicalize().unwrap();
 
         let overlay_source = "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
@@ -673,7 +699,8 @@ mod tests {
         assert_eq!(root_file.source.as_str(), overlay_source);
 
         // Helper file should use disk content
-        let helper_file = &project.files[&helper_canonical];
+        let helper_dag_id = DagId::new(["helper"]);
+        let helper_file = &project.files[&helper_dag_id];
         assert_eq!(helper_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
 
@@ -712,8 +739,8 @@ mod tests {
         let project = load_project(&dir.path().join("a.gcl"), None, &FS).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_canonical = dir.path().join("d.gcl").canonicalize().unwrap();
-        assert_eq!(project.load_order[0], d_canonical);
+        let d_dag_id = DagId::new(["d"]);
+        assert_eq!(project.load_order[0], d_dag_id);
     }
 
     #[test]

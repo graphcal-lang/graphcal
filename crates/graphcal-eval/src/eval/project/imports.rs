@@ -19,16 +19,16 @@ use super::*;
 )]
 pub(super) fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
-    importer_path: &Path,
-    import_canonical: &PathBuf,
+    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     include_decl: &graphcal_compiler::syntax::ast::IncludeDecl,
     decl: &graphcal_compiler::syntax::ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
+    evaluated_files: &'a HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    let dep_loaded = &project.files[import_canonical];
-    let importer_loaded = &project.files[importer_path];
+    let dep_loaded = &project.files[import_dag_id];
+    let importer_loaded = &project.files[importer_dag_id];
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
@@ -57,7 +57,7 @@ pub(super) fn process_instantiated_include<'a>(
     }
     ctx.module_map.insert(
         prefix.clone(),
-        (import_canonical.clone(), include_decl.path.span()),
+        (import_dag_id.clone(), include_decl.path.span()),
     );
 
     // Classify and validate bindings against the dependency's AST.
@@ -254,7 +254,7 @@ pub(super) fn process_instantiated_include<'a>(
                 });
                 if is_type_system {
                     ctx.imported_type_system_names
-                        .entry(import_canonical.clone())
+                        .entry(import_dag_id.clone())
                         .or_default()
                         .insert(orig_name.clone());
                 }
@@ -286,7 +286,7 @@ pub(super) fn process_instantiated_include<'a>(
                 }
             }
             // Import type-system declarations (pub items only).
-            if let Some(dep_eval) = evaluated_files.get(import_canonical) {
+            if let Some(dep_eval) = evaluated_files.get(import_dag_id) {
                 ctx.extra_registry_builders
                     .push((&dep_eval.registry, &dep_eval.pub_names));
             }
@@ -351,7 +351,7 @@ pub(super) fn process_instantiated_include<'a>(
     }
 
     ctx.deferred_instantiated.push(DeferredInstantiatedImport {
-        dep_path: import_canonical.clone(),
+        dep_dag_id: import_dag_id.clone(),
         prefix,
         bindings,
         index_bindings,
@@ -401,8 +401,9 @@ pub(super) fn process_inline_dag_include(
     };
 
     // Check for duplicate module names.
-    // We use a sentinel path for inline DAGs in the module_map.
-    let sentinel_path = PathBuf::from(format!("<dag:{dag_name}>"));
+    // We use a sentinel DagId for inline DAGs in the module_map.
+    let sentinel_dag_id =
+        graphcal_compiler::syntax::dag_id::DagId::new([format!("<dag:{dag_name}>")]);
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
@@ -412,7 +413,7 @@ pub(super) fn process_inline_dag_include(
         }));
     }
     ctx.module_map
-        .insert(prefix.clone(), (sentinel_path, include_decl.path.span()));
+        .insert(prefix.clone(), (sentinel_dag_id, include_decl.path.span()));
 
     // Create a virtual File from the DAG body, filtering out `import ..` declarations.
     // Import .. declarations are processed separately to populate the DAG's imported names.
@@ -806,7 +807,7 @@ pub(super) fn process_cross_file_parent_scope_import(
 /// `dag double { ... }`.
 pub(super) fn is_bare_module_dag_ref(
     import_path: &ImportPath,
-    resolved_canonical: &PathBuf,
+    resolved_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     project: &crate::loader::LoadedProject,
 ) -> bool {
     let segments = match import_path {
@@ -821,7 +822,7 @@ pub(super) fn is_bare_module_dag_ref(
     let last_segment = &last_seg.name;
 
     // Check if the resolved file contains a DAG with the matching name.
-    let Some(target_loaded) = project.files.get(resolved_canonical) else {
+    let Some(target_loaded) = project.files.get(resolved_dag_id) else {
         return false;
     };
 
@@ -848,20 +849,17 @@ pub(super) fn is_bare_module_dag_ref(
 )]
 pub(super) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
-    import_canonical: &PathBuf,
+    import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     import_path: &graphcal_compiler::syntax::ast::ImportPath,
     import_kind: &graphcal_compiler::syntax::ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<PathBuf, EvaluatedFile>,
+    evaluated_files: &'a HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
     is_import: bool,
 ) -> Result<(), CompileError> {
-    let dep = evaluated_files.get(import_canonical).ok_or_else(|| {
+    let dep = evaluated_files.get(import_dag_id).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
-            message: format!(
-                "internal: dependency {} not yet evaluated",
-                import_canonical.display()
-            ),
+            message: format!("internal: dependency {import_dag_id} not yet evaluated",),
             src: file_src.clone(),
             span: import_path.span().into(),
         })
@@ -877,7 +875,7 @@ pub(super) fn process_non_instantiated_import<'a>(
                 if !dep.pub_names.contains(orig_name.as_str()) {
                     // Check if the name exists at all (value or type-system) before
                     // reporting "private" vs "not found".
-                    let dep_loaded = &project.files[import_canonical];
+                    let dep_loaded = &project.files[import_dag_id];
                     let exists = dep.const_values.contains_key(orig_name)
                         || dep.values.contains_key(orig_name)
                         || dep.has_assert(orig_name)
@@ -926,11 +924,11 @@ pub(super) fn process_non_instantiated_import<'a>(
                     }
                     SelectiveImportResult::NotFound => {
                         // Check if it's a type-system declaration in the dep's file.
-                        let dep_loaded = &project.files[import_canonical];
+                        let dep_loaded = &project.files[import_dag_id];
                         if file_has_declaration(&dep_loaded.ast, orig_name) {
                             // Type-system declaration (dim/unit/index/type).
                             ctx.imported_type_system_names
-                                .entry(import_canonical.clone())
+                                .entry(import_dag_id.clone())
                                 .or_default()
                                 .insert(orig_name.clone());
                         } else {
@@ -961,7 +959,7 @@ pub(super) fn process_non_instantiated_import<'a>(
             }
             ctx.module_map.insert(
                 module_name.clone(),
-                (import_canonical.clone(), import_path.span()),
+                (import_dag_id.clone(), import_path.span()),
             );
 
             // Import all values under module::name prefix.

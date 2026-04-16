@@ -2,7 +2,7 @@
 //! references, lowering to IR, and applying parameter overrides.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -161,8 +161,8 @@ pub(super) struct DepImportedValues {
 
 /// An instantiated import that needs IR merging (deferred until after lowering).
 pub(super) struct DeferredInstantiatedImport {
-    /// Canonical path of the dependency file.
-    pub(super) dep_path: PathBuf,
+    /// DAG identifier of the dependency.
+    pub(super) dep_dag_id: graphcal_compiler::syntax::dag_id::DagId,
     /// The prefix for all merged declarations (from alias or filename).
     pub(super) prefix: String,
     /// Param bindings: `param_name` → binding expression.
@@ -213,8 +213,9 @@ pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
     pub(super) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    pub(super) imported_type_system_names: HashMap<PathBuf, HashSet<String>>,
-    pub(super) module_map: HashMap<String, (PathBuf, Span)>,
+    pub(super) imported_type_system_names:
+        HashMap<graphcal_compiler::syntax::dag_id::DagId, HashSet<String>>,
+    pub(super) module_map: HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
     pub(super) extra_registry_builders: Vec<(&'a Registry, &'a HashSet<String>)>,
     pub(super) deferred_instantiated: Vec<DeferredInstantiatedImport>,
@@ -240,7 +241,7 @@ pub(super) enum SelectiveImportResult {
 /// to their flat counterparts.
 pub(super) fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::syntax::ast::File,
-    module_map: &HashMap<String, (PathBuf, Span)>,
+    module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
 ) -> std::borrow::Cow<'a, graphcal_compiler::syntax::ast::File> {
     if module_map.is_empty() {
         return std::borrow::Cow::Borrowed(ast);

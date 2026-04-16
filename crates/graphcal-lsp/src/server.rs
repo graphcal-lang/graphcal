@@ -285,16 +285,17 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
     };
 
     let import_links = root_file
-        .imports_with_paths()
-        .map(|(_, import_decl, path)| (import_decl.path.span(), path));
+        .imports_with_dag_ids()
+        .map(|(_, import_decl, dag_id)| (import_decl.path.span(), dag_id));
     let include_links = root_file
-        .includes_with_paths()
-        .map(|(_, include_decl, path)| (include_decl.path.span(), path));
+        .includes_with_dag_ids()
+        .map(|(_, include_decl, dag_id)| (include_decl.path.span(), dag_id));
 
     import_links
         .chain(include_links)
-        .filter_map(|(span, path)| {
-            let uri = Url::from_file_path(path).ok()?;
+        .filter_map(|(span, dag_id)| {
+            let loaded = project.files.get(dag_id)?;
+            let uri = Url::from_file_path(&loaded.path).ok()?;
             Some(ResolvedImportLink {
                 path_span: span,
                 target_uri: uri,
@@ -571,8 +572,6 @@ fn collect_imported_definitions(
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_eval::tir::TIR>,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
-    use std::path::Path;
-
     let mut result = HashMap::new();
 
     let Some(root_file) = project.files.get(&project.root) else {
@@ -581,15 +580,18 @@ fn collect_imported_definitions(
 
     // Cache symbol tables per canonical path to avoid re-building for files imported
     // by multiple `import` declarations.
-    let mut table_cache: HashMap<&Path, (SymbolTable, Url, Arc<String>)> = HashMap::new();
+    let mut table_cache: HashMap<
+        &graphcal_compiler::syntax::dag_id::DagId,
+        (SymbolTable, Url, Arc<String>),
+    > = HashMap::new();
 
-    for (_decl, import_decl, canonical) in root_file.imports_with_paths() {
-        let Some(loaded_file) = project.files.get(canonical) else {
+    for (_decl, import_decl, dag_id) in root_file.imports_with_dag_ids() {
+        let Some(loaded_file) = project.files.get(dag_id) else {
             continue;
         };
 
         let (imported_table, imported_uri, source) =
-            table_cache.entry(canonical).or_insert_with(|| {
+            table_cache.entry(dag_id).or_insert_with(|| {
                 let mut table = symbol_table::build_from_ast(&loaded_file.ast);
                 if let Some(tir) = tir {
                     symbol_table::enrich_from_tir(&mut table, tir);
