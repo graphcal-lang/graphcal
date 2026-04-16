@@ -373,7 +373,7 @@ pub struct IncludeDecl {
 /// implemented — this phase only parses the syntax.
 #[derive(Debug, Clone)]
 pub struct DagDecl {
-    /// The DAG name (must be `lower_snake_case`).
+    /// The DAG name.
     pub name: Spanned<DeclName>,
     /// Declarations inside the DAG block.
     pub body: Vec<Declaration>,
@@ -939,6 +939,18 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
+    /// Unresolved bare identifier reference.
+    ///
+    /// Produced by the parser when the meaning of a bare identifier cannot be
+    /// determined from syntax alone. A name-resolution pass rewrites this to
+    /// one of `ConstRef`, `LocalRef`, or `StructConstruction` (bare variant).
+    NameRef(Ident),
+    /// Unresolved qualified reference: `a::b`
+    ///
+    /// Produced by the parser when `ident::ident` appears without a following
+    /// `(` (which would make it a qualified function call). A name-resolution
+    /// pass rewrites this to `VariantLiteral` or `QualifiedConstRef`.
+    QualifiedNameRef { qualifier: Ident, member: Ident },
 }
 
 /// A single key in a map literal entry: `Index::Variant`
@@ -1220,6 +1232,8 @@ fn desugar_expr(expr: &mut Expr) {
         | ExprKind::VariantLiteral { .. }
         | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::NameRef(_)
+        | ExprKind::QualifiedNameRef { .. }
         // TupleMatch is handled below after recursing into children.
         | ExprKind::TupleMatch { .. } => {}
         ExprKind::BinOp { lhs, rhs, .. } => {

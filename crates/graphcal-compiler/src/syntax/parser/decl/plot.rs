@@ -4,15 +4,13 @@ use crate::syntax::ast::{
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case};
+use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a plot declaration: `plot name = { mark: type, encode: { ... }, title: "..." };`
     pub(super) fn parse_plot(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Plot)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Eq)?;
 
         // Parse the block: { mark: ..., encode: { ... }, ... }

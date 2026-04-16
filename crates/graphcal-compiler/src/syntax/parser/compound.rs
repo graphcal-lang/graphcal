@@ -7,7 +7,7 @@ use crate::syntax::names::{FieldName, IndexName, Spanned, StructTypeName, Varian
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
-use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case};
+use super::{ParseError, Parser};
 
 impl Parser<'_> {
     // --- Match expression ---
@@ -161,13 +161,13 @@ impl Parser<'_> {
     /// - Tagged union: `VariantName { field1, field2: binding }` or bare `VariantName`
     /// - Index variant: `Index::Variant` (qualified form)
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
-        let first_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let first_ident = self.parse_any_ident()?;
         let start_span = first_ident.span;
 
         if self.lexer.peek() == Some(&Token::ColonColon) {
             // Qualified index variant pattern: Index::Variant
             self.lexer.next_token(); // consume '::'
-            let variant_ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let variant_ident = self.parse_any_ident()?;
             let end_span = variant_ident.span;
             return Ok(MatchPattern {
                 qualified_index: Some(Spanned::new(
@@ -283,7 +283,7 @@ impl Parser<'_> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
         loop {
-            let var = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+            let var = self.parse_any_ident()?;
             self.expect(Token::Colon)?;
             let index = self.parse_for_binding_index()?;
             bindings.push(ForBinding { var, index });
@@ -300,7 +300,7 @@ impl Parser<'_> {
         if self.is_tuple_key_sugar() {
             self.lexer.next_token(); // consume '('
             loop {
-                self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                self.parse_any_ident()?;
                 if self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
                 } else {
@@ -342,9 +342,7 @@ impl Parser<'_> {
             }
         }
         // Named index
-        let index = self
-            .parse_ident_with_casing("PascalCase", is_pascal_case)?
-            .into_spanned::<IndexName>();
+        let index = self.parse_any_ident()?.into_spanned::<IndexName>();
         Ok(ForBindingIndex::Named(index))
     }
 
@@ -419,9 +417,9 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         // Parse lambda: |acc, val| body
         self.expect(Token::Pipe)?;
-        let acc_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let acc_name = self.parse_any_ident()?;
         self.expect(Token::Comma)?;
-        let val_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let val_name = self.parse_any_ident()?;
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -448,9 +446,9 @@ impl Parser<'_> {
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
         self.expect(Token::Pipe)?;
-        let prev_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let prev_name = self.parse_any_ident()?;
         self.expect(Token::Comma)?;
-        let curr_name = self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+        let curr_name = self.parse_any_ident()?;
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;

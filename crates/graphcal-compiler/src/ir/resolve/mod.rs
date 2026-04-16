@@ -27,7 +27,6 @@ pub use crate::registry::resolve_types::{
 
 // Re-export items from submodules (crate-internal only).
 pub use deps::collect_graph_refs;
-pub(crate) use names::is_lower_snake_case;
 
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
@@ -252,27 +251,6 @@ fn collect_local_declarations(
             }
         };
         source_order.push((name.clone(), category));
-
-        // Check casing (defensive -- parser should enforce this already)
-        #[expect(
-            clippy::else_if_without_else,
-            reason = "no action needed in the else case"
-        )]
-        if is_const {
-            if !is_lower_snake_case(&name) {
-                return Err(GraphcalError::EvalError {
-                    message: format!("const node name `{name}` must be lower_snake_case"),
-                    src: src.clone(),
-                    span: name_span.into(),
-                });
-            }
-        } else if !is_lower_snake_case(&name) {
-            return Err(GraphcalError::EvalError {
-                message: format!("param/node name `{name}` must be lower_snake_case"),
-                src: src.clone(),
-                span: name_span.into(),
-            });
-        }
     }
 
     // Build the set of all known names for reference checking.
@@ -908,6 +886,11 @@ pub(crate) fn resolve_with_imports(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
 ) -> Result<ResolvedFile, GraphcalError> {
+    // Ensure NameRef/QualifiedNameRef are resolved before proceeding.
+    let mut file = file.clone();
+    crate::syntax::name_resolve::resolve_name_refs(&mut file);
+    let file = &file;
+
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -1092,6 +1075,12 @@ pub(crate) fn resolve_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
 ) -> Result<ResolvedFile, GraphcalError> {
+    // Ensure NameRef/QualifiedNameRef are resolved before proceeding.
+    // This is idempotent if already resolved by the loader.
+    let mut file = file.clone();
+    crate::syntax::name_resolve::resolve_name_refs(&mut file);
+    let file = &file;
+
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 

@@ -361,7 +361,7 @@ When both `--set` and `--input` are provided, `--set` takes precedence for the s
 
 - Rich error diagnostics with source spans and error codes (via [miette](https://github.com/zkat/miette))
 - JSON output for tooling integration (`--format json`)
-- Naming convention enforcement: `lower_snake_case` for params/nodes/constants/DAGs, `PascalCase` for types/indexes/dimensions
+- Naming conventions: `lower_snake_case` recommended for params/nodes/constants/DAGs, `PascalCase` for types/indexes/dimensions
 - Runtime safety checks: division by zero, NaN/infinity detection, integer overflow
 - Fault isolation: a failing node does not crash unrelated nodes
 

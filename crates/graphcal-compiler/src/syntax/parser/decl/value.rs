@@ -4,16 +4,14 @@ use crate::syntax::ast::{
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case};
+use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
     // --- param/node/const node with required type annotation ---
 
     pub(super) fn parse_param(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Param)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         let value = if self.lexer.peek() == Some(&Token::Eq) {
@@ -38,9 +36,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_node(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Node)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -66,9 +62,7 @@ impl Parser<'_> {
         // `const` keyword already consumed by the caller.
         // Next token must be `node`.
         self.expect(Token::Node)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         self.expect(Token::Eq)?;
@@ -91,9 +85,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_assert(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Assert)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Eq)?;
         let first_expr = self.parse_expr()?;
 

@@ -238,34 +238,6 @@ impl<'src> Parser<'src> {
         Ok(items)
     }
 
-    /// Parse an identifier and check that it matches the expected casing.
-    pub(super) fn parse_ident_with_casing(
-        &mut self,
-        casing_desc: &str,
-        check: fn(&str) -> bool,
-    ) -> Result<Ident, ParseError> {
-        match self.lexer.next_token() {
-            Some((Token::Ident, span)) => {
-                let name = self.lexer.slice_at(span).to_string();
-                if check(&name) {
-                    Ok(Ident { name, span })
-                } else {
-                    Err(self.unexpected_token(
-                        &format!("{casing_desc} identifier"),
-                        &format!("identifier `{name}`"),
-                        span,
-                    ))
-                }
-            }
-            Some((tok, span)) => Err(self.unexpected_token(
-                &format!("{casing_desc} identifier"),
-                &tok.to_string(),
-                span,
-            )),
-            None => Err(self.unexpected_eof(&format!("{casing_desc} identifier"))),
-        }
-    }
-
     /// Parse any identifier regardless of casing.
     pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
@@ -279,16 +251,6 @@ impl<'src> Parser<'src> {
     }
 }
 
-pub(super) use crate::syntax::names::is_lower_snake_case;
-pub(super) use crate::syntax::names::is_pascal_case;
-pub(super) use crate::syntax::names::is_upper_snake_case;
-
-/// Uppercase-starting identifier: `PascalCase` names or single-letter generic params like `I`.
-/// Used where both concrete index names (`Maneuver`) and generic params (`I`) are valid.
-pub(super) fn is_uppercase_starting(s: &str) -> bool {
-    !s.is_empty() && s.starts_with(|c: char| c.is_ascii_uppercase())
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -299,7 +261,7 @@ mod tests {
         reason = "test code"
     )]
 
-    use super::is_pascal_case;
+    use crate::syntax::names::is_pascal_case;
 
     #[test]
     fn is_pascal_case_examples() {

@@ -3,7 +3,7 @@ use crate::syntax::names::{IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
-use super::{ParseError, Parser, is_pascal_case, is_uppercase_starting};
+use super::{ParseError, Parser};
 
 impl Parser<'_> {
     // --- Table expression (desugars to MapLiteral) ---
@@ -17,7 +17,7 @@ impl Parser<'_> {
         self.expect(Token::LBracket)?;
         let mut indexes: Vec<Spanned<IndexName>> = Vec::new();
         loop {
-            let ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+            let ident = self.parse_any_ident()?;
             indexes.push(ident.into_spanned::<IndexName>());
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
@@ -58,8 +58,7 @@ impl Parser<'_> {
     ) -> Result<Vec<MapEntry>, ParseError> {
         let mut entries = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
-            let label =
-                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            let label = self.parse_any_ident()?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             self.expect(Token::Semicolon)?;
@@ -88,8 +87,7 @@ impl Parser<'_> {
         // Parse header row: ColLabel1, ColLabel2, ...;
         let mut col_labels: Vec<Spanned<VariantName>> = Vec::new();
         loop {
-            let label =
-                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            let label = self.parse_any_ident()?;
             col_labels.push(label.into_spanned::<VariantName>());
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
@@ -104,8 +102,7 @@ impl Parser<'_> {
         while self.lexer.peek() != Some(&Token::RBrace)
             && self.lexer.peek() != Some(&Token::LBracket)
         {
-            let row_label_ident =
-                self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+            let row_label_ident = self.parse_any_ident()?;
             let row_label_span = row_label_ident.span;
             let row_label = row_label_ident.into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
@@ -172,12 +169,9 @@ impl Parser<'_> {
                 if i > 0 {
                     self.expect(Token::Comma)?;
                 }
-                let index_ident =
-                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                let index_ident = self.parse_any_ident()?;
                 self.expect(Token::ColonColon)?;
-                let variant = self
-                    .parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?
-                    .into_spanned::<VariantName>();
+                let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                 prefix_keys.push(MapEntryKey {
                     index: Spanned::new(IndexName::new(index_ident.name), index_ident.span),
                     variant,
@@ -220,13 +214,9 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break; // trailing comma
             }
-            let index = self
-                .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                .into_spanned::<IndexName>();
+            let index = self.parse_any_ident()?.into_spanned::<IndexName>();
             self.expect(Token::ColonColon)?;
-            let variant = self
-                .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                .into_spanned::<VariantName>();
+            let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
@@ -257,13 +247,9 @@ impl Parser<'_> {
             self.expect(Token::LParen)?;
             let mut keys = Vec::new();
             loop {
-                let index = self
-                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                    .into_spanned::<IndexName>();
+                let index = self.parse_any_ident()?.into_spanned::<IndexName>();
                 self.expect(Token::ColonColon)?;
-                let variant = self
-                    .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                    .into_spanned::<VariantName>();
+                let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                 keys.push(MapEntryKey { index, variant });
                 if self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();

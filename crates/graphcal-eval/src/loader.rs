@@ -101,6 +101,7 @@ impl LoadedProject {
         let mut ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
+        graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
         let path = PathBuf::from(name);
         let loaded_file = LoadedFile {
             path: path.clone(),
@@ -214,6 +215,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let mut ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
+    graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
 
     // Collect inline DAG names so we can skip includes that reference them.
     let dag_names: HashSet<String> = ast

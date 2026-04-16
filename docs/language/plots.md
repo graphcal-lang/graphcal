@@ -24,7 +24,7 @@ plot <name> = {
 
 A `plot` declaration has:
 
-- A **name** following `lower_snake_case` conventions (like `param` and `node`).
+- A **name** (conventionally `lower_snake_case`, like `param` and `node`).
 - A **`mark` field** specifying the visual mark type.
 - An **`encode` block** mapping data to visual channels.
 - Optional **properties** like `title`.
@@ -203,7 +203,7 @@ figure <name> = {
 
 A `figure` declaration has:
 
-- A **name** following `lower_snake_case` conventions.
+- A **name** (conventionally `lower_snake_case`).
 - A **`plots` field** listing the plot names to combine: `plots: [a, b]`.
 - Optional **fields** like `title` (a string literal).
 
@@ -309,8 +309,8 @@ This overlays the line and point marks on the same axes.
 
 ## Key Properties
 
-- Plot, figure, and layer names follow `lower_snake_case`, like `param` and
-  `node`.
+- Plot, figure, and layer names conventionally use `lower_snake_case`, like
+  `param` and `node`.
 - Plot bodies can reference any `@param` or `@node`, plus constants.
 - Plots, figures, and layers are **leaf nodes** -- no declaration can reference
   them with `@`.

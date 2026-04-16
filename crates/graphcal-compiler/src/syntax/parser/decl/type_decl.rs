@@ -2,7 +2,7 @@ use crate::syntax::ast::{DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember
 use crate::syntax::names::{FieldName, StructTypeName};
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case, is_pascal_case};
+use super::super::{ParseError, Parser};
 use crate::syntax::names::Spanned;
 
 impl Parser<'_> {
@@ -10,9 +10,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Type)?;
-        let name = self
-            .parse_ident_with_casing("PascalCase", is_pascal_case)?
-            .into_spanned::<StructTypeName>();
+        let name = self.parse_any_ident()?.into_spanned::<StructTypeName>();
 
         // Optional generic params: <D: Dim, F: Type>
         let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
@@ -86,9 +84,7 @@ impl Parser<'_> {
     /// Parse a comma-separated field list: `field: Type, field: Type, ...`
     pub(super) fn parse_field_list(&mut self) -> Result<Vec<FieldDecl>, ParseError> {
         let fields = self.parse_comma_separated(Token::RBrace, |p| {
-            let field_name = p
-                .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-                .into_spanned::<FieldName>();
+            let field_name = p.parse_any_ident()?.into_spanned::<FieldName>();
             p.expect(Token::Colon)?;
             let type_ann = p.parse_type_expr()?;
             Ok(FieldDecl {
@@ -120,7 +116,7 @@ impl Parser<'_> {
 
     /// Parse a single union member: `Foo` or `Foo<D, E>`
     fn parse_union_member(&mut self) -> Result<UnionMember, ParseError> {
-        let ident = self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
+        let ident = self.parse_any_ident()?;
         let name = Spanned::new(StructTypeName::new(&ident.name), ident.span);
         let start_span = ident.span;
 

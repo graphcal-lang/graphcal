@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 59
 expression: rendered
 ---
-unknown constant `UNKNOWN`
+unknown local variable `UNKNOWN`
     Diagnostic severity: error
 Begin snippet for unknown_const_ref.gcl starting at line 1, column 1
 
 snippet line 1: // Unknown constant reference: UNKNOWN is never declared
 snippet line 2: node x: Dimensionless = UNKNOWN + 1.0;
     label at line 2, columns 25 to 31: not found
-diagnostic help: constant references must point to a `const` or built-in constant (PI, E)
-diagnostic code: graphcal::N003
+diagnostic help: local variables are introduced by `for`, `scan`, `unfold`, `match`, or function parameters
+diagnostic code: graphcal::S008

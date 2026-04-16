@@ -33,7 +33,9 @@ pub(crate) trait ExprVisitor {
             | ExprKind::StringLiteral(_)
             | ExprKind::UnitLiteral { .. }
             | ExprKind::LocalRef(_)
-            | ExprKind::VariantLiteral { .. } => self.visit_leaf(expr),
+            | ExprKind::VariantLiteral { .. }
+            | ExprKind::NameRef(_)
+            | ExprKind::QualifiedNameRef { .. } => self.visit_leaf(expr),
 
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref(expr),
@@ -242,7 +244,9 @@ pub trait ExprVisitorMut {
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::UnitLiteral { .. }
-            | ExprKind::LocalRef(_) => Ok(()),
+            | ExprKind::LocalRef(_)
+            | ExprKind::NameRef(_)
+            | ExprKind::QualifiedNameRef { .. } => Ok(()),
 
             ExprKind::VariantLiteral { .. } => self.visit_variant_literal_mut(expr),
 

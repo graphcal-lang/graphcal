@@ -2,7 +2,7 @@ use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind};
 use crate::syntax::names::{IndexName, VariantName};
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_pascal_case};
+use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a unified index declaration:
@@ -12,9 +12,7 @@ impl Parser<'_> {
     /// - `index Foo: Time;` (required range — must be bound via parameterized import)
     pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
-        let name = self
-            .parse_ident_with_casing("PascalCase", is_pascal_case)?
-            .into_spanned::<IndexName>();
+        let name = self.parse_any_ident()?.into_spanned::<IndexName>();
 
         // Required named index: `index Foo;`
         if self.lexer.peek() == Some(&Token::Semicolon) {
@@ -58,8 +56,7 @@ impl Parser<'_> {
                 self.expect(Token::LBrace)?;
 
                 let variants = self.parse_comma_separated(Token::RBrace, |p| {
-                    Ok(p.parse_ident_with_casing("PascalCase", is_pascal_case)?
-                        .into_spanned::<VariantName>())
+                    Ok(p.parse_any_ident()?.into_spanned::<VariantName>())
                 })?;
 
                 if variants.is_empty() {

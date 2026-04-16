@@ -14,7 +14,7 @@ Declare a finite index with named labels:
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Labels follow `PascalCase` convention and are namespaced by the index: `Maneuver::Departure`.
+Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver::Departure`.
 
 ## Indexed Values
 

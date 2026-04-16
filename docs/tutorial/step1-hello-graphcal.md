@@ -53,7 +53,7 @@ param dry_mass: Dimensionless = 1200.0;
 ```
 
 - **`param`** -- declares an input parameter
-- **`dry_mass`** -- the name (must be `lower_snake_case`)
+- **`dry_mass`** -- the name (conventionally `lower_snake_case`)
 - **`: Dimensionless`** -- the dimension annotation (`Dimensionless` means a plain number)
 - **`= 1200.0`** -- the default value
 
@@ -66,7 +66,7 @@ const node margin_factor: Dimensionless = 1.1;
 ```
 
 - **`const node`** -- declares a compile-time constant
-- **`margin_factor`** -- the name (must be `lower_snake_case`)
+- **`margin_factor`** -- the name (conventionally `lower_snake_case`)
 
 ### Nodes (`node`)
 
@@ -105,10 +105,10 @@ All downstream nodes (`total_mass`, `mass_with_margin`, `mass_ratio`) update aut
 
 ## Naming Conventions
 
-Graphcal enforces naming conventions at parse time:
+Graphcal recommends the following naming conventions:
 
-| Declaration | Convention | Example |
-|-------------|-----------|---------|
+| Declaration | Recommended Convention | Example |
+|-------------|----------------------|---------|
 | `param`, `node`, `const node`, `dag` | `lower_snake_case` | `dry_mass`, `total_dv`, `margin_factor` |
 | `type`, `index`, `dim` | `PascalCase` | `TransferResult`, `Maneuver` |
 

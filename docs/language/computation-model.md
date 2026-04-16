@@ -105,10 +105,10 @@ If a node's evaluation fails (e.g., division by zero), only that node and its de
 
 ## Naming Conventions
 
-Graphcal enforces naming conventions at parse time:
+Graphcal recommends the following naming conventions:
 
-| Declaration | Convention | Example |
-|-------------|-----------|---------|
+| Declaration | Recommended Convention | Example |
+|-------------|----------------------|---------|
 | `param` | `lower_snake_case` | `dry_mass` |
 | `node` | `lower_snake_case` | `total_dv` |
 | `const node` | `lower_snake_case` | `g0`, `margin_factor` |
@@ -119,7 +119,7 @@ Graphcal enforces naming conventions at parse time:
 | `index` | `PascalCase` | `Maneuver` |
 | `unit` | (various) | `km`, `kN`, `MPa` |
 
-Using the wrong casing is a parse error.
+These conventions are not enforced by the compiler, but following them is strongly recommended for consistency and readability.
 
 ## Comments
 

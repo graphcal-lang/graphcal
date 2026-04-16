@@ -2,15 +2,13 @@ use crate::syntax::ast::{DeclKind, Declaration, LayerDecl, PlotField};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case};
+use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a layer declaration: `layer name = { plots: [a, b], title: "..." };`
     pub(super) fn parse_layer(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Layer)?;
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
         self.expect(Token::Eq)?;
 
         // Parse field block: { plots: [...], title: "...", ... }
@@ -27,9 +25,7 @@ impl Parser<'_> {
                 // Parse plots: [name1, name2, ...]
                 self.expect(Token::LBracket)?;
                 while self.lexer.peek() != Some(&Token::RBracket) {
-                    let plot_name = self
-                        .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-                        .into_spanned::<DeclName>();
+                    let plot_name = self.parse_any_ident()?.into_spanned::<DeclName>();
                     plot_names.push(plot_name);
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.expect(Token::Comma)?;

@@ -6,7 +6,7 @@ use crate::syntax::names::UnitName;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
-use super::{ParseError, Parser, is_pascal_case, is_uppercase_starting};
+use super::{ParseError, Parser};
 
 impl Parser<'_> {
     // --- Type expressions ---
@@ -60,7 +60,9 @@ impl Parser<'_> {
                         span: ident.span,
                     }
                 }
-            } else if is_pascal_case(text) && self.is_lt_after_ident(span) {
+            } else if text.starts_with(|c: char| c.is_ascii_uppercase())
+                && self.is_lt_after_ident(span)
+            {
                 // Type application: Vec3<Length, ECI>
                 let ident = self.parse_any_ident()?;
                 let type_args = self.parse_type_arg_list()?;
@@ -567,8 +569,7 @@ impl Parser<'_> {
                 | Token::Unfold
                 | Token::Index,
             ) => {
-                let ident =
-                    self.parse_ident_with_casing("PascalCase identifier", is_uppercase_starting)?;
+                let ident = self.parse_any_ident()?;
                 Ok(NatExpr::Var(ident))
             }
             _ => {
