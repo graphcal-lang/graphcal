@@ -4,7 +4,7 @@ use crate::syntax::names::{
 };
 use crate::syntax::token::Token;
 
-use super::{ParseError, Parser, is_lower_snake_case, is_pascal_case, is_upper_snake_case};
+use super::{ParseError, Parser};
 
 /// Map comparison tokens to their corresponding `BinOp`.
 pub(super) const fn token_to_comparison_op(token: &Token) -> Option<BinOp> {
@@ -338,13 +338,11 @@ impl Parser<'_> {
             }
             Some(Token::At) => {
                 let (_, at_span) = self.advance()?;
-                let ident =
-                    self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                let ident = self.parse_any_ident()?;
                 // Check for module-qualified graph ref: @module::name
                 if self.lexer.peek() == Some(&Token::ColonColon) {
                     self.lexer.next_token(); // consume '::'
-                    let member =
-                        self.parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?;
+                    let member = self.parse_any_ident()?;
                     let span = at_span.merge(member.span);
                     Ok(Expr {
                         kind: ExprKind::QualifiedGraphRef {
@@ -448,71 +446,75 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse an identifier-based expression (const ref, struct, variant, fn call, qualified ref, etc.).
+    /// Parse an identifier-based expression.
+    ///
+    /// Dispatches on following tokens (syntax-based disambiguation):
+    /// - `ident<T>{ ... }` → struct construction with type args
+    /// - `ident{ ... }` → struct construction
+    /// - `ident::member<T>(...)` or `ident::member(...)` → qualified function call
+    /// - `ident::member` → `QualifiedNameRef` (resolved later to variant or const)
+    /// - `ident<T>(...)` or `ident(...)` → function call
+    /// - bare `ident` → `NameRef` (resolved later to const, local, or bare struct)
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
 
-        if is_upper_snake_case(&name) {
-            // Built-in constant reference: PI, E, TAU, SQRT2, etc.
-            Ok(Expr {
-                kind: ExprKind::ConstRef(Spanned::new(DeclName::new(name), span)),
-                span,
-            })
-        } else if is_pascal_case(&name)
+        // Use uppercase-starting as a convention-based hint: `Name { ... }` and `Name<T>{ ... }`
+        // are parsed as struct construction only when the identifier starts with an uppercase
+        // letter. This avoids ambiguity with `if cond { ... }` where a lowercase variable
+        // precedes a block delimiter.
+        let starts_upper = name.starts_with(|c: char| c.is_ascii_uppercase());
+
+        if starts_upper
             && self.lexer.peek() == Some(&Token::Lt)
             && self.is_type_args_followed_by_brace()
         {
-            // Generic struct construction: Vec3<Length, ECI> { x: 1 km, ... }
+            // Generic struct construction: Name<T> { ... }
             let type_args = self.parse_type_arg_list()?;
             self.parse_struct_construction_with_type_args(
                 Spanned::new(StructTypeName::new(name), span),
                 type_args,
             )
-        } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::LBrace) {
+        } else if starts_upper && self.lexer.peek() == Some(&Token::LBrace) {
             // Struct/variant construction with fields: TypeName { field1: expr, field2 }
             self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
-        } else if is_pascal_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
-            // Qualified variant literal: Maneuver::Departure
-            self.lexer.next_token(); // consume '::'
-            let variant = self
-                .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                .into_spanned::<VariantName>();
-            let full_span = span.merge(variant.span);
-            Ok(Expr {
-                kind: ExprKind::VariantLiteral {
-                    index: Spanned::new(IndexName::new(name), span),
-                    variant,
-                },
-                span: full_span,
-            })
-        } else if is_pascal_case(&name) {
-            // Bare variant construction (no fields): `Nominal`
-            Ok(Expr {
-                kind: ExprKind::StructConstruction {
-                    type_name: Spanned::new(StructTypeName::new(name), span),
-                    type_args: Vec::new(),
-                    fields: Vec::new(),
-                },
-                span,
-            })
-        } else if is_lower_snake_case(&name) && self.lexer.peek() == Some(&Token::ColonColon) {
-            // Module-qualified built-in constant: module::CONST_NAME
+        } else if self.lexer.peek() == Some(&Token::ColonColon) {
+            // Qualified reference: could be variant, const, or function call
             self.lexer.next_token(); // consume '::'
             let member_ident = self.parse_any_ident()?;
-            let member = member_ident.name.clone();
-            if is_upper_snake_case(&member) {
-                // module::BUILTIN_CONST (e.g., math::PI)
+            let member_name = member_ident.name.clone();
+
+            if self.lexer.peek() == Some(&Token::LParen)
+                || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
+            {
+                // Qualified function call: module::fn(args) or module::fn<T>(args)
+                let type_args = if self.lexer.peek() == Some(&Token::Lt) {
+                    self.parse_generic_arg_list()?
+                } else {
+                    vec![]
+                };
+                self.lexer.next_token(); // consume '('
+                let args = self.parse_arg_list()?;
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                let call_span = span.merge(rparen_span);
+                Ok(Expr {
+                    kind: ExprKind::FnCall {
+                        name: Spanned::new(FnName::new(format!("{name}::{member_name}")), span),
+                        type_args,
+                        args,
+                    },
+                    span: call_span,
+                })
+            } else {
+                // Unresolved qualified reference: a::b
                 let full_span = span.merge(member_ident.span);
                 Ok(Expr {
-                    kind: ExprKind::QualifiedConstRef {
-                        module: crate::syntax::ast::Ident { name, span },
-                        name: Spanned::new(DeclName::new(member), member_ident.span),
+                    kind: ExprKind::QualifiedNameRef {
+                        qualifier: crate::syntax::ast::Ident { name, span },
+                        member: member_ident,
                     },
                     span: full_span,
                 })
-            } else {
-                Err(self.unexpected_token("a CONST_NAME after `::`", &member, member_ident.span))
             }
         } else if self.lexer.peek() == Some(&Token::LParen)
             || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
@@ -536,10 +538,9 @@ impl Parser<'_> {
                 span: call_span,
             })
         } else {
-            // Bare lowercase identifier -> LocalRef (loop variable, function parameter, etc.)
-            // Semantic validation happens in resolve/dim_check.
+            // Bare identifier → NameRef (resolved later by name resolution pass)
             Ok(Expr {
-                kind: ExprKind::LocalRef(crate::syntax::ast::Ident { name, span }),
+                kind: ExprKind::NameRef(crate::syntax::ast::Ident { name, span }),
                 span,
             })
         }
@@ -550,48 +551,37 @@ impl Parser<'_> {
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
         if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
-            let text = self.lexer.slice_at(ident_span);
-            if is_pascal_case(text) {
-                // Could be map literal (PascalCase :: Variant : expr)
-                let saved_text = text.to_string();
-                // Consume the ident to peek at what's next
-                let (_, saved_span) = self.advance()?;
-                if self.lexer.peek() == Some(&Token::ColonColon) {
-                    // Consume `::` and variant, then check next token.
-                    self.lexer.next_token(); // consume '::'
-                    let variant_ident =
-                        self.parse_ident_with_casing("PascalCase", is_pascal_case)?;
-                    if self.lexer.peek() == Some(&Token::Colon) {
-                        // Map literal: { Index::Variant: expr, ... }
-                        self.parse_map_literal_after_first_entry(
-                            start_span,
-                            Spanned::new(IndexName::new(saved_text), saved_span),
-                            variant_ident.into_spanned::<VariantName>(),
-                        )
-                    } else {
-                        let found = self
-                            .lexer
-                            .peek()
-                            .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
-                        Err(self.unexpected_token(
-                            "`:` after variant in map literal",
-                            &found,
-                            start_span,
-                        ))
-                    }
+            // Could be map literal: { Ident::Variant: expr, ... }
+            let saved_text = self.lexer.slice_at(ident_span).to_string();
+            // Consume the ident to peek at what's next
+            let (_, saved_span) = self.advance()?;
+            if self.lexer.peek() == Some(&Token::ColonColon) {
+                // Consume `::` and variant, then check next token.
+                self.lexer.next_token(); // consume '::'
+                let variant_ident = self.parse_any_ident()?;
+                if self.lexer.peek() == Some(&Token::Colon) {
+                    // Map literal: { Index::Variant: expr, ... }
+                    self.parse_map_literal_after_first_entry(
+                        start_span,
+                        Spanned::new(IndexName::new(saved_text), saved_span),
+                        variant_ident.into_spanned::<VariantName>(),
+                    )
                 } else {
-                    // PascalCase ident not followed by `::` — not a map literal
+                    let found = self
+                        .lexer
+                        .peek()
+                        .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
                     Err(self.unexpected_token(
-                        "map literal (`{ Index::Variant: expr, ... }`)",
-                        &saved_text,
+                        "`:` after variant in map literal",
+                        &found,
                         start_span,
                     ))
                 }
             } else {
-                let found = self.lexer.slice_at(ident_span).to_string();
+                // Ident not followed by `::` — not a map literal
                 Err(self.unexpected_token(
                     "map literal (`{ Index::Variant: expr, ... }`)",
-                    &found,
+                    &saved_text,
                     start_span,
                 ))
             }
@@ -616,38 +606,34 @@ impl Parser<'_> {
     /// Parse an index argument: `Index::Variant`, a loop variable `m`, or an expression `i + 1`.
     ///
     /// Strategy:
-    /// 1. Peek for `PascalCase` identifier followed by `::` → parse as qualified variant.
+    /// 1. Peek for identifier followed by `::` → parse as qualified variant.
     /// 2. Otherwise, parse a full expression:
-    ///    - If it's a bare `LocalRef(ident)` → convert to `IndexArg::Var` (backward compat).
+    ///    - If it's a bare `NameRef(ident)` → convert to `IndexArg::Var` (backward compat).
     ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
-        // Check for qualified variant: PascalCase::Variant
+        // Check for qualified variant: Ident::Ident
         if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
             let name = self.lexer.slice_at(span).to_string();
-            if is_pascal_case(&name) {
-                // Consume the identifier to peek at what follows
-                self.lexer.next_token();
-                if self.lexer.peek() == Some(&Token::ColonColon) {
-                    // Qualified variant: Index::Variant
-                    self.lexer.next_token(); // consume '::'
-                    let variant = self
-                        .parse_ident_with_casing("PascalCase", is_pascal_case)?
-                        .into_spanned::<VariantName>();
-                    return Ok(IndexArg::Variant {
-                        index: Spanned::new(IndexName::new(name), span),
-                        variant,
-                    });
-                }
-                // Not a qualified variant — put the token back and fall through to expression
-                self.lexer.put_back(Token::Ident, span);
+            // Consume the identifier to peek at what follows
+            self.lexer.next_token();
+            if self.lexer.peek() == Some(&Token::ColonColon) {
+                // Qualified variant: Index::Variant
+                self.lexer.next_token(); // consume '::'
+                let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+                return Ok(IndexArg::Variant {
+                    index: Spanned::new(IndexName::new(name), span),
+                    variant,
+                });
             }
+            // Not a qualified variant — put the token back and fall through to expression
+            self.lexer.put_back(Token::Ident, span);
         }
 
         // Parse a full expression
         let expr = self.parse_expr()?;
 
-        // If it's a bare local variable reference, use IndexArg::Var for backward compatibility
-        if let ExprKind::LocalRef(ident) = expr.kind {
+        // If it's a bare name reference, use IndexArg::Var for backward compatibility
+        if let ExprKind::NameRef(ident) = expr.kind {
             Ok(IndexArg::Var(ident))
         } else {
             Ok(IndexArg::Expr(Box::new(expr)))
@@ -997,10 +983,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_const_ref() {
+    fn parse_name_ref() {
         let expr = parse_node_expr("PI * 2.0");
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
-            assert!(matches!(&lhs.kind, ExprKind::ConstRef(id) if id.value.as_str() == "PI"));
+            assert!(matches!(&lhs.kind, ExprKind::NameRef(id) if id.name.as_str() == "PI"));
         } else {
             panic!("expected BinOp");
         }
@@ -1286,7 +1272,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_qualified_const_ref() {
+    fn parse_qualified_name_ref() {
         let file = Parser::new("node x: Dimensionless = constants::G0;")
             .parse_file()
             .unwrap();
@@ -1295,11 +1281,11 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::QualifiedConstRef { module, name } => {
-                assert_eq!(module.name, "constants");
-                assert_eq!(name.value.as_str(), "G0");
+            ExprKind::QualifiedNameRef { qualifier, member } => {
+                assert_eq!(qualifier.name, "constants");
+                assert_eq!(member.name.as_str(), "G0");
             }
-            other => panic!("expected QualifiedConstRef, got {other:?}"),
+            other => panic!("expected QualifiedNameRef, got {other:?}"),
         }
     }
 

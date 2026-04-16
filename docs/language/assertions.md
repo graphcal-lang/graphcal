@@ -19,7 +19,7 @@ assert fuel_positive = @fuel_mass > 0.0 kg;
 
 ### Key Properties
 
-- Assert names follow `lower_snake_case`, like `param` and `node`.
+- Assert names conventionally use `lower_snake_case`, like `param` and `node`.
 - Assert bodies can reference any `@param` or `@node`, plus constants.
 - Assertions are **leaf nodes** -- no declaration can reference an assert with
   `@`. Attempting `@my_assert` is a compile error (A003).

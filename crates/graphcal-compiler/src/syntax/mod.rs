@@ -4,6 +4,7 @@ pub mod ast;
 pub mod comments;
 pub mod dimension;
 pub mod lexer;
+pub mod name_resolve;
 pub mod names;
 pub mod parser;
 pub mod span;

@@ -258,6 +258,12 @@ pub fn eval_expr(
         // TupleMatch is desugared to If/BinOp(Eq) chains before evaluation.
         #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
         ExprKind::TupleMatch { .. } => unreachable!("TupleMatch should be desugared before eval"),
+
+        // NameRef/QualifiedNameRef are resolved before evaluation.
+        #[expect(clippy::unreachable, reason = "invariant: resolved before eval")]
+        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
+            unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
+        }
     }
 }
 

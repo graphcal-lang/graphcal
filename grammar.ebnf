@@ -83,33 +83,16 @@ DIGIT
 IDENT
    = LETTER, { LETTER | DIGIT | "_" };
 
-(* Casing conventions enforced by the parser:
-   - lower_snake_case: starts with a lowercase letter, contains only
-     lowercase letters, digits, and underscores.
-     Used for: param, node, const node, dag names, field names, local variables.
-   - UPPER_SNAKE_CASE: starts with an uppercase letter, contains only
-     uppercase letters, digits, and underscores.
-     Used for: built-in constants only (PI, E, TAU).
-   - PascalCase: starts with an uppercase letter, contains at least
-     one lowercase letter.
-     Used for: type, index, variant names.
-   - Uppercase-starting: starts with an uppercase letter (either
-     PascalCase or UPPER_SNAKE_CASE).
-     Used for: indexed type parameters. *)
-lower_snake_case_ident
-   = LOWER_LETTER, { LOWER_LETTER | DIGIT | "_" };
-
-upper_snake_case_ident
-   = UPPER_LETTER, { UPPER_LETTER | DIGIT | "_" };
-
-(* PascalCase is not expressible purely in EBNF; the semantic
-   constraint is: starts with an uppercase letter and contains at
-   least one lowercase letter. *)
-pascal_case_ident
-   = IDENT;  (* with PascalCase constraint *)
-
-uppercase_starting_ident
-   = IDENT;  (* starts with uppercase letter *)
+(* Casing conventions (recommended but not enforced by the parser):
+   - lower_snake_case for: param, node, const node, dag names, field names, local variables.
+   - UPPER_SNAKE_CASE for: built-in constants (PI, E, TAU).
+   - PascalCase for: type, index, variant names.
+   - Uppercase-starting for: indexed type parameters.
+   The parser accepts any IDENT in all positions. Struct construction
+   syntax (`Name { ... }`) requires the identifier to start with an
+   uppercase letter to avoid ambiguity with block delimiters. A
+   name-resolution pass resolves bare identifiers and qualified
+   references after parsing. *)
 
 (* --- Numeric literals --- *)
 DIGIT_SEQ
@@ -194,14 +177,14 @@ declaration_kind
    Required params must be bound via `--set`, `--input`, or include
    param bindings. *)
 param_decl
-   = "param", lower_snake_case_ident, [ ":", type_expr ], [ "=", expr ], ";";
+   = "param", IDENT, [ ":", type_expr ], [ "=", expr ], ";";
 
 (* --- node, const node --- *)
 node_decl
-   = "node", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
+   = "node", IDENT, [ ":", type_expr ], "=", expr, ";";
 
 const_decl
-   = "const", "node", lower_snake_case_ident, [ ":", type_expr ], "=", expr, ";";
+   = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
 
 (* --- dimension --- *)
 (* Two forms:
@@ -232,7 +215,7 @@ unit_scale
    3. Union type (sum of types):   type ManeuverKind = Impulsive | LowThrust;
 *)
 type_decl
-   = "type", pascal_case_ident, [ generic_params ], type_decl_body;
+   = "type", IDENT, [ generic_params ], type_decl_body;
 
 type_decl_body
    = ";"                                              (* unit type *)
@@ -243,7 +226,7 @@ field_list
    = field_decl, { ",", field_decl }, [ "," ];
 
 field_decl
-   = lower_snake_case_ident, ":", type_expr;
+   = IDENT, ":", type_expr;
 
 (* Semantic constraint: struct field types must be ValueTypes
    (type_expr_base), not indexed DeclTypes. You cannot put
@@ -254,7 +237,7 @@ union_member_list
    = union_member, { "|", union_member };
 
 union_member
-   = pascal_case_ident, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
+   = IDENT, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
 
 (* Union members can carry type arguments for generic unions:
    type Result<D: Dim> = Ok<D> | Err; *)
@@ -281,12 +264,12 @@ generic_constraint
    4. Required range:       index Foo: Time;
 *)
 index_decl
-   = "index", pascal_case_ident, "=",
-     "{", pascal_case_ident, { ",", pascal_case_ident }, [ "," ], "}", ";"
-   | "index", pascal_case_ident, "=",
+   = "index", IDENT, "=",
+     "{", IDENT, { ",", IDENT }, [ "," ], "}", ";"
+   | "index", IDENT, "=",
      "linspace", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";"
-   | "index", pascal_case_ident, ";"
-   | "index", pascal_case_ident, ":", dim_expr, ";";
+   | "index", IDENT, ";"
+   | "index", IDENT, ":", dim_expr, ";";
 
 (* "step" and "linspace" are contextual keywords.
    Required indexes must be bound via parameterized include. *)
@@ -311,13 +294,13 @@ import_decl
 
 import_path
    = STRING_LITERAL
-   | lower_snake_case_ident, "/", lower_snake_case_ident,
-     { "/", lower_snake_case_ident }
+   | IDENT, "/", IDENT,
+     { "/", IDENT }
    | "..", { "/", ".." };
 
 import_body
    = "{", [ import_item_list ], "}", ";"
-   | "as", lower_snake_case_ident, ";"
+   | "as", IDENT, ";"
    | ";";
 
 import_item_list
@@ -346,27 +329,27 @@ include_decl
 
 include_path
    = STRING_LITERAL
-   | lower_snake_case_ident, "/", lower_snake_case_ident,
-     { "/", lower_snake_case_ident }
-   | lower_snake_case_ident
+   | IDENT, "/", IDENT,
+     { "/", IDENT }
+   | IDENT
    | "..", { "/", ".." };
 
 include_param_bindings
    = "(", include_param_binding, { ",", include_param_binding }, [ "," ], ")";
 
 include_param_binding
-   = lower_snake_case_ident, ":", expr;
+   = IDENT, ":", expr;
 
 (* --- dag --- *)
 (* DAG blocks define reusable, parameterized computation. They
    contain the same declarations as a file (params, nodes, imports,
    etc.) and are instantiated via `include`. *)
 dag_decl
-   = "dag", lower_snake_case_ident, "{", { declaration }, "}";
+   = "dag", IDENT, "{", { declaration }, "}";
 
 (* --- assert --- *)
 assert_decl
-   = "assert", lower_snake_case_ident, "=", assert_body, ";";
+   = "assert", IDENT, "=", assert_body, ";";
 
 assert_body
    = expr                                                 (* exact assertion *)
@@ -377,7 +360,7 @@ assert_body
    They specify a mark type, encoding channels, and optional
    properties. *)
 plot_decl
-   = "plot", lower_snake_case_ident, "=",
+   = "plot", IDENT, "=",
      "{", [ plot_body_field, { ",", plot_body_field }, [ "," ] ], "}", ";";
 
 plot_body_field
@@ -406,7 +389,7 @@ plot_field
 (* Figure declarations group multiple plots into a combined chart
    with side-by-side subplots (tiling). *)
 figure_decl
-   = "figure", lower_snake_case_ident, "=",
+   = "figure", IDENT, "=",
      "{", [ figure_field, { ",", figure_field }, [ "," ] ], "}", ";";
 
 figure_field
@@ -423,7 +406,7 @@ figure_named_field
 (* Layer declarations overlay multiple plots on the same axes
    (shared coordinate space). *)
 layer_decl
-   = "layer", lower_snake_case_ident, "=",
+   = "layer", IDENT, "=",
      "{", [ layer_field, { ",", layer_field }, [ "," ] ], "}", ";";
 
 layer_field
@@ -471,7 +454,7 @@ type_constraint
 
 (* Generic type application: Vec3<Length, ECI>, Timestamp<UTC> *)
 type_application
-   = pascal_case_ident, "<", type_expr, { ",", type_expr }, [ "," ], ">";
+   = IDENT, "<", type_expr, { ",", type_expr }, [ "," ], ">";
 
 (* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N] *)
 index_expr_list
@@ -587,11 +570,7 @@ atom
    | integer_literal
    | bool_literal
    | graph_ref
-   | local_ref
-   | fn_call
-   | qualified_fn_call
-   | variant_literal
-   | struct_construction
+   | ident_expr
    | map_literal
    | table_expr
    | paren_expr
@@ -616,31 +595,34 @@ bool_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", [ lower_snake_case_ident, "::" ], lower_snake_case_ident;
+   = "@", [ IDENT, "::" ], IDENT;
 
 (* @name -- graph ref (param, node, or const node).
    @module::name -- qualified graph ref.
-   Bare UPPER_SNAKE_CASE identifiers (PI, E, TAU) are built-in constants
-   only; user-defined const nodes use @name like regular nodes. *)
+   Built-in constants (PI, E, TAU) and user-defined const nodes both
+   use their names directly; graph declarations require @. *)
 
-local_ref
-   = lower_snake_case_ident;
-
-(* Reference to a loop variable, match binding, or include alias. *)
-
-(* --- Function call --- *)
-fn_call
-   = lower_snake_case_ident,
+(* --- Identifier expression --- *)
+(* Dispatches based on the token(s) following the identifier:
+   - IDENT<T>{ ... } or IDENT{ ... }  → struct construction
+     (requires uppercase-starting identifier to avoid ambiguity)
+   - IDENT::IDENT<T>(...) or IDENT::IDENT(...)  → qualified fn call
+   - IDENT::IDENT  → qualified name ref (resolved to variant or const)
+   - IDENT<T>(...) or IDENT(...)  → function call
+   - IDENT  → name ref (resolved to local, const, or bare struct) *)
+ident_expr
+   = IDENT, "::", IDENT,
      [ "<", generic_arg_list, ">" ],
-     "(", [ expr_list ], ")";
-
-qualified_fn_call
-   = lower_snake_case_ident, "::", lower_snake_case_ident,
+     "(", [ expr_list ], ")"                      (* qualified fn call *)
+   | IDENT, "::", IDENT                            (* qualified name ref *)
+   | IDENT,
+     [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
+     "{", [ field_init, { ",", field_init }, [ "," ] ], "}"
+                                                    (* struct construction *)
+   | IDENT,
      [ "<", generic_arg_list, ">" ],
-     "(", [ expr_list ], ")";
-
-(* fn(args) -- local call.  module::fn(args) -- qualified call.
-   Optional turbofish syntax: fn<Type>(args), fn<3>(args). *)
+     "(", [ expr_list ], ")"                       (* function call *)
+   | IDENT;                                        (* bare name ref *)
 
 generic_arg_list
    = generic_arg, { ",", generic_arg }, [ "," ];
@@ -652,19 +634,8 @@ generic_arg
 expr_list
    = expr, { ",", expr }, [ "," ];
 
-(* --- Variant literal --- *)
-variant_literal
-   = pascal_case_ident, "::", pascal_case_ident;
-
-(* Qualified index variant reference, e.g., Maneuver::Departure. *)
-(* --- Struct construction --- *)
-struct_construction
-   = pascal_case_ident,
-     [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
-     "{", [ field_init, { ",", field_init }, [ "," ] ], "}";
-
 field_init
-   = lower_snake_case_ident, [ ":", expr ];
+   = IDENT, [ ":", expr ];
 
 (* When the colon and expression are omitted, the field name is used
    as a shorthand reference to a variable of the same name. *)
@@ -683,18 +654,18 @@ map_entry
    | tuple_key_entry;
 
 single_key_entry
-   = pascal_case_ident, "::", pascal_case_ident, ":", expr;
+   = IDENT, "::", IDENT, ":", expr;
 
 tuple_key_entry
-   = "(", pascal_case_ident, "::", pascal_case_ident,
-     { ",", pascal_case_ident, "::", pascal_case_ident }, ")", ":", expr;
+   = "(", IDENT, "::", IDENT,
+     { ",", IDENT, "::", IDENT }, ")", ":", expr;
 
 (* --- Table expression (syntax sugar, desugars to map_literal) --- *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
 
 index_list
-   = pascal_case_ident, { ",", pascal_case_ident };
+   = IDENT, { ",", IDENT };
 
 table_body
    = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
@@ -708,16 +679,16 @@ table_single
    = table_header_row, table_data_row, { table_data_row };
 
 table_header_row
-   = pascal_case_ident, { ",", pascal_case_ident }, ";";
+   = IDENT, { ",", IDENT }, ";";
 
 table_data_row
-   = pascal_case_ident, ":", expr, { ",", expr }, ";";
+   = IDENT, ":", expr, { ",", expr }, ";";
 
 table_data_row_1d
-   = pascal_case_ident, ":", expr, ";";
+   = IDENT, ":", expr, ";";
 
 qualified_variant
-   = pascal_case_ident, "::", pascal_case_ident;
+   = IDENT, "::", IDENT;
 
 (* --- Parenthesized expression --- *)
 paren_expr
@@ -739,8 +710,8 @@ tuple_match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = pascal_case_ident, "::", pascal_case_ident           (* qualified: Index::Variant *)
-   | pascal_case_ident,
+   = IDENT, "::", IDENT           (* qualified: Index::Variant *)
+   | IDENT,
      [ "{", [ pattern_binding_list ], "}" ];              (* union variant *)
 
 pattern_binding_list
@@ -760,14 +731,14 @@ tuple_match_pattern
 (* ================================================================== *)
 for_expr
    = "for", for_binding, { ",", for_binding },
-     "{", [ "(", lower_snake_case_ident,
-     { ",", lower_snake_case_ident }, ")", "=>" ], expr, "}";
+     "{", [ "(", IDENT,
+     { ",", IDENT }, ")", "=>" ], expr, "}";
 
 for_binding
-   = lower_snake_case_ident, ":", for_binding_index;
+   = IDENT, ":", for_binding_index;
 
 for_binding_index
-   = pascal_case_ident                                    (* named index *)
+   = IDENT                                    (* named index *)
    | "range", "(", nat_expr, ")";                         (* nat range *)
 
 (* "range" is a contextual keyword in for bindings.
@@ -781,14 +752,14 @@ nat_expr
 
 scan_expr
    = "scan", "(", expr, ",", expr, ",",
-     "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|",
+     "|", IDENT, ",", IDENT, "|",
      expr, ")";
 
 (* scan(source, init, |acc, val| body)
    Folds over an indexed value, accumulating a result. *)
 unfold_expr
    = "unfold", "(", expr, ",",
-     "|", lower_snake_case_ident, ",", lower_snake_case_ident, "|",
+     "|", IDENT, ",", IDENT, "|",
      expr, ")";
 
 (* unfold(init, |prev, curr| body)

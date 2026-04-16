@@ -219,7 +219,7 @@ fn parse_unit_decl_with_paren_expr() {
             match &def.scale_expr.kind {
                 ExprKind::BinOp { op, lhs, rhs } => {
                     assert!(matches!(op, crate::syntax::ast::BinOp::Div));
-                    assert!(matches!(&lhs.kind, ExprKind::ConstRef(c) if c.value.as_str() == "PI"));
+                    assert!(matches!(&lhs.kind, ExprKind::NameRef(c) if c.name.as_str() == "PI"));
                     assert!(matches!(&rhs.kind, ExprKind::Integer(180)));
                 }
                 other => panic!("expected BinOp, got {other:?}"),
@@ -250,15 +250,19 @@ fn parse_with_comments() {
 }
 
 #[test]
-fn parse_error_bad_param_casing() {
-    let result = Parser::new("param BadName: Dimensionless = 1.0;").parse_file();
-    assert!(result.is_err());
+fn parse_param_any_casing() {
+    let file = Parser::new("param BadName: Dimensionless = 1.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
-fn parse_error_bad_const_node_casing() {
-    let result = Parser::new("const node BAD_NAME: Dimensionless = 42.0;").parse_file();
-    assert!(result.is_err());
+fn parse_const_node_any_casing() {
+    let file = Parser::new("const node BAD_NAME: Dimensionless = 42.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
@@ -379,17 +383,17 @@ fn parse_type_decl_empty_type() {
 }
 
 #[test]
-fn parse_type_decl_uppercase_name_error() {
+fn parse_type_decl_uppercase_name() {
     let source = "type ORBIT { sma: Length }";
-    let result = Parser::new(source).parse_file();
-    assert!(result.is_err());
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
-fn parse_type_decl_lowercase_name_error() {
+fn parse_type_decl_lowercase_name() {
     let source = "type orbit { sma: Length }";
-    let result = Parser::new(source).parse_file();
-    assert!(result.is_err());
+    let file = Parser::new(source).parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
@@ -1139,9 +1143,9 @@ fn parse_dag_with_declarations() {
 }
 
 #[test]
-fn parse_dag_name_must_be_lower_snake_case() {
-    let result = Parser::new("dag MyPipeline {}").parse_file();
-    assert!(result.is_err(), "PascalCase dag name should be rejected");
+fn parse_dag_name_any_casing() {
+    let file = Parser::new("dag MyPipeline {}").parse_file().unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]

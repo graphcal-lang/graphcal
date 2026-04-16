@@ -49,7 +49,9 @@ fn collect_const_refs(
         | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => Ok(()),
+        | ExprKind::VariantLiteral { .. }
+        | ExprKind::NameRef(_)
+        | ExprKind::QualifiedNameRef { .. } => Ok(()),
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             // In const expressions, @name can reference other const nodes but not runtime names.
             // Runtime refs are already rejected by check_no_runtime_graph_refs before we get here.
@@ -391,7 +393,9 @@ fn collect_all_refs(
         | ExprKind::StringLiteral(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => Ok(()),
+        | ExprKind::VariantLiteral { .. }
+        | ExprKind::NameRef(_)
+        | ExprKind::QualifiedNameRef { .. } => Ok(()),
         ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
             if all_runtime_names.contains(ident.value.as_str()) {
                 graph_refs.insert(ident.value.to_string());

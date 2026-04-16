@@ -51,9 +51,12 @@ fn resolve_unknown_graph_ref() {
 }
 
 #[test]
-fn resolve_unknown_const_ref() {
-    let err = parse_and_resolve("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownConstRef { .. }));
+fn resolve_unknown_bare_name_becomes_local_ref() {
+    // After lifting casing requirements, bare `NONEXISTENT` is parsed as NameRef
+    // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
+    // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
+    let resolved = parse_and_resolve("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap();
+    assert_eq!(resolved.nodes.len(), 1);
 }
 
 #[test]
@@ -66,15 +69,19 @@ fn resolve_at_in_const() {
 }
 
 #[test]
-fn parser_rejects_bad_const_casing() {
-    let result = Parser::new("const node BAD_NAME: Dimensionless = 42.0;").parse_file();
-    assert!(result.is_err());
+fn parser_accepts_any_const_casing() {
+    let file = Parser::new("const node BAD_NAME: Dimensionless = 42.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
-fn parser_rejects_bad_param_casing() {
-    let result = Parser::new("param BAD: Dimensionless = 42.0;").parse_file();
-    assert!(result.is_err());
+fn parser_accepts_any_param_casing() {
+    let file = Parser::new("param BAD: Dimensionless = 42.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
@@ -161,9 +168,12 @@ fn resolve_const_collision_with_param() {
 }
 
 #[test]
-fn resolve_unknown_const_ref_in_const() {
-    let err = parse_and_resolve("const node a: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownConstRef { .. }));
+fn resolve_unknown_bare_name_in_const_becomes_local_ref() {
+    // After lifting casing requirements, bare `NONEXISTENT` is parsed as NameRef
+    // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
+    // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
+    let resolved = parse_and_resolve("const node a: Dimensionless = NONEXISTENT + 1.0;").unwrap();
+    assert_eq!(resolved.consts.len(), 1);
 }
 
 #[test]

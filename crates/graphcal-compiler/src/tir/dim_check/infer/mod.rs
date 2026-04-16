@@ -359,5 +359,14 @@ pub(super) fn infer_type_with_owner(
         ExprKind::TupleMatch { .. } => {
             unreachable!("TupleMatch should be desugared before dim-checking")
         }
+
+        // NameRef/QualifiedNameRef are resolved before dim-checking.
+        #[expect(
+            clippy::unreachable,
+            reason = "invariant: resolved before dim-checking"
+        )]
+        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
+            unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
+        }
     }
 }

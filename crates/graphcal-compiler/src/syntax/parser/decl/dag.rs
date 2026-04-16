@@ -2,7 +2,7 @@ use crate::syntax::ast::{DagDecl, DeclKind, Declaration};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser, is_lower_snake_case};
+use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a dag declaration: `dag name { declarations... }`
@@ -12,9 +12,7 @@ impl Parser<'_> {
     pub(super) fn parse_dag_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dag)?;
 
-        let name = self
-            .parse_ident_with_casing("lower_snake_case", is_lower_snake_case)?
-            .into_spanned::<DeclName>();
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
 
         self.expect(Token::LBrace)?;
 

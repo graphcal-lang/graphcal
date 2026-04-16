@@ -67,20 +67,6 @@ fn error_at_in_const() {
 }
 
 #[test]
-fn error_bad_const_casing() {
-    let source = include_str!("../../../tests/fixtures/errors/bad_const_casing.gcl");
-    let rendered = render_error(source, "bad_const_casing.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
-fn error_bad_param_casing() {
-    let source = include_str!("../../../tests/fixtures/errors/bad_param_casing.gcl");
-    let rendered = render_error(source, "bad_param_casing.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn error_runtime_cycle() {
     let source = include_str!("../../../tests/fixtures/errors/cycle.gcl");
     let rendered = render_error(source, "cycle.gcl");

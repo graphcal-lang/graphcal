@@ -1113,6 +1113,23 @@ fn collect_expr_refs(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_) => {}
+        ExprKind::NameRef(ident) => {
+            // Unresolved name reference -- treat as a reference to a top-level symbol.
+            table.references.push(ReferenceInfo {
+                span: ident.span,
+                target: SymbolKey::TopLevel(ident.name.clone()),
+            });
+        }
+        ExprKind::QualifiedNameRef { qualifier, member } => {
+            // Unresolved qualified name reference.
+            table.references.push(ReferenceInfo {
+                span: member.span,
+                target: SymbolKey::Qualified {
+                    module: qualifier.name.clone(),
+                    name: member.name.clone(),
+                },
+            });
+        }
     }
 }
 

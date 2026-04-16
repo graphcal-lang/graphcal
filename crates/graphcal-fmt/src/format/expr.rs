@@ -33,7 +33,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::QualifiedConstRef { module, name } => {
             RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
         }
-        ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
+        ExprKind::LocalRef(ident) | ExprKind::NameRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
             let op_str = match op {
@@ -125,6 +125,9 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::TupleMatch { scrutinees, arms } => format_tuple_match(fmt, scrutinees, arms),
         ExprKind::VariantLiteral { index, variant } => {
             RcDoc::text(format!("{}::{}", index.value, variant.value))
+        }
+        ExprKind::QualifiedNameRef { qualifier, member } => {
+            RcDoc::text(format!("{}::{}", qualifier.name, member.name))
         }
     }
 }
