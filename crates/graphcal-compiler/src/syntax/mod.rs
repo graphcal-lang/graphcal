@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod comments;
+pub mod dag_id;
 pub mod dimension;
 pub mod lexer;
 pub mod name_resolve;

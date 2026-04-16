@@ -170,7 +170,8 @@ fn wrap_dep_map(
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
-    lower_with_imports(ast, src, &ImportedNames::default())
+    let dag_id = crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
+    lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
 }
 
 /// Lower an AST with imported declarations into an [`IR`].
@@ -185,8 +186,9 @@ fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
-    let (builder, resolved_ir) = lower_to_builder(ast, src, imported)?;
+    let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
     Ok(resolved_ir.freeze(builder.build()))
 }
 
@@ -203,6 +205,7 @@ pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution
     let resolved = resolve_with_imports(ast, src, imported)?;
@@ -220,7 +223,7 @@ pub(crate) fn lower_to_builder(
     }
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new())
+    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new(), dag_id)
 }
 
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
@@ -243,6 +246,7 @@ pub fn lower_to_builder_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
@@ -251,7 +255,7 @@ pub fn lower_to_builder_with_imported_values(
     let type_anns = extract_type_annotations(ast);
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values)
+    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values, dag_id)
 }
 
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
@@ -268,11 +272,12 @@ fn build_ir_from_resolved(
     mut resolved: ResolvedFile,
     mut type_anns: HashMap<String, TypeExpr>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Build registry (prelude + user-declared dimensions/units/indexes/structs)
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
-    register_file_declarations(ast, &mut builder, src)?;
+    register_file_declarations(ast, &mut builder, src, dag_id)?;
 
     // Augment runtime deps with transitive dependencies through dynamic units.
     let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
@@ -1111,9 +1116,9 @@ pub(crate) fn register_file_declarations(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
-    let file_path = std::path::PathBuf::from(src.name());
-    register_declarations_impl(file, registry, src, None, &file_path)
+    register_declarations_impl(file, registry, src, None, dag_id)
 }
 
 /// Register only the named type-system declarations (dimensions, units, indexes, types)
@@ -1134,9 +1139,9 @@ pub fn register_selected_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     names: &std::collections::HashSet<String>,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
-    let file_path = std::path::PathBuf::from(src.name());
-    register_declarations_impl(file, registry, src, Some(names), &file_path)
+    register_declarations_impl(file, registry, src, Some(names), dag_id)
 }
 
 /// Shared implementation for registering type-system declarations.
@@ -1158,7 +1163,7 @@ fn register_declarations_impl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     filter: Option<&std::collections::HashSet<String>>,
-    file_path: &std::path::Path,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     use crate::syntax::ast::{DimDecl, IndexDecl, UnitDecl};
 
@@ -1175,7 +1180,7 @@ fn register_declarations_impl(
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::BaseDimension(d) if should_register(d.name.value.as_str()) => {
-                register_base_dimension_decl(d, registry, file_path);
+                register_base_dimension_decl(d, registry, dag_id);
             }
             DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
                 derived_dims.push(d);
@@ -1369,10 +1374,10 @@ fn topo_sort_units<'a>(
 fn register_base_dimension_decl(
     d: &crate::syntax::ast::BaseDimDecl,
     registry: &mut RegistryBuilder,
-    file_path: &std::path::Path,
+    dag_id: &crate::syntax::dag_id::DagId,
 ) {
     let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
-        file: file_path.to_path_buf(),
+        dag: dag_id.clone(),
         name: d.name.value.to_string(),
     };
     registry.register_base_dimension(d.name.value.clone(), dim_id);

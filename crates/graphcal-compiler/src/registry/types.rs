@@ -1072,7 +1072,7 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b);
         let info_id = BaseDimId::UserDefined {
-            file: std::path::PathBuf::from("test.gcl"),
+            dag: crate::syntax::dag_id::DagId::new(["test"]),
             name: "Information".to_string(),
         };
         let id = b.register_base_dimension(DimName::new("Information"), info_id.clone());
@@ -1107,7 +1107,7 @@ mod tests {
     fn set_base_dim_symbol_only_first() {
         let mut b = RegistryBuilder::new();
         let info_id = BaseDimId::UserDefined {
-            file: std::path::PathBuf::from("test.gcl"),
+            dag: crate::syntax::dag_id::DagId::new(["test"]),
             name: "Information".to_string(),
         };
         let id = b.register_base_dimension(DimName::new("Information"), info_id);
