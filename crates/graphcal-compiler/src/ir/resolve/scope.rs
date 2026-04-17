@@ -176,35 +176,6 @@ where
     }
 }
 
-/// Check that an expression contains no variant literals (for non-rebindable contexts).
-///
-/// Variant literals are banned in node, const, assert, and plot expressions
-/// to ensure files can be reused as libraries with different index definitions.
-pub(super) fn check_no_variant_literals(
-    expr: &Expr,
-    context: &str,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let context = context.to_string();
-    let mut checker = VariantLiteralChecker {
-        check: move |index: &str,
-                     variant: &str,
-                     span: Span,
-                     src: &NamedSource<Arc<String>>|
-              -> Result<(), GraphcalError> {
-            Err(GraphcalError::VariantLiteralInNonRebindable {
-                index: index.to_string(),
-                variant: variant.to_string(),
-                context: context.clone(),
-                src: src.clone(),
-                span: span.into(),
-            })
-        },
-        src,
-    };
-    checker.visit_expr(expr)
-}
-
 /// Check that an expression contains no variant literals of `pub index` declarations.
 ///
 /// Pub indexes may be overridden by importers, so their variant literals are not
