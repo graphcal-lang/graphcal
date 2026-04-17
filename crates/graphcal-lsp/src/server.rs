@@ -161,6 +161,45 @@ impl Backend {
         // refresh notification the client may show stale or missing hints.
         let _ = self.client.inlay_hint_refresh().await;
     }
+
+    /// Spawn a debounced analysis task for a `did_change` event.
+    ///
+    /// Waits [`DEBOUNCE_DELAY_MS`] and bails out if a newer change has
+    /// arrived (generation mismatch). Any `JoinError` from the blocking
+    /// analysis task is logged to the client rather than silently swallowed.
+    fn spawn_debounced_analysis(&self, uri: Url, text: String, generation: u64) {
+        let client = self.client.clone();
+        let documents = self.documents.clone();
+        let generations = self.change_generations.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
+
+            // Check if a newer change has superseded this one.
+            let current = *generations.read().await.get(&uri).unwrap_or(&0);
+            if current != generation {
+                return;
+            }
+
+            let uri_for_analysis = uri.clone();
+            let analysis =
+                match tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text))
+                    .await
+                {
+                    Ok(a) => a,
+                    Err(e) => {
+                        client
+                            .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
+                            .await;
+                        return;
+                    }
+                };
+            let diagnostics = analysis.diagnostics.clone();
+            documents.write().await.insert(uri.clone(), analysis);
+            client.publish_diagnostics(uri, diagnostics, None).await;
+            let _ = client.inlay_hint_refresh().await;
+        });
+    }
 }
 
 /// Build a `LoadedProject` from a URI and in-memory text.
@@ -736,34 +775,7 @@ impl LanguageServer for Backend {
             .and_modify(|v| *v += 1)
             .or_insert(1);
 
-        // Spawn a delayed analysis task. If another change arrives within the
-        // debounce window, its generation will be higher and this task will
-        // skip analysis.
-        let client = self.client.clone();
-        let documents = self.documents.clone();
-        let generations = self.change_generations.clone();
-        let text = change.text;
-
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
-
-            // Check if a newer change has superseded this one.
-            let current = *generations.read().await.get(&uri).unwrap_or(&0);
-            if current != generation {
-                return;
-            }
-
-            let uri_for_analysis = uri.clone();
-            let Ok(analysis) =
-                tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text)).await
-            else {
-                return;
-            };
-            let diagnostics = analysis.diagnostics.clone();
-            documents.write().await.insert(uri.clone(), analysis);
-            client.publish_diagnostics(uri, diagnostics, None).await;
-            let _ = client.inlay_hint_refresh().await;
-        });
+        self.spawn_debounced_analysis(uri, change.text, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
