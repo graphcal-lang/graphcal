@@ -233,7 +233,7 @@ pub(super) fn compile_single_file_in_project(
             })
             .ok_or_else(|| {
                 CompileError::Eval(GraphcalError::EvalError {
-                    message: format!("DAG `{dag_name}` not found in file `{include_canonical}`",),
+                    message: format!("DAG `{dag_name}` not found in file `{include_canonical}`"),
                     src: file_src.clone(),
                     span: include_decl.path.span().into(),
                 })

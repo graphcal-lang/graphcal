@@ -104,16 +104,12 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                 }
                 depth -= 1;
             }
-            Token::Comma => {
-                if depth == 0 {
-                    comma_count += 1;
-                }
+            Token::Comma if depth == 0 => {
+                comma_count += 1;
             }
-            Token::Semicolon => {
-                if depth == 0 {
-                    // Passed a statement boundary — not in a function call.
-                    return None;
-                }
+            Token::Semicolon if depth == 0 => {
+                // Passed a statement boundary — not in a function call.
+                return None;
             }
             _ => {}
         }
