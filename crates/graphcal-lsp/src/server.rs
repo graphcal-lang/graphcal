@@ -34,53 +34,53 @@ use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostic
 use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
-pub struct ImportedDefinition {
+pub(crate) struct ImportedDefinition {
     /// URI of the file containing the definition.
-    pub uri: Url,
+    pub(crate) uri: Url,
     /// Source text of the imported file (needed for span-to-range conversion).
     /// Shared via `Arc` to avoid cloning the full source per imported symbol.
-    pub source: Arc<String>,
+    pub(crate) source: Arc<String>,
     /// The definition info (name, category, spans, type description).
-    pub definition: DefinitionInfo,
+    pub(crate) definition: DefinitionInfo,
 }
 
 /// A loader-resolved import link for Document Links.
 ///
 /// Pairs the source-text span of the import path with the loader-resolved
 /// target URI, so `document_links` doesn't need to re-resolve paths.
-pub struct ResolvedImportLink {
+pub(crate) struct ResolvedImportLink {
     /// Span of the import path in the source text.
-    pub path_span: graphcal_compiler::syntax::span::Span,
+    pub(crate) path_span: graphcal_compiler::syntax::span::Span,
     /// Loader-resolved target URI.
-    pub target_uri: Url,
+    pub(crate) target_uri: Url,
 }
 
 /// Structured function signature for Signature Help.
-pub struct FnSignatureInfo {
+pub(crate) struct FnSignatureInfo {
     /// Full signature label, e.g. `"fn sqrt(x: D) -> D^(1/2)"`.
-    pub label: String,
+    pub(crate) label: String,
     /// Individual parameter labels, e.g. `["x: D"]`.
-    pub parameters: Vec<String>,
+    pub(crate) parameters: Vec<String>,
 }
 
 /// Cached analysis result for a document.
-pub struct AnalysisResult {
+pub(crate) struct AnalysisResult {
     /// The raw source text.
-    pub source: String,
+    pub(crate) source: String,
     /// The symbol table (built from AST, enriched from TIR if available).
-    pub symbol_table: SymbolTable,
+    pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
-    pub imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
     /// Diagnostics to publish.
-    pub diagnostics: Vec<Diagnostic>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
-    pub eval_values: HashMap<String, String>,
+    pub(crate) eval_values: HashMap<String, String>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
-    pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
+    pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
-    pub import_links: Vec<ResolvedImportLink>,
+    pub(crate) import_links: Vec<ResolvedImportLink>,
 }
 
 /// Debounce delay for `did_change` notifications (milliseconds).

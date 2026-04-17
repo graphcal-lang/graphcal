@@ -75,11 +75,6 @@ impl std::fmt::Display for SymbolKey {
 }
 
 impl SymbolKey {
-    /// Returns `true` if this is a `Field` key.
-    pub const fn is_field(&self) -> bool {
-        matches!(self, Self::Field(_))
-    }
-
     /// Returns `true` if this is a `Variant` whose parent matches the given name.
     pub fn is_variant_of(&self, parent_name: &str) -> bool {
         matches!(self, Self::Variant { parent, .. } if parent == parent_name)
@@ -89,15 +84,6 @@ impl SymbolKey {
     pub fn top_level_name(&self) -> Option<&str> {
         match self {
             Self::TopLevel(name) => Some(name),
-            _ => None,
-        }
-    }
-
-    /// Returns the member name: the bare name for `TopLevel`, or the member
-    /// name for `Qualified`.
-    pub fn member_name(&self) -> Option<&str> {
-        match self {
-            Self::TopLevel(name) | Self::Qualified { name, .. } => Some(name),
             _ => None,
         }
     }
@@ -1545,9 +1531,6 @@ mod tests {
 
     #[test]
     fn symbol_key_helpers() {
-        assert!(SymbolKey::Field("x".to_string()).is_field());
-        assert!(!SymbolKey::TopLevel("x".to_string()).is_field());
-
         let variant = SymbolKey::Variant {
             parent: "Phase".to_string(),
             variant: "Launch".to_string(),
@@ -1560,21 +1543,6 @@ mod tests {
             Some("x")
         );
         assert_eq!(SymbolKey::Field("x".to_string()).top_level_name(), None);
-
-        // member_name
-        assert_eq!(
-            SymbolKey::TopLevel("x".to_string()).member_name(),
-            Some("x")
-        );
-        assert_eq!(
-            SymbolKey::Qualified {
-                module: "params".to_string(),
-                name: "dry_mass".to_string()
-            }
-            .member_name(),
-            Some("dry_mass")
-        );
-        assert_eq!(SymbolKey::Field("x".to_string()).member_name(), None);
     }
 
     #[test]
