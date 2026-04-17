@@ -240,7 +240,7 @@ mod tests {
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
         assert_eq!(force.get_exponent(&length_id()), Rational::ONE);
-        assert_eq!(force.get_exponent(&time_id()), Rational::new(-2, 1));
+        assert_eq!(force.get_exponent(&time_id()), Rational::from_int(-2));
     }
 
     #[test]

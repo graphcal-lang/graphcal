@@ -30,23 +30,10 @@ impl fmt::Display for Rational {
 impl Rational {
     pub const ZERO: Self = Self { num: 0, den: 1 };
     pub const ONE: Self = Self { num: 1, den: 1 };
-
-    /// Create a new rational number, automatically reduced.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `den` is zero.
-    #[must_use]
-    #[expect(
-        clippy::panic,
-        reason = "panicking variant for known-safe literal denominators"
-    )]
-    pub fn new(num: i32, den: i32) -> Self {
-        match Self::try_new(num, den) {
-            Ok(r) => r,
-            Err(RationalError::ZeroDenominator) => panic!("denominator must not be zero"),
-        }
-    }
+    /// `1/2` — used for square-root exponents.
+    pub const HALF: Self = Self { num: 1, den: 2 };
+    /// `1/3` — used for cube-root exponents.
+    pub const THIRD: Self = Self { num: 1, den: 3 };
 
     /// Try to create a new rational number, automatically reduced.
     ///
@@ -497,6 +484,12 @@ mod tests {
 
     use super::*;
 
+    /// Test helper: build a `Rational` from integer literals, panicking on
+    /// zero denominator. Tests are the only place panicking is acceptable.
+    fn r(num: i32, den: i32) -> Rational {
+        Rational::try_new(num, den).expect("non-zero denominator")
+    }
+
     // Helper: well-known base dimension IDs matching prelude dimensions.
     fn length() -> BaseDimId {
         BaseDimId::Prelude("Length".to_string())
@@ -539,38 +532,38 @@ mod tests {
 
     #[test]
     fn rational_creation_and_reduction() {
-        assert_eq!(Rational::new(2, 4), Rational::new(1, 2));
-        assert_eq!(Rational::new(-3, 6), Rational::new(-1, 2));
-        assert_eq!(Rational::new(6, -4), Rational::new(-3, 2));
-        assert_eq!(Rational::new(0, 5), Rational::ZERO);
+        assert_eq!(r(2, 4), r(1, 2));
+        assert_eq!(r(-3, 6), r(-1, 2));
+        assert_eq!(r(6, -4), r(-3, 2));
+        assert_eq!(r(0, 5), Rational::ZERO);
     }
 
     #[test]
     fn rational_arithmetic() {
-        let half = Rational::new(1, 2);
-        let third = Rational::new(1, 3);
+        let half = r(1, 2);
+        let third = r(1, 3);
 
         // 1/2 + 1/3 = 5/6
         let sum = half + third;
-        assert_eq!(sum, Rational::new(5, 6));
+        assert_eq!(sum, r(5, 6));
 
         // 1/2 - 1/3 = 1/6
         let diff = half - third;
-        assert_eq!(diff, Rational::new(1, 6));
+        assert_eq!(diff, r(1, 6));
 
         // 1/2 * 1/3 = 1/6
         let prod = half * third;
-        assert_eq!(prod, Rational::new(1, 6));
+        assert_eq!(prod, r(1, 6));
 
         // -1/2
-        assert_eq!(-half, Rational::new(-1, 2));
+        assert_eq!(-half, r(-1, 2));
     }
 
     #[test]
     fn rational_from_int() {
-        assert_eq!(Rational::from_int(3), Rational::new(3, 1));
+        assert_eq!(Rational::from_int(3), r(3, 1));
         assert_eq!(Rational::from_int(0), Rational::ZERO);
-        assert_eq!(Rational::from_int(-2), Rational::new(-2, 1));
+        assert_eq!(Rational::from_int(-2), r(-2, 1));
     }
 
     #[test]
@@ -626,7 +619,7 @@ mod tests {
     fn dimension_sqrt() {
         // sqrt(Area) = sqrt(Length^2) = Length
         let area = Dimension::base(length()).pow_int(2);
-        let sqrt_area = area.pow(Rational::new(1, 2));
+        let sqrt_area = area.pow(Rational::HALF);
         assert_eq!(sqrt_area, Dimension::base(length()));
     }
 
@@ -746,7 +739,7 @@ mod tests {
         fn arb_rational() -> impl Strategy<Value = Rational> {
             (-50i32..=50, -50i32..=50)
                 .prop_filter("denominator must be non-zero", |&(_, d)| d != 0)
-                .prop_map(|(n, d)| Rational::new(n, d))
+                .prop_map(|(n, d)| Rational::try_new(n, d).expect("filtered d != 0"))
         }
 
         /// The 8 prelude dimension names for property testing.
@@ -780,7 +773,7 @@ mod tests {
             #[test]
             fn rational_always_reduced(n in -100i32..=100, d in -100i32..=100) {
                 prop_assume!(d != 0);
-                let r = Rational::new(n, d);
+                let r = Rational::try_new(n, d).expect("d != 0 by prop_assume");
                 // den is always positive
                 prop_assert!(r.den() > 0, "den must be positive, got {}", r.den());
                 // gcd(|num|, den) == 1 (reduced form)

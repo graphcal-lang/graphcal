@@ -272,7 +272,7 @@ pub(super) fn infer_binop(
                         reason = "checking exact 0.5 literal for square-root exponent"
                     )]
                     if *n == 0.5 {
-                        Ok(InferredType::Scalar(lhs_dim.pow(Rational::new(1, 2))))
+                        Ok(InferredType::Scalar(lhs_dim.pow(Rational::HALF)))
                     } else {
                         Err(GraphcalError::NonLiteralExponent {
                             src: src.clone(),

@@ -180,14 +180,14 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "sqrt",
         BuiltinFunction {
             eval: |a| a[0].sqrt(),
-            dim_sig: DimSignature::free_to_pow("x", Rational::new(1, 2)),
+            dim_sig: DimSignature::free_to_pow("x", Rational::HALF),
         },
     );
     m.insert(
         "cbrt",
         BuiltinFunction {
             eval: |a| a[0].cbrt(),
-            dim_sig: DimSignature::free_to_pow("x", Rational::new(1, 3)),
+            dim_sig: DimSignature::free_to_pow("x", Rational::THIRD),
         },
     );
     // Exponential and logarithmic functions (all dimensionless)
