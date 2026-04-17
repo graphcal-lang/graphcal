@@ -648,14 +648,7 @@ fn collect_imported_definitions(
                 for import_item in names {
                     let key = SymbolKey::TopLevel(import_item.name.name.clone());
                     if let Some(def) = imported_table.definitions.get(&key) {
-                        result.insert(
-                            key,
-                            ImportedDefinition {
-                                uri: imported_uri.clone(),
-                                source: source.clone(),
-                                definition: def.clone(),
-                            },
-                        );
+                        insert_imported_def(&mut result, key, imported_uri, source, def);
                     }
                 }
             }
@@ -678,20 +671,33 @@ fn collect_imported_definitions(
                         },
                         other => other.clone(),
                     };
-                    result.insert(
-                        qualified_key,
-                        ImportedDefinition {
-                            uri: imported_uri.clone(),
-                            source: source.clone(),
-                            definition: def.clone(),
-                        },
-                    );
+                    insert_imported_def(&mut result, qualified_key, imported_uri, source, def);
                 }
             }
         }
     }
 
     result
+}
+
+/// Record a symbol from an imported file as visible in the current file under
+/// `key`. Both `ImportKind` branches use this so the insertion semantics stay
+/// identical — only the key derivation differs between them.
+fn insert_imported_def(
+    result: &mut HashMap<SymbolKey, ImportedDefinition>,
+    key: SymbolKey,
+    uri: &Url,
+    source: &Arc<String>,
+    def: &DefinitionInfo,
+) {
+    result.insert(
+        key,
+        ImportedDefinition {
+            uri: uri.clone(),
+            source: Arc::clone(source),
+            definition: def.clone(),
+        },
+    );
 }
 
 #[tower_lsp::async_trait]
