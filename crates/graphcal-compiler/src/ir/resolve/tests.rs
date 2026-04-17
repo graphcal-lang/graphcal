@@ -445,12 +445,11 @@ fn resolve_private_in_public_index_in_type() {
         pub node costs: Dimensionless[Phase, Step] = { Phase::Alpha: { Step::Xray: 1.0, Step::Yankee: 2.0 }, Phase::Beta: { Step::Xray: 3.0, Step::Yankee: 4.0 } };
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    // May get PubIndexVariantLiteral or VariantLiteralInNonRebindable before PrivateInPublic.
+    // May get PubIndexVariantLiteral before PrivateInPublic.
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name == "Step")
-            || matches!(err, GraphcalError::PubIndexVariantLiteral { .. })
-            || matches!(err, GraphcalError::VariantLiteralInNonRebindable { .. }),
-        "expected PrivateInPublic or variant literal error, got: {err:?}"
+            || matches!(err, GraphcalError::PubIndexVariantLiteral { .. }),
+        "expected PrivateInPublic or PubIndexVariantLiteral error, got: {err:?}"
     );
 }
 

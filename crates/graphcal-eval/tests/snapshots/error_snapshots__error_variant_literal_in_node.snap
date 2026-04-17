@@ -2,12 +2,13 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-variant literal `Phase::Design` cannot be used in a node expression
+variant literal `Phase::Design` of `pub index` cannot be used in the defining file
     Diagnostic severity: error
-Begin snippet for variant_literal_in_node.gcl starting at line 7, column 1
+Begin snippet for variant_literal_in_node.gcl starting at line 3, column 1
 
-snippet line 7: };
-snippet line 8: node design_cost: Dimensionless = @cost[Phase::Design];
-    label at line 8, columns 35 to 54: variant literal not allowed here
-diagnostic help: extract it into a `param` default expression instead, which can be rebound by importers
-diagnostic code: graphcal::I008
+snippet line 3: param cost: Dimensionless[Phase] = {
+snippet line 4:     Phase::Design: 100.0,
+    label at line 4, columns 5 to 9: variant literal of pub index
+snippet line 5:     Phase::Build: 200.0,
+diagnostic help: pub indexes may be overridden by importers; use `param` declarations for variant-specific values instead
+diagnostic code: graphcal::V004

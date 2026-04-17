@@ -33,7 +33,6 @@ use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
 use scope::{
     check_no_assert_graph_refs, check_no_pub_index_variant_literals, check_no_runtime_graph_refs,
-    check_no_variant_literals,
 };
 
 /// Known attribute names in the language.
@@ -293,7 +292,7 @@ fn collect_local_declarations(
                     )?;
                     // Check that assert body doesn't reference other assert names via @
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
-                    check_no_variant_literals(body_expr, "assert", src)?;
+                    check_no_pub_index_variant_literals(body_expr, &pub_index_names, src)?;
                 }
                 let aname = a.name.value.to_string();
                 asserts.push(ResolvedAssertEntry {
@@ -316,7 +315,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
-                    check_no_variant_literals(&encoding.value, "plot", src)?;
+                    check_no_pub_index_variant_literals(&encoding.value, &pub_index_names, src)?;
                 }
                 for prop in &p.mark.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -330,7 +329,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    check_no_variant_literals(&prop.value, "plot", src)?;
+                    check_no_pub_index_variant_literals(&prop.value, &pub_index_names, src)?;
                 }
                 for prop in &p.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -344,7 +343,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    check_no_variant_literals(&prop.value, "plot", src)?;
+                    check_no_pub_index_variant_literals(&prop.value, &pub_index_names, src)?;
                 }
                 let pname = p.name.value.to_string();
                 plots.push(ResolvedPlotEntry {
@@ -367,7 +366,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    check_no_variant_literals(&field.value, "figure", src)?;
+                    check_no_pub_index_variant_literals(&field.value, &pub_index_names, src)?;
                 }
                 let fname = f.name.value.to_string();
                 figures.push(ResolvedFigureEntry {
@@ -390,7 +389,7 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    check_no_variant_literals(&field.value, "layer", src)?;
+                    check_no_pub_index_variant_literals(&field.value, &pub_index_names, src)?;
                 }
                 let lname = l.name.value.to_string();
                 layers.push(ResolvedLayerEntry {
@@ -427,7 +426,7 @@ fn collect_local_declarations(
             }
             DeclKind::ConstNode(c) => {
                 check_no_runtime_graph_refs(&c.value, &all_runtime_names, src)?;
-                check_no_variant_literals(&c.value, "const node", src)?;
+                check_no_pub_index_variant_literals(&c.value, &pub_index_names, src)?;
                 let deps = extract_const_refs(
                     &c.value,
                     &all_const_names,
@@ -446,7 +445,7 @@ fn collect_local_declarations(
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
-                check_no_variant_literals(&n.value, "node", src)?;
+                check_no_pub_index_variant_literals(&n.value, &pub_index_names, src)?;
                 let nname = n.name.value.to_string();
                 let (graph_refs, _const_refs) = extract_all_refs(
                     &n.value,
