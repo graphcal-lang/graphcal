@@ -80,7 +80,7 @@ $ graphcal eval rocket.gcl
 |------|---------|
 | `0` | Success, all assertions pass |
 | `1` | Assertion failure or evaluation error |
-| `2` | Compile error (parse or type check) |
+| `2` | Compile error (parse or type check), invalid `--set`/`--input` argument, or internal I/O error |
 
 **Examples:**
 
