@@ -102,7 +102,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .asserts
         .iter()
         .map(|entry| AssertBodyEntry {
-            name: DeclName::new(entry.name.to_string()),
+            name: DeclName::from(&entry.name),
             body: entry.body.clone(),
             span: entry.span,
         })
@@ -112,7 +112,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .plots
         .iter()
         .map(|entry| PlotBodyEntry {
-            name: DeclName::new(entry.name.to_string()),
+            name: DeclName::from(&entry.name),
             decl: entry.decl.clone(),
             is_pub: entry.is_pub,
         })
@@ -122,7 +122,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .figures
         .iter()
         .map(|entry| FigureBodyEntry {
-            name: DeclName::new(entry.name.to_string()),
+            name: DeclName::from(&entry.name),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -131,7 +131,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .layers
         .iter()
         .map(|entry| LayerBodyEntry {
-            name: DeclName::new(entry.name.to_string()),
+            name: DeclName::from(&entry.name),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -155,17 +155,12 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         assumes_map: tir
             .assumes_map
             .iter()
-            .map(|(k, v)| {
-                (
-                    DeclName::new(k.to_string()),
-                    v.iter().map(|s| DeclName::new(s.to_string())).collect(),
-                )
-            })
+            .map(|(k, v)| (DeclName::from(k), v.iter().map(DeclName::from).collect()))
             .collect(),
         expected_fail: tir
             .expected_fail
             .iter()
-            .map(|(k, v)| (DeclName::new(k.to_string()), v.clone()))
+            .map(|(k, v)| (DeclName::from(k), v.clone()))
             .collect(),
         domain_constraints,
     })
@@ -264,28 +259,26 @@ fn build_runtime_dag(
         Node(&'a graphcal_compiler::ir::lower::NodeEntry),
     }
 
+    impl DeclRef<'_> {
+        const fn name(&self) -> &crate::resolve::ScopedName {
+            match self {
+                Self::Param(e) => &e.name,
+                Self::Node(e) => &e.name,
+            }
+        }
+    }
+
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
     let mut expressions: HashMap<DeclName, Expr> = HashMap::new();
 
-    let mut all_decls: Vec<DeclRef<'_>> = Vec::new();
-    for entry in &tir.params {
-        all_decls.push(DeclRef::Param(entry));
-    }
-    for entry in &tir.nodes {
-        all_decls.push(DeclRef::Node(entry));
-    }
-    all_decls.sort_by(|a, b| {
-        let name_a = match a {
-            DeclRef::Param(e) => &e.name,
-            DeclRef::Node(e) => &e.name,
-        };
-        let name_b = match b {
-            DeclRef::Param(e) => &e.name,
-            DeclRef::Node(e) => &e.name,
-        };
-        name_a.cmp(name_b)
-    });
+    let mut all_decls: Vec<DeclRef<'_>> = tir
+        .params
+        .iter()
+        .map(DeclRef::Param)
+        .chain(tir.nodes.iter().map(DeclRef::Node))
+        .collect();
+    all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
     for decl in &all_decls {
         match decl {

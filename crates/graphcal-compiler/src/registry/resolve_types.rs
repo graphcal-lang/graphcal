@@ -351,6 +351,14 @@ impl std::fmt::Display for ScopedName {
     }
 }
 
+impl From<&ScopedName> for crate::syntax::names::DeclName {
+    /// Flatten a scoped name into a single `DeclName` using the `module::member`
+    /// display form for qualified names and the bare member for locals.
+    fn from(s: &ScopedName) -> Self {
+        Self::new(s.to_string())
+    }
+}
+
 /// Pre-evaluated value bindings imported from already-evaluated dependency files.
 ///
 /// Unlike `ImportedNames` which carries AST expressions, this carries
