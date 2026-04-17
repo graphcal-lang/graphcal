@@ -572,4 +572,4 @@ graphcal eval --root ./workspace project/main.gcl
 
 When `--root` is provided, automatic `graphcal.toml` discovery is skipped — the given directory is used directly. This is useful in CI/scripts or when placing a `graphcal.toml` file is inconvenient.
 
-The `--root` flag is available for both `eval` and `typecheck` subcommands.
+The `--root` flag is available for both `eval` and `check` subcommands.

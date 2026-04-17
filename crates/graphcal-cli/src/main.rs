@@ -56,7 +56,7 @@ enum Commands {
         check: bool,
     },
     /// Check .gcl files for type/dimension errors without evaluation
-    Typecheck {
+    Check {
         /// Files or directories to check (default: current directory)
         paths: Vec<PathBuf>,
         /// Project root directory (overrides automatic graphcal.toml detection)
@@ -145,7 +145,7 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Typecheck { paths, root } => {
+        Commands::Check { paths, root } => {
             run_check(&paths, root.as_deref());
         }
         Commands::Format { paths, check } => {

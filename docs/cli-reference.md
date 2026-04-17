@@ -23,7 +23,7 @@ graphcal [OPTIONS] <COMMAND>
 |---------|-------------|
 | [`eval`](#graphcal-eval) | Evaluate a `.gcl` file |
 | [`format`](#graphcal-format) | Format `.gcl` files |
-| [`typecheck`](#graphcal-typecheck) | Check `.gcl` files for errors without evaluation |
+| [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
 
 ---
@@ -80,7 +80,7 @@ $ graphcal eval rocket.gcl
 |------|---------|
 | `0` | Success, all assertions pass |
 | `1` | Assertion failure or evaluation error |
-| `2` | Compile error (parse or typecheck) |
+| `2` | Compile error (parse or type check) |
 
 **Examples:**
 
@@ -269,12 +269,12 @@ graphcal format --check
 
 ---
 
-## `graphcal typecheck`
+## `graphcal check`
 
 Check `.gcl` files for type/dimension errors without evaluation. Performs parsing and type/dimension checking.
 
 ```bash
-graphcal typecheck [PATHS]...
+graphcal check [PATHS]...
 ```
 
 **Arguments:**
@@ -287,13 +287,13 @@ graphcal typecheck [PATHS]...
 
 ```bash
 # Check all .gcl files in the current directory
-graphcal typecheck
+graphcal check
 
 # Check a specific file
-graphcal typecheck rocket.gcl
+graphcal check rocket.gcl
 
 # Check a directory
-graphcal typecheck my_project/
+graphcal check my_project/
 ```
 
 **Exit codes:**
