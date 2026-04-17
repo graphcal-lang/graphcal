@@ -287,7 +287,107 @@ pub fn check_dimensions_tir(
         )?;
     }
 
+    // Validate domain constraint bound expression dimensions
+    check_domain_constraint_dimensions(tir, &declared_types, &empty_locals, builtin_fns, src)?;
+
     Ok(())
+}
+
+/// Check that domain constraint bound expressions have the correct dimension.
+///
+/// For each param/node with `(min: ..., max: ...)` constraints whose target type
+/// is `Scalar(d)` or `Dimensionless`, infers the type of each bound expression
+/// using the regular type checker and verifies it matches the constrained type's
+/// dimension. Bounds that are `Int` are accepted only for `Dimensionless` targets.
+///
+/// Targets other than `Scalar`/`Dimensionless` (e.g., `Int`, `Bool`) are skipped
+/// here and handled by `validate_constraint_target` in `exec_plan` (which raises
+/// `InvalidDomainTarget`).
+fn check_domain_constraint_dimensions(
+    tir: &crate::tir::typed::TIR,
+    declared_types: &HashMap<String, DeclaredType>,
+    empty_locals: &HashMap<String, InferredType>,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let decl_iter = tir
+        .params
+        .iter()
+        .map(|e| (&e.name, &e.type_ann))
+        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann)));
+
+    for (name, type_ann) in decl_iter {
+        let bounds = extract_domain_bounds(type_ann);
+        if bounds.is_empty() {
+            continue;
+        }
+
+        let resolved = tir.resolved_decl_types.get(name);
+        let base_resolved = resolved.map(strip_indexed);
+        let expected = match base_resolved {
+            Some(crate::tir::typed::ResolvedTypeExpr::Scalar(dim)) => dim.clone(),
+            Some(crate::tir::typed::ResolvedTypeExpr::Dimensionless) => Dimension::dimensionless(),
+            _ => continue,
+        };
+
+        for bound in bounds {
+            let inferred = infer_type(
+                &bound.value,
+                declared_types,
+                empty_locals,
+                &tir.registry,
+                builtin_fns,
+                src,
+            )?;
+            let ok = match &inferred {
+                InferredType::Scalar(d) => *d == expected,
+                InferredType::Int => expected.is_dimensionless(),
+                _ => false,
+            };
+            if !ok {
+                let bound_dim_str = match &inferred {
+                    InferredType::Scalar(d) => tir.registry.dimensions.format_dimension(d),
+                    other => format_inferred_type(other, &tir.registry),
+                };
+                return Err(GraphcalError::DomainDimensionMismatch {
+                    name: name.to_string(),
+                    type_dim: tir.registry.dimensions.format_dimension(&expected),
+                    bound_name: bound.kind.to_string(),
+                    bound_dim: bound_dim_str,
+                    src: src.clone(),
+                    span: bound.span.into(),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
+///
+/// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
+/// not on the outer `Indexed` wrapper.
+fn extract_domain_bounds(
+    type_ann: &crate::syntax::ast::TypeExpr,
+) -> &[crate::syntax::ast::DomainBound] {
+    if !type_ann.constraints.is_empty() {
+        return &type_ann.constraints;
+    }
+    if let crate::syntax::ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
+        return &base.constraints;
+    }
+    &[]
+}
+
+/// Strip `Indexed` wrappers to get the base resolved type.
+fn strip_indexed(
+    resolved: &crate::tir::typed::ResolvedTypeExpr,
+) -> &crate::tir::typed::ResolvedTypeExpr {
+    match resolved {
+        crate::tir::typed::ResolvedTypeExpr::Indexed { base, .. } => strip_indexed(base),
+        other => other,
+    }
 }
 
 /// Check that an override expression has the correct dimension for the given param.

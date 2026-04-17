@@ -877,3 +877,106 @@ fn fin_arithmetic_with_int() {
 node v: Dimensionless[3] = for i: range(3) { to_float(i) };";
     check(source).unwrap();
 }
+
+// -----------------------------------------------------------------------
+// Domain constraint bound dimensions (#438)
+// -----------------------------------------------------------------------
+
+#[test]
+fn domain_bound_unit_literal_matches() {
+    let source = "param m: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;";
+    check(source).unwrap();
+}
+
+#[test]
+fn domain_bound_dimensionless_accepts_int() {
+    // Bare Int literal is accepted as a Dimensionless bound (existing behavior).
+    let source = "param r: Dimensionless(min: 0, max: 1) = 0.5;";
+    check(source).unwrap();
+}
+
+#[test]
+fn domain_bound_bare_number_on_dimensioned_rejected() {
+    // Bare numbers infer as Dimensionless, mismatching Mass.
+    // This is the implicit-unit-attachment case from #440.
+    let source = "param m: Mass(min: 1.0, max: 100.0 kg) = 50.0 kg;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn domain_bound_bare_int_on_dimensioned_rejected() {
+    // Integer literal on a dimensioned scalar should also be rejected.
+    let source = "param m: Mass(min: 1, max: 100.0 kg) = 50.0 kg;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn domain_bound_division_creates_wrong_dimension() {
+    // 1.0 m / 1.0 s is Velocity, but the constrained type is Length.
+    let source = "param d: Length(min: 1.0 m / 1.0 s) = 5.0 m;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn domain_bound_division_inverse_dimension() {
+    // 1.0 / 1.0 kg is 1/Mass, not Mass.
+    let source = "param x: Mass(min: 1.0 / 1.0 kg) = 5.0 kg;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn domain_bound_addition_unit_mismatch_in_bound() {
+    // 5.0 m + 3.0 s is itself a dimension mismatch inside the bound expression.
+    let source = "param t: Time(min: 5.0 m + 3.0 s) = 10.0 s;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn domain_bound_convert_preserves_dimension() {
+    // Conversion between units of the same dimension is fine.
+    let source = "param m: Mass(min: 1.0 kg -> g) = 5.0 kg;";
+    check(source).unwrap();
+}
+
+#[test]
+fn domain_bound_multiplication_creates_correct_dimension() {
+    // 10.0 kg * 9.8 m / s^2 is Force; Force(min: ...) accepts it.
+    let source = "param f: Force(min: 10.0 kg * 9.8 m / s^2) = 100.0 N;";
+    check(source).unwrap();
+}
+
+#[test]
+fn domain_bound_indexed_dimension_checked() {
+    // Constraints on the base of an indexed type are also checked.
+    let source = "\
+index Maneuver = { Departure, Correction };
+param dv: Velocity(min: 1.0 m)[Maneuver] = {
+Maneuver::Departure: 1.0 m / s,
+Maneuver::Correction: 0.5 m / s,
+};";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
