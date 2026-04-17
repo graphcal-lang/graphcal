@@ -349,12 +349,10 @@ fn build_runtime_dag(
 
 /// Resolve domain constraints from type annotations on params and nodes.
 ///
-/// Evaluates each constraint bound expression using const values and builtins,
-/// validates the dimension matches the declared type, and checks min <= max.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear iteration over domain bounds with validation"
-)]
+/// Evaluates each constraint bound expression using const values and builtins
+/// to obtain SI min/max scalars, validates that the target type accepts
+/// constraints, and checks min <= max. Bound dimensions are validated earlier
+/// in `dim_check::check_dimensions_tir`.
 fn resolve_domain_constraints(
     tir: &TIR,
     const_values: &HashMap<DeclName, RuntimeValue>,
@@ -394,18 +392,10 @@ fn resolve_domain_constraints(
         }
 
         // Validate that the base type supports constraints.
+        // (Bound dimensions are validated in `dim_check::check_dimensions_tir`.)
         let resolved = tir.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
         validate_constraint_target(&name.to_string(), base_resolved, decl_span, src)?;
-
-        // Get the expected dimension for bound validation.
-        let expected_dim = base_resolved.and_then(|r| match r {
-            crate::tir::ResolvedTypeExpr::Scalar(dim) => Some(dim.clone()),
-            crate::tir::ResolvedTypeExpr::Dimensionless => {
-                Some(graphcal_compiler::syntax::dimension::Dimension::dimensionless())
-            }
-            _ => None,
-        });
 
         let mut min_val: Option<f64> = None;
         let mut max_val: Option<f64> = None;
@@ -435,24 +425,6 @@ fn resolve_domain_constraints(
                     });
                 }
             };
-
-            // Validate dimension of the bound against the type's dimension.
-            if let (Some(expected), RuntimeValue::Scalar(_)) = (&expected_dim, &rv) {
-                // Infer the dimension of the bound expression from its unit annotation.
-                let bound_dim = infer_bound_dimension(&bound.value, &tir.registry);
-                if let Some(bd) = &bound_dim
-                    && bd != expected
-                {
-                    return Err(GraphcalError::DomainDimensionMismatch {
-                        name: name.to_string(),
-                        type_dim: tir.registry.dimensions.format_dimension(expected),
-                        bound_name: bound.kind.to_string(),
-                        bound_dim: tir.registry.dimensions.format_dimension(bd),
-                        src: src.clone(),
-                        span: bound.span.into(),
-                    });
-                }
-            }
 
             // Format display text from the expression and pre-evaluated value.
             let display_text = format_bound_display(&bound.value, si_value);
@@ -570,26 +542,6 @@ fn validate_constraint_target(
             // Already stripped, shouldn't reach here
             Ok(())
         }
-    }
-}
-
-/// Infer the dimension of a bound expression from its unit annotation.
-///
-/// Only handles simple cases: unit literals and negated unit literals.
-/// For bare numbers (no unit), returns `None` (dimensionless is assumed).
-fn infer_bound_dimension(
-    expr: &graphcal_compiler::syntax::ast::Expr,
-    registry: &crate::registry::Registry,
-) -> Option<graphcal_compiler::syntax::dimension::Dimension> {
-    use graphcal_compiler::syntax::ast::ExprKind;
-    match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => registry.units.resolve_unit_dimension(unit),
-        ExprKind::UnaryOp { operand, .. } => infer_bound_dimension(operand, registry),
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            // Try lhs first, fall back to rhs
-            infer_bound_dimension(lhs, registry).or_else(|| infer_bound_dimension(rhs, registry))
-        }
-        _ => None, // Number, Integer, and other expressions are dimensionless
     }
 }
 
