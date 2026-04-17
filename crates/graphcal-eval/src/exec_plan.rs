@@ -266,11 +266,21 @@ fn build_runtime_dag(
                 Self::Node(e) => &e.name,
             }
         }
+
+        const fn span(&self) -> Span {
+            match self {
+                Self::Param(e) => e.span,
+                Self::Node(e) => e.span,
+            }
+        }
     }
 
     let mut graph = DiGraph::<String, ()>::new();
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
     let mut expressions: HashMap<DeclName, Expr> = HashMap::new();
+    // Lookup used to recover source spans for cycle-error reporting without
+    // re-iterating params/nodes on the error path.
+    let mut span_by_name: HashMap<String, Span> = HashMap::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = tir
         .params
@@ -281,28 +291,24 @@ fn build_runtime_dag(
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
     for decl in &all_decls {
+        let name_str = decl.name().to_string();
+        let idx = graph.add_node(name_str.clone());
+        index_map.insert(name_str.clone(), idx);
+        span_by_name.insert(name_str.clone(), decl.span());
         match decl {
-            DeclRef::Param(entry) => {
-                let name_str = entry.name.to_string();
-                let idx = graph.add_node(name_str.clone());
-                index_map.insert(name_str.clone(), idx);
-                match &entry.default_expr {
-                    Some(expr) => {
-                        expressions.insert(DeclName::new(name_str), expr.clone());
-                    }
-                    None => {
-                        return Err(GraphcalError::RequiredParamNotProvided {
-                            name: name_str,
-                            src: src.clone(),
-                            span: entry.span.into(),
-                        });
-                    }
+            DeclRef::Param(entry) => match &entry.default_expr {
+                Some(expr) => {
+                    expressions.insert(DeclName::new(name_str), expr.clone());
                 }
-            }
+                None => {
+                    return Err(GraphcalError::RequiredParamNotProvided {
+                        name: name_str,
+                        src: src.clone(),
+                        span: entry.span.into(),
+                    });
+                }
+            },
             DeclRef::Node(entry) => {
-                let name_str = entry.name.to_string();
-                let idx = graph.add_node(name_str.clone());
-                index_map.insert(name_str.clone(), idx);
                 expressions.insert(DeclName::new(name_str), entry.expr.clone());
             }
         }
@@ -322,13 +328,10 @@ fn build_runtime_dag(
 
     let topo_indices = toposort(&graph, None).map_err(|cycle| {
         let cycle_node = &graph[cycle.node_id()];
-        let span = tir
-            .nodes
-            .iter()
-            .map(|e| (e.name.to_string(), e.span))
-            .chain(tir.params.iter().map(|e| (e.name.to_string(), e.span)))
-            .find(|(n, _)| n == cycle_node)
-            .map_or_else(|| Span::new(0, 0), |(_, s)| s);
+        let span = span_by_name
+            .get(cycle_node)
+            .copied()
+            .unwrap_or_else(|| Span::new(0, 0));
         GraphcalError::CyclicDependency {
             name: cycle_node.clone().into(),
             src: src.clone(),
@@ -351,10 +354,6 @@ fn build_runtime_dag(
 #[expect(
     clippy::too_many_lines,
     reason = "linear iteration over domain bounds with validation"
-)]
-#[expect(
-    clippy::redundant_clone,
-    reason = "name_str is cloned in early-return error paths but consumed later"
 )]
 fn resolve_domain_constraints(
     tir: &TIR,
@@ -394,12 +393,10 @@ fn resolve_domain_constraints(
             continue;
         }
 
-        let name_str = name.to_string();
-
         // Validate that the base type supports constraints.
         let resolved = tir.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
-        validate_constraint_target(&name_str, base_resolved, decl_span, src)?;
+        validate_constraint_target(&name.to_string(), base_resolved, decl_span, src)?;
 
         // Get the expected dimension for bound validation.
         let expected_dim = base_resolved.and_then(|r| match r {
@@ -447,7 +444,7 @@ fn resolve_domain_constraints(
                     && bd != expected
                 {
                     return Err(GraphcalError::DomainDimensionMismatch {
-                        name: name_str.clone(),
+                        name: name.to_string(),
                         type_dim: tir.registry.dimensions.format_dimension(expected),
                         bound_name: bound.kind.to_string(),
                         bound_dim: tir.registry.dimensions.format_dimension(bd),
@@ -479,7 +476,7 @@ fn resolve_domain_constraints(
             && min > max
         {
             return Err(GraphcalError::DomainMinExceedsMax {
-                name: name_str.clone(),
+                name: name.to_string(),
                 min: min_display.unwrap_or_else(|| format!("{min}")),
                 max: max_display.unwrap_or_else(|| format!("{max}")),
                 src: src.clone(),
@@ -488,7 +485,7 @@ fn resolve_domain_constraints(
         }
 
         constraints.insert(
-            DeclName::new(name_str),
+            DeclName::from(name),
             ResolvedDomainConstraint {
                 min: min_val,
                 max: max_val,
