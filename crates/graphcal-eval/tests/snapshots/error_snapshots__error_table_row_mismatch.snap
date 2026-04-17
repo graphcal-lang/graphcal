@@ -6,7 +6,7 @@ table row has 2 value(s), but the header has 3 column(s)
     Diagnostic severity: error
 Begin snippet for table_row_mismatch.gcl starting at line 7, column 1
 
-snippet line 7:     Departure, Correction, Insertion;
+snippet line 7:     : Departure, Correction, Insertion;
 snippet line 8:     Launch: 5000.0 kg, 0.0 kg;
     label at line 8, columns 5 to 30: this row has 2 value(s)
 snippet line 9: };

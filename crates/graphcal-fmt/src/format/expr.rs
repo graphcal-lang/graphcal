@@ -1,8 +1,7 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, MapEntry, MatchArm,
-    MatchPattern, PatternBinding, TupleMatchArm, TypeExpr, UnaryOp,
+    MatchPattern, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
 };
-use graphcal_compiler::syntax::names::{IndexName, Spanned};
 use pretty::RcDoc;
 
 use super::{
@@ -375,7 +374,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
 /// Handles 1D, 2D, and 3D+ tables with column-aligned output.
 pub fn format_table_literal(
     fmt: &mut Formatter<'_>,
-    indexes: &[Spanned<IndexName>],
+    indexes: &[TableIndexSpec],
     entries: &[MapEntry],
 ) -> RcDoc<'static> {
     let ndim = indexes.len();
@@ -383,12 +382,15 @@ pub fn format_table_literal(
     // Build the `table[Index1, Index2]` header
     let idx_names: Vec<String> = indexes
         .iter()
-        .map(|i| i.value.as_str().to_string())
+        .map(|i| match i {
+            TableIndexSpec::Named(s) => s.value.as_str().to_string(),
+            TableIndexSpec::NatRange(n, _) => n.to_string(),
+        })
         .collect();
     let header = format!("table[{}]", idx_names.join(", "));
 
     if ndim == 1 {
-        format_table_1d(fmt, &header, entries)
+        format_table_1d(fmt, &header, &indexes[0], entries)
     } else if ndim == 2 {
         format_table_2d(fmt, &header, indexes, entries)
     } else {
@@ -396,14 +398,26 @@ pub fn format_table_literal(
     }
 }
 
-/// Format a 1D table: `table[Maneuver] { Label: expr; ... }`
-fn format_table_1d(fmt: &mut Formatter<'_>, header: &str, entries: &[MapEntry]) -> RcDoc<'static> {
-    // Compute max label width for alignment
-    let max_label_width = entries
-        .iter()
-        .map(|e| e.keys[0].variant.value.as_str().len())
-        .max()
-        .unwrap_or(0);
+/// Format a 1D table: `table[Maneuver] { Label: expr; ... }` or
+/// `table[3] { expr; ... }` for Nat range indexes.
+fn format_table_1d(
+    fmt: &mut Formatter<'_>,
+    header: &str,
+    index: &TableIndexSpec,
+    entries: &[MapEntry],
+) -> RcDoc<'static> {
+    let nat_range = index.is_nat_range();
+
+    // Compute max label width for alignment (unused for NatRange)
+    let max_label_width = if nat_range {
+        0
+    } else {
+        entries
+            .iter()
+            .map(|e| e.keys[0].variant.value.as_str().len())
+            .max()
+            .unwrap_or(0)
+    };
 
     // Render each cell value to a string for width computation
     let rendered_values: Vec<String> = entries
@@ -424,15 +438,19 @@ fn format_table_1d(fmt: &mut Formatter<'_>, header: &str, entries: &[MapEntry]) 
         // key spans may point to the index declaration, not the table row)
         let leading = fmt.drain_comments_before(e.value.span.offset());
 
-        let label = e.keys[0].variant.value.as_str();
-        let padding = max_label_width - label.len();
         let value_padding = max_value_width - rendered.len();
-        let row_text = format!(
-            "{}:{} {};",
-            label,
-            " ".repeat(padding + 1 + value_padding),
-            rendered
-        );
+        let row_text = if nat_range {
+            format!("{}{};", " ".repeat(value_padding), rendered)
+        } else {
+            let label = e.keys[0].variant.value.as_str();
+            let padding = max_label_width - label.len();
+            format!(
+                "{}:{} {};",
+                label,
+                " ".repeat(padding + 1 + value_padding),
+                rendered
+            )
+        };
 
         // Drain trailing comment on the same line after this entry's value
         let value_end = e.value.span.offset() + e.value.span.len();
@@ -457,7 +475,7 @@ fn format_table_1d(fmt: &mut Formatter<'_>, header: &str, entries: &[MapEntry]) 
 fn format_table_2d(
     fmt: &mut Formatter<'_>,
     header: &str,
-    indexes: &[Spanned<IndexName>],
+    indexes: &[TableIndexSpec],
     entries: &[MapEntry],
 ) -> RcDoc<'static> {
     let body = format_table_2d_body(fmt, indexes, entries);
@@ -472,12 +490,15 @@ fn format_table_2d(
 /// Shared between 2D tables and 3D+ slice sections.
 fn format_table_2d_body(
     fmt: &mut Formatter<'_>,
-    indexes: &[Spanned<IndexName>],
+    indexes: &[TableIndexSpec],
     entries: &[MapEntry],
 ) -> RcDoc<'static> {
     let ndim = indexes.len();
     // Row index is second-to-last, column index is last
     let col_idx = ndim - 1;
+    let row_idx = ndim - 2;
+    let row_is_nat = indexes[row_idx].is_nat_range();
+    let col_is_nat = indexes[col_idx].is_nat_range();
 
     // Extract unique column labels (from the last key, preserving order)
     let mut col_labels: Vec<String> = Vec::new();
@@ -490,7 +511,6 @@ fn format_table_2d_body(
     let num_cols = col_labels.len();
 
     // Extract unique row labels (from the second-to-last key, preserving order)
-    let row_idx = ndim - 2;
     let mut row_labels: Vec<String> = Vec::new();
     for e in entries {
         let row_label = e.keys[row_idx].variant.value.as_str().to_string();
@@ -518,37 +538,50 @@ fn format_table_2d_body(
     }
 
     // Compute column widths: max of (column label width, max cell width in that column)
+    // When the column axis is a NatRange, no header row is emitted, so column labels
+    // do not contribute to width.
     let col_widths: Vec<usize> = (0..num_cols)
         .map(|ci| {
-            let label_width = col_labels[ci].len();
+            let label_width = if col_is_nat { 0 } else { col_labels[ci].len() };
             let max_cell = grid.iter().map(|row| row[ci].len()).max().unwrap_or(0);
             label_width.max(max_cell)
         })
         .collect();
 
-    // Compute max row label width
-    let max_row_label_width = row_labels
-        .iter()
-        .map(std::string::String::len)
-        .max()
-        .unwrap_or(0);
+    // Compute max row label width (0 when row axis is NatRange — no labels emitted)
+    let max_row_label_width = if row_is_nat {
+        0
+    } else {
+        row_labels
+            .iter()
+            .map(std::string::String::len)
+            .max()
+            .unwrap_or(0)
+    };
 
-    // Build header row: right-aligned column labels, indented to account for row label column
-    let row_label_prefix_width = max_row_label_width + 2; // "Label: " minus the space that is part of the value
-    let header_cells: Vec<String> = col_labels
-        .iter()
-        .enumerate()
-        .map(|(ci, label)| format!("{:>width$}", label, width = col_widths[ci]))
-        .collect();
-    let header_line = format!(
-        "{}{};",
-        " ".repeat(row_label_prefix_width),
-        header_cells.join(", ")
-    );
-
-    // Build data rows
+    // Build the header row only when the column axis is named.
+    // Header format: `: Col1, Col2, ...;` aligned to the row-label column.
     let mut all_rows: Vec<RcDoc<'static>> = Vec::new();
-    all_rows.push(RcDoc::text(header_line));
+    if !col_is_nat {
+        let header_cells: Vec<String> = col_labels
+            .iter()
+            .enumerate()
+            .map(|(ci, label)| format!("{:>width$}", label, width = col_widths[ci]))
+            .collect();
+        let header_line = if row_is_nat {
+            // No row labels — just `: Col1, Col2, ...;` at the row start.
+            format!(": {};", header_cells.join(", "))
+        } else {
+            // Pad so `:` lines up with the data-row colons.
+            let row_label_prefix_width = max_row_label_width;
+            format!(
+                "{}: {};",
+                " ".repeat(row_label_prefix_width),
+                header_cells.join(", ")
+            )
+        };
+        all_rows.push(RcDoc::text(header_line));
+    }
 
     for (ri, row_label) in row_labels.iter().enumerate() {
         // Drain leading comments before this row (use first entry's value span)
@@ -557,16 +590,20 @@ fn format_table_2d_body(
             fmt.drain_comments_before(entries[ei].value.span.offset())
         });
 
-        let label_padding = max_row_label_width - row_label.len();
         let cells: Vec<String> = (0..num_cols)
             .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
             .collect();
-        let row_line = format!(
-            "{}:{} {};",
-            row_label,
-            " ".repeat(label_padding),
-            cells.join(", ")
-        );
+        let row_line = if row_is_nat {
+            format!("{};", cells.join(", "))
+        } else {
+            let label_padding = max_row_label_width - row_label.len();
+            format!(
+                "{}:{} {};",
+                row_label,
+                " ".repeat(label_padding),
+                cells.join(", ")
+            )
+        };
 
         // Drain trailing comment from last entry in this row
         let last_entry_idx = entry_indices[ri].iter().rev().find_map(|idx| *idx);
@@ -586,22 +623,25 @@ fn format_table_2d_body(
 fn format_table_sliced(
     fmt: &mut Formatter<'_>,
     header: &str,
-    indexes: &[Spanned<IndexName>],
+    indexes: &[TableIndexSpec],
     entries: &[MapEntry],
 ) -> RcDoc<'static> {
     let ndim = indexes.len();
     let slice_dims = ndim - 2;
 
-    // Group entries by their slice keys (first N-2 keys)
+    // Group entries by their slice keys (first N-2 keys).
+    // Named axes render as `Index::Variant`; NatRange axes render as `#N`
+    // (the variant name is already the synthetic `#N` form).
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         let slice_key: Vec<String> = (0..slice_dims)
-            .map(|i| {
-                format!(
+            .map(|i| match &indexes[i] {
+                TableIndexSpec::Named(_) => format!(
                     "{}::{}",
                     e.keys[i].index.value.as_str(),
                     e.keys[i].variant.value.as_str()
-                )
+                ),
+                TableIndexSpec::NatRange(_, _) => e.keys[i].variant.value.as_str().to_string(),
             })
             .collect();
 

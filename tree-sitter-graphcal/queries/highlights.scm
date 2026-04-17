@@ -333,8 +333,5 @@
 ; Column headers in table header row: highlighted as index variants
 (table_header_row column: (identifier) @constant)
 
-; Row labels in 2D table data rows: highlighted as index variants
+; Row labels in table data rows: highlighted as index variants
 (table_data_row row_label: (identifier) @constant)
-
-; Row labels in 1D table data rows: highlighted as index variants
-(table_data_row_1d row_label: (identifier) @constant)

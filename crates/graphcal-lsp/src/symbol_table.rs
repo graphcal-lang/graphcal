@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use graphcal_compiler::syntax::ast::{
     AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
     FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
-    PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
+    PatternBinding, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl,
+    UnitDecl, UnitExpr,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -823,10 +824,12 @@ fn collect_expr_refs(
             // For TableLiteral, also add references for the index names in table[...].
             if let ExprKind::TableLiteral { indexes, .. } = &expr.kind {
                 for idx in indexes {
-                    table.references.push(ReferenceInfo {
-                        span: idx.span,
-                        target: SymbolKey::TopLevel(idx.value.to_string()),
-                    });
+                    if let TableIndexSpec::Named(spanned) = idx {
+                        table.references.push(ReferenceInfo {
+                            span: spanned.span,
+                            target: SymbolKey::TopLevel(spanned.value.to_string()),
+                        });
+                    }
                 }
             }
             for entry in entries {

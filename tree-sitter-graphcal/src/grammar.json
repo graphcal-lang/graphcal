@@ -4727,8 +4727,17 @@
           "type": "FIELD",
           "name": "index",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "nat_literal"
+              }
+            ]
           }
         },
         {
@@ -4744,8 +4753,17 @@
                 "type": "FIELD",
                 "name": "index",
                 "content": {
-                  "type": "SYMBOL",
-                  "name": "identifier"
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "identifier"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "nat_literal"
+                    }
+                  ]
                 }
               }
             ]
@@ -4782,13 +4800,6 @@
         {
           "type": "SYMBOL",
           "name": "table_single"
-        },
-        {
-          "type": "REPEAT1",
-          "content": {
-            "type": "SYMBOL",
-            "name": "table_data_row_1d"
-          }
         }
       ]
     },
@@ -4801,7 +4812,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "qualified_variant"
+          "name": "table_slice_label"
         },
         {
           "type": "REPEAT",
@@ -4814,7 +4825,7 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "qualified_variant"
+                "name": "table_slice_label"
               }
             ]
           }
@@ -4829,12 +4840,42 @@
         }
       ]
     },
+    "table_slice_label": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "qualified_variant"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "#"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "nat_literal"
+            }
+          ]
+        }
+      ]
+    },
     "table_single": {
       "type": "SEQ",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "table_header_row"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "table_header_row"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "REPEAT1",
@@ -4848,6 +4889,10 @@
     "table_header_row": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "STRING",
+          "value": ":"
+        },
         {
           "type": "FIELD",
           "name": "column",
@@ -4886,16 +4931,29 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "FIELD",
-          "name": "row_label",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ":"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "row_label",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "identifier"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ":"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "FIELD",
@@ -4923,35 +4981,6 @@
                 }
               }
             ]
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ";"
-        }
-      ]
-    },
-    "table_data_row_1d": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "FIELD",
-          "name": "row_label",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ":"
-        },
-        {
-          "type": "FIELD",
-          "name": "value",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_expr"
           }
         },
         {

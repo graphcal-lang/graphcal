@@ -931,12 +931,13 @@ module.exports = grammar({
     ),
 
     // Table expression: table[Index1, Index2] { ... }
-    // Syntax sugar for map literals with spreadsheet-like layout
+    // Syntax sugar for map literals with spreadsheet-like layout.
+    // Index specs are named identifiers or integer literals (Nat range).
     table_expr: $ => seq(
       "table",
       "[",
-      field("index", $.identifier),
-      repeat(seq(",", field("index", $.identifier))),
+      field("index", choice($.identifier, $.nat_literal)),
+      repeat(seq(",", field("index", choice($.identifier, $.nat_literal)))),
       "]",
       "{",
       $.table_body,
@@ -946,43 +947,45 @@ module.exports = grammar({
     table_body: $ => choice(
       // 3D+: slice sections
       repeat1($.table_slice_section),
-      // 2D: header + data rows
+      // 1D or 2D: optional header + data rows
       $.table_single,
-      // 1D: data rows only
-      repeat1($.table_data_row_1d),
     ),
 
     table_slice_section: $ => seq(
       "[",
-      $.qualified_variant,
-      repeat(seq(",", $.qualified_variant)),
+      $.table_slice_label,
+      repeat(seq(",", $.table_slice_label)),
       "]",
       $.table_single,
     ),
 
+    // Slice labels: `Index::Variant` (named axis) or `#N` (Nat range axis).
+    table_slice_label: $ => choice(
+      $.qualified_variant,
+      seq("#", $.nat_literal),
+    ),
+
     table_single: $ => seq(
-      $.table_header_row,
+      optional($.table_header_row),
       repeat1($.table_data_row),
     ),
 
+    // Header row now requires a leading `:` prefix.
+    // Omitted when the column axis is a Nat range.
     table_header_row: $ => seq(
+      ":",
       field("column", $.identifier),
       repeat(seq(",", field("column", $.identifier))),
       ";",
     ),
 
+    // Data row: `Label: val, val, ...;` for named row axes, or
+    // `val, val, ...;` for Nat range row axes. A row with a single
+    // value and no label also covers the 1D case.
     table_data_row: $ => seq(
-      field("row_label", $.identifier),
-      ":",
+      optional(seq(field("row_label", $.identifier), ":")),
       field("value", $._expr),
       repeat(seq(",", field("value", $._expr))),
-      ";",
-    ),
-
-    table_data_row_1d: $ => seq(
-      field("row_label", $.identifier),
-      ":",
-      field("value", $._expr),
       ";",
     ),
 
