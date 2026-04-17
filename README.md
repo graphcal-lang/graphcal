@@ -209,18 +209,6 @@ param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> {
 node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
 ```
 
-Types can derive component-wise arithmetic:
-
-```gcl
-#[derive(Add, Sub, Neg)]
-type DeriveVec3<D: Dim, F: Type> {
-    x: D, y: D, z: D,
-}
-
-node dv_sum: DeriveVec3<Velocity, Eci> = @dv_a + @dv_b;   // component-wise
-node dv_neg: DeriveVec3<Velocity, Eci> = -@dv_a;           // component-wise
-```
-
 ### Indexed values and aggregation
 
 Define named index sets and operate over them with `for` comprehensions and aggregation functions.
@@ -579,7 +567,6 @@ dim Velocity = Length / Time;
 type Eci;
 type Body;
 
-#[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
 }
@@ -591,16 +578,8 @@ param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> {
 // Explicit frame cast required -- no implicit mixing
 node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
 
-// Component-wise arithmetic
-param dv_a: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
-    x: 100.0 m/s, y: 200.0 m/s, z: 300.0 m/s,
-};
-param dv_b: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> {
-    x: 10.0 m/s, y: 20.0 m/s, z: 30.0 m/s,
-};
-
-node dv_sum: Vec3<Velocity, Eci> = @dv_a + @dv_b;
-node dv_neg: Vec3<Velocity, Eci> = -@dv_a;
+// Field access
+node pos_body_x: Length = @pos_body.x;
 ```
 
 ### Indexed values with aggregation

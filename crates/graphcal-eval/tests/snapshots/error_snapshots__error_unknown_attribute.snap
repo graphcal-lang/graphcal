@@ -10,5 +10,5 @@ snippet line 1: // Error: unknown attribute name
 snippet line 2: #[foobar]
     label at line 2, columns 1 to 9: unknown attribute
 snippet line 3: param x: Dimensionless = 1.0;
-diagnostic help: recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`
+diagnostic help: recognized attributes are `#[assumes(...)]`, `#[lazy]`, `#[expected_fail]`, and `#[allow_defaults]`
 diagnostic code: graphcal::A007

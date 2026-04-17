@@ -144,7 +144,6 @@ module.exports = grammar({
       ";",
     ),
 
-    // #[derive(Add, Sub, Neg)]
     // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type
     // type Eci {}                                            -- empty record type
     // type Coasting;                                         -- unit type

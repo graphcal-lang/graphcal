@@ -179,7 +179,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `type Name;` or `#[derive(...)] type Name<...> { ... }`
+/// `type Name { ... }` or `type Name;` or `type Name<...> { ... }`
 fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 

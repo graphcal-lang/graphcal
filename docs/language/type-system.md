@@ -133,7 +133,6 @@ type Orbit {
     inc: Angle,
 }
 
-#[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, Frame: Type> {
     x: D,
     y: D,
@@ -493,8 +492,6 @@ This section lists the type of each expression form and the constraints the comp
 | `a ^ n` | `dim(a) ^ n` | `n` is a numeric literal |
 | `-a` | `dim(a)` | |
 
-For struct types with `#[derive(Add)]`, `#[derive(Sub)]`, or `#[derive(Neg)]`, the corresponding operators are also allowed. Both operands must be the same struct type with the same type arguments, and the result is that struct type. The operation is applied component-wise.
-
 ### Comparison and Logical Operators
 
 | Expression | Result Type | Constraint |
@@ -687,7 +684,6 @@ Types can be generic over dimensions, indexes, natural numbers, and phantom type
 Generic parameters can have defaults:
 
 ```
-#[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type = Unframed> {
     x: D,
     y: D,
@@ -769,24 +765,3 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
 
 Named index labels have a dedicated `Label(IndexName)` type kind, distinct from union type members. Labels use qualified syntax (`Maneuver::Departure`) while union type members use bare syntax (`Nominal`).
-
-## Derived Operations
-
-Struct types can derive arithmetic operators using the `#[derive(...)]` attribute:
-
-```
-#[derive(Add, Sub, Neg)]
-type Vec3<D: Dim> {
-    x: D,
-    y: D,
-    z: D,
-}
-```
-
-| Derive | Enables | Operand Constraint | Result |
-|--------|---------|--------------------|--------|
-| `Add` | `a + b` | Both operands same struct type with same type args | Same struct type |
-| `Sub` | `a - b` | Both operands same struct type with same type args | Same struct type |
-| `Neg` | `-a` | Operand is the struct type | Same struct type |
-
-Operations are applied component-wise to all fields. All fields must have types that support the corresponding operation (e.g., for `#[derive(Add)]`, all fields must be addable).

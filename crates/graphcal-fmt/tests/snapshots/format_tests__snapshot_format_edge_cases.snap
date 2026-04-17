@@ -17,7 +17,6 @@ type Vec3<D: Dim, F: Type> {
     z: D,
 }
 
-#[derive(Add, Sub, Neg)]
 type StateVec<D: Dim, V: Dim, F: Type> {
     pos_x: D,
     pos_y: D,

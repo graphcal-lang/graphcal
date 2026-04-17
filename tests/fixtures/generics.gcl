@@ -41,39 +41,6 @@ param pos3_default: Pos3<Length> = Pos3<Length> { x: 10.0 km, y: 20.0 km, z: 30.
 node pos3_eci_x: Length = @pos3_eci.x;
 node pos3_default_y: Length = @pos3_default.y;
 
-// --- #[derive(Add, Sub, Neg)] ---
-// DeriveVec3 has component-wise +, -, and unary -
-#[derive(Add, Sub, Neg)]
-type DeriveVec3<D: Dim, F: Type> {
-    x: D,
-    y: D,
-    z: D,
-}
-
-param dv_a: DeriveVec3<Velocity, Eci> = DeriveVec3<Velocity, Eci> {
-    x: 100.0 m/s,
-    y: 200.0 m/s,
-    z: 300.0 m/s,
-};
-
-param dv_b: DeriveVec3<Velocity, Eci> = DeriveVec3<Velocity, Eci> {
-    x: 10.0 m/s,
-    y: 20.0 m/s,
-    z: 30.0 m/s,
-};
-
-// derive(Add): component-wise addition
-node dv_sum: DeriveVec3<Velocity, Eci> = @dv_a + @dv_b;
-node dv_sum_x: Velocity = @dv_sum.x;
-
-// derive(Sub): component-wise subtraction
-node dv_diff: DeriveVec3<Velocity, Eci> = @dv_a - @dv_b;
-node dv_diff_y: Velocity = @dv_diff.y;
-
-// derive(Neg): component-wise negation
-node dv_neg: DeriveVec3<Velocity, Eci> = -@dv_a;
-node dv_neg_z: Velocity = @dv_neg.z;
-
 // --- as cast (phantom type parameter change) ---
 // Cast a Vec3 from Eci frame to Body frame (phantom param only)
 node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
