@@ -293,16 +293,25 @@ pub fn check_dimensions_tir(
     Ok(())
 }
 
-/// Check that domain constraint bound expressions have the correct dimension.
+/// What a domain bound expression must infer to for a given target type.
+enum ExpectedBound {
+    /// Bound must be `Scalar(d)`. `Int` is also accepted when `d` is dimensionless.
+    Scalar(Dimension),
+    /// Bound must be unitless: `Int`, or `Scalar` with the dimensionless dimension.
+    Int,
+}
+
+/// Check that domain constraint bound expressions have the correct type.
 ///
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
-/// is `Scalar(d)` or `Dimensionless`, infers the type of each bound expression
-/// using the regular type checker and verifies it matches the constrained type's
-/// dimension. Bounds that are `Int` are accepted only for `Dimensionless` targets.
+/// is `Scalar(d)`, `Dimensionless`, or `Int`, infers the type of each bound
+/// expression using the regular type checker and verifies it matches:
+/// - `Scalar(d)` target: bound must be `Scalar(d)` (or `Int` if `d` is dimensionless).
+/// - `Dimensionless` target: bound must be `Scalar(dimensionless)` or `Int`.
+/// - `Int` target: bound must be `Int` or `Scalar(dimensionless)` — units forbidden.
 ///
-/// Targets other than `Scalar`/`Dimensionless` (e.g., `Int`, `Bool`) are skipped
-/// here and handled by `validate_constraint_target` in `exec_plan` (which raises
-/// `InvalidDomainTarget`).
+/// Other targets (e.g., `Bool`) are skipped here and handled by
+/// `validate_constraint_target` in `exec_plan` (which raises `InvalidDomainTarget`).
 fn check_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<String, DeclaredType>,
@@ -325,8 +334,13 @@ fn check_domain_constraint_dimensions(
         let resolved = tir.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
         let expected = match base_resolved {
-            Some(crate::tir::typed::ResolvedTypeExpr::Scalar(dim)) => dim.clone(),
-            Some(crate::tir::typed::ResolvedTypeExpr::Dimensionless) => Dimension::dimensionless(),
+            Some(crate::tir::typed::ResolvedTypeExpr::Scalar(dim)) => {
+                ExpectedBound::Scalar(dim.clone())
+            }
+            Some(crate::tir::typed::ResolvedTypeExpr::Dimensionless) => {
+                ExpectedBound::Scalar(Dimension::dimensionless())
+            }
+            Some(crate::tir::typed::ResolvedTypeExpr::Int) => ExpectedBound::Int,
             _ => continue,
         };
 
@@ -339,29 +353,62 @@ fn check_domain_constraint_dimensions(
                 builtin_fns,
                 src,
             )?;
-            let ok = match &inferred {
-                InferredType::Scalar(d) => *d == expected,
-                InferredType::Int => expected.is_dimensionless(),
-                _ => false,
-            };
-            if !ok {
-                let bound_dim_str = match &inferred {
-                    InferredType::Scalar(d) => tir.registry.dimensions.format_dimension(d),
-                    other => format_inferred_type(other, &tir.registry),
-                };
-                return Err(GraphcalError::DomainDimensionMismatch {
-                    name: name.to_string(),
-                    type_dim: tir.registry.dimensions.format_dimension(&expected),
-                    bound_name: bound.kind.to_string(),
-                    bound_dim: bound_dim_str,
-                    src: src.clone(),
-                    span: bound.span.into(),
-                });
-            }
+            check_one_bound(name, bound, &inferred, &expected, &tir.registry, src)?;
         }
     }
 
     Ok(())
+}
+
+fn check_one_bound(
+    name: &crate::registry::resolve_types::ScopedName,
+    bound: &crate::syntax::ast::DomainBound,
+    inferred: &InferredType,
+    expected: &ExpectedBound,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match expected {
+        ExpectedBound::Scalar(target_dim) => {
+            let ok = match inferred {
+                InferredType::Scalar(d) => d == target_dim,
+                InferredType::Int => target_dim.is_dimensionless(),
+                _ => false,
+            };
+            if ok {
+                return Ok(());
+            }
+            let bound_dim_str = match inferred {
+                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
+                other => format_inferred_type(other, registry),
+            };
+            Err(GraphcalError::DomainDimensionMismatch {
+                name: name.to_string(),
+                type_dim: registry.dimensions.format_dimension(target_dim),
+                bound_name: bound.kind.to_string(),
+                bound_dim: bound_dim_str,
+                src: src.clone(),
+                span: bound.span.into(),
+            })
+        }
+        ExpectedBound::Int => {
+            let ok = match inferred {
+                InferredType::Int => true,
+                InferredType::Scalar(d) => d.is_dimensionless(),
+                _ => false,
+            };
+            if ok {
+                return Ok(());
+            }
+            Err(GraphcalError::IntDomainBoundNotUnitless {
+                name: name.to_string(),
+                bound_name: bound.kind.to_string(),
+                bound_type: format_inferred_type(inferred, registry),
+                src: src.clone(),
+                span: bound.span.into(),
+            })
+        }
+    }
 }
 
 /// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.

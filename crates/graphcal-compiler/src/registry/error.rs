@@ -1035,6 +1035,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error(
+        "domain bound on Int `{name}` must be unitless: {bound_name} bound has type {bound_type}"
+    )]
+    #[diagnostic(
+        code(graphcal::C005),
+        help("Int values are unitless; their domain bounds must be Int or dimensionless")
+    )]
+    IntDomainBoundNotUnitless {
+        name: String,
+        bound_name: String,
+        bound_type: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("Int bound is not unitless")]
+        span: SourceSpan,
+    },
+
     // --- Visibility errors ---
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]
