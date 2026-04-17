@@ -437,6 +437,36 @@ fn eval_indexed_milestone() {
 }
 
 #[test]
+fn eval_table_literal_nat_range_1d() {
+    let source = r"
+param v: Dimensionless[3] = table[3] {
+    1.0;
+    2.0;
+    3.0;
+};
+node total: Dimensionless = sum(for i: range(3) { @v[i] });
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "total") - 6.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_table_literal_nat_range_2d() {
+    let source = r"
+param m: Dimensionless[2, 3] = table[2, 3] {
+    1.0, 2.0, 3.0;
+    4.0, 5.0, 6.0;
+};
+node row_sums: Dimensionless[2] = for i: range(2) {
+    sum(for j: range(3) { @m[i, j] })
+};
+node total: Dimensionless = sum(for i: range(2) { @row_sums[i] });
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "total") - 21.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn eval_table_literal() {
     let source = include_str!("../../../../tests/fixtures/table_literal.gcl");
     let result = compile_and_eval(source).unwrap();

@@ -34,7 +34,7 @@ index OpMode = {
 
 // --- Power draw per subsystem per mode (12x8 = 96 cells) ---
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
-                       Safe, Detumble, NominalSunlit, NominalEclipse,  Comms, ScienceObs, OrbitManeuver, Standby;
+                    :  Safe, Detumble, NominalSunlit, NominalEclipse,  Comms, ScienceObs, OrbitManeuver, Standby;
     CommandAndData:   5.0 W,    5.0 W,         8.0 W,          8.0 W,  8.0 W,      8.0 W,         8.0 W,   3.0 W;
     AttitudeControl:  0.0 W,   15.0 W,        12.0 W,         12.0 W, 12.0 W,     12.0 W,        20.0 W,   0.0 W;
     Propulsion:       0.0 W,    0.0 W,         0.0 W,          0.0 W,  0.0 W,      0.0 W,        45.0 W,   0.0 W;

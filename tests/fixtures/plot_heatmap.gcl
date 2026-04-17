@@ -6,7 +6,7 @@ index Subsystem = { Comms, Thermal, Payload };
 index OpMode = { Safe, Nominal, Science };
 
 param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
-              Safe, Nominal, Science;
+           :   Safe, Nominal, Science;
     Comms:   2.0 W,   5.0 W,   3.0 W;
     Thermal: 8.0 W,   5.0 W,   5.0 W;
     Payload: 0.0 W,   0.0 W,  35.0 W;

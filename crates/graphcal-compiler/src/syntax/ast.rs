@@ -875,10 +875,11 @@ pub enum ExprKind {
     },
     /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
     MapLiteral { entries: Vec<MapEntry> },
-    /// Table literal: `table[Phase, Maneuver] { ... }`
+    /// Table literal: `table[Phase, 3] { ... }`
     /// Semantically equivalent to `MapLiteral` but preserves tabular structure for formatting.
+    /// Indexes can be named (`Phase`) or Nat range literals (`3`).
     TableLiteral {
-        indexes: Vec<Spanned<IndexName>>,
+        indexes: Vec<TableIndexSpec>,
         entries: Vec<MapEntry>,
     },
     /// For comprehension: `for m: Maneuver { @delta_v[m] + 1.0 }`
@@ -951,6 +952,35 @@ pub enum ExprKind {
     /// `(` (which would make it a qualified function call). A name-resolution
     /// pass rewrites this to `VariantLiteral` or `QualifiedConstRef`.
     QualifiedNameRef { qualifier: Ident, member: Ident },
+}
+
+/// An index specification in a table literal's bracket list: `table[Phase, 3]`
+///
+/// Named indexes reference declared index types, while Nat range literals
+/// desugar to `range(N)` with synthetic variants `#0`, `#1`, etc.
+#[derive(Debug, Clone)]
+pub enum TableIndexSpec {
+    /// A named index: `Phase`, `Maneuver`
+    Named(Spanned<IndexName>),
+    /// A Nat range literal: `3` (desugars to `range(3)`)
+    NatRange(u64, Span),
+}
+
+impl TableIndexSpec {
+    /// Get the source span of this table index specification.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Named(spanned) => spanned.span,
+            Self::NatRange(_, span) => *span,
+        }
+    }
+
+    /// Returns `true` if this is a Nat range index.
+    #[must_use]
+    pub const fn is_nat_range(&self) -> bool {
+        matches!(self, Self::NatRange(..))
+    }
 }
 
 /// A single key in a map literal entry: `Index::Variant`

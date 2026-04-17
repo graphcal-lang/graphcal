@@ -43,7 +43,7 @@ index OrbitCondition = {
 index Limit = { Min, Max };
 
 param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
-                          Min,     Max;
+                     :    Min,     Max;
     SolarPanelPosX:  -150.0 K, 120.0 K;
     SolarPanelNegX:  -150.0 K, 120.0 K;
     RadiatorPosY:    -100.0 K,  60.0 K;
@@ -70,7 +70,7 @@ param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
 
 // --- Internal heat dissipation per node per orbit condition (22x7 = 154 cells) ---
 param heat_dissipation: Power[ThermalNode, OrbitCondition] = table[ThermalNode, OrbitCondition] {
-                     HotCase, ColdCase, NominalSunlit, NominalEclipse, SafeMode, TransientEntry, TransientExit;
+                   : HotCase, ColdCase, NominalSunlit, NominalEclipse, SafeMode, TransientEntry, TransientExit;
     SolarPanelPosX:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
     SolarPanelNegX:    0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;
     RadiatorPosY:      0.0 W,    0.0 W,         0.0 W,          0.0 W,    0.0 W,          0.0 W,         0.0 W;

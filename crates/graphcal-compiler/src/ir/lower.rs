@@ -977,11 +977,14 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
     }
 
     fn visit_table_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::syntax::ast::TableIndexSpec;
         use crate::syntax::names::IndexName;
         if let ExprKind::TableLiteral { indexes, entries } = &mut expr.kind {
             for idx in indexes.iter_mut() {
-                if let Some(new) = self.bindings.get(idx.value.as_str()) {
-                    idx.value = IndexName::new(new);
+                if let TableIndexSpec::Named(spanned) = idx
+                    && let Some(new) = self.bindings.get(spanned.value.as_str())
+                {
+                    spanned.value = IndexName::new(new);
                 }
             }
             for entry in entries.iter_mut() {
@@ -1680,7 +1683,7 @@ fn collect_nat_range_literals_from_nat_expr(
 /// Recursively scan an expression for `for i: range(N)` and register
 /// nat range indexes for concrete nat literals.
 fn collect_nat_ranges_from_expr(expr: &crate::syntax::ast::Expr, registry: &mut RegistryBuilder) {
-    use crate::syntax::ast::{ExprKind, ForBindingIndex};
+    use crate::syntax::ast::{ExprKind, ForBindingIndex, TableIndexSpec};
 
     // Use the visitor trait to walk all sub-expressions
     struct NatRangeCollector<'a> {
@@ -1691,12 +1694,22 @@ fn collect_nat_ranges_from_expr(expr: &crate::syntax::ast::Expr, registry: &mut 
         type Error = GraphcalError;
 
         fn visit_expr(&mut self, expr: &crate::syntax::ast::Expr) -> Result<(), GraphcalError> {
-            if let ExprKind::ForComp { bindings, .. } = &expr.kind {
-                for binding in bindings {
-                    if let ForBindingIndex::Range { arg, .. } = &binding.index {
-                        collect_nat_range_literals_from_nat_expr(arg, self.registry);
+            match &expr.kind {
+                ExprKind::ForComp { bindings, .. } => {
+                    for binding in bindings {
+                        if let ForBindingIndex::Range { arg, .. } = &binding.index {
+                            collect_nat_range_literals_from_nat_expr(arg, self.registry);
+                        }
                     }
                 }
+                ExprKind::TableLiteral { indexes, .. } => {
+                    for idx in indexes {
+                        if let TableIndexSpec::NatRange(n, _) = idx {
+                            self.registry.ensure_nat_range_index(*n);
+                        }
+                    }
+                }
+                _ => {}
             }
             self.dispatch(expr)
         }

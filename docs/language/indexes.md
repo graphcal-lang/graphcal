@@ -207,14 +207,14 @@ Labels in the table body are unqualified (`Departure` instead of `Maneuver::Depa
 
 ```
 param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
-    Departure, Correction, Insertion;
+    : Departure, Correction, Insertion;
     Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
     Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
 };
 ```
 
-The last index becomes columns, the second-to-last becomes rows. The first row lists column headers, followed by data rows with `RowLabel: value, value, ...;`.
+The last index becomes columns, the second-to-last becomes rows. The header row starts with `:` and lists the column labels, followed by data rows with `RowLabel: value, value, ...;`.
 
 ### 3D+ Table
 
@@ -223,20 +223,61 @@ For three or more indexes, use slice sections with qualified labels:
 ```
 param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
     [Time::T1]
-    Departure, Correction, Insertion;
+    : Departure, Correction, Insertion;
     Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
     Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
 
     [Time::T2]
-    Departure, Correction, Insertion;
+    : Departure, Correction, Insertion;
     Launch:  4800.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4300.0 kg, 0.0 kg;
     Arrival:    0.0 kg, 0.0 kg,    3800.0 kg;
 };
 ```
 
-Each `[SliceLabel]` section contains its own column header row and data rows. Slice labels use `Index::Variant` syntax.
+Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index::Variant` syntax; Nat range slice labels use `#N`.
+
+### Nat Range Tables
+
+`table[...]` also accepts integer literals to produce positional matrix literals backed by Nat range indexes. When an axis is a Nat range, its labels are implicit `#0, #1, ...` and are omitted in the body:
+
+```
+// 1D Nat range
+param v: Dimensionless[3] = table[3] {
+    1.0;
+    2.0;
+    3.0;
+};
+
+// 2D, both axes Nat range
+param m: Dimensionless[2, 3] = table[2, 3] {
+    1.0, 2.0, 3.0;
+    4.0, 5.0, 6.0;
+};
+
+// 2D, mixed: named columns, Nat range rows
+param mixed: Dimensionless[2, Maneuver] = table[2, Maneuver] {
+    : Departure, Correction;
+    1.0, 2.0;
+    3.0, 4.0;
+};
+
+// 3D with a Nat range slice axis
+param m3d: Dimensionless[2, Phase, Maneuver] = table[2, Phase, Maneuver] {
+    [#0]
+    : Departure, Correction;
+    Launch: 1.0, 2.0;
+    Cruise: 3.0, 4.0;
+
+    [#1]
+    : Departure, Correction;
+    Launch: 5.0, 6.0;
+    Cruise: 7.0, 8.0;
+};
+```
+
+Slice labels (all but the last two axes) always require an explicit marker -- `[Index::Variant]` for named axes or `[#N]` for Nat range axes.
 
 The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
 

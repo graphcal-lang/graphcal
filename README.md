@@ -272,6 +272,16 @@ param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
 node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j] };
 ```
 
+Integer literals are also accepted in `table[...]` for positional matrix literals -- labels are implicit `#0, #1, ...` and omitted in the body:
+
+```gcl
+// Pure matrix literal
+param m: Dimensionless[2, 3] = table[2, 3] {
+    1.0, 2.0, 3.0;
+    4.0, 5.0, 6.0;
+};
+```
+
 ### Multi-file projects
 
 Split calculations across files with `import` declarations. All declaration kinds can be imported, and circular dependencies are detected at compile time.

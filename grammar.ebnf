@@ -660,32 +660,46 @@ tuple_key_entry
    = "(", IDENT, "::", IDENT,
      { ",", IDENT, "::", IDENT }, ")", ":", expr;
 
-(* --- Table expression (syntax sugar, desugars to map_literal) --- *)
+(* --- Table expression (syntax sugar, desugars to map_literal) ---     *)
+(*                                                                      *)
+(* The body grammar is context-sensitive: whether a header row is       *)
+(* expected, whether data rows carry row labels, and whether slice      *)
+(* labels are `Index::Variant` or `#N` all depend on whether the        *)
+(* corresponding axis in `index_list` is named or a Nat range literal.  *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
 
+(* Each index is a named identifier or an integer literal which         *)
+(* desugars to `range(N)` with synthetic variants `#0`, `#1`, ...       *)
 index_list
-   = IDENT, { ",", IDENT };
+   = (IDENT | NUMBER), { ",", (IDENT | NUMBER) };
 
 table_body
    = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
    | table_single                                    (* 2D: header + data rows *)
-   | table_data_row_1d, { table_data_row_1d };       (* 1D: data rows only *)
+   | table_data_row_1d, { table_data_row_1d };       (* 1D: data rows *)
 
 table_slice_section
-   = "[", qualified_variant, { ",", qualified_variant }, "]", table_single;
+   = "[", table_slice_label, { ",", table_slice_label }, "]", table_single;
 
+table_slice_label
+   = qualified_variant          (* for named axes *)
+   | "#", NUMBER;               (* for Nat range axes *)
+
+(* When the column axis is a Nat range, `table_header_row` is omitted.  *)
 table_single
-   = table_header_row, table_data_row, { table_data_row };
+   = [ table_header_row ], table_data_row, { table_data_row };
 
 table_header_row
-   = IDENT, { ",", IDENT }, ";";
+   = ":", IDENT, { ",", IDENT }, ";";
 
+(* When the row axis is a Nat range, `IDENT, ":"` is omitted.           *)
 table_data_row
-   = IDENT, ":", expr, { ",", expr }, ";";
+   = [ IDENT, ":" ], expr, { ",", expr }, ";";
 
+(* When the index is a Nat range, `IDENT, ":"` is omitted.              *)
 table_data_row_1d
-   = IDENT, ":", expr, ";";
+   = [ IDENT, ":" ], expr, ";";
 
 qualified_variant
    = IDENT, "::", IDENT;

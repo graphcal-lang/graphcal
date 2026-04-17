@@ -402,7 +402,7 @@ fn format_table_2d_preserves_syntax() {
 index Phase = { Launch, Cruise };
 index Maneuver = { Departure, Correction };
 param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
-    Departure, Correction;
+    : Departure, Correction;
     Launch: 5000.0, 0.0;
     Cruise: 0.0, 4500.0;
 };
@@ -1127,13 +1127,13 @@ index Phase = { Launch, Cruise, Arrival };
 index Maneuver = { Departure, Correction, Insertion };
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
     [Scenario::Nominal] // nominal scenario
-             Departure, Correction, Insertion;
+           : Departure, Correction, Insertion;
     Launch:  5000.0,        0.0,       0.0;
     Cruise:     0.0,     4500.0,       0.0;
     Arrival:    0.0,        0.0,    4000.0;
 
     [Scenario::Contingency] // contingency scenario
-             Departure, Correction, Insertion;
+           : Departure, Correction, Insertion;
     Launch:  4800.0,        0.0,       0.0;
     Cruise:     0.0,     4200.0,       0.0;
     Arrival:    0.0,        0.0,    3800.0;

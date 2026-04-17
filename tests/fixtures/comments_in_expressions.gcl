@@ -34,7 +34,7 @@ param fuel: Mass[Maneuver] = table[Maneuver] {
 
 // 2D table with trailing comments on rows
 param mass_2d: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
-             Departure, Correction, Insertion;
+           : Departure, Correction, Insertion;
     Launch:  5000.0 kg,     0.0 kg,    0.0 kg; // launch phase
     Cruise:     0.0 kg,  4500.0 kg,    0.0 kg; // cruise phase
     Arrival:    0.0 kg,     0.0 kg, 4000.0 kg; // arrival phase
