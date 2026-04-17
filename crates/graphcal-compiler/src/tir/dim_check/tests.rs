@@ -1017,3 +1017,36 @@ fn int_domain_bound_arithmetic_with_unit_rejected() {
         "got: {err:?}"
     );
 }
+
+// -----------------------------------------------------------------------
+// Domain bound dimension checks on const nodes (#441)
+// -----------------------------------------------------------------------
+
+#[test]
+fn const_domain_bound_dimension_checked() {
+    // Const nodes get the same compile-time bound dimension check as params/nodes.
+    let source = "const node MAX_M: Mass(min: 1.0 m) = 50.0 kg;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_domain_bound_int_with_unit_rejected() {
+    let source = "const node MAX_N: Int(min: 1.0 kg) = 5;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_domain_bound_well_formed_passes_dim_check() {
+    // Well-formed const constraint passes dim_check (value-vs-bound check is
+    // in exec_plan, not dim_check).
+    let source = "const node MAX_M: Mass(min: 1.0 kg, max: 100.0 kg) = 50.0 kg;";
+    check(source).unwrap();
+}

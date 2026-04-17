@@ -320,9 +320,10 @@ fn check_domain_constraint_dimensions(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let decl_iter = tir
-        .params
+        .consts
         .iter()
         .map(|e| (&e.name, &e.type_ann))
+        .chain(tir.params.iter().map(|e| (&e.name, &e.type_ann)))
         .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann)));
 
     for (name, type_ann) in decl_iter {
