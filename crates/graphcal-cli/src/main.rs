@@ -84,51 +84,46 @@ enum PlotOutput {
 /// Parse `--set` overrides and `--input` JSON file into a combined overrides map.
 ///
 /// `--set` values take precedence over `--input` values for the same name.
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
+/// Returns an error message suitable for `stderr` on the first failure.
 fn parse_overrides(
     set: &[String],
     input: Option<&std::path::Path>,
-) -> std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr> {
+) -> Result<std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>, String> {
     let mut overrides = std::collections::HashMap::new();
     for s in set {
         let Some((name, value_str)) = s.split_once('=') else {
-            eprintln!("error: invalid --set format: {s:?} (expected 'name=expr')");
-            process::exit(1);
+            return Err(format!(
+                "invalid --set format: {s:?} (expected 'name=expr')"
+            ));
         };
         let name = name.trim();
         let value_str = value_str.trim();
+        if name.is_empty() {
+            return Err(format!("invalid --set format: {s:?} (name is empty)"));
+        }
+        if value_str.is_empty() {
+            return Err(format!("invalid --set format: {s:?} (expression is empty)"));
+        }
         match graphcal_compiler::syntax::parser::Parser::new(value_str).parse_single_expr() {
             Ok(expr) => {
                 overrides.insert(DeclName::new(name), expr);
             }
             Err(e) => {
-                eprintln!("error: failed to parse --set value for `{name}`: {e}");
-                process::exit(1);
+                return Err(format!("failed to parse --set value for `{name}`: {e}"));
             }
         }
     }
 
     if let Some(input_path) = input {
-        let json_str = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
-            eprintln!(
-                "error: cannot read input file {}: {e}",
-                input_path.display()
-            );
-            process::exit(1);
-        });
-        let json_overrides = json_input::json_to_overrides(&json_str).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            process::exit(1);
-        });
+        let json_str = std::fs::read_to_string(input_path)
+            .map_err(|e| format!("cannot read input file {}: {e}", input_path.display()))?;
+        let json_overrides = json_input::json_to_overrides(&json_str).map_err(|e| e.to_string())?;
         for (name, expr) in json_overrides {
             overrides.entry(name).or_insert(expr);
         }
     }
 
-    overrides
+    Ok(overrides)
 }
 
 fn main() {
@@ -172,7 +167,19 @@ fn main() {
             allow_defaults,
             plot: plot_output,
         } => {
-            let overrides = parse_overrides(&set, input.as_deref());
+            let overrides = match parse_overrides(&set, input.as_deref()) {
+                Ok(o) => o,
+                Err(msg) => {
+                    #[expect(
+                        clippy::print_stderr,
+                        reason = "CLI binary, stderr output is expected for errors"
+                    )]
+                    {
+                        eprintln!("error: {msg}");
+                    }
+                    process::exit(2);
+                }
+            };
             handle_eval(
                 &file,
                 &format,
@@ -972,5 +979,68 @@ mod tests {
     #[test]
     fn format_large_decimal() {
         assert_eq!(format_number(3138.128), "3138.128");
+    }
+
+    #[test]
+    fn parse_overrides_happy_path() {
+        let set = vec!["x=1.0 m".to_string(), "y=2".to_string()];
+        let overrides = parse_overrides(&set, None).unwrap();
+        assert_eq!(overrides.len(), 2);
+        assert!(overrides.contains_key(&DeclName::new("x")));
+        assert!(overrides.contains_key(&DeclName::new("y")));
+    }
+
+    #[test]
+    fn parse_overrides_trims_whitespace() {
+        let set = vec!["  x  =  42  ".to_string()];
+        let overrides = parse_overrides(&set, None).unwrap();
+        assert!(overrides.contains_key(&DeclName::new("x")));
+    }
+
+    #[test]
+    fn parse_overrides_missing_equals() {
+        let set = vec!["just_a_name".to_string()];
+        let err = parse_overrides(&set, None).unwrap_err();
+        assert!(
+            err.contains("invalid --set format"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_overrides_empty_name() {
+        let set = vec!["=42".to_string()];
+        let err = parse_overrides(&set, None).unwrap_err();
+        assert!(err.contains("name is empty"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn parse_overrides_empty_expression() {
+        let set = vec!["x=".to_string()];
+        let err = parse_overrides(&set, None).unwrap_err();
+        assert!(
+            err.contains("expression is empty"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_overrides_unparsable_expression() {
+        let set = vec!["x=###".to_string()];
+        let err = parse_overrides(&set, None).unwrap_err();
+        assert!(
+            err.contains("failed to parse --set value for `x`"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_overrides_missing_input_file() {
+        let missing = std::path::Path::new("/nonexistent/path/file.json");
+        let err = parse_overrides(&[], Some(missing)).unwrap_err();
+        assert!(
+            err.contains("cannot read input file"),
+            "unexpected message: {err}"
+        );
     }
 }
