@@ -859,7 +859,7 @@ pub(super) fn process_non_instantiated_import<'a>(
 ) -> Result<(), CompileError> {
     let dep = evaluated_files.get(import_dag_id).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
-            message: format!("internal: dependency {import_dag_id} not yet evaluated",),
+            message: format!("internal: dependency {import_dag_id} not yet evaluated"),
             src: file_src.clone(),
             span: import_path.span().into(),
         })
