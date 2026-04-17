@@ -29,6 +29,7 @@ pub use graphcal_compiler::tir::dim_check;
 pub use graphcal_compiler::tir::typed as tir;
 
 // Modules owned by graphcal-eval.
+pub(crate) mod domain_check;
 pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;

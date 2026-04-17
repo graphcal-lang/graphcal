@@ -347,12 +347,29 @@ fn build_runtime_dag(
     Ok((topo_order, expressions))
 }
 
-/// Resolve domain constraints from type annotations on params and nodes.
+/// Whether a declaration is a const (compile-time evaluated) or a param/node.
+///
+/// Consts get an immediate value-vs-constraint check at compile time;
+/// params/nodes are checked at runtime by `eval/runtime.rs`.
+enum DomainDeclKind {
+    Const,
+    ParamOrNode,
+}
+
+/// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
 /// Evaluates each constraint bound expression using const values and builtins
 /// to obtain SI min/max scalars, validates that the target type accepts
 /// constraints, and checks min <= max. Bound dimensions are validated earlier
 /// in `dim_check::check_dimensions_tir`.
+///
+/// For const declarations, the resolved constraint is also checked against the
+/// already-evaluated const value at compile time, raising `DomainViolation`
+/// if the value is out of bounds.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear iteration over domain bounds with bound eval, range, and const-value checks"
+)]
 fn resolve_domain_constraints(
     tir: &TIR,
     const_values: &HashMap<DeclName, RuntimeValue>,
@@ -377,14 +394,24 @@ fn resolve_domain_constraints(
 
     let mut constraints = HashMap::new();
 
-    // Iterate over params and nodes that have non-empty constraints in their type annotations.
+    // Iterate over consts, params, and nodes with non-empty constraints in their type annotations.
+    // Consts get an additional value-vs-constraint check below.
     let decl_iter = tir
-        .params
+        .consts
         .iter()
-        .map(|e| (&e.name, &e.type_ann, e.span))
-        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
+        .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::Const))
+        .chain(
+            tir.params
+                .iter()
+                .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::ParamOrNode)),
+        )
+        .chain(
+            tir.nodes
+                .iter()
+                .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::ParamOrNode)),
+        );
 
-    for (name, type_ann, decl_span) in decl_iter {
+    for (name, type_ann, decl_span, kind) in decl_iter {
         // Get constraints from the type annotation (could be on base type if indexed).
         let domain_bounds = extract_domain_bounds(type_ann);
         if domain_bounds.is_empty() {
@@ -456,19 +483,50 @@ fn resolve_domain_constraints(
             });
         }
 
-        constraints.insert(
-            DeclName::from(name),
-            ResolvedDomainConstraint {
-                min: min_val,
-                max: max_val,
-                min_display,
-                max_display,
-                span: constraint_span,
-            },
-        );
+        let resolved_constraint = ResolvedDomainConstraint {
+            min: min_val,
+            max: max_val,
+            min_display,
+            max_display,
+            span: constraint_span,
+        };
+
+        // For const declarations, validate the (already-known) value at compile time.
+        if matches!(kind, DomainDeclKind::Const)
+            && let Some(value) = const_values.get(&DeclName::from(name))
+            && let Some(violation) =
+                crate::domain_check::check_domain_constraint(value, &resolved_constraint)
+        {
+            return Err(GraphcalError::DomainViolation {
+                name: name.to_string(),
+                value: format_runtime_value(value),
+                violation,
+                src: src.clone(),
+                span: decl_span.into(),
+            });
+        }
+
+        constraints.insert(DeclName::from(name), resolved_constraint);
     }
 
     Ok(constraints)
+}
+
+/// Format a runtime value for inclusion in a `DomainViolation` error message.
+fn format_runtime_value(rv: &RuntimeValue) -> String {
+    match rv {
+        RuntimeValue::Scalar(v) => crate::format::format_number(*v),
+        RuntimeValue::Int(i) => format!("{i}"),
+        RuntimeValue::Indexed { entries, .. } => {
+            // Show the first violating entry's value if recoverable; otherwise summary.
+            let parts: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", format_runtime_value(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        other => format!("{other:?}"),
+    }
 }
 
 /// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
@@ -648,5 +706,66 @@ mod tests {
             compile_source("node a: Dimensionless = @b + 1.0;\nnode b: Dimensionless = @a + 1.0;")
                 .unwrap_err();
         assert!(matches!(err, GraphcalError::CyclicDependency { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Domain constraints on const nodes (#441)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn const_domain_value_within_bounds_passes() {
+        compile_source("const node MAX_M: Mass(min: 1.0 kg, max: 100.0 kg) = 50.0 kg;").unwrap();
+    }
+
+    #[test]
+    fn const_domain_value_below_min_rejected() {
+        let err = compile_source("const node X: Mass(min: 100.0 kg) = 50.0 kg;").unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DomainViolation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn const_domain_value_above_max_rejected() {
+        let err = compile_source("const node X: Mass(max: 10.0 kg) = 50.0 kg;").unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DomainViolation { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn const_domain_min_exceeds_max_rejected() {
+        let err = compile_source("const node X: Mass(min: 100.0 kg, max: 50.0 kg) = 75.0 kg;")
+            .unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DomainMinExceedsMax { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn const_domain_invalid_target_rejected() {
+        // `Bool` is not a valid constraint target; this should now fire on consts too.
+        let err = compile_source("const node FLAG: Bool(min: 0.0) = true;").unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::InvalidDomainTarget { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn const_domain_int_value_within_bounds() {
+        compile_source("const node N: Int(min: 1, max: 100) = 5;").unwrap();
+    }
+
+    #[test]
+    fn const_domain_int_value_out_of_bounds_rejected() {
+        let err = compile_source("const node N: Int(min: 1, max: 10) = 100;").unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DomainViolation { .. }),
+            "got: {err:?}"
+        );
     }
 }
