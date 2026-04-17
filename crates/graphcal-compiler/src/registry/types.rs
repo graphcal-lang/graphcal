@@ -124,7 +124,6 @@ pub struct TypeGenericParam {
 pub struct TypeDef {
     pub name: StructTypeName,
     pub generic_params: Vec<TypeGenericParam>,
-    pub derives: Vec<crate::syntax::ast::DeriveOp>,
     pub kind: TypeDefKind,
 }
 
@@ -1015,7 +1014,6 @@ mod tests {
         b.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
-            derives: vec![],
             kind: TypeDefKind::Record {
                 fields: vec![
                     StructField {

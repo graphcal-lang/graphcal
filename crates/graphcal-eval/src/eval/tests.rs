@@ -327,18 +327,6 @@ fn eval_generics_milestone() {
         "pos3_default_y = {pos3_default_y}"
     );
 
-    // dv_sum_x: derive(Add), 100 + 10 = 110 m/s
-    let dv_sum_x = find_value(&result, "dv_sum_x");
-    assert!((dv_sum_x - 110.0).abs() < 0.01, "dv_sum_x = {dv_sum_x}");
-
-    // dv_diff_y: derive(Sub), 200 - 20 = 180 m/s
-    let dv_diff_y = find_value(&result, "dv_diff_y");
-    assert!((dv_diff_y - 180.0).abs() < 0.01, "dv_diff_y = {dv_diff_y}");
-
-    // dv_neg_z: derive(Neg), -(300 m/s) = -300 m/s
-    let dv_neg_z = find_value(&result, "dv_neg_z");
-    assert!((dv_neg_z - (-300.0)).abs() < 0.01, "dv_neg_z = {dv_neg_z}");
-
     // pos_body_x: as cast (phantom only), same value as pos_eci.x = 6878 km = 6878000 m
     let pos_body_x = find_value(&result, "pos_body_x");
     assert!(

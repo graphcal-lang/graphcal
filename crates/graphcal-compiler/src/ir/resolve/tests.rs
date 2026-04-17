@@ -342,35 +342,6 @@ fn resolve_unfold_self_edge_excluded() {
     );
 }
 
-#[test]
-fn resolve_derive_on_type_is_valid() {
-    let source = r"
-        #[derive(Add, Sub, Neg)]
-        type Vec3 { x: Dimensionless, y: Dimensionless, z: Dimensionless }
-    ";
-    parse_and_resolve(source).unwrap();
-}
-
-#[test]
-fn resolve_derive_on_param_is_rejected() {
-    let source = r"
-        #[derive(Add)]
-        param x: Dimensionless = 1.0;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::InvalidAttributeTarget { .. }));
-}
-
-#[test]
-fn resolve_derive_unknown_op_is_rejected() {
-    let source = r"
-        #[derive(Mul)]
-        type Vec2 { x: Dimensionless, y: Dimensionless }
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
-}
-
 // --- Visibility tests ---
 
 #[test]

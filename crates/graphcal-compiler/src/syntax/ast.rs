@@ -514,14 +514,6 @@ pub struct UnionMember {
     pub span: Span,
 }
 
-/// An operator that can be derived for a struct type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeriveOp {
-    Add,
-    Sub,
-    Neg,
-}
-
 /// A field in a variant or struct type declaration.
 #[derive(Debug, Clone)]
 pub struct FieldDecl {

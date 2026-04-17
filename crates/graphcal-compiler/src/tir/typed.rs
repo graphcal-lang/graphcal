@@ -1803,7 +1803,6 @@ mod tests {
         b.register_type(crate::registry::types::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
-            derives: vec![],
             kind: crate::registry::types::TypeDefKind::Record {
                 fields: vec![
                     crate::registry::types::StructField {

@@ -626,7 +626,9 @@ pub enum GraphcalError {
     #[error("unknown attribute `{name}`")]
     #[diagnostic(
         code(graphcal::A007),
-        help("recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`")
+        help(
+            "recognized attributes are `#[assumes(...)]`, `#[lazy]`, `#[expected_fail]`, and `#[allow_defaults]`"
+        )
     )]
     UnknownAttribute {
         name: String,

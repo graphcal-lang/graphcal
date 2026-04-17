@@ -1203,7 +1203,7 @@ fn register_declarations_impl(
                 }
             },
             DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
-                register_type_decl(t, &decl.attributes, registry);
+                register_type_decl(t, registry);
             }
             DeclKind::UnionType(t) if should_register(t.name.value.as_str()) => {
                 register_union_type_decl(t, registry);
@@ -1761,11 +1761,7 @@ fn register_index_decl(
     Ok(())
 }
 
-fn register_type_decl(
-    t: &crate::syntax::ast::TypeDecl,
-    attributes: &[crate::syntax::ast::Attribute],
-    registry: &mut RegistryBuilder,
-) {
+fn register_type_decl(t: &crate::syntax::ast::TypeDecl, registry: &mut RegistryBuilder) {
     let generic_params: Vec<types::TypeGenericParam> = t
         .generic_params
         .iter()
@@ -1790,26 +1786,9 @@ fn register_type_decl(
         types::TypeDefKind::Record { fields }
     };
 
-    // Extract derives from attributes (validated by resolver)
-    let derives: Vec<crate::syntax::ast::DeriveOp> = attributes
-        .iter()
-        .filter(|a| a.name.name == "derive")
-        .flat_map(|a| a.args.iter())
-        .filter_map(|arg| {
-            arg.as_single_ident()
-                .and_then(|ident| match ident.name.as_str() {
-                    "Add" => Some(crate::syntax::ast::DeriveOp::Add),
-                    "Sub" => Some(crate::syntax::ast::DeriveOp::Sub),
-                    "Neg" => Some(crate::syntax::ast::DeriveOp::Neg),
-                    _ => None,
-                })
-        })
-        .collect();
-
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        derives,
         kind,
     });
 }
@@ -1837,7 +1816,6 @@ fn register_union_type_decl(t: &crate::syntax::ast::UnionTypeDecl, registry: &mu
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        derives: vec![],
         kind: types::TypeDefKind::Union { members },
     });
 }

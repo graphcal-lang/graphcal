@@ -12,9 +12,7 @@ use crate::syntax::names::{GenericParamName, UnitName};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 
-use super::super::helpers::{
-    check_derived_binop, check_derived_neg, expect_scalar, format_inferred_type,
-};
+use super::super::helpers::{expect_scalar, format_inferred_type};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
@@ -117,21 +115,9 @@ pub(super) fn infer_binop(
             Ok(InferredType::Bool)
         }
         // Arithmetic operators: require matching numeric operands (Int or Scalar)
-        // or structs with derive(Add)/derive(Sub)
         BinOp::Add | BinOp::Sub => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
-            }
-            // Check for derive(Add)/derive(Sub) on struct types
-            let derive_op = if *op == BinOp::Add {
-                crate::syntax::ast::DeriveOp::Add
-            } else {
-                crate::syntax::ast::DeriveOp::Sub
-            };
-            if let Some(result) = check_derived_binop(
-                &lhs_type, &rhs_type, derive_op, registry, src, lhs.span, rhs.span,
-            )? {
-                return Ok(result);
             }
             // Point-vs-vector rules for Datetime
             if let InferredType::Datetime(ls) = &lhs_type {
@@ -363,10 +349,6 @@ pub(super) fn infer_unary(
                     src: src.clone(),
                     span: operand.span.into(),
                 });
-            }
-            // Check for derive(Neg) on struct types
-            if let Some(result) = check_derived_neg(&operand_type, registry, src, operand.span)? {
-                return Ok(result);
             }
             // Negation preserves the type (Scalar or Int)
             Ok(operand_type)

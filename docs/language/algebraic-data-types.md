@@ -137,17 +137,12 @@ Types can have generic parameters for type-safe phantom typing:
 type Eci;
 type Body;
 
-#[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type> {
     x: D,
     y: D,
     z: D,
 }
 ```
-
-### `#[derive]` Attribute
-
-`#[derive(Add, Sub, Neg)]` generates component-wise arithmetic operators for the type.
 
 ### Phantom Type Cast with `as`
 
@@ -165,7 +160,6 @@ The `as` operator only changes the phantom type parameter; the underlying data i
 ```
 type Unframed;
 
-#[derive(Add, Sub, Neg)]
 type Vec3<D: Dim, F: Type = Unframed> {
     x: D,
     y: D,
