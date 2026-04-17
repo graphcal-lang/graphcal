@@ -980,3 +980,40 @@ Maneuver::Correction: 0.5 m / s,
         "got: {err:?}"
     );
 }
+
+// -----------------------------------------------------------------------
+// Int domain bound must be unitless (#439)
+// -----------------------------------------------------------------------
+
+#[test]
+fn int_domain_bound_int_literal_accepted() {
+    let source = "param n: Int(min: 1, max: 100) = 5;";
+    check(source).unwrap();
+}
+
+#[test]
+fn int_domain_bound_dimensionless_scalar_accepted() {
+    let source = "param n: Int(min: 0.0, max: 100.0) = 5;";
+    check(source).unwrap();
+}
+
+#[test]
+fn int_domain_bound_with_unit_rejected() {
+    let source = "param n: Int(min: 1.0 kg, max: 10.0 kg) = 5;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn int_domain_bound_arithmetic_with_unit_rejected() {
+    // Arithmetic that produces a dimensioned result is also rejected.
+    let source = "param n: Int(min: 1.0 m / 1.0 s) = 5;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        "got: {err:?}"
+    );
+}
