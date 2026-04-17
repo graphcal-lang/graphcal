@@ -892,11 +892,7 @@ impl ExprVisitorMut for RefPrefixer<'_> {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
+pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
     let mut prefixer = RefPrefixer { prefix, dep_names };
     let _ = prefixer.visit_expr_mut(expr);
 }

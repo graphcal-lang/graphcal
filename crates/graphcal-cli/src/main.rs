@@ -535,7 +535,7 @@ fn format_table_slices(
     }
 
     // depth >= 3: emit section headers and recurse
-    let _ = symbols; // used only for recursive calls
+    let _ = symbols; // passed through for recursion; not used at this level
     for (variant, inner_val) in entries {
         parts.push(format!("\n  [{index_name}::{variant}]"));
         format_table_slices(inner_val, symbols, depth - 1, parts);
