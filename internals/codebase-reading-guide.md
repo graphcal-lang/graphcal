@@ -200,7 +200,7 @@ Binary crate. CLI entry point with subcommands:
 | ----------- | ------------------------------------------------------------ |
 | `eval`      | Compile and evaluate a `.gcl` file; display as table or JSON |
 | `format`    | Format `.gcl` files (check or write mode)                    |
-| `typecheck` | Parse + type-check without evaluation                        |
+| `check`     | Parse + type-check without evaluation                        |
 | `lsp`       | Start Language Server Protocol server                        |
 
 Key options: `--set name=expr` (override params), `--input file.json`,
