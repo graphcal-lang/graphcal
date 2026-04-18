@@ -538,6 +538,38 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
 }
 
 #[test]
+fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
+    // A10(b) carve-out: private sink kinds are pruned from the merged
+    // IR when the file is used as a library, so literal mentions of
+    // `Phase::v` cannot orphan anything under override.
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+        assert design_cheap = @cost[Phase::Design] < 10.0;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
+    // A10(b): public sinks travel with the include and must abstract
+    // over pub(bind) indexes.
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+        pub assert design_cheap = @cost[Phase::Design] < 10.0;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
 fn resolve_node_with_plain_pub_variant_literal_ok() {
     // Plain `pub` (fixed) indexes are not bindable, so A10 does not
     // fire on their variant literals; importers cannot override them.

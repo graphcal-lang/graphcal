@@ -1,0 +1,11 @@
+// Error: public assert naming a variant literal of a pub(bind) index.
+//
+// A10(b): public sink kinds travel with the include, so they must
+// abstract over pub(bind) indexes to remain meaningful under rebinding.
+pub(bind) index Phase = { Design, Build };
+param cost: Dimensionless[Phase] = {
+    Phase::Design: 1.0,
+    Phase::Build: 2.0,
+};
+
+pub assert design_cheap = @cost[Phase::Design] < 10.0;

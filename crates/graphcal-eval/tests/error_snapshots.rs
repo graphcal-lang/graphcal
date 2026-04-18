@@ -451,6 +451,13 @@ fn error_variant_literal_in_const() {
 }
 
 #[test]
+fn error_pub_assert_variant_literal() {
+    let source = include_str!("../../../tests/fixtures/errors/pub_assert_variant_literal.gcl");
+    let rendered = render_error(source, "pub_assert_variant_literal.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_required_index_standalone() {
     let source = include_str!("../../../tests/fixtures/errors/required_index_standalone.gcl");
     let rendered = render_error(source, "required_index_standalone.gcl");

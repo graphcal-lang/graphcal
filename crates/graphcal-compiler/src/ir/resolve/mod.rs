@@ -309,6 +309,13 @@ fn collect_local_declarations(
                     )?;
                     // Check that assert body doesn't reference other assert names via @
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
+                    // A10(b): public sink kinds travel with the include,
+                    // so their bodies must abstract over pub(bind)
+                    // indexes. Private sinks are pruned on include, so
+                    // their literal mentions cannot orphan anything.
+                    if decl.is_pub() {
+                        check_no_pub_index_variant_literals(body_expr, &pub_bind_index_names, src)?;
+                    }
                 }
                 let aname = a.name.value.to_string();
                 asserts.push(ResolvedAssertEntry {
@@ -318,7 +325,9 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Plot(p) => {
-                // Validate references in plot encoding and property expressions (plots CAN use @)
+                // Validate references in plot encoding and property expressions (plots CAN use @).
+                // A10(b): public sinks must abstract over pub(bind) indexes.
+                let pub_sink = decl.is_pub();
                 for encoding in &p.encodings {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &encoding.value,
@@ -331,6 +340,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &encoding.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 for prop in &p.mark.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -344,6 +360,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &prop.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 for prop in &p.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -357,6 +380,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &prop.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let pname = p.name.value.to_string();
                 plots.push(ResolvedPlotEntry {
@@ -366,7 +396,8 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Figure(f) => {
-                // Validate references in figure field expressions (figures CAN use @)
+                // Validate references in figure field expressions (figures CAN use @).
+                let pub_sink = decl.is_pub();
                 for field in &f.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -379,6 +410,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &field.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let fname = f.name.value.to_string();
                 figures.push(ResolvedFigureEntry {
@@ -388,7 +426,8 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Layer(l) => {
-                // Validate references in layer field expressions (layers CAN use @)
+                // Validate references in layer field expressions (layers CAN use @).
+                let pub_sink = decl.is_pub();
                 for field in &l.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -401,6 +440,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &field.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let lname = l.name.value.to_string();
                 layers.push(ResolvedLayerEntry {
