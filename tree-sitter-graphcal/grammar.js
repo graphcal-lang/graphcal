@@ -390,9 +390,11 @@ module.exports = grammar({
       repeat(seq("/", "..")),
     ),
 
-    // Import item with optional alias: name or name as alias
+    // Import item with optional alias and optional `pub` re-export
+    // marker: name, name as alias, pub name, pub name as alias.
     import_item: $ => seq(
       repeat($.attribute),
+      optional("pub"),
       field("name", $.identifier),
       optional(seq("as", field("alias", $.identifier))),
     ),
