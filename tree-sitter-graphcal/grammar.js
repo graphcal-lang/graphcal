@@ -124,6 +124,7 @@ module.exports = grammar({
     ),
 
     // base dim Length;
+    // dim D;                            -- required dim (bound via include)
     // dim Velocity = Length / Time;
     dimension_declaration: $ => seq(
       optional($.visibility),

@@ -494,11 +494,18 @@ pub struct BaseDimDecl {
     pub name: Spanned<DimName>,
 }
 
-/// Derived dimension declaration: `dim Velocity = Length / Time;`
+/// Dimension declaration with a body or required.
+///
+/// Two forms:
+/// - Derived: `dim Velocity = Length / Time;` — `definition: Some(...)`
+/// - Required: `dim D;` — `definition: None`. The library requires a
+///   dimension to be bound here from outside (via an include with
+///   dim bindings). Treated like an opaque base dimension when the
+///   library is compiled standalone.
 #[derive(Debug, Clone)]
 pub struct DimDecl {
     pub name: Spanned<DimName>,
-    pub definition: DimExpr,
+    pub definition: Option<DimExpr>,
 }
 
 /// Unit declaration: `unit km: Length = 1000 m;` or `const unit km: Length = 1000 m;`

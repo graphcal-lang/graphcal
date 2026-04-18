@@ -24,13 +24,20 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse `dim Name = DimExpr;` (derived dimensions only)
+    /// Parse a dimension declaration:
+    /// - Derived: `dim Name = DimExpr;`
+    /// - Required: `dim Name;` — the library requires a dimension
+    ///   bound from outside.
     pub(super) fn parse_dimension_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dimension)?;
         let name = self.parse_any_ident()?.into_spanned::<DimName>();
 
-        self.expect(Token::Eq)?;
-        let definition = self.parse_dim_expr()?;
+        let definition = if self.lexer.peek() == Some(&Token::Eq) {
+            self.expect(Token::Eq)?;
+            Some(self.parse_dim_expr()?)
+        } else {
+            None
+        };
 
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);

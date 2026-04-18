@@ -459,7 +459,9 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
         None,
         None,
     );
-    collect_dim_expr_refs(&d.definition, table);
+    if let Some(definition) = &d.definition {
+        collect_dim_expr_refs(definition, table);
+    }
 }
 
 fn collect_unit_decl(

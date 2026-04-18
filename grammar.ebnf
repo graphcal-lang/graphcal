@@ -193,11 +193,13 @@ const_decl
    = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
 
 (* --- dimension --- *)
-(* Two forms:
-   1. Base dimension:    base dim Length;
-   2. Derived dimension: dim Velocity = Length / Time; *)
+(* Three forms:
+   1. Base dimension:     base dim Length;
+   2. Required dimension: dim D;                       (must be bound via include)
+   3. Derived dimension:  dim Velocity = Length / Time; *)
 dimension_decl
    = "base", "dim", IDENT, ";"
+   | "dim", IDENT, ";"
    | "dim", IDENT, "=", dim_expr, ";";
 
 (* --- unit --- *)

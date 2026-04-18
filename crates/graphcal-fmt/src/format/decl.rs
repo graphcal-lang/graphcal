@@ -141,13 +141,16 @@ fn format_base_dim_decl(d: &BaseDimDecl) -> RcDoc<'static> {
         .append(RcDoc::text(";"))
 }
 
-/// `dim Name = DimExpr;`
+/// `dim Name = DimExpr;` or `dim Name;` (required).
 fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
-    RcDoc::text("dim ")
-        .append(RcDoc::text(d.name.value.as_str().to_string()))
-        .append(RcDoc::text(" = "))
-        .append(format_dim_expr_inline(&d.definition))
-        .append(RcDoc::text(";"))
+    let head = RcDoc::text("dim ").append(RcDoc::text(d.name.value.as_str().to_string()));
+    match &d.definition {
+        Some(def) => head
+            .append(RcDoc::text(" = "))
+            .append(format_dim_expr_inline(def))
+            .append(RcDoc::text(";")),
+        None => head.append(RcDoc::text(";")),
+    }
 }
 
 /// `unit name: Dim = scale unit_expr;` or `unit name: Dim;`

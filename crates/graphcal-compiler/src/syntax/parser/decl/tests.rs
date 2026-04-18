@@ -141,12 +141,26 @@ fn parse_derived_dimension() {
     match &file.declarations[0].kind {
         DeclKind::Dimension(d) => {
             assert_eq!(d.name.value.as_str(), "Velocity");
-            assert_eq!(d.definition.terms.len(), 2);
-            assert_eq!(d.definition.terms[0].term.name.name, "Length");
-            assert_eq!(d.definition.terms[1].op, MulDivOp::Div);
-            assert_eq!(d.definition.terms[1].term.name.name, "Time");
+            let def = d.definition.as_ref().expect("derived dim has a body");
+            assert_eq!(def.terms.len(), 2);
+            assert_eq!(def.terms[0].term.name.name, "Length");
+            assert_eq!(def.terms[1].op, MulDivOp::Div);
+            assert_eq!(def.terms[1].term.name.name, "Time");
         }
         _ => panic!("expected dimension"),
+    }
+}
+
+#[test]
+fn parse_required_dimension() {
+    // `dim D;` — the library requires a dimension to be bound from outside.
+    let file = Parser::new("dim Element;").parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Dimension(d) => {
+            assert_eq!(d.name.value.as_str(), "Element");
+            assert!(d.definition.is_none());
+        }
+        other => panic!("expected dimension, got {other:?}"),
     }
 }
 
