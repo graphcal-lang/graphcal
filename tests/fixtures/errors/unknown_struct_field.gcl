@@ -1,7 +1,7 @@
 // error: unknown field access on struct
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
-type Transfer {
+pub type Transfer {
     dv1: Velocity,
     dv2: Velocity,
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 506
 expression: formatted
 ---
 // expected_fail_multi_indexed_partial.gcl -- Bug reproducer for multi-index per-tuple-key expected_fail.
@@ -7,8 +8,8 @@ expression: formatted
 // Setup: (Normal, Cruise), (Eco, Cruise), and (Boost, Launch) all fail.
 // Only (Normal, Cruise) and (Boost, Launch) are marked expected_fail.
 // Expected: (Eco, Cruise) failure should still be reported.
-index Mode = { Normal, Eco, Boost };
-index Phase = { Launch, Cruise };
+pub index Mode = { Normal, Eco, Boost };
+pub index Phase = { Launch, Cruise };
 
 param threshold: Dimensionless[Mode, Phase] = {
     (Mode::Normal, Phase::Launch): 10.0,

@@ -1,4 +1,4 @@
-index Maneuver = { Departure, Correction, Insertion };
+pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
     Maneuver::Departure: 2.46 km/s,
     Maneuver::Correction: 0.5 km/s,

@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 487
 expression: formatted
 ---
 // parenthesized_exprs.gcl -- Test parenthesized dim and unit expressions
@@ -9,16 +10,16 @@ expression: formatted
 // 2. Parenthesized sub-expressions in unit literals (arithmetic context)
 // --- Parenthesized dim expressions ---
 // Voltage = kg * m^2 / (A * s^3)
-dim Voltage = Mass * Length^2 / ElectricCurrent / Time^3;
+pub dim Voltage = Mass * Length^2 / ElectricCurrent / Time^3;
 
 // Resistance = kg * m^2 / (A^2 * s^3)
-dim Resistance = Voltage / ElectricCurrent;
+pub dim Resistance = Voltage / ElectricCurrent;
 
 // HeatFlux = Power / Area = kg / s^3
-dim HeatFlux = Mass / Time^3;
+pub dim HeatFlux = Mass / Time^3;
 
 // Capacitance uses nested grouping: A^2 * s^4 / (kg * m^2)
-dim Capacitance = ElectricCurrent^2 * Time^4 / Mass / Length^2;
+pub dim Capacitance = ElectricCurrent^2 * Time^4 / Mass / Length^2;
 
 unit V: Voltage = 1.0 kg * m^2/A/s^3;
 unit ohm: Resistance = 1.0 V/A;

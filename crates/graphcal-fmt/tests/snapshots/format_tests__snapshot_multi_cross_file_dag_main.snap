@@ -1,9 +1,10 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 636
 expression: formatted
 ---
 // main.gcl -- includes a DAG from another file
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
 param speed: Velocity = 200.0 m/s;
 include "./lib.gcl"/double_speed(v: @speed) { result as doubled, mach as mach_number };

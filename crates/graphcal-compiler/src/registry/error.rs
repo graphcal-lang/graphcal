@@ -1088,13 +1088,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A `pub` declaration references a private type-system item in its type annotation.
+    /// A visible declaration references a private type-system item in
+    /// its written signature (A9 case 1).
+    ///
+    /// The `pub_kind` string is the declaration kind (e.g. `"param"`,
+    /// `"pub node"`, `"pub type"`). `param` is always visible (A5 §4.0)
+    /// and never carries an explicit annotation.
     #[error(
-        "`pub {pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its type annotation"
+        "`{pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its signature"
     )]
     #[diagnostic(
         code(graphcal::V003),
-        help("add `pub` to `{ref_name}` or remove `pub` from `{pub_name}`")
+        help(
+            "add `pub` to `{ref_name}` so it is visible across the include boundary, or stop exposing `{pub_name}`"
+        )
     )]
     PrivateInPublic {
         pub_kind: String,
@@ -1105,7 +1112,7 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("references private `{ref_name}`")]
         ref_span: SourceSpan,
-        #[label("declared `pub` here")]
+        #[label("visible declaration is here")]
         pub_span: SourceSpan,
     },
 

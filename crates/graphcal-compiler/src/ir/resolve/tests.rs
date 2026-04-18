@@ -276,7 +276,7 @@ fn resolve_import_decl_skipped() {
 fn resolve_indexed_param() {
     let resolved = parse_and_resolve(
         r"
-        index Color = { Red, Green, Blue };
+        pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -292,7 +292,7 @@ fn resolve_indexed_param() {
 fn resolve_for_comprehension() {
     let resolved = parse_and_resolve(
         r"
-        index Color = { Red, Green, Blue };
+        pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -311,7 +311,7 @@ fn resolve_for_comprehension() {
 fn resolve_scan_expression() {
     let resolved = parse_and_resolve(
         r"
-        index Step = { First, Second, Third };
+        pub index Step = { First, Second, Third };
         param vals: Dimensionless[Step] = {
             Step::First: 1.0,
             Step::Second: 2.0,
@@ -584,15 +584,93 @@ fn resolve_node_with_plain_pub_variant_literal_ok() {
 }
 
 #[test]
-fn resolve_param_with_private_dim_not_flagged_yet() {
-    // Post-A5 params are implicitly visible, so strictly a private dim
-    // in a param's type annotation should be flagged by V003. The V003
-    // checker currently only walks explicitly-pub declarations, so this
-    // case slips through — B4 audits V003 to cover implicitly-visible
-    // kinds.
+fn resolve_param_with_private_dim_fires_v003() {
+    // `param` is implicitly visible (A5 §4.0), so a private dim in a
+    // param's signature is V003 (A9 case 1).
     let source = r"
         dim Velocity = Length / Time;
         param speed: Velocity = 10.0 m/s;
     ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
+    );
+}
+
+#[test]
+fn resolve_param_with_pub_dim_ok() {
+    let source = r"
+        pub dim Velocity = Length / Time;
+        param speed: Velocity = 10.0 m/s;
+    ";
     parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_pub_dim_with_private_dim_fires_v003() {
+    // A9 case 1 also applies to dim/unit/type/index signatures.
+    let source = r"
+        dim Inner = Length;
+        pub dim Outer = Inner / Time;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "dim" && ref_name == "Inner")
+    );
+}
+
+#[test]
+fn resolve_pub_type_with_private_field_type_fires_v003() {
+    let source = r"
+        type Inner {}
+        pub type Outer { inner: Inner }
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "type" && ref_name == "Inner")
+    );
+}
+
+#[test]
+fn resolve_pub_union_type_with_private_member_fires_v003() {
+    let source = r"
+        pub type Ok {}
+        type Err {}
+        pub type Result = Ok | Err;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "type" && ref_name == "Err")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_index_with_private_dim_fires_v003() {
+    // A required range index carries a dim constraint that participates
+    // in A9 case 1.
+    let source = r"
+        dim Frequency = Time^-1;
+        pub(bind) index Channel: Frequency;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "index" && ref_name == "Frequency")
+    );
+}
+
+#[test]
+fn resolve_pub_unit_with_private_dim_fires_v003() {
+    let source = r"
+        dim Currency = Length;
+        pub unit usd: Currency = 1.0 m;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "unit" && ref_name == "Currency")
+    );
 }

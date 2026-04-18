@@ -1,14 +1,15 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 464
 expression: formatted
 ---
 // indexed.gcl -- Phase 5 milestone: indexed values
-dim Velocity = Length / Time;
-dim Mass = Mass;
+pub dim Velocity = Length / Time;
+pub dim Mass = Mass;
 
-index Maneuver = { Departure, Correction, Insertion };
+pub index Maneuver = { Departure, Correction, Insertion };
 
-index Phase = { Launch, Cruise, Arrival };
+pub index Phase = { Launch, Cruise, Arrival };
 
 param spacecraft_mass: Mass[Phase, Maneuver] = for p: Phase, m: Maneuver {
     if p == Phase::Launch && m == Maneuver::Departure {

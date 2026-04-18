@@ -1,5 +1,5 @@
 // lib.gcl -- library with a default named index
-index Phase = { Alpha, Beta };
+pub index Phase = { Alpha, Beta };
 
 param x: Dimensionless[Phase] = {
     Phase::Alpha: 1.0,

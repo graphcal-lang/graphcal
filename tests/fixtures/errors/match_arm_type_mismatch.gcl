@@ -1,11 +1,11 @@
 // Error: match arms return different types
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
-type Impulsive {
+pub type Impulsive {
     delta_v: Velocity,
 }
-type Coasting {}
-type ManeuverKind = Impulsive | Coasting;
+pub type Coasting {}
+pub type ManeuverKind = Impulsive | Coasting;
 
 param m: ManeuverKind = Coasting { };
 

@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 471
 expression: formatted
 ---
 // table_literal.gcl -- Table literal syntax sugar tests
-dim Velocity = Length / Time;
-dim Mass = Mass;
+pub dim Velocity = Length / Time;
+pub dim Mass = Mass;
 
-index Maneuver = { Departure, Correction, Insertion };
-index Phase = { Launch, Cruise, Arrival };
+pub index Maneuver = { Departure, Correction, Insertion };
+pub index Phase = { Launch, Cruise, Arrival };
 
 // 1D table literal
 param delta_v: Velocity[Maneuver] = table[Maneuver] {
@@ -45,7 +46,7 @@ param spacecraft_mass_map: Mass[Phase, Maneuver] = {
 };
 
 // 3D table literal
-index Scenario = { Nominal, Contingency };
+pub index Scenario = { Nominal, Contingency };
 
 param mass_3d: Mass[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
     [Scenario::Nominal]

@@ -1,7 +1,7 @@
 // error: missing fields in struct construction
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
-type Transfer {
+pub type Transfer {
     dv1: Velocity,
     dv2: Velocity,
 }

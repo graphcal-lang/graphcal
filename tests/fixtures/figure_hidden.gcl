@@ -2,7 +2,7 @@
 //
 // Plots without `pub` are hidden from standalone output.
 // Only the figure's combined chart should appear in the output.
-index Step = { First, Second, Third, Fourth };
+pub index Step = { First, Second, Third, Fourth };
 
 param x0: Dimensionless = 1.0;
 

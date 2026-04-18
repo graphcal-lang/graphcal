@@ -1,15 +1,15 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 473
+assertion_line: 487
 expression: rendered
 ---
-`pub node` `speed` references private dim `Velocity` in its type annotation
+`node` `speed` references private dim `Velocity` in its signature
     Diagnostic severity: error
-Begin snippet for private_in_public.gcl starting at line 3, column 1
+Begin snippet for private_in_public.gcl starting at line 7, column 1
 
-snippet line 3: param kmh: Velocity = 36.0 km/h;
-snippet line 4: pub node speed: Velocity = @kmh;
-    label at line 4, columns 1 to 32: declared `pub` here
-    label at line 4, columns 17 to 24: references private `Velocity`
-diagnostic help: add `pub` to `Velocity` or remove `pub` from `speed`
+snippet line 7: const node velocity_of: Velocity = 10.0 m/s;
+snippet line 8: pub node speed: Velocity = @velocity_of;
+    label at line 8, columns 1 to 40: visible declaration is here
+    label at line 8, columns 17 to 24: references private `Velocity`
+diagnostic help: add `pub` to `Velocity` so it is visible across the include boundary, or stop exposing `speed`
 diagnostic code: graphcal::V003

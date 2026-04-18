@@ -1,12 +1,12 @@
 // Error: non-exhaustive match — missing variant
-type Nominal {}
-type Warning {
+pub type Nominal {}
+pub type Warning {
     code: Dimensionless,
 }
-type Critical {
+pub type Critical {
     code: Dimensionless,
 }
-type Status = Nominal | Warning | Critical;
+pub type Status = Nominal | Warning | Critical;
 
 param s: Status = Nominal { };
 

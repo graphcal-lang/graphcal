@@ -150,9 +150,9 @@ fn forward_ref_unit() {
 #[test]
 fn forward_ref_derived_dimension_chain() {
     let source = r"
-        dim Jerk = Acceleration / Time;
-        dim Acceleration = Velocity / Time;
-        dim Velocity = Length / Time;
+        pub dim Jerk = Acceleration / Time;
+        pub dim Acceleration = Velocity / Time;
+        pub dim Velocity = Length / Time;
         param j: Jerk = 1.0 m/s^3;
     ";
     compile_and_eval(source).expect("chained forward-ref dimensions must compile and evaluate");

@@ -734,18 +734,26 @@ fn validate_attributes(
     })
 }
 
-/// Validate that `pub` declarations do not reference private type-system items in their
-/// type annotations (Rust's E0446 "private type in public interface").
+/// Validate that every visible declaration names only visible type-system
+/// symbols in its written signature (V003 / A9 case 1).
 ///
-/// Checks dimension names, index names, and struct type names in the type annotations
-/// of pub params, nodes, and const nodes. References to prelude dimensions (Length, etc.)
-/// and built-in types (Bool, Int, Dimensionless, Datetime) are always allowed.
+/// A declaration's signature is checked when the declaration is visible
+/// at the library boundary: either explicitly `pub` / `pub(bind)`, or
+/// implicitly visible (`param`, per A5 §4.0).
+///
+/// Built-in type-system items (prelude dimensions like `Length`, and
+/// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
+/// always considered visible.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-kind signature extraction for every declaration kind"
+)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<String>,
 ) -> Result<(), GraphcalError> {
-    use crate::syntax::ast::{IndexExpr, TypeExprKind};
+    use crate::syntax::ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -771,13 +779,9 @@ fn validate_private_in_public(
         clippy::items_after_statements,
         reason = "helper function scoped to this validation"
     )]
-    fn collect_type_refs(type_expr: &crate::syntax::ast::TypeExpr, refs: &mut Vec<(String, Span)>) {
+    fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
         match &type_expr.kind {
-            TypeExprKind::DimExpr(dim_expr) => {
-                for item in &dim_expr.terms {
-                    refs.push((item.term.name.name.clone(), item.term.span));
-                }
-            }
+            TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
             TypeExprKind::Indexed { base, indexes } => {
                 collect_type_refs(base, refs);
                 for idx in indexes {
@@ -799,53 +803,126 @@ fn validate_private_in_public(
         }
     }
 
-    for decl in &file.declarations {
-        if !decl.is_pub() {
-            continue;
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
+    fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
+        for item in &dim_expr.terms {
+            refs.push((item.term.name.name.clone(), item.term.span));
         }
+    }
 
-        let (kind, name, type_ann) = match &decl.kind {
-            DeclKind::Param(p) => ("param", p.name.value.to_string(), &p.type_ann),
-            DeclKind::Node(n) => ("node", n.name.value.to_string(), &n.type_ann),
-            DeclKind::ConstNode(c) => ("const node", c.name.value.to_string(), &c.type_ann),
-            _ => continue,
-        };
+    // Classify the owning declaration of a referenced name for the error
+    // message.
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
+    fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
+        match file
+            .declarations
+            .iter()
+            .find(|d| match &d.kind {
+                DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
+                DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
+                DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
+                DeclKind::Type(t) => t.name.value.as_str() == ref_name,
+                DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
+                _ => false,
+            })
+            .map(|d| &d.kind)
+        {
+            Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
+            Some(DeclKind::Index(_)) => "index",
+            Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
+            _ => "item",
+        }
+    }
 
-        let mut refs = Vec::new();
-        collect_type_refs(type_ann, &mut refs);
-
+    let emit = |pub_kind: &str,
+                pub_name: String,
+                pub_span: Span,
+                refs: &[(String, Span)]|
+     -> Result<(), GraphcalError> {
         for (ref_name, ref_span) in refs {
-            // Only flag if the name is a local declaration and is not pub.
-            if local_type_names.contains_key(&ref_name) && !pub_names.contains(&ref_name) {
-                let ref_kind = match &file
-                    .declarations
-                    .iter()
-                    .find(|d| match &d.kind {
-                        DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
-                        DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
-                        DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
-                        DeclKind::Type(t) => t.name.value.as_str() == ref_name,
-                        DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
-                        _ => false,
-                    })
-                    .map(|d| &d.kind)
-                {
-                    Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
-                    Some(DeclKind::Index(_)) => "index",
-                    Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
-                    _ => "item",
-                };
+            if local_type_names.contains_key(ref_name) && !pub_names.contains(ref_name) {
                 return Err(GraphcalError::PrivateInPublic {
-                    pub_kind: kind.to_string(),
-                    pub_name: name,
-                    ref_kind: ref_kind.to_string(),
-                    ref_name,
+                    pub_kind: pub_kind.to_string(),
+                    pub_name,
+                    ref_kind: ref_kind_for(file, ref_name).to_string(),
+                    ref_name: ref_name.clone(),
                     src: src.clone(),
-                    ref_span: ref_span.into(),
-                    pub_span: decl.span.into(),
+                    ref_span: (*ref_span).into(),
+                    pub_span: pub_span.into(),
                 });
             }
         }
+        Ok(())
+    };
+
+    for decl in &file.declarations {
+        // `param` is always visible (A5 §4.0); other kinds only when
+        // explicitly marked `pub` / `pub(bind)`.
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        if !decl.is_pub() && !implicitly_visible {
+            continue;
+        }
+
+        let mut refs: Vec<(String, Span)> = Vec::new();
+        let (kind, name): (&str, String) = match &decl.kind {
+            DeclKind::Param(p) => {
+                collect_type_refs(&p.type_ann, &mut refs);
+                ("param", p.name.value.to_string())
+            }
+            DeclKind::Node(n) => {
+                collect_type_refs(&n.type_ann, &mut refs);
+                ("node", n.name.value.to_string())
+            }
+            DeclKind::ConstNode(c) => {
+                collect_type_refs(&c.type_ann, &mut refs);
+                ("const node", c.name.value.to_string())
+            }
+            DeclKind::Dimension(d) => {
+                if let Some(def) = &d.definition {
+                    collect_dim_refs(def, &mut refs);
+                }
+                ("dim", d.name.value.to_string())
+            }
+            DeclKind::Unit(u) => {
+                collect_dim_refs(&u.dim_type, &mut refs);
+                ("unit", u.name.value.to_string())
+            }
+            DeclKind::Type(t) => {
+                if let Some(fields) = &t.fields {
+                    for field in fields {
+                        collect_type_refs(&field.type_ann, &mut refs);
+                    }
+                }
+                ("type", t.name.value.to_string())
+            }
+            DeclKind::UnionType(u) => {
+                for member in &u.members {
+                    refs.push((member.name.value.to_string(), member.name.span));
+                    for arg in &member.type_args {
+                        collect_type_refs(arg, &mut refs);
+                    }
+                }
+                ("type", u.name.value.to_string())
+            }
+            DeclKind::Index(idx) => {
+                if let IndexDeclKind::RequiredRange { dimension } = &idx.kind {
+                    collect_dim_refs(dimension, &mut refs);
+                }
+                ("index", idx.name.value.to_string())
+            }
+            // Sink kinds have no written signature; bodies are not A9 case 1.
+            // BaseDimension has no body. Import/Include are use-sites. Dag is
+            // a use-site at the signature level.
+            _ => continue,
+        };
+
+        emit(kind, name, decl.span, &refs)?;
     }
     Ok(())
 }
