@@ -268,6 +268,10 @@
         {
           "type": "attribute",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -896,6 +900,10 @@
         {
           "type": "unit_declaration",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -977,6 +985,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1387,6 +1405,10 @@
         },
         {
           "type": "figure_field",
+          "named": true
+        },
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -2087,6 +2109,10 @@
         {
           "type": "import_item",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -2184,6 +2210,10 @@
         },
         {
           "type": "import_item",
+          "named": true
+        },
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -2861,6 +2891,10 @@
         {
           "type": "variant",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -2952,6 +2986,10 @@
         },
         {
           "type": "layer_field",
+          "named": true
+        },
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -3861,6 +3899,10 @@
         {
           "type": "attribute",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -3994,6 +4036,10 @@
       "types": [
         {
           "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -4176,6 +4222,10 @@
         },
         {
           "type": "plot_field",
+          "named": true
+        },
+        {
+          "type": "visibility",
           "named": true
         }
       ]
@@ -5962,6 +6012,10 @@
         {
           "type": "union_members",
           "named": true
+        },
+        {
+          "type": "visibility",
+          "named": true
         }
       ]
     }
@@ -6424,6 +6478,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -6534,6 +6598,11 @@
         }
       ]
     }
+  },
+  {
+    "type": "visibility",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "wildcard",
@@ -6698,6 +6767,10 @@
   },
   {
     "type": "base",
+    "named": false
+  },
+  {
+    "type": "bind",
     "named": false
   },
   {

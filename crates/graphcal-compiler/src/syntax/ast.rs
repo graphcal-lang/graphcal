@@ -51,13 +51,54 @@ impl AttributeArg {
     }
 }
 
+/// Visibility and bindability annotation on a declaration.
+///
+/// Tracks the two-axis split from the visibility / bindability axioms:
+/// - `Private`: no annotation — the declaration is not visible outside the library.
+/// - `Public`: `pub` — visible at the include boundary but not bindable.
+/// - `PublicBind`: `pub(bind)` — visible AND bindable via include param bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Private,
+    Public,
+    PublicBind,
+}
+
+impl Visibility {
+    /// Returns `true` for `Public` and `PublicBind`.
+    #[must_use]
+    pub const fn is_public(self) -> bool {
+        matches!(self, Self::Public | Self::PublicBind)
+    }
+
+    /// Returns `true` for `PublicBind`.
+    #[must_use]
+    pub const fn is_bindable(self) -> bool {
+        matches!(self, Self::PublicBind)
+    }
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone)]
 pub struct Declaration {
     pub attributes: Vec<Attribute>,
-    pub is_pub: bool,
+    pub visibility: Visibility,
     pub kind: DeclKind,
     pub span: Span,
+}
+
+impl Declaration {
+    /// Returns `true` if this declaration is visible (`pub` or `pub(bind)`).
+    #[must_use]
+    pub const fn is_pub(&self) -> bool {
+        self.visibility.is_public()
+    }
+
+    /// Returns `true` if this declaration is bindable (`pub(bind)`).
+    #[must_use]
+    pub const fn is_bindable(&self) -> bool {
+        self.visibility.is_bindable()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1429,7 +1470,7 @@ mod tests {
         let file = File {
             declarations: vec![Declaration {
                 attributes: vec![],
-                is_pub: false,
+                visibility: Visibility::Private,
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {

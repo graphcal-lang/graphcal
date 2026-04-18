@@ -1,4 +1,4 @@
-use crate::syntax::ast::{DeclKind, Declaration, LayerDecl, PlotField};
+use crate::syntax::ast::{DeclKind, Declaration, LayerDecl, PlotField, Visibility};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
@@ -52,7 +52,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Layer(LayerDecl {
                 name,
                 plot_names,

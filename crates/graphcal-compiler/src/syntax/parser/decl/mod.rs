@@ -1,4 +1,4 @@
-use crate::syntax::ast::{Attribute, AttributeArg, Declaration};
+use crate::syntax::ast::{Attribute, AttributeArg, Declaration, Visibility};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -23,12 +23,26 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        // Optional `pub` visibility modifier
-        let pub_span = if self.lexer.peek() == Some(&Token::Pub) {
-            let (_, span) = self.advance()?;
-            Some(span)
+        // Optional `pub` or `pub(bind)` visibility modifier.
+        //
+        // `bind` is a contextual keyword parsed as a literal identifier
+        // inside the parens; it is not a reserved token so it remains a
+        // valid identifier elsewhere.
+        let (visibility, visibility_span) = if self.lexer.peek() == Some(&Token::Pub) {
+            let (_, pub_span) = self.advance()?;
+            if self.lexer.peek() == Some(&Token::LParen) {
+                self.expect(Token::LParen)?;
+                let (bind_tok, bind_span) = self.advance()?;
+                if bind_tok != Token::Ident || self.lexer.slice_at(bind_span) != "bind" {
+                    return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
+                }
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                (Visibility::PublicBind, Some(pub_span.merge(rparen_span)))
+            } else {
+                (Visibility::Public, Some(pub_span))
+            }
         } else {
-            None
+            (Visibility::Private, None)
         };
 
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
@@ -81,11 +95,10 @@ impl Parser<'_> {
         }?;
 
         // Set visibility
-        let is_pub = pub_span.is_some();
-        decl.is_pub = is_pub;
+        decl.visibility = visibility;
 
-        // Extend the declaration span to include `pub` keyword
-        if let Some(ps) = pub_span {
+        // Extend the declaration span to include `pub` / `pub(bind)` prefix
+        if let Some(ps) = visibility_span {
             decl.span = ps.merge(decl.span);
         }
 

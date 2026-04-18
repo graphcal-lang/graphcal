@@ -8,7 +8,7 @@
 
 use crate::syntax::ast::{
     AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportKind, IndexDeclKind, MulDivOp,
-    TypeExprKind,
+    TypeExprKind, Visibility,
 };
 use crate::syntax::parser::Parser;
 
@@ -1260,4 +1260,71 @@ fn parse_dag_with_import_parent() {
         }
         other => panic!("expected Dag, got {other:?}"),
     }
+}
+
+// --- Visibility / bindability annotations ---
+
+#[test]
+fn parse_private_declaration_has_private_visibility() {
+    let file = Parser::new("param x: Dimensionless = 1.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::Private);
+    assert!(!file.declarations[0].is_pub());
+    assert!(!file.declarations[0].is_bindable());
+}
+
+#[test]
+fn parse_pub_declaration_has_public_visibility() {
+    let file = Parser::new("pub param x: Dimensionless = 1.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::Public);
+    assert!(file.declarations[0].is_pub());
+    assert!(!file.declarations[0].is_bindable());
+}
+
+#[test]
+fn parse_pub_bind_declaration_has_public_bind_visibility() {
+    let file = Parser::new("pub(bind) index Phase = { Design, Test };")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::PublicBind);
+    assert!(file.declarations[0].is_pub());
+    assert!(file.declarations[0].is_bindable());
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => assert_eq!(idx.name.value.as_str(), "Phase"),
+        other => panic!("expected Index, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_pub_bind_spans_extend_over_annotation() {
+    // The declaration span should start at `pub` — the annotation is included.
+    let src = "pub(bind) index Phase = { Design, Test };";
+    let file = Parser::new(src).parse_file().unwrap();
+    let span = file.declarations[0].span;
+    assert_eq!(span.offset(), 0);
+    // Span covers from `pub` up through the declaration body; `;` is
+    // consumed but not included in the per-decl span for index.
+    assert!(span.len() >= "pub(bind) index Phase = { Design, Test }".len());
+}
+
+#[test]
+fn parse_pub_paren_without_bind_is_error() {
+    // `pub(foo)` should not parse — `bind` is the only contextual keyword.
+    assert!(
+        Parser::new("pub(foo) param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_unclosed_paren_is_error() {
+    assert!(
+        Parser::new("pub(bind param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
 }

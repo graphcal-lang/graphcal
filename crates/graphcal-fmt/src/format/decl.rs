@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
     IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -35,11 +35,11 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
     };
 
-    // Prepend `pub ` if the declaration is public
-    let body = if decl.is_pub {
-        RcDoc::text("pub ").append(body)
-    } else {
-        body
+    // Prepend the visibility annotation (if any).
+    let body = match decl.visibility {
+        Visibility::Private => body,
+        Visibility::Public => RcDoc::text("pub ").append(body),
+        Visibility::PublicBind => RcDoc::text("pub(bind) ").append(body),
     };
 
     if decl.attributes.is_empty() {

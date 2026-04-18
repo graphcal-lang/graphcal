@@ -1,4 +1,4 @@
-use crate::syntax::ast::{DagDecl, DeclKind, Declaration};
+use crate::syntax::ast::{DagDecl, DeclKind, Declaration, Visibility};
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
@@ -30,7 +30,7 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Dag(DagDecl { name, body, span }),
             span,
         })

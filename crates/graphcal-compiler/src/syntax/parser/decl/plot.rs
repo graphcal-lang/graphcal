@@ -1,5 +1,6 @@
 use crate::syntax::ast::{
     DeclKind, Declaration, Encoding, EncodingChannel, MarkSpec, MarkType, PlotDecl, PlotField,
+    Visibility,
 };
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
@@ -56,7 +57,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Plot(PlotDecl {
                 name,
                 mark,

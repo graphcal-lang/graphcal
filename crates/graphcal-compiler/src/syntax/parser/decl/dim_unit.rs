@@ -1,4 +1,4 @@
-use crate::syntax::ast::{BaseDimDecl, DeclKind, Declaration, DimDecl};
+use crate::syntax::ast::{BaseDimDecl, DeclKind, Declaration, DimDecl, Visibility};
 use crate::syntax::names::{DimName, UnitName};
 use crate::syntax::token::Token;
 
@@ -18,7 +18,7 @@ impl Parser<'_> {
         let span = base_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::BaseDimension(BaseDimDecl { name }),
             span,
         })
@@ -36,7 +36,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Dimension(DimDecl { name, definition }),
             span,
         })
@@ -75,7 +75,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
                 name,
                 dim_type,

@@ -137,8 +137,14 @@ source_file
 (* ================================================================== *)
 (* 3. Declarations                                                    *)
 (* ================================================================== *)
+(* Declarations may carry an optional visibility annotation:
+   - bare:         private (not visible outside the library)
+   - "pub":        visible at include boundary (not bindable)
+   - "pub(bind)":  visible AND bindable via include param bindings
+   "bind" is a contextual keyword parsed only inside the parens after
+   "pub"; it remains a valid identifier elsewhere. *)
 declaration
-   = { attribute }, [ "pub" ], declaration_kind;
+   = { attribute }, [ "pub", [ "(", "bind", ")" ] ], declaration_kind;
 
 attribute
    = "#", "[", IDENT, [ "(", [ attribute_arg_list ], ")" ], "]";

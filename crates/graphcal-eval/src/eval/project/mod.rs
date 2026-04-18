@@ -288,7 +288,7 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
 pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> HashSet<String> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
-        if !decl.is_pub {
+        if !decl.is_pub() {
             continue;
         }
         let name = match &decl.kind {

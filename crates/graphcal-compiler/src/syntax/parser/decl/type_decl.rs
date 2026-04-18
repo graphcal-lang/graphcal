@@ -1,4 +1,6 @@
-use crate::syntax::ast::{DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl};
+use crate::syntax::ast::{
+    DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl, Visibility,
+};
 use crate::syntax::names::{FieldName, StructTypeName};
 use crate::syntax::token::Token;
 
@@ -33,7 +35,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     kind: DeclKind::Type(TypeDecl {
                         name,
                         generic_params,
@@ -48,7 +50,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     kind: DeclKind::Type(TypeDecl {
                         name,
                         generic_params,
@@ -65,7 +67,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     kind: DeclKind::UnionType(UnionTypeDecl {
                         name,
                         generic_params,
