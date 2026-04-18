@@ -119,7 +119,7 @@ You can define entirely new base dimensions for domain-specific quantities:
 
 ```
 base dim Information;
-unit bit: Information;
+base unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
 

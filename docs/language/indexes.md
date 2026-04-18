@@ -368,15 +368,19 @@ An index can be declared **without** specifying its variants or range values. Th
 ### Required Named Index
 
 ```
-index Phase;
+pub(bind) index Phase;
 ```
 
 This declares a named index `Phase` with no variants. A file importing this library must bind it to a concrete named index.
 
+Required indexes form the library's bindable interface and must carry
+`pub(bind)` (see [Visibility and Bindability](multi-file.md#visibility-and-bindability)).
+Omitting the annotation — or writing plain `pub` — is error `V002`.
+
 ### Required Range Index
 
 ```
-index Step: Time;
+pub(bind) index Step: Time;
 ```
 
 This declares a range index `Step` constrained to have dimension `Time`. The importer must bind it to a concrete range index with the same dimension.
@@ -386,10 +390,10 @@ This declares a range index `Step` constrained to have dimension `Time`. The imp
 Required indexes are used exactly like concrete indexes — in type annotations, `for` comprehensions, index access, `match`, and map/table literals:
 
 ```
-index Phase;
+pub(bind) index Phase;
 
-param cost: Dimensionless[Phase];
-node total: Dimensionless = sum(for p: Phase { @cost[p] });
+pub param cost: Dimensionless[Phase];
+pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
 The file cannot be evaluated standalone. It must be imported with a binding that supplies a concrete index (see [Index Bindings](multi-file.md#index-bindings)).

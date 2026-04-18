@@ -146,51 +146,167 @@ import "./file_b.gcl" { velocity as velocity_b };
 node diff: Velocity = @velocity_a - @velocity_b;
 ```
 
-## Visibility (`pub`)
+## Visibility and Bindability
 
-Declarations are **private by default**. Only declarations marked with the `pub` keyword are visible to other files:
+Graphcal's visibility system uses a **two-axis split**:
+
+- **Visibility** (`pub`): whether a declaration is visible across the include / import boundary.
+- **Bindability** (`pub(bind)`): whether importers may *override* it via an include or import binding.
+
+Bindability implies visibility — every `pub(bind)` item is also `pub`.
+
+| Annotation   | Visible? | Bindable? | Use for                                                           |
+|--------------|:--------:|:---------:|-------------------------------------------------------------------|
+| (none)       | no       | no        | internal helpers, private values                                  |
+| `pub`        | yes      | no        | constants, derived dims / units / types consumers read but don't rewire |
+| `pub(bind)`  | yes      | yes       | the library's bindable interface: required indexes / types / dims |
+
+`param` is a special case (axiom A5): `param` declarations never carry an
+annotation. Required `param` is implicitly part of the bindable interface,
+and defaulted `param` is implicitly bindable-with-default. Writing `pub param`
+or `pub(bind) param` is a parse error.
+
+```
+pub param dry_mass: Mass = 1200.0 kg;   // parse error — drop the `pub`
+param dry_mass: Mass = 1200.0 kg;       // OK
+```
+
+### Private by default
+
+Declarations without an annotation are private:
 
 ```
 pub param dry_mass: Mass = 1200.0 kg;   // visible to importers
-param internal: Mass = 500.0 kg;        // private — not importable
+param internal: Mass = 500.0 kg;        // private — but bindable because
+                                        // `param` is always bindable (A5)
 ```
 
-Attempting to import a private item produces error `V001`:
+Attempting to import a private non-`param` item produces error `V001`:
 
 ```
-// ERROR: cannot import private item `internal` from `./lib.gcl`
-include "./lib.gcl" { internal };
+// ERROR: cannot import private item `internal_helper` from `./lib.gcl`
+import "./lib.gcl" { internal_helper };
 ```
 
-### Required items must be `pub`
+### Required items must be `pub(bind)`
 
-Required params (no default value) and required indexes form the public interface of a file — they **must** be declared `pub`. Omitting `pub` on a required item is error `V002`:
+Required `index` / `type` / `dim` declarations (no body) form the *bindable*
+interface of a library — importers must supply a binding. They must therefore
+be declared `pub(bind)`. Writing bare `pub` on a required item is error `V002`:
 
 ```
-// ERROR: required param must be declared `pub`
-param dry_mass: Mass;
+// ERROR: required index must be declared `pub(bind)`
+pub index Phase;
 
 // OK
-pub param dry_mass: Mass;
+pub(bind) index Phase;
+
+// Required types and dims follow the same rule.
+pub(bind) type Element;
+pub(bind) dim Distance;
 ```
 
-### Private-in-public
+Required `param` is excluded from V002 (annotation-free; implicitly bindable).
 
-A `pub` declaration must not reference private type-system items (`dim`, `type`, `index`, `base dim`) in its type annotation. This prevents exposing types that importers cannot see. Violating this rule is error `V003`:
+### Private-in-public (`V003`)
+
+A visible declaration must not reference private type-system items (`dim`,
+`type`, `index`, `base dim`) in its written signature. This prevents leaking
+names that importers cannot see. Violating this rule is error `V003`:
 
 ```
 dim Velocity = Length / Time;
-// ERROR: `pub param` references private dim `Velocity`
-pub param speed: Velocity = 10.0 m/s;
+// ERROR: `pub node` `speed` references private dim `Velocity`
+pub node speed: Velocity = 10.0 m/s;
 
-// Fix: make the dim public too
+// Fix: make the dim visible too.
 pub dim Velocity = Length / Time;
-pub param speed: Velocity = 10.0 m/s;
+pub node speed: Velocity = 10.0 m/s;
 ```
 
-### `pub` indexes and variant literals
+### `pub(bind)` indexes and variant literals (`V004`)
 
-When an index is declared `pub`, its variant literals cannot be used in the defining file's expressions. This is because importers may override the index variants via parameterized imports. Use `param` declarations for variant-specific values instead. Violating this rule is error `V004`.
+When an `index` is declared `pub(bind)`, its variant literals cannot appear
+in the defining file's `node` / `const` bodies or in public sinks
+(`plot` / `assert` / `figure` / `layer`). The reason: importers may rebind
+the index to a different variant set, which would orphan the literal.
+Either abstract over the index with `for p: I { ... }` or move the
+variant-specific value into a `param`. Violating the rule is error `V004`:
+
+```
+pub(bind) index Phase = { Design, Test };
+// ERROR: variant literal `Phase::Design` of `pub(bind) index` cannot be
+//        used in the defining file
+pub node cost: Dimensionless = if @mode == Phase::Design { 1.0 } else { 2.0 };
+```
+
+### Include overrides must reconcile (`V005`)
+
+If an include overrides a bindable symbol `s` and some kept declaration in
+the merged IR still mentions a name nominally tied to `s` (e.g. a variant
+literal of an overridden `index`, a field access of an overridden `type`),
+the importer must *also* re-bind that dependent declaration. Otherwise the
+orphan mention has no meaning in the merged graph — error `V005`:
+
+```
+// lib.gcl
+pub(bind) index Phase = { Design, Test };
+pub param cost: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };
+
+// main.gcl
+pub(bind) index NewPhase = { Review, Ship };
+// ERROR: include overrides index `Phase` but does not re-bind `cost`,
+//        whose default mentions `Phase::Design`
+include "./lib.gcl"(Phase: NewPhase);
+
+// Fix: re-bind `cost` as well.
+include "./lib.gcl"(
+    Phase: NewPhase,
+    cost: { NewPhase::Review: 1.0, NewPhase::Ship: 2.0 },
+);
+```
+
+`dim` and `param` overrides never trigger V005: their substitution is total
+(algebraic / by value) and leaves no orphan nominal mentions.
+
+### Re-exports and generics leakage (`V006`)
+
+A `pub include` / `pub import` re-exports the dependency's `pub` items under
+the importer's namespace. If the include's bindings rename a `pub(bind)`
+symbol to a name that is *private* at the importer, and that private name
+appears in a re-exported signature, downstream consumers would see a
+symbol they cannot name. That's error `V006`:
+
+```
+// container.gcl
+pub(bind) type Element;
+pub type Widget { item: Element }
+
+// main.gcl
+type Inner {}                         // private at the importer
+// ERROR: re-exported type `Widget`'s signature references private type `Inner`
+pub include "./container.gcl"(Element: Inner) as c;
+
+// Fix: make the substituted name visible too.
+pub type Inner {}
+pub include "./container.gcl"(Element: Inner) as c;
+```
+
+### Re-export syntax
+
+Prefix an `import` or `include` with `pub` to re-export the dependency's
+`pub` items at the importer:
+
+```
+pub import "./types.gcl";                // whole-module re-export
+pub import "./math.gcl" { sqrt, clamp }; // selective with every item re-exported
+
+import "./mixed.gcl" { pub public_helper, private_helper };
+//                     ^^^ only `public_helper` is re-exported
+```
+
+`pub include` behaves the same way for DAG instantiations. The
+re-exported surface is subject to V006.
 
 ## What Can Be Imported
 
@@ -291,7 +407,7 @@ A library declares a [required index](indexes.md#required-indexes):
 
 ```
 // lib/budget.gcl
-pub index Phase;
+pub(bind) index Phase;
 
 pub param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
@@ -323,7 +439,7 @@ When binding a required range index, the concrete range index must have the **sa
 
 ```
 // lib.gcl
-index Step: Time;   // requires dimension Time
+pub(bind) index Step: Time;   // requires dimension Time
 
 // main.gcl
 index MyStep = linspace(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
@@ -488,7 +604,7 @@ project/
 
 ```
 // lib/budget.gcl
-pub index Phase;
+pub(bind) index Phase;
 
 pub param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
