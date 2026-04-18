@@ -1,0 +1,15 @@
+// main.gcl -- overrides Phase and re-binds cost in the same include → OK.
+//
+// Satisfies A8 by supplying a fresh `cost` value whose keys are
+// variants of the replacement index `MyPhase`.
+index MyPhase = { Plan, Make };
+
+include "./lib.gcl"(
+    Phase: MyPhase { },
+    cost: {
+        MyPhase::Plan: 10.0,
+        MyPhase::Make: 20.0,
+    },
+) { total };
+
+node result: Dimensionless = @total;

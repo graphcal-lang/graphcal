@@ -1422,6 +1422,44 @@ fn project_instantiated_import_dim_binding() {
 }
 
 #[test]
+fn project_include_overrides_index_no_param_binding_v005() {
+    // V005: overriding `Phase` orphans the `cost` default (which mentions
+    // `Phase::Design` / `Phase::Build`) because the importer forgot to
+    // re-bind `cost` in the same include statement.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/include_overrides_index_no_param_binding/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    match result {
+        Err(CompileError::Eval(GraphcalError::IncludeMustReconcileOverride {
+            overridden,
+            overridden_kind,
+            orphan_decl,
+            ..
+        })) => {
+            assert_eq!(overridden, "Phase");
+            assert_eq!(overridden_kind, "index");
+            assert_eq!(orphan_decl, "cost");
+        }
+        other => panic!("expected IncludeMustReconcileOverride, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_include_overrides_index_with_param_binding_ok() {
+    // Positive companion to project_include_overrides_index_no_param_binding_v005:
+    // supplying a fresh `cost` binding satisfies A8.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/include_overrides_index_with_param_binding/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result_val = find_value(&result, "result");
+    // total = 10 + 20 = 30
+    assert!(
+        (result_val - 30.0).abs() < 1e-10,
+        "result = {result_val}, expected 30.0"
+    );
+}
+
+#[test]
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");
