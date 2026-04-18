@@ -527,19 +527,22 @@ pub struct UnitDef {
     pub span: Span,
 }
 
-/// Type declaration: record types and unit types.
+/// Type declaration: record types and required types.
 ///
-/// Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
-///
-/// Empty record type: `type ECI {}`
-///
-/// Unit type: `type Coasting;`
+/// Forms:
+/// - Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+/// - Empty record type (unit-like marker): `type Eci {}`
+/// - Required type: `type T;` — the library requires a type bound from
+///   outside; no body at declaration.
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam>,
-    /// Fields of the type. Empty for unit types and empty record types.
-    pub fields: Vec<FieldDecl>,
+    /// Fields of the type:
+    /// - `None` — required type (`type T;`, no body).
+    /// - `Some(vec![])` — empty record (`type T {}`).
+    /// - `Some(non-empty)` — record with fields.
+    pub fields: Option<Vec<FieldDecl>>,
 }
 
 /// Union type declaration: `type ManeuverKind = Impulsive | Coasting;`

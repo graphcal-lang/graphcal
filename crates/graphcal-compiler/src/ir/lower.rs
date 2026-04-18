@@ -1805,18 +1805,22 @@ fn register_type_decl(t: &crate::syntax::ast::TypeDecl, registry: &mut RegistryB
         })
         .collect();
 
-    let kind = if t.fields.is_empty() {
-        types::TypeDefKind::Unit
-    } else {
-        let fields = t
-            .fields
-            .iter()
-            .map(|f| types::StructField {
-                name: f.name.value.clone(),
-                type_ann: f.type_ann.clone(),
-            })
-            .collect();
-        types::TypeDefKind::Record { fields }
+    // Required types (`type T;` with no body) are treated like opaque
+    // unit types at the library level; include-time substitution rewires
+    // references through the importer's type bindings (see plan §C1).
+    let kind = match &t.fields {
+        None => types::TypeDefKind::Unit,
+        Some(fields) if fields.is_empty() => types::TypeDefKind::Unit,
+        Some(fields) => {
+            let fields = fields
+                .iter()
+                .map(|f| types::StructField {
+                    name: f.name.value.clone(),
+                    type_ann: f.type_ann.clone(),
+                })
+                .collect();
+            types::TypeDefKind::Record { fields }
+        }
     };
 
     registry.register_type(types::TypeDef {

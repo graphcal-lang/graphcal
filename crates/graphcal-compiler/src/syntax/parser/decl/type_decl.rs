@@ -21,7 +21,9 @@ impl Parser<'_> {
             Vec::new()
         };
 
-        // Disambiguate: record type, unit type, or union type
+        // Disambiguate: record type, required type, or union type.
+        // After the visibility-bindability axioms rework, `type T;` is a
+        // REQUIRED type; the empty record / unit-like marker is `type T {}`.
         match self.lexer.peek() {
             Some(&Token::LBrace) => {
                 // Record type: `type Foo { field: Type, ... }` or empty `type Foo {}`
@@ -39,13 +41,13 @@ impl Parser<'_> {
                     kind: DeclKind::Type(TypeDecl {
                         name,
                         generic_params,
-                        fields,
+                        fields: Some(fields),
                     }),
                     span,
                 })
             }
             Some(&Token::Semicolon) => {
-                // Unit type: `type Foo;`
+                // Required type: `type Foo;` — bound from outside via include.
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
@@ -54,7 +56,7 @@ impl Parser<'_> {
                     kind: DeclKind::Type(TypeDecl {
                         name,
                         generic_params,
-                        fields: Vec::new(),
+                        fields: None,
                     }),
                     span,
                 })

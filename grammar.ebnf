@@ -218,15 +218,16 @@ unit_scale
    expressions are allowed: numbers, PI, E, and arithmetic operators. *)
 (* --- type --- *)
 (* Three forms of type declaration:
-   1. Unit type (no fields):       type Eci;
+   1. Required type (no body):     type Element;        (must be bound via include)
    2. Record type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
+      or empty record / marker:    type Eci {}
    3. Union type (sum of types):   type ManeuverKind = Impulsive | LowThrust;
 *)
 type_decl
    = "type", IDENT, [ generic_params ], type_decl_body;
 
 type_decl_body
-   = ";"                                              (* unit type *)
+   = ";"                                              (* required type *)
    | "{", [ field_list ], "}"                         (* record type *)
    | "=", union_member_list, ";";                     (* union type *)
 

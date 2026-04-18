@@ -1,5 +1,5 @@
 // Error: non-exhaustive match — missing variant
-type Nominal;
+type Nominal {}
 type Warning {
     code: Dimensionless,
 }

@@ -150,8 +150,8 @@ module.exports = grammar({
     ),
 
     // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type
-    // type Eci {}                                            -- empty record type
-    // type Coasting;                                         -- unit type
+    // type Eci {}                                            -- empty record / marker
+    // type Element;                                          -- required type (bound via include)
     // type ManeuverKind = Impulsive | Coasting;              -- union type
     // type Result<D: Dim> = Ok<D> | Err;                     -- generic union type
     type_declaration: $ => seq(

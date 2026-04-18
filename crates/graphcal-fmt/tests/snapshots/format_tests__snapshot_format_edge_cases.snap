@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 972
 expression: formatted
 ---
 // format_edge_cases.gcl -- Edge cases for formatter: long lines, deep nesting, complex expressions
@@ -8,8 +9,8 @@ dim Acceleration = Length / Time^2;
 dim Frequency = Time^-1;
 dim GravParam = Length^3 / Time^2;
 
-type Eci;
-type Body;
+type Eci {}
+type Body {}
 
 type Vec3<D: Dim, F: Type> {
     x: D,

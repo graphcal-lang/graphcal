@@ -39,7 +39,7 @@ node transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s}
 node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;
 
 // Unit type and union with bare variant (no fields)
-type Nominal;
+type Nominal {}
 type Warning {
     code: Dimensionless,
 }

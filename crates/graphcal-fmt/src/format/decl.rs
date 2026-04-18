@@ -182,7 +182,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `type Name;` or `type Name<...> { ... }`
+/// `type Name { ... }` or `type Name;` (required) or `type Name {}` (empty).
 fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
@@ -190,18 +190,18 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
-    if d.fields.is_empty() {
-        // Unit type or empty record type — format as `type Name;`
-        return header.append(RcDoc::text(";"));
+    match &d.fields {
+        None => header.append(RcDoc::text(";")),
+        Some(fields) if fields.is_empty() => header.append(RcDoc::text(" {}")),
+        Some(fields) => {
+            let formatted = format_field_decls(fmt, fields);
+            header
+                .append(RcDoc::text(" {"))
+                .append(RcDoc::hardline().append(formatted).nest(INDENT))
+                .append(RcDoc::hardline())
+                .append(RcDoc::text("}"))
+        }
     }
-
-    // Record type with fields
-    let fields = format_field_decls(fmt, &d.fields);
-    header
-        .append(RcDoc::text(" {"))
-        .append(RcDoc::hardline().append(fields).nest(INDENT))
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("}"))
 }
 
 /// `type Name = A | B | C;` or `type Name<D: Dim> = Ok<D> | Err;`

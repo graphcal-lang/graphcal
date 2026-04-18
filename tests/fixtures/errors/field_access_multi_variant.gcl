@@ -4,7 +4,7 @@ dim Velocity = Length / Time;
 type Impulsive {
     delta_v: Velocity,
 }
-type Coasting;
+type Coasting {}
 type ManeuverKind = Impulsive | Coasting;
 
 param m: ManeuverKind = Coasting { };
