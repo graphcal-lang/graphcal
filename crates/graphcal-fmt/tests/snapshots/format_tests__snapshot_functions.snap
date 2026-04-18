@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 461
 expression: formatted
 ---
 // functions.gcl -- Phase 6 milestone: DAG blocks replace user-defined functions
@@ -17,20 +18,20 @@ const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 
 // Non-generic DAG: orbital velocity
 dag orbital_velocity {
-    pub param gm: GravParam;
+    param gm: GravParam;
     
-    pub param r: Length;
+    param r: Length;
     
     node v: Velocity = sqrt(@gm / @r);
 }
 
 // DAG with multiple internal nodes: Hohmann transfer delta-v
 dag hohmann_dv {
-    pub param gm: GravParam;
+    param gm: GravParam;
     
-    pub param r1: Length;
+    param r1: Length;
     
-    pub param r2: Length;
+    param r2: Length;
     
     import .. { TransferResult };
     

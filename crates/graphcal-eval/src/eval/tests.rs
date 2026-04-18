@@ -655,7 +655,7 @@ fn override_unknown_param_errors() {
 
 #[test]
 fn required_param_without_override_errors() {
-    let source = "pub param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
+    let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let result = compile_and_eval_with_overrides(source, "test", &HashMap::new(), true);
     match result {
         Err(CompileError::Eval(GraphcalError::RequiredParamNotProvided { name, .. })) => {
@@ -667,7 +667,7 @@ fn required_param_without_override_errors() {
 
 #[test]
 fn required_param_with_override_succeeds() {
-    let source = "pub param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
+    let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("x"), parse_expr("42.0"));
     let result = compile_and_eval_with_overrides(source, "test", &overrides, true).unwrap();
@@ -1481,8 +1481,8 @@ fn inline_dag_from_source() {
 dim Velocity = Length / Time;
 
 dag add_velocities {
-    pub param a: Velocity;
-    pub param b: Velocity;
+    param a: Velocity;
+    param b: Velocity;
     node sum: Velocity = @a + @b;
 }
 

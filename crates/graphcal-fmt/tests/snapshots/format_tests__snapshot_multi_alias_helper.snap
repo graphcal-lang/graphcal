@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 541
 expression: formatted
 ---
-pub param x: Dimensionless = 42.0;
+param x: Dimensionless = 42.0;

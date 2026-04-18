@@ -1124,4 +1124,21 @@ pub enum GraphcalError {
         #[label("variant literal of pub index")]
         span: SourceSpan,
     },
+
+    /// A `param` carries a `pub` or `pub(bind)` annotation.
+    ///
+    /// Params are always visible and bindable from the include site;
+    /// the annotation conveys no additional information.
+    #[error("`param` declarations cannot carry a `pub` or `pub(bind)` annotation")]
+    #[diagnostic(
+        code(graphcal::V007),
+        help("remove the annotation — params are always visible and bindable via include")
+    )]
+    ParamAnnotationForbidden {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("annotation not allowed on `param`")]
+        span: SourceSpan,
+    },
 }

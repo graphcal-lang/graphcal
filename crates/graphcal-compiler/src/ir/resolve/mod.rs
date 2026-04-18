@@ -126,10 +126,13 @@ fn collect_local_declarations(
     let mut source_order = Vec::new();
     let mut assert_names: HashSet<String> = HashSet::new();
 
-    // Collect names of all `pub` declarations (including type-system declarations).
+    // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`
+    // declarations contribute; params are implicitly visible+bindable under
+    // A5 and always contribute.
     let mut pub_names: HashSet<String> = HashSet::new();
     for decl in &file.declarations {
-        if !decl.is_pub() {
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        if !decl.is_pub() && !implicitly_visible {
             continue;
         }
         let Some((name, _)) = decl.kind.name_and_span() else {
@@ -138,12 +141,17 @@ fn collect_local_declarations(
         pub_names.insert(name.to_string());
     }
 
-    // Validate: required params and indexes must be `pub`.
+    // Validate annotations on params (A5) and required indexes (V002).
+    //
+    // Params must never carry `pub` or `pub(bind)` — they are implicitly
+    // visible and bindable at every include site. Required indexes
+    // (without a body) are still checked for visibility in this phase;
+    // B1 will generalise this to `required must be bindable` for all
+    // non-param kinds.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Param(p) if p.value.is_none() && !decl.is_pub() => {
-                return Err(GraphcalError::RequiredItemMustBePub {
-                    kind: "param".to_string(),
+            DeclKind::Param(p) if decl.is_pub() => {
+                return Err(GraphcalError::ParamAnnotationForbidden {
                     name: p.name.value.to_string(),
                     src: src.clone(),
                     span: p.name.span.into(),

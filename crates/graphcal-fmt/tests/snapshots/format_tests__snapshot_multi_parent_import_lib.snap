@@ -1,7 +1,8 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 792
 expression: formatted
 ---
 // lib.gcl -- A library file in the parent directory
-pub param base_value: Dimensionless = 42.0;
+param base_value: Dimensionless = 42.0;
 pub const node scale: Dimensionless = 2.0;

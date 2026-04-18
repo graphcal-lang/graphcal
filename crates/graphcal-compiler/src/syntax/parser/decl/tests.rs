@@ -1321,7 +1321,9 @@ fn parse_private_declaration_has_private_visibility() {
 
 #[test]
 fn parse_pub_declaration_has_public_visibility() {
-    let file = Parser::new("pub param x: Dimensionless = 1.0;")
+    // The parser accepts any `pub` decl; the resolver rejects `pub param`
+    // separately (see ParamAnnotationForbidden / V007).
+    let file = Parser::new("pub node y: Dimensionless = 1.0;")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations[0].visibility, Visibility::Public);

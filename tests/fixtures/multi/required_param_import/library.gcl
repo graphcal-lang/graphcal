@@ -1,6 +1,6 @@
 // A library with a required param (no default value).
 // The importer must provide `radius` via a parameterized import.
-pub param radius: Length;
+param radius: Length;
 
 const node pi: Dimensionless = 3.14159265358979;
 

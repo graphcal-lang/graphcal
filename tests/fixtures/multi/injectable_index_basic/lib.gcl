@@ -1,6 +1,6 @@
 // lib.gcl -- library with a required named index
 pub index Phase;
 
-pub param cost: Dimensionless[Phase];
+param cost: Dimensionless[Phase];
 
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });

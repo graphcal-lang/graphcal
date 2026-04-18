@@ -1,3 +1,3 @@
 // Library file: param x and node y that depends on @x.
-pub param x: Dimensionless = 10.0;
+param x: Dimensionless = 10.0;
 pub node y: Dimensionless = @x * 2.0;

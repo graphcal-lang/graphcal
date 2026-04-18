@@ -1,8 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 770
 expression: formatted
 ---
 // params.gcl -- tunable parameters
-pub param dry_mass: Mass = 1200.0 kg;
-pub param fuel_mass: Mass = 2800.0 kg;
-pub param isp: Time = 320.0 s;
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+param isp: Time = 320.0 s;

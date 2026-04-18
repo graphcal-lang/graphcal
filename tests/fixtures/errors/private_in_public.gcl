@@ -1,3 +1,4 @@
-// Error: pub param references private dim in its type annotation.
+// Error: pub node references private dim in its type annotation.
 dim Velocity = Length / Time;
-pub param speed: Velocity = 10.0 m/s;
+param kmh: Velocity = 36.0 km/h;
+pub node speed: Velocity = @kmh;

@@ -1,1 +1,1 @@
-pub param transfer_dv: Velocity = 2460.0 m/s;
+param transfer_dv: Velocity = 2460.0 m/s;
