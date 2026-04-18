@@ -182,6 +182,11 @@ pub(super) struct DeferredInstantiatedImport {
     /// Key = original name in dep, Value = list of attributes from the import item.
     pub(super) import_item_attributes:
         HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
+    /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
+    pub(super) pub_reexport_whole: bool,
+    /// Original names (in the dep) of selective items marked `pub` in the
+    /// importer's brace list (issue #452). Empty for whole-module form.
+    pub(super) pub_reexport_items: HashSet<String>,
 }
 
 /// A deferred inline DAG include that needs IR merging.
@@ -210,6 +215,11 @@ pub(super) struct DeferredInlineDagInclude {
     /// Per-import-item attributes.
     pub(super) import_item_attributes:
         HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
+    /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
+    pub(super) pub_reexport_whole: bool,
+    /// Original names (in the DAG body) of selective items marked `pub` in
+    /// the importer's brace list (issue #452). Empty for whole-module form.
+    pub(super) pub_reexport_items: HashSet<String>,
 }
 
 /// Mutable state accumulated while processing import declarations.

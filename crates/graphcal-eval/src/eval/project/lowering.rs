@@ -60,6 +60,7 @@ pub(super) fn lower_and_finalize(
     // Process deferred instantiated imports: compile dep to IR and merge.
     process_deferred_instantiated_imports(
         project,
+        file_dag_id,
         &ctx.deferred_instantiated,
         evaluated_files,
         file_src,
@@ -71,6 +72,7 @@ pub(super) fn lower_and_finalize(
     process_deferred_inline_dag_includes(
         &ctx.deferred_inline_dags,
         file_src,
+        file_ast,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -116,12 +118,16 @@ pub(super) fn lower_and_finalize(
 /// and merging it into the importer's IR.
 pub(super) fn process_deferred_instantiated_imports(
     project: &crate::loader::LoadedProject,
+    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     deferred_imports: &[DeferredInstantiatedImport],
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     importer_src: &NamedSource<Arc<String>>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
+    let importer_ast = &project.files[importer_dag_id].ast;
+    let importer_pub_names = super::extract_pub_names(importer_ast);
+    let importer_local_type_names = collect_local_type_names(importer_ast);
     for deferred in deferred_imports {
         let dep_loaded = &project.files[&deferred.dep_dag_id];
         let dep_src = &dep_loaded.named_source;
@@ -193,6 +199,21 @@ pub(super) fn process_deferred_instantiated_imports(
             deferred.import_span,
         )?;
 
+        // A9 case 2 / V006: a `pub`-re-exported decl must not leak a
+        // private-at-importer symbol through its signature.
+        check_generics_leakage(
+            &dep_loaded.ast,
+            deferred.pub_reexport_whole,
+            &deferred.pub_reexport_items,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+            &deferred.dim_bindings,
+            &importer_pub_names,
+            &importer_local_type_names,
+            importer_src,
+            deferred.import_span,
+        )?;
+
         // Merge the dependency's IR into the importer's IR.
         unfrozen.merge_dependency(
             dep_unfrozen,
@@ -219,9 +240,12 @@ pub(super) fn process_deferred_instantiated_imports(
 pub(super) fn process_deferred_inline_dag_includes(
     deferred_dags: &[DeferredInlineDagInclude],
     file_src: &NamedSource<Arc<String>>,
+    importer_ast: &graphcal_compiler::syntax::ast::File,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
+    let importer_pub_names = super::extract_pub_names(importer_ast);
+    let importer_local_type_names = collect_local_type_names(importer_ast);
     for deferred in deferred_dags {
         // Compile the DAG body to IR.
         // The DAG body is lowered as if it were a standalone file, with only
@@ -290,6 +314,21 @@ pub(super) fn process_deferred_inline_dag_includes(
             &deferred.bindings,
             &deferred.index_bindings,
             &deferred.type_bindings,
+            file_src,
+            deferred.import_span,
+        )?;
+
+        // A9 case 2 / V006: a `pub`-re-exported decl must not leak a
+        // private-at-importer symbol through its signature.
+        check_generics_leakage(
+            &deferred.dag_body,
+            deferred.pub_reexport_whole,
+            &deferred.pub_reexport_items,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+            &deferred.dim_bindings,
+            &importer_pub_names,
+            &importer_local_type_names,
             file_src,
             deferred.import_span,
         )?;
@@ -762,4 +801,177 @@ pub(super) fn build_dep_import_values_for_kind(
             );
         }
     }
+}
+
+/// Collect the set of type-system names declared locally in a file
+/// (dims, units, indexes, types). Used to distinguish a private-local
+/// symbol (V = private at the importer) from a builtin or cross-file
+/// symbol for the V006 check.
+fn collect_local_type_names(
+    file: &graphcal_compiler::syntax::ast::File,
+) -> HashMap<String, &'static str> {
+    let mut names = HashMap::new();
+    for decl in &file.declarations {
+        let (name, kind) = match &decl.kind {
+            DeclKind::BaseDimension(d) => (d.name.value.to_string(), "dim"),
+            DeclKind::Dimension(d) => (d.name.value.to_string(), "dim"),
+            DeclKind::Unit(u) => (u.name.value.to_string(), "unit"),
+            DeclKind::Index(idx) => (idx.name.value.to_string(), "index"),
+            DeclKind::Type(t) => (t.name.value.to_string(), "type"),
+            DeclKind::UnionType(u) => (u.name.value.to_string(), "type"),
+            _ => continue,
+        };
+        names.insert(name, kind);
+    }
+    names
+}
+
+/// Walk a `TypeExpr` collecting every type-system name reference
+/// (dimension / type / index / type-application). Used by the V006
+/// check to decide which names in a re-exported signature need a
+/// visibility review at the importing site.
+fn collect_type_expr_names(
+    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    refs: &mut Vec<String>,
+) {
+    use graphcal_compiler::syntax::ast::{IndexExpr, TypeExprKind};
+    match &type_expr.kind {
+        TypeExprKind::DimExpr(dim_expr) => {
+            for item in &dim_expr.terms {
+                refs.push(item.term.name.name.clone());
+            }
+        }
+        TypeExprKind::Indexed { base, indexes } => {
+            collect_type_expr_names(base, refs);
+            for idx in indexes {
+                if let IndexExpr::Name(ident) = idx {
+                    refs.push(ident.name.clone());
+                }
+            }
+        }
+        TypeExprKind::TypeApplication { name, type_args } => {
+            refs.push(name.name.clone());
+            for arg in type_args {
+                collect_type_expr_names(arg, refs);
+            }
+        }
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => {}
+    }
+}
+
+/// A9 case 2 / V006 — re-exported decls must not name a private-at-importer
+/// symbol in their effective signature.
+///
+/// For every decl in the dep that the importer re-exports (whole-module
+/// `pub include` / `pub import`, or selectively via `{ pub name }`),
+/// walk its signature, apply the include's substitution map, and check
+/// each referenced type/dim/index name: if the name resolves to a
+/// declaration that exists locally in the importer but is not in the
+/// importer's `pub_names`, the re-export leaks a private symbol.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
+)]
+fn check_generics_leakage(
+    dep_ast: &graphcal_compiler::syntax::ast::File,
+    pub_reexport_whole: bool,
+    pub_reexport_items: &HashSet<String>,
+    index_bindings: &HashMap<String, String>,
+    type_bindings: &HashMap<String, String>,
+    dim_bindings: &HashMap<String, String>,
+    importer_pub_names: &HashSet<String>,
+    importer_local_type_names: &HashMap<String, &'static str>,
+    importer_src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<(), CompileError> {
+    if !pub_reexport_whole && pub_reexport_items.is_empty() {
+        return Ok(());
+    }
+
+    for decl in &dep_ast.declarations {
+        // Is this decl part of the importer's re-exported surface?
+        let (decl_name, decl_kind_str) = match &decl.kind {
+            DeclKind::Param(p) => (p.name.value.to_string(), "param"),
+            DeclKind::Node(n) => (n.name.value.to_string(), "node"),
+            DeclKind::ConstNode(c) => (c.name.value.to_string(), "const node"),
+            DeclKind::BaseDimension(d) => (d.name.value.to_string(), "dim"),
+            DeclKind::Dimension(d) => (d.name.value.to_string(), "dim"),
+            DeclKind::Unit(u) => (u.name.value.to_string(), "unit"),
+            DeclKind::Index(idx) => (idx.name.value.to_string(), "index"),
+            DeclKind::Type(t) => (t.name.value.to_string(), "type"),
+            DeclKind::UnionType(u) => (u.name.value.to_string(), "type"),
+            _ => continue,
+        };
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        let reexported = if pub_reexport_whole {
+            decl.is_pub() || implicitly_visible
+        } else {
+            pub_reexport_items.contains(&decl_name)
+        };
+        if !reexported {
+            continue;
+        }
+
+        // Collect every type-system name the signature references.
+        let mut refs: Vec<String> = Vec::new();
+        match &decl.kind {
+            DeclKind::Param(p) => collect_type_expr_names(&p.type_ann, &mut refs),
+            DeclKind::Node(n) => collect_type_expr_names(&n.type_ann, &mut refs),
+            DeclKind::ConstNode(c) => collect_type_expr_names(&c.type_ann, &mut refs),
+            DeclKind::Unit(u) => {
+                for item in &u.dim_type.terms {
+                    refs.push(item.term.name.name.clone());
+                }
+            }
+            DeclKind::Dimension(d) => {
+                if let Some(def) = &d.definition {
+                    for item in &def.terms {
+                        refs.push(item.term.name.name.clone());
+                    }
+                }
+            }
+            DeclKind::Type(t) => {
+                if let Some(fields) = &t.fields {
+                    for field in fields {
+                        collect_type_expr_names(&field.type_ann, &mut refs);
+                    }
+                }
+            }
+            DeclKind::UnionType(u) => {
+                for member in &u.members {
+                    for arg in &member.type_args {
+                        collect_type_expr_names(arg, &mut refs);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Apply substitutions, then check each substituted name against the
+        // importer's visibility table.
+        for raw_name in refs {
+            let substituted = index_bindings
+                .get(&raw_name)
+                .or_else(|| type_bindings.get(&raw_name))
+                .or_else(|| dim_bindings.get(&raw_name))
+                .map_or(raw_name.as_str(), String::as_str);
+
+            if let Some(kind) = importer_local_type_names.get(substituted)
+                && !importer_pub_names.contains(substituted)
+            {
+                return Err(CompileError::Eval(GraphcalError::GenericsLeakage {
+                    reexport_kind: decl_kind_str.to_string(),
+                    reexport_name: decl_name,
+                    leaked_kind: (*kind).to_string(),
+                    leaked_name: substituted.to_string(),
+                    src: importer_src.clone(),
+                    span: include_span.into(),
+                }));
+            }
+        }
+    }
+    Ok(())
 }

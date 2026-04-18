@@ -1170,4 +1170,34 @@ pub enum GraphcalError {
         #[label("include is missing a binding for `{orphan_decl}`")]
         span: SourceSpan,
     },
+
+    /// A `pub include` / `pub import` (or selective `{ pub items }`)
+    /// re-exports a declaration whose effective (post-substitution)
+    /// signature mentions a symbol that is `V = private` at the
+    /// importing site — A9 case 2 / visibility composition.
+    ///
+    /// Concretely: an include binding renames a bindable symbol `s`
+    /// in the dep to a name that is private at the importer, and the
+    /// re-exported surface of the include carries that name into the
+    /// importer's public API. Downstream consumers of the importer
+    /// would see a signature referring to a symbol they cannot name.
+    #[error(
+        "re-exported {reexport_kind} `{reexport_name}`'s signature references private {leaked_kind} `{leaked_name}`"
+    )]
+    #[diagnostic(
+        code(graphcal::V006),
+        help(
+            "make `{leaked_name}` `pub` at the importing file, or drop the `pub` / `pub(..)` re-export marker on this include / import"
+        )
+    )]
+    GenericsLeakage {
+        reexport_kind: String,
+        reexport_name: String,
+        leaked_kind: String,
+        leaked_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("leaks private `{leaked_name}` across the include boundary")]
+        span: SourceSpan,
+    },
 }

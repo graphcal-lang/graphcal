@@ -1,0 +1,4 @@
+// container.gcl -- same library as the V006 negative fixture.
+pub(bind) type Element { size: Length }
+
+pub const node origin: Element = Element { size: 1.0 m };
