@@ -1476,6 +1476,42 @@ fn project_include_overrides_index_with_param_binding_ok() {
 }
 
 #[test]
+fn project_pub_include_leaks_private_type_v006() {
+    // V006: `pub include` re-exports container's `origin` decl whose
+    // signature (post-substitution) names `PrivateInner`, which is a
+    // private-local type at the importer.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/pub_include_leaks_private_type/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    match result {
+        Err(CompileError::Eval(GraphcalError::GenericsLeakage {
+            reexport_name,
+            leaked_name,
+            leaked_kind,
+            ..
+        })) => {
+            assert_eq!(reexport_name, "origin");
+            assert_eq!(leaked_name, "PrivateInner");
+            assert_eq!(leaked_kind, "type");
+        }
+        other => panic!("expected GenericsLeakage, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_pub_include_with_public_type_binding_ok() {
+    // Positive companion to project_pub_include_leaks_private_type_v006:
+    // binding `Element` to a `pub` importer-local type satisfies A9.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/pub_include_with_public_type_binding/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    assert!(
+        result.is_ok(),
+        "`pub include` re-exporting a `pub` type binding should compile: {result:?}"
+    );
+}
+
+#[test]
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");

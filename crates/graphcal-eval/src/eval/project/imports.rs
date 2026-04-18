@@ -385,6 +385,16 @@ pub(super) fn process_instantiated_include<'a>(
         }
     }
 
+    let pub_reexport_whole = decl.visibility == graphcal_compiler::syntax::ast::Visibility::Public;
+    let pub_reexport_items: HashSet<String> = match &include_decl.kind {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(items) => items
+            .iter()
+            .filter(|it| it.is_pub)
+            .map(|it| it.name.name.clone())
+            .collect(),
+        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => HashSet::new(),
+    };
+
     ctx.deferred_instantiated.push(DeferredInstantiatedImport {
         dep_dag_id: import_dag_id.clone(),
         prefix,
@@ -395,6 +405,8 @@ pub(super) fn process_instantiated_include<'a>(
         selective_names,
         import_span: decl.span,
         import_item_attributes,
+        pub_reexport_whole,
+        pub_reexport_items,
     });
     Ok(())
 }
@@ -708,6 +720,16 @@ pub(super) fn process_inline_dag_include(
         }
     }
 
+    let pub_reexport_whole = decl.visibility == graphcal_compiler::syntax::ast::Visibility::Public;
+    let pub_reexport_items: HashSet<String> = match &include_decl.kind {
+        graphcal_compiler::syntax::ast::ImportKind::Selective(items) => items
+            .iter()
+            .filter(|it| it.is_pub)
+            .map(|it| it.name.name.clone())
+            .collect(),
+        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => HashSet::new(),
+    };
+
     ctx.deferred_inline_dags.push(DeferredInlineDagInclude {
         dag_body,
         dag_imported_names,
@@ -720,6 +742,8 @@ pub(super) fn process_inline_dag_include(
         selective_names,
         import_span: decl.span,
         import_item_attributes,
+        pub_reexport_whole,
+        pub_reexport_items,
     });
     Ok(())
 }
