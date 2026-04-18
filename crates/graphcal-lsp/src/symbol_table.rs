@@ -6,7 +6,7 @@ use graphcal_compiler::syntax::ast::{
     AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
     FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
     PatternBinding, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl,
-    UnitDecl, UnitExpr,
+    UnitDecl, UnitExpr, Visibility,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -124,6 +124,11 @@ pub struct DefinitionInfo {
     pub type_description: Option<String>,
     /// Additional detail for hover.
     pub detail: Option<String>,
+    /// Visibility / bindability of the declaration.
+    ///
+    /// `None` for builtins, fields, and local variables (concepts that have
+    /// no surface annotation).
+    pub visibility: Option<Visibility>,
 }
 
 impl DefinitionInfo {
@@ -225,6 +230,10 @@ impl SymbolTable {
     /// 1. Converting the name to a `String`
     /// 2. Creating a `SymbolKey::TopLevel`
     /// 3. Inserting a `DefinitionInfo` with the given category and spans
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "declaration fields line up with DefinitionInfo — splitting would just shuffle them across a struct"
+    )]
     fn register_top_level(
         &mut self,
         name: impl AsRef<str>,
@@ -233,6 +242,7 @@ impl SymbolTable {
         category: SymbolCategory,
         type_description: Option<String>,
         detail: Option<String>,
+        visibility: Visibility,
     ) {
         let name = name.as_ref().to_string();
         self.insert_definition(
@@ -244,6 +254,7 @@ impl SymbolTable {
                 decl_span,
                 type_description,
                 detail,
+                visibility: Some(visibility),
             },
         );
     }
@@ -308,25 +319,26 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
     for decl in &ast.declarations {
         collect_attribute_refs(&decl.attributes, &mut table);
 
+        let vis = decl.visibility;
         match &decl.kind {
-            DeclKind::Param(p) => collect_param_decl(p, decl.span, &mut table, &mut scopes),
-            DeclKind::Node(n) => collect_node_decl(n, decl.span, &mut table, &mut scopes),
+            DeclKind::Param(p) => collect_param_decl(p, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::Node(n) => collect_node_decl(n, decl.span, vis, &mut table, &mut scopes),
             DeclKind::ConstNode(c) => {
-                collect_const_node_decl(c, decl.span, &mut table, &mut scopes);
+                collect_const_node_decl(c, decl.span, vis, &mut table, &mut scopes);
             }
-            DeclKind::BaseDimension(d) => collect_base_dim_decl(d, decl.span, &mut table),
-            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, &mut table),
-            DeclKind::Unit(u) => collect_unit_decl(u, decl.span, &mut table, &mut scopes),
-            DeclKind::Type(t) => collect_type_decl(t, decl.span, &mut table),
-            DeclKind::UnionType(u) => collect_union_type_decl(u, decl.span, &mut table),
-            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, &mut table),
-            DeclKind::Assert(a) => collect_assert_decl(a, decl.span, &mut table, &mut scopes),
-            DeclKind::Plot(p) => collect_plot_decl(p, decl.span, &mut table, &mut scopes),
-            DeclKind::Figure(f) => collect_figure_decl(f, decl.span, &mut table, &mut scopes),
-            DeclKind::Layer(l) => collect_layer_decl(l, decl.span, &mut table, &mut scopes),
+            DeclKind::BaseDimension(d) => collect_base_dim_decl(d, decl.span, vis, &mut table),
+            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, vis, &mut table),
+            DeclKind::Unit(u) => collect_unit_decl(u, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::Type(t) => collect_type_decl(t, decl.span, vis, &mut table),
+            DeclKind::UnionType(u) => collect_union_type_decl(u, decl.span, vis, &mut table),
+            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, vis, &mut table),
+            DeclKind::Assert(a) => collect_assert_decl(a, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::Plot(p) => collect_plot_decl(p, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::Figure(f) => collect_figure_decl(f, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::Layer(l) => collect_layer_decl(l, decl.span, vis, &mut table, &mut scopes),
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
-            DeclKind::Dag(d) => collect_dag_decl(d, decl.span, &mut table),
+            DeclKind::Dag(d) => collect_dag_decl(d, decl.span, vis, &mut table),
         }
     }
 
@@ -346,6 +358,7 @@ fn register_builtins(table: &mut SymbolTable) {
                 decl_span: Span::new(0, 0),
                 type_description: Some("Dimensionless".to_string()),
                 detail: None,
+                visibility: None,
             },
         );
     }
@@ -360,6 +373,7 @@ fn register_builtins(table: &mut SymbolTable) {
                 decl_span: Span::new(0, 0),
                 type_description: None,
                 detail: Some(format!("builtin, arity {}", f.arity())),
+                visibility: None,
             },
         );
     }
@@ -386,6 +400,7 @@ fn collect_attribute_refs(
 fn collect_param_decl(
     p: &ParamDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -396,6 +411,7 @@ fn collect_param_decl(
         SymbolCategory::Param,
         None,
         None,
+        visibility,
     );
     collect_type_expr_refs(&p.type_ann, table);
     if let Some(ref value) = p.value {
@@ -406,6 +422,7 @@ fn collect_param_decl(
 fn collect_node_decl(
     n: &NodeDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -416,6 +433,7 @@ fn collect_node_decl(
         SymbolCategory::Node,
         None,
         None,
+        visibility,
     );
     collect_type_expr_refs(&n.type_ann, table);
     collect_expr_refs(&n.value, table, scopes);
@@ -424,6 +442,7 @@ fn collect_node_decl(
 fn collect_const_node_decl(
     c: &graphcal_compiler::syntax::ast::ConstNodeDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -434,12 +453,18 @@ fn collect_const_node_decl(
         SymbolCategory::Const,
         None,
         None,
+        visibility,
     );
     collect_type_expr_refs(&c.type_ann, table);
     collect_expr_refs(&c.value, table, scopes);
 }
 
-fn collect_base_dim_decl(d: &BaseDimDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_base_dim_decl(
+    d: &BaseDimDecl,
+    decl_span: Span,
+    visibility: Visibility,
+    table: &mut SymbolTable,
+) {
     table.register_top_level(
         &d.name.value,
         d.name.span,
@@ -447,10 +472,11 @@ fn collect_base_dim_decl(d: &BaseDimDecl, decl_span: Span, table: &mut SymbolTab
         SymbolCategory::Dimension,
         None,
         None,
+        visibility,
     );
 }
 
-fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_dim_decl(d: &DimDecl, decl_span: Span, visibility: Visibility, table: &mut SymbolTable) {
     table.register_top_level(
         &d.name.value,
         d.name.span,
@@ -458,6 +484,7 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
         SymbolCategory::Dimension,
         None,
         None,
+        visibility,
     );
     if let Some(definition) = &d.definition {
         collect_dim_expr_refs(definition, table);
@@ -467,6 +494,7 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
 fn collect_unit_decl(
     u: &UnitDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -477,6 +505,7 @@ fn collect_unit_decl(
         SymbolCategory::Unit,
         None,
         None,
+        visibility,
     );
     collect_dim_expr_refs(&u.dim_type, table);
     if let Some(unit_def) = &u.definition {
@@ -485,7 +514,12 @@ fn collect_unit_decl(
     }
 }
 
-fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_type_decl(
+    t: &TypeDecl,
+    decl_span: Span,
+    visibility: Visibility,
+    table: &mut SymbolTable,
+) {
     table.register_top_level(
         &t.name.value,
         t.name.span,
@@ -493,6 +527,7 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
         SymbolCategory::StructType,
         None,
         None,
+        visibility,
     );
     // Walk field type annotations (required types have no fields).
     if let Some(fields) = &t.fields {
@@ -502,7 +537,12 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
     }
 }
 
-fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_union_type_decl(
+    u: &UnionTypeDecl,
+    decl_span: Span,
+    visibility: Visibility,
+    table: &mut SymbolTable,
+) {
     table.register_top_level(
         &u.name.value,
         u.name.span,
@@ -510,6 +550,7 @@ fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut Symbo
         SymbolCategory::StructType,
         None,
         None,
+        visibility,
     );
     // Register each union member as a reference to the member type.
     for member in &u.members {
@@ -524,7 +565,12 @@ fn collect_union_type_decl(u: &UnionTypeDecl, decl_span: Span, table: &mut Symbo
     }
 }
 
-fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_index_decl(
+    idx: &IndexDecl,
+    decl_span: Span,
+    visibility: Visibility,
+    table: &mut SymbolTable,
+) {
     let name = idx.name.value.to_string();
     table.register_top_level(
         &name,
@@ -533,6 +579,7 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
         SymbolCategory::Index,
         None,
         None,
+        visibility,
     );
     match &idx.kind {
         IndexDeclKind::Named { variants } => {
@@ -551,6 +598,7 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
                         decl_span: variant.span,
                         type_description: None,
                         detail: Some(format!("label/value variant of index {name}")),
+                        visibility: None,
                     },
                 );
             }
@@ -565,6 +613,7 @@ fn collect_index_decl(idx: &IndexDecl, decl_span: Span, table: &mut SymbolTable)
 fn collect_assert_decl(
     a: &AssertDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -575,6 +624,7 @@ fn collect_assert_decl(
         SymbolCategory::Assert,
         Some("Bool".to_string()),
         Some("assert".to_string()),
+        visibility,
     );
     match &a.body {
         graphcal_compiler::syntax::ast::AssertBody::Expr(expr) => {
@@ -596,6 +646,7 @@ fn collect_assert_decl(
 fn collect_plot_decl(
     p: &PlotDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -606,6 +657,7 @@ fn collect_plot_decl(
         SymbolCategory::Plot,
         Some(format!("plot (mark: {})", p.mark.mark_type)),
         Some("plot".to_string()),
+        visibility,
     );
     for encoding in &p.encodings {
         collect_expr_refs(&encoding.value, table, scopes);
@@ -621,6 +673,7 @@ fn collect_plot_decl(
 fn collect_figure_decl(
     f: &FigureDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -631,6 +684,7 @@ fn collect_figure_decl(
         SymbolCategory::Figure,
         Some("figure".to_string()),
         Some("figure".to_string()),
+        visibility,
     );
     for field in &f.fields {
         collect_expr_refs(&field.value, table, scopes);
@@ -640,6 +694,7 @@ fn collect_figure_decl(
 fn collect_layer_decl(
     l: &LayerDecl,
     decl_span: Span,
+    visibility: Visibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -650,13 +705,14 @@ fn collect_layer_decl(
         SymbolCategory::Layer,
         Some("layer".to_string()),
         Some("layer".to_string()),
+        visibility,
     );
     for field in &l.fields {
         collect_expr_refs(&field.value, table, scopes);
     }
 }
 
-fn collect_dag_decl(d: &DagDecl, decl_span: Span, table: &mut SymbolTable) {
+fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table: &mut SymbolTable) {
     table.register_top_level(
         d.name.value.as_str(),
         d.name.span,
@@ -664,6 +720,7 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, table: &mut SymbolTable) {
         SymbolCategory::Dag,
         None,
         None,
+        visibility,
     );
 }
 
@@ -874,6 +931,7 @@ fn collect_expr_refs(
                         decl_span: binding.var.span,
                         type_description: None,
                         detail: Some(detail),
+                        visibility: None,
                     },
                 );
                 scopes.insert(var_name, key);
@@ -944,6 +1002,7 @@ fn collect_expr_refs(
                     decl_span: acc_name.span,
                     type_description: None,
                     detail: Some("scan accumulator".to_string()),
+                    visibility: None,
                 },
             );
             table.insert_definition(
@@ -955,6 +1014,7 @@ fn collect_expr_refs(
                     decl_span: val_name.span,
                     type_description: None,
                     detail: Some("scan value".to_string()),
+                    visibility: None,
                 },
             );
             scopes.insert(acc_name.name.clone(), acc_key);
@@ -990,6 +1050,7 @@ fn collect_expr_refs(
                     decl_span: prev_name.span,
                     type_description: None,
                     detail: Some("unfold previous step".to_string()),
+                    visibility: None,
                 },
             );
             table.insert_definition(
@@ -1001,6 +1062,7 @@ fn collect_expr_refs(
                     decl_span: curr_name.span,
                     type_description: None,
                     detail: Some("unfold current step".to_string()),
+                    visibility: None,
                 },
             );
             scopes.insert(prev_name.name.clone(), prev_key);
@@ -1073,6 +1135,7 @@ fn collect_expr_refs(
                                     decl_span: var.span,
                                     type_description: None,
                                     detail: Some(format!("bound from {variant_name}")),
+                                    visibility: None,
                                 },
                             );
                             scopes.insert(var.name.clone(), var_key);
@@ -1440,6 +1503,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                         decl_span: Span::new(0, 0),
                         type_description: None,
                         detail: Some(format!("field of {}", type_def.name)),
+                        visibility: None,
                     },
                 );
             }

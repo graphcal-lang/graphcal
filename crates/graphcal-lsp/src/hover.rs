@@ -1,5 +1,6 @@
 //! textDocument/hover handler.
 
+use graphcal_compiler::syntax::ast::Visibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::convert::span_to_range;
@@ -24,40 +25,57 @@ pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
     })
 }
 
+/// Prefix for the declaration keyword in a hover label, based on visibility.
+///
+/// Returns `"pub "` for `Public`, `"pub(bind) "` for `PublicBind`, and
+/// the empty string for `Private` or unknown visibility. `param` never
+/// carries an annotation (axiom A5), so we always use the empty string
+/// there regardless of the stored visibility.
+const fn visibility_prefix(vis: Option<Visibility>) -> &'static str {
+    match vis {
+        Some(Visibility::Public) => "pub ",
+        Some(Visibility::PublicBind) => "pub(bind) ",
+        Some(Visibility::Private) | None => "",
+    }
+}
+
 /// Format hover content for a definition.
 fn format_hover(def: &DefinitionInfo) -> String {
+    let vis = visibility_prefix(def.visibility);
     match def.category {
         SymbolCategory::Param => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
+            // `param` is always implicitly bindable (axiom A5) and never
+            // carries a `pub` / `pub(bind)` annotation — drop the prefix.
             format!("```graphcal\nparam {}: {type_str}\n```", def.name)
         }
         SymbolCategory::Node => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
-            format!("```graphcal\nnode {}: {type_str}\n```", def.name)
+            format!("```graphcal\n{vis}node {}: {type_str}\n```", def.name)
         }
         SymbolCategory::Const => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
-            format!("```graphcal\nconst {}: {type_str}\n```", def.name)
+            format!("```graphcal\n{vis}const {}: {type_str}\n```", def.name)
         }
         SymbolCategory::Dimension => {
             let fallback = format!("dim {}", def.name);
             let desc = def.type_description.as_deref().unwrap_or(&fallback);
-            format!("```graphcal\n{desc}\n```")
+            format!("```graphcal\n{vis}{desc}\n```")
         }
         SymbolCategory::Unit => {
             let desc = def.type_description.as_deref().unwrap_or("");
-            format!("```graphcal\nunit {}: {desc}\n```", def.name)
+            format!("```graphcal\n{vis}unit {}: {desc}\n```", def.name)
         }
         SymbolCategory::Index => {
             let desc = def.type_description.as_deref().unwrap_or("...");
             format!(
-                "```graphcal\nindex {} = {desc}\n```\n(named index labels are first-class value variants)",
+                "```graphcal\n{vis}index {} = {desc}\n```\n(named index labels are first-class value variants)",
                 def.name
             )
         }
         SymbolCategory::StructType => {
             let desc = def.type_description.as_deref().unwrap_or("...");
-            format!("```graphcal\ntype {} = {desc}\n```", def.name)
+            format!("```graphcal\n{vis}type {} = {desc}\n```", def.name)
         }
         SymbolCategory::IndexVariant => {
             let detail = def.detail.as_deref().unwrap_or("");
@@ -88,20 +106,20 @@ fn format_hover(def: &DefinitionInfo) -> String {
             )
         }
         SymbolCategory::Assert => {
-            format!("```graphcal\nassert {}: Bool\n```", def.name)
+            format!("```graphcal\n{vis}assert {}: Bool\n```", def.name)
         }
         SymbolCategory::Plot => {
             let type_str = def.type_description.as_deref().unwrap_or("plot");
-            format!("```graphcal\nplot {}\n```\n{}", def.name, type_str)
+            format!("```graphcal\n{vis}plot {}\n```\n{}", def.name, type_str)
         }
         SymbolCategory::Figure => {
-            format!("```graphcal\nfigure {}\n```", def.name)
+            format!("```graphcal\n{vis}figure {}\n```", def.name)
         }
         SymbolCategory::Layer => {
-            format!("```graphcal\nlayer {}\n```", def.name)
+            format!("```graphcal\n{vis}layer {}\n```", def.name)
         }
         SymbolCategory::Dag => {
-            format!("```graphcal\ndag {} {{ ... }}\n```", def.name)
+            format!("```graphcal\n{vis}dag {} {{ ... }}\n```", def.name)
         }
     }
 }

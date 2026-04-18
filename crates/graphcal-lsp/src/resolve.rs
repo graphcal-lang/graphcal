@@ -121,6 +121,7 @@ mod tests {
                     decl_span: graphcal_compiler::syntax::span::Span::new(0, 29),
                     type_description: Some("Dimensionless".to_string()),
                     detail: None,
+                    visibility: None,
                 },
             },
         );
@@ -139,6 +140,7 @@ mod tests {
                     decl_span: graphcal_compiler::syntax::span::Span::new(0, 29),
                     type_description: Some("Dimensionless".to_string()),
                     detail: None,
+                    visibility: None,
                 },
             },
         );

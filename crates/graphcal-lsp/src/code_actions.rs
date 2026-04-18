@@ -1,8 +1,9 @@
 //! textDocument/codeAction handler.
 //!
 //! Provides quick-fix code actions for visibility-related diagnostics:
-//! - V002: Add `pub` to required param/index
-//! - V003: Add `pub` to private item referenced by a public declaration
+//! - V002: Add `pub(bind)` to a required `index` / `type` / `dim`.
+//! - V003: Add `pub` to a private item referenced by a public declaration.
+//! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
 
 use std::collections::HashMap;
 
@@ -49,7 +50,7 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
         match code {
             "graphcal::V002" => {
                 if let Some(action) =
-                    make_add_pub_action_v002(diag, source, &params.text_document.uri)
+                    make_add_pub_bind_action_v002(diag, source, &params.text_document.uri)
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -57,6 +58,13 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
             "graphcal::V003" => {
                 if let Some(action) =
                     make_add_pub_action_v003(diag, source, &params.text_document.uri)
+                {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "graphcal::V006" => {
+                if let Some(action) =
+                    make_add_pub_action_v006(diag, source, &params.text_document.uri)
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -72,11 +80,14 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
     }
 }
 
-/// For V002: insert `pub ` before the declaration keyword on the line containing the diagnostic.
+/// For V002: insert `pub(bind) ` before the declaration keyword on the line
+/// containing the diagnostic.
 ///
-/// The diagnostic span points to the name (e.g., `x` in `param x: Dimensionless;`).
-/// We find the start of the line and insert `pub ` right after leading whitespace.
-fn make_add_pub_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
+/// The diagnostic span points to the name (e.g., `Phase` in `index Phase;`).
+/// V002 fires on required `index` / `type` / `dim` declarations — which form
+/// the bindable interface of the library — so the fix always lifts them all
+/// the way to `pub(bind)` rather than plain `pub`.
+fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
     let insert_pos = find_keyword_position(source, diag.range.start.line)?;
 
     let edit = TextEdit {
@@ -84,14 +95,14 @@ fn make_add_pub_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Optio
             start: insert_pos,
             end: insert_pos,
         },
-        new_text: "pub ".to_string(),
+        new_text: "pub(bind) ".to_string(),
     };
 
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
 
     Some(CodeAction {
-        title: "Add `pub` to this declaration".to_string(),
+        title: "Add `pub(bind)` to this declaration".to_string(),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {
@@ -142,6 +153,44 @@ fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Optio
     })
 }
 
+/// For V006: insert `pub ` before the leaked item's declaration at the importer.
+///
+/// The diagnostic message follows the pattern:
+/// `` "re-exported <kind> `<name>`'s signature references private <kind> `<leaked_name>`" ``
+///
+/// We extract `leaked_name` and, if it is declared locally in the importer's
+/// file, insert `pub ` in front of its declaration. The alternative fix — drop
+/// the re-export marker — depends on syntactic context that is not available
+/// here, so the quick-fix focuses on the "make the symbol visible" branch.
+fn make_add_pub_action_v006(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
+    let leaked_name = extract_leaked_name_v006(&diag.message)?;
+    let decl_line = find_declaration_line(source, &leaked_name)?;
+    let insert_pos = find_keyword_position(source, decl_line)?;
+
+    let edit = TextEdit {
+        range: Range {
+            start: insert_pos,
+            end: insert_pos,
+        },
+        new_text: "pub ".to_string(),
+    };
+
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+
+    Some(CodeAction {
+        title: format!("Add `pub` to `{leaked_name}`"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    })
+}
+
 /// Find the position of the declaration keyword on a given line.
 ///
 /// Skips leading whitespace and returns the position at which a keyword
@@ -179,6 +228,19 @@ fn extract_private_ref_name(message: &str) -> Option<String> {
     let marker = "references private ";
     let after_marker = message.find(marker).map(|i| &message[i + marker.len()..])?;
     // Skip the ref_kind word(s) to reach `ref_name`
+    let backtick_start = after_marker.find('`')? + 1;
+    let rest = &after_marker[backtick_start..];
+    let backtick_end = rest.find('`')?;
+    Some(rest[..backtick_end].to_string())
+}
+
+/// Extract the leaked item name from a V006 diagnostic message.
+///
+/// Message format: `` "re-exported <kind> `<name>`'s signature references
+/// private <kind> `<leaked_name>`" ``
+fn extract_leaked_name_v006(message: &str) -> Option<String> {
+    let marker = "references private ";
+    let after_marker = message.find(marker).map(|i| &message[i + marker.len()..])?;
     let backtick_start = after_marker.find('`')? + 1;
     let rest = &after_marker[backtick_start..];
     let backtick_end = rest.find('`')?;
@@ -254,12 +316,12 @@ mod tests {
     }
 
     #[test]
-    fn v002_adds_pub_to_required_param() {
-        let source = "param x: Dimensionless;";
+    fn v002_adds_pub_bind_to_required_index() {
+        let source = "index Phase;";
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V002",
-            "required param `x` must be declared `pub`",
+            "required index `Phase` must be declared `pub(bind)`",
             Range {
                 start: Position {
                     line: 0,
@@ -267,7 +329,7 @@ mod tests {
                 },
                 end: Position {
                     line: 0,
-                    character: 7,
+                    character: 11,
                 },
             },
         );
@@ -279,7 +341,7 @@ mod tests {
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
             panic!("expected CodeAction");
         };
-        assert_eq!(action.title, "Add `pub` to this declaration");
+        assert_eq!(action.title, "Add `pub(bind)` to this declaration");
         assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
         assert_eq!(action.is_preferred, Some(true));
 
@@ -287,7 +349,7 @@ mod tests {
         let changes = edit.changes.as_ref().unwrap();
         let edits = &changes[&uri];
         assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].new_text, "pub ");
+        assert_eq!(edits[0].new_text, "pub(bind) ");
         assert_eq!(
             edits[0].range.start,
             Position {
@@ -298,12 +360,12 @@ mod tests {
     }
 
     #[test]
-    fn v002_adds_pub_with_indentation() {
-        let source = "    param x: Dimensionless;";
+    fn v002_adds_pub_bind_with_indentation() {
+        let source = "    index Phase;";
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V002",
-            "required param `x` must be declared `pub`",
+            "required index `Phase` must be declared `pub(bind)`",
             Range {
                 start: Position {
                     line: 0,
@@ -311,7 +373,7 @@ mod tests {
                 },
                 end: Position {
                     line: 0,
-                    character: 11,
+                    character: 15,
                 },
             },
         );
@@ -322,6 +384,7 @@ mod tests {
             panic!("expected CodeAction");
         };
         let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        assert_eq!(edits[0].new_text, "pub(bind) ");
         assert_eq!(
             edits[0].range.start,
             Position {
@@ -374,6 +437,51 @@ mod tests {
     fn extract_private_ref_name_works() {
         let msg = "`pub node` `speed` references private dim `Velocity` in its type annotation";
         assert_eq!(extract_private_ref_name(msg), Some("Velocity".to_string()));
+    }
+
+    #[test]
+    fn v006_adds_pub_to_leaked_symbol() {
+        let source = "type Inner {}\npub include \"lib.gcl\"(Element: Inner) as c;\n";
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::V006",
+            "re-exported type `Widget`'s signature references private type `Inner`",
+            Range {
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 12,
+                },
+            },
+        );
+
+        let params = make_params(&uri, vec![diag]);
+        let actions = code_actions(&params, source).unwrap();
+        assert_eq!(actions.len(), 1);
+
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        assert_eq!(action.title, "Add `pub` to `Inner`");
+        let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        assert_eq!(edits[0].new_text, "pub ");
+        // `type Inner` is on line 0 — the edit goes at the start of that line.
+        assert_eq!(
+            edits[0].range.start,
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
+    }
+
+    #[test]
+    fn extract_leaked_name_v006_works() {
+        let msg = "re-exported type `Widget`'s signature references private type `Inner`";
+        assert_eq!(extract_leaked_name_v006(msg), Some("Inner".to_string()));
     }
 
     #[test]
