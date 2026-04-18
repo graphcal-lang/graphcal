@@ -1478,7 +1478,7 @@ include recursive(x: 1.0) { result };
 fn inline_dag_from_source() {
     // Test inline DAG from in-memory source.
     let source = "
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
 dag add_velocities {
     param a: Velocity;

@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 466
 expression: rendered
 ---
-required index `Phase` must be declared `pub`
+required index `Phase` must be declared `pub(bind)`
     Diagnostic severity: error
 Begin snippet for required_index_not_pub.gcl starting at line 1, column 1
 
 snippet line 1: // Error: required index is not marked `pub`.
 snippet line 2: index Phase;
-    label at line 2, columns 7 to 11: required item must be `pub`
-diagnostic help: required params and indexes form the public interface — add `pub` before the declaration
+    label at line 2, columns 7 to 11: required item must be `pub(bind)`
+diagnostic help: required indexes, types, and dimensions form the bindable interface — add `pub(bind)` before the declaration
 diagnostic code: graphcal::V002

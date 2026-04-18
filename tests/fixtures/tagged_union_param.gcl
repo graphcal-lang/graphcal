@@ -1,15 +1,15 @@
 // tagged_union_param.gcl -- Tagged union as a param (for JSON input testing)
-dim Velocity = Length / Time;
-dim Force = Mass * Length / Time^2;
+pub dim Velocity = Length / Time;
+pub dim Force = Mass * Length / Time^2;
 
-type Impulsive {
+pub type Impulsive {
     delta_v: Velocity,
 }
-type LowThrust {
+pub type LowThrust {
     thrust: Force,
     duration: Time,
 }
-type ManeuverKind = Impulsive | LowThrust;
+pub type ManeuverKind = Impulsive | LowThrust;
 
 param maneuver: ManeuverKind = LowThrust { thrust: 0.5 N, duration: 3600.0 s};
 

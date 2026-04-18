@@ -1,10 +1,11 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 474
 expression: formatted
 ---
 // assertions.gcl -- Assertion feature tests
-dim Velocity = Length / Time;
-dim Force = Mass * Length / Time^2;
+pub dim Velocity = Length / Time;
+pub dim Force = Mass * Length / Time^2;
 
 param mass: Mass = 100.0 kg;
 param velocity: Velocity = 50.0 m/s;

@@ -1,4 +1,4 @@
 // lib.gcl -- library with a required named index
-pub index Phase;
+pub(bind) index Phase;
 
 param cost: Dimensionless[Phase];

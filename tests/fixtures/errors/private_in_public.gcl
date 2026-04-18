@@ -1,4 +1,8 @@
-// Error: pub node references private dim in its type annotation.
+// Error: pub node references private dim in its signature (V003).
+//
+// `velocity_of` is private, so its name is not visible across the
+// include boundary. `pub node speed` names it → V003.
 dim Velocity = Length / Time;
-param kmh: Velocity = 36.0 km/h;
-pub node speed: Velocity = @kmh;
+pub dim Speed = Length / Time;
+const node velocity_of: Velocity = 10.0 m/s;
+pub node speed: Velocity = @velocity_of;

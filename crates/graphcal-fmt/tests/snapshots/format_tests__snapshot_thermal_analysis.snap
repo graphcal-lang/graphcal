@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 486
 expression: formatted
 ---
 // thermal_analysis.gcl -- Spacecraft thermal node network
@@ -7,7 +8,7 @@ expression: formatted
 // A medium-size thermal model with many thermal nodes,
 // temperature-dependent heat flows, and multi-dimensional indexed values.
 // --- Thermal nodes representing spacecraft components (22 variants) ---
-index ThermalNode = {
+pub index ThermalNode = {
     SolarPanelPosX,
     SolarPanelNegX,
     RadiatorPosY,
@@ -33,7 +34,7 @@ index ThermalNode = {
 };
 
 // --- Orbit condition for different thermal scenarios (7 variants) ---
-index OrbitCondition = {
+pub index OrbitCondition = {
     HotCase,
     ColdCase,
     NominalSunlit,
@@ -44,7 +45,7 @@ index OrbitCondition = {
 };
 
 // --- Temperature limits (min, max) per node (22x2 = 44 cells) ---
-index Limit = { Min, Max };
+pub index Limit = { Min, Max };
 
 param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
                    :      Min,     Max;
@@ -169,7 +170,7 @@ param emissivity: Dimensionless = 0.85;
 
 // Simplified: radiative_capacity = emissivity * area * 459.3 W/m^2
 // We pre-compute the flux density as a Power value per unit area.
-dim HeatFlux = Mass / Time^3;
+pub dim HeatFlux = Mass / Time^3;
 const node flux_at_300k: HeatFlux = 459.3 kg/s^3;
 
 node radiative_power_capacity: Power[ThermalNode] = for n: ThermalNode {

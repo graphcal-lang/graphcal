@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 498
 expression: formatted
 ---
 // expected_fail_indexed_partial.gcl -- Bug reproducer: per-variant expected_fail
@@ -8,7 +9,7 @@ expression: formatted
 // Setup: Boost and Eco both fail, but only Boost is marked expected_fail.
 // Expected: Eco's failure should still be reported.
 // Actual (bug): The entire assertion passes because Variants falls back to All.
-index Mode = { Normal, Eco, Boost };
+pub index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,

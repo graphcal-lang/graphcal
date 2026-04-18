@@ -2,9 +2,9 @@
 //
 // Demonstrates a scatter chart using computed x and y data from
 // the same index, useful for visualizing correlations.
-index Maneuver = { Departure, MidCourse, Insertion };
+pub index Maneuver = { Departure, MidCourse, Insertion };
 
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
     Maneuver::Departure: 3.2 km/s,

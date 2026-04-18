@@ -1068,30 +1068,40 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A required param or index is not marked `pub`.
-    #[error("required {kind} `{name}` must be declared `pub`")]
+    /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
+    ///
+    /// `param` is excluded: required `param` is implicitly bindable (A5);
+    /// it never carries a visibility annotation.
+    #[error("required {kind} `{name}` must be declared `pub(bind)`")]
     #[diagnostic(
         code(graphcal::V002),
         help(
-            "required params and indexes form the public interface — add `pub` before the declaration"
+            "required indexes, types, and dimensions form the bindable interface — add `pub(bind)` before the declaration"
         )
     )]
-    RequiredItemMustBePub {
+    RequiredItemMustBeBindable {
         kind: String,
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("required item must be `pub`")]
+        #[label("required item must be `pub(bind)`")]
         span: SourceSpan,
     },
 
-    /// A `pub` declaration references a private type-system item in its type annotation.
+    /// A visible declaration references a private type-system item in
+    /// its written signature (A9 case 1).
+    ///
+    /// The `pub_kind` string is the declaration kind (e.g. `"param"`,
+    /// `"pub node"`, `"pub type"`). `param` is always visible (A5 §4.0)
+    /// and never carries an explicit annotation.
     #[error(
-        "`pub {pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its type annotation"
+        "`{pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its signature"
     )]
     #[diagnostic(
         code(graphcal::V003),
-        help("add `pub` to `{ref_name}` or remove `pub` from `{pub_name}`")
+        help(
+            "add `pub` to `{ref_name}` so it is visible across the include boundary, or stop exposing `{pub_name}`"
+        )
     )]
     PrivateInPublic {
         pub_kind: String,
@@ -1102,18 +1112,24 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("references private `{ref_name}`")]
         ref_span: SourceSpan,
-        #[label("declared `pub` here")]
+        #[label("visible declaration is here")]
         pub_span: SourceSpan,
     },
 
-    /// A `pub index` with concrete variants has its variants used in the defining file's expressions.
+    /// A `pub(bind)` index with concrete variants has its variants used
+    /// in a non-bindable body (`node` / `const`) or a public sink
+    /// declaration in the defining file.
+    ///
+    /// Per axiom A10(c) / A10(b), a bindable index's variant literals
+    /// must not appear in bodies that cannot themselves be re-bound by
+    /// importers (the defining library must abstract over the index).
     #[error(
-        "variant literal `{index}::{variant}` of `pub index` cannot be used in the defining file"
+        "variant literal `{index}::{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
     #[diagnostic(
         code(graphcal::V004),
         help(
-            "pub indexes may be overridden by importers; use `param` declarations for variant-specific values instead"
+            "pub(bind) indexes may be overridden by importers; use `param` declarations for variant-specific values, or abstract over the index via `for p : I {{ … }}`"
         )
     )]
     PubIndexVariantLiteral {
@@ -1121,7 +1137,7 @@ pub enum GraphcalError {
         variant: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("variant literal of pub index")]
+        #[label("variant literal of pub(bind) index")]
         span: SourceSpan,
     },
 }

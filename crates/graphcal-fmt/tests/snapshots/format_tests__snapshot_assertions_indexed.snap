@@ -1,9 +1,10 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 481
 expression: formatted
 ---
 // assertions_indexed.gcl -- Indexed Bool assertion test
-index Mode = { Normal, Eco, Boost };
+pub index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
     Mode::Normal: 100.0,
@@ -21,7 +22,7 @@ param power_use: Dimensionless[Mode] = {
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
 
 // Multi-dimensional indexed assertion
-index Phase = { Launch, Cruise, Arrival };
+pub index Phase = { Launch, Cruise, Arrival };
 
 param threshold: Dimensionless[Mode, Phase] = {
     (Mode::Normal, Phase::Launch): 10.0,

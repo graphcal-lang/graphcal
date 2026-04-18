@@ -176,16 +176,20 @@ where
     }
 }
 
-/// Check that an expression contains no variant literals of `pub index` declarations.
+/// Check that an expression contains no variant literals of
+/// `pub(bind)` index declarations (V004 / A10(c)).
 ///
-/// Pub indexes may be overridden by importers, so their variant literals are not
-/// allowed in the defining file (including param default expressions).
+/// Bindable indexes can be overridden by importers, so the defining
+/// library must abstract over them — any body of a non-bindable kind
+/// that mentions a `pub(bind)` index's variant literal would orphan
+/// under rebinding. Plain `pub` (fixed) indexes are not subject to
+/// A10, so this check ignores them.
 pub(super) fn check_no_pub_index_variant_literals(
     expr: &Expr,
-    pub_index_names: &HashSet<String>,
+    pub_bind_index_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    if pub_index_names.is_empty() {
+    if pub_bind_index_names.is_empty() {
         return Ok(());
     }
     let mut checker = VariantLiteralChecker {
@@ -194,7 +198,7 @@ pub(super) fn check_no_pub_index_variant_literals(
                 span: Span,
                 src: &NamedSource<Arc<String>>|
          -> Result<(), GraphcalError> {
-            if pub_index_names.contains(index) {
+            if pub_bind_index_names.contains(index) {
                 return Err(GraphcalError::PubIndexVariantLiteral {
                     index: index.to_string(),
                     variant: variant.to_string(),

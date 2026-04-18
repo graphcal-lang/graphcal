@@ -141,30 +141,52 @@ fn collect_local_declarations(
         pub_names.insert(name.to_string());
     }
 
-    // Validate: required indexes must be `pub` (V002).
+    // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
     //
-    // (`param` carrying `pub` / `pub(bind)` is rejected at parse time —
-    // the parser refuses any annotation on `param` per the axioms §4.0.)
+    // Required `param` is excluded from this check: per axiom A5 §4.0,
+    // `param` is implicitly V=visible + B=bindable and never carries a
+    // visibility annotation. The parser rejects `pub`/`pub(bind)` on
+    // `param`.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub() => {
-                return Err(GraphcalError::RequiredItemMustBePub {
+            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "index".to_string(),
                     name: idx.name.value.to_string(),
                     src: src.clone(),
                     span: idx.name.span.into(),
                 });
             }
+            DeclKind::Type(t) if t.fields.is_none() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
+                    kind: "type".to_string(),
+                    name: t.name.value.to_string(),
+                    src: src.clone(),
+                    span: t.name.span.into(),
+                });
+            }
+            DeclKind::Dimension(d) if d.definition.is_none() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
+                    kind: "dim".to_string(),
+                    name: d.name.value.to_string(),
+                    src: src.clone(),
+                    span: d.name.span.into(),
+                });
+            }
             _ => {}
         }
     }
 
-    // Collect pub index names with concrete variants (for variant-literal restriction).
-    let pub_index_names: HashSet<String> = file
+    // Collect `pub(bind)` index names with concrete variants (for V004 /
+    // A10(c) variant-literal restriction). Plain `pub` indexes are not
+    // bindable, so A10 never fires on their variant literals. Required
+    // `pub(bind)` indexes have no declared variants so they carry no
+    // variant literals either; the filter below excludes them.
+    let pub_bind_index_names: HashSet<String> = file
         .declarations
         .iter()
         .filter_map(|decl| {
-            if !decl.is_pub() {
+            if !decl.is_bindable() {
                 return None;
             }
             if let DeclKind::Index(idx) = &decl.kind
@@ -287,7 +309,13 @@ fn collect_local_declarations(
                     )?;
                     // Check that assert body doesn't reference other assert names via @
                     check_no_assert_graph_refs(body_expr, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(body_expr, &pub_index_names, src)?;
+                    // A10(b): public sink kinds travel with the include,
+                    // so their bodies must abstract over pub(bind)
+                    // indexes. Private sinks are pruned on include, so
+                    // their literal mentions cannot orphan anything.
+                    if decl.is_pub() {
+                        check_no_pub_index_variant_literals(body_expr, &pub_bind_index_names, src)?;
+                    }
                 }
                 let aname = a.name.value.to_string();
                 asserts.push(ResolvedAssertEntry {
@@ -297,7 +325,9 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Plot(p) => {
-                // Validate references in plot encoding and property expressions (plots CAN use @)
+                // Validate references in plot encoding and property expressions (plots CAN use @).
+                // A10(b): public sinks must abstract over pub(bind) indexes.
+                let pub_sink = decl.is_pub();
                 for encoding in &p.encodings {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &encoding.value,
@@ -310,7 +340,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(&encoding.value, &pub_index_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &encoding.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 for prop in &p.mark.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -324,7 +360,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(&prop.value, &pub_index_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &prop.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 for prop in &p.properties {
                     let (_graph_refs, _const_refs) = extract_all_refs(
@@ -338,7 +380,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(&prop.value, &pub_index_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &prop.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let pname = p.name.value.to_string();
                 plots.push(ResolvedPlotEntry {
@@ -348,7 +396,8 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Figure(f) => {
-                // Validate references in figure field expressions (figures CAN use @)
+                // Validate references in figure field expressions (figures CAN use @).
+                let pub_sink = decl.is_pub();
                 for field in &f.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -361,7 +410,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(&field.value, &pub_index_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &field.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let fname = f.name.value.to_string();
                 figures.push(ResolvedFigureEntry {
@@ -371,7 +426,8 @@ fn collect_local_declarations(
                 });
             }
             DeclKind::Layer(l) => {
-                // Validate references in layer field expressions (layers CAN use @)
+                // Validate references in layer field expressions (layers CAN use @).
+                let pub_sink = decl.is_pub();
                 for field in &l.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -384,7 +440,13 @@ fn collect_local_declarations(
                         None,
                     )?;
                     check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    check_no_pub_index_variant_literals(&field.value, &pub_index_names, src)?;
+                    if pub_sink {
+                        check_no_pub_index_variant_literals(
+                            &field.value,
+                            &pub_bind_index_names,
+                            src,
+                        )?;
+                    }
                 }
                 let lname = l.name.value.to_string();
                 layers.push(ResolvedLayerEntry {
@@ -397,8 +459,11 @@ fn collect_local_declarations(
                 let pname = p.name.value.to_string();
                 if let Some(ref value) = p.value {
                     check_no_assert_graph_refs(value, &assert_names, src)?;
-                    // Check for variant literals of pub indexes in param defaults.
-                    check_no_pub_index_variant_literals(value, &pub_index_names, src)?;
+                    // A10(a) + A5: `param` is implicitly bindable, so a
+                    // variant literal of a `pub(bind)` index in a param
+                    // default is always fine — the importer rebinding the
+                    // index will also be required to rebind the param
+                    // (V005, enforced at the include site).
                     let (graph_refs, _const_refs) = extract_all_refs(
                         value,
                         &all_runtime_names,
@@ -421,7 +486,7 @@ fn collect_local_declarations(
             }
             DeclKind::ConstNode(c) => {
                 check_no_runtime_graph_refs(&c.value, &all_runtime_names, src)?;
-                check_no_pub_index_variant_literals(&c.value, &pub_index_names, src)?;
+                check_no_pub_index_variant_literals(&c.value, &pub_bind_index_names, src)?;
                 let deps = extract_const_refs(
                     &c.value,
                     &all_const_names,
@@ -440,7 +505,7 @@ fn collect_local_declarations(
             }
             DeclKind::Node(n) => {
                 check_no_assert_graph_refs(&n.value, &assert_names, src)?;
-                check_no_pub_index_variant_literals(&n.value, &pub_index_names, src)?;
+                check_no_pub_index_variant_literals(&n.value, &pub_bind_index_names, src)?;
                 let nname = n.name.value.to_string();
                 let (graph_refs, _const_refs) = extract_all_refs(
                     &n.value,
@@ -669,18 +734,26 @@ fn validate_attributes(
     })
 }
 
-/// Validate that `pub` declarations do not reference private type-system items in their
-/// type annotations (Rust's E0446 "private type in public interface").
+/// Validate that every visible declaration names only visible type-system
+/// symbols in its written signature (V003 / A9 case 1).
 ///
-/// Checks dimension names, index names, and struct type names in the type annotations
-/// of pub params, nodes, and const nodes. References to prelude dimensions (Length, etc.)
-/// and built-in types (Bool, Int, Dimensionless, Datetime) are always allowed.
+/// A declaration's signature is checked when the declaration is visible
+/// at the library boundary: either explicitly `pub` / `pub(bind)`, or
+/// implicitly visible (`param`, per A5 §4.0).
+///
+/// Built-in type-system items (prelude dimensions like `Length`, and
+/// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
+/// always considered visible.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-kind signature extraction for every declaration kind"
+)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<String>,
 ) -> Result<(), GraphcalError> {
-    use crate::syntax::ast::{IndexExpr, TypeExprKind};
+    use crate::syntax::ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -706,13 +779,9 @@ fn validate_private_in_public(
         clippy::items_after_statements,
         reason = "helper function scoped to this validation"
     )]
-    fn collect_type_refs(type_expr: &crate::syntax::ast::TypeExpr, refs: &mut Vec<(String, Span)>) {
+    fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
         match &type_expr.kind {
-            TypeExprKind::DimExpr(dim_expr) => {
-                for item in &dim_expr.terms {
-                    refs.push((item.term.name.name.clone(), item.term.span));
-                }
-            }
+            TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
             TypeExprKind::Indexed { base, indexes } => {
                 collect_type_refs(base, refs);
                 for idx in indexes {
@@ -734,53 +803,126 @@ fn validate_private_in_public(
         }
     }
 
-    for decl in &file.declarations {
-        if !decl.is_pub() {
-            continue;
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
+    fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
+        for item in &dim_expr.terms {
+            refs.push((item.term.name.name.clone(), item.term.span));
         }
+    }
 
-        let (kind, name, type_ann) = match &decl.kind {
-            DeclKind::Param(p) => ("param", p.name.value.to_string(), &p.type_ann),
-            DeclKind::Node(n) => ("node", n.name.value.to_string(), &n.type_ann),
-            DeclKind::ConstNode(c) => ("const node", c.name.value.to_string(), &c.type_ann),
-            _ => continue,
-        };
+    // Classify the owning declaration of a referenced name for the error
+    // message.
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function scoped to this validation"
+    )]
+    fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
+        match file
+            .declarations
+            .iter()
+            .find(|d| match &d.kind {
+                DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
+                DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
+                DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
+                DeclKind::Type(t) => t.name.value.as_str() == ref_name,
+                DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
+                _ => false,
+            })
+            .map(|d| &d.kind)
+        {
+            Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
+            Some(DeclKind::Index(_)) => "index",
+            Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
+            _ => "item",
+        }
+    }
 
-        let mut refs = Vec::new();
-        collect_type_refs(type_ann, &mut refs);
-
+    let emit = |pub_kind: &str,
+                pub_name: String,
+                pub_span: Span,
+                refs: &[(String, Span)]|
+     -> Result<(), GraphcalError> {
         for (ref_name, ref_span) in refs {
-            // Only flag if the name is a local declaration and is not pub.
-            if local_type_names.contains_key(&ref_name) && !pub_names.contains(&ref_name) {
-                let ref_kind = match &file
-                    .declarations
-                    .iter()
-                    .find(|d| match &d.kind {
-                        DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
-                        DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
-                        DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
-                        DeclKind::Type(t) => t.name.value.as_str() == ref_name,
-                        DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
-                        _ => false,
-                    })
-                    .map(|d| &d.kind)
-                {
-                    Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
-                    Some(DeclKind::Index(_)) => "index",
-                    Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
-                    _ => "item",
-                };
+            if local_type_names.contains_key(ref_name) && !pub_names.contains(ref_name) {
                 return Err(GraphcalError::PrivateInPublic {
-                    pub_kind: kind.to_string(),
-                    pub_name: name,
-                    ref_kind: ref_kind.to_string(),
-                    ref_name,
+                    pub_kind: pub_kind.to_string(),
+                    pub_name,
+                    ref_kind: ref_kind_for(file, ref_name).to_string(),
+                    ref_name: ref_name.clone(),
                     src: src.clone(),
-                    ref_span: ref_span.into(),
-                    pub_span: decl.span.into(),
+                    ref_span: (*ref_span).into(),
+                    pub_span: pub_span.into(),
                 });
             }
         }
+        Ok(())
+    };
+
+    for decl in &file.declarations {
+        // `param` is always visible (A5 §4.0); other kinds only when
+        // explicitly marked `pub` / `pub(bind)`.
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        if !decl.is_pub() && !implicitly_visible {
+            continue;
+        }
+
+        let mut refs: Vec<(String, Span)> = Vec::new();
+        let (kind, name): (&str, String) = match &decl.kind {
+            DeclKind::Param(p) => {
+                collect_type_refs(&p.type_ann, &mut refs);
+                ("param", p.name.value.to_string())
+            }
+            DeclKind::Node(n) => {
+                collect_type_refs(&n.type_ann, &mut refs);
+                ("node", n.name.value.to_string())
+            }
+            DeclKind::ConstNode(c) => {
+                collect_type_refs(&c.type_ann, &mut refs);
+                ("const node", c.name.value.to_string())
+            }
+            DeclKind::Dimension(d) => {
+                if let Some(def) = &d.definition {
+                    collect_dim_refs(def, &mut refs);
+                }
+                ("dim", d.name.value.to_string())
+            }
+            DeclKind::Unit(u) => {
+                collect_dim_refs(&u.dim_type, &mut refs);
+                ("unit", u.name.value.to_string())
+            }
+            DeclKind::Type(t) => {
+                if let Some(fields) = &t.fields {
+                    for field in fields {
+                        collect_type_refs(&field.type_ann, &mut refs);
+                    }
+                }
+                ("type", t.name.value.to_string())
+            }
+            DeclKind::UnionType(u) => {
+                for member in &u.members {
+                    refs.push((member.name.value.to_string(), member.name.span));
+                    for arg in &member.type_args {
+                        collect_type_refs(arg, &mut refs);
+                    }
+                }
+                ("type", u.name.value.to_string())
+            }
+            DeclKind::Index(idx) => {
+                if let IndexDeclKind::RequiredRange { dimension } = &idx.kind {
+                    collect_dim_refs(dimension, &mut refs);
+                }
+                ("index", idx.name.value.to_string())
+            }
+            // Sink kinds have no written signature; bodies are not A9 case 1.
+            // BaseDimension has no body. Import/Include are use-sites. Dag is
+            // a use-site at the signature level.
+            _ => continue,
+        };
+
+        emit(kind, name, decl.span, &refs)?;
     }
     Ok(())
 }

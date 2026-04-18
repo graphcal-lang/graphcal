@@ -1,0 +1,10 @@
+// Error: variant literal of pub(bind) index used in a const node body.
+//
+// A10(c): `const node` is non-bindable, so mentioning a pub(bind)
+// index's variant literal would orphan under rebinding.
+pub(bind) index Phase = { Design, Build, Test };
+pub const node design_cost: Dimensionless[Phase] = {
+    Phase::Design: 100.0,
+    Phase::Build: 200.0,
+    Phase::Test: 50.0,
+};

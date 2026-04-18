@@ -4,7 +4,7 @@ assertion_line: 640
 expression: formatted
 ---
 // lib.gcl -- defines a reusable DAG
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
 const node speed_of_sound: Velocity = 343.0 m/s;
 

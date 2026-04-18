@@ -1,5 +1,9 @@
-// Error: variant literal of pub index used in a node expression
-pub index Phase = { Design, Build, Test };
+// Error: variant literal of pub(bind) index used in a node expression.
+//
+// Param default may freely name Phase::v — `param` is implicitly
+// bindable (A10(a) trivially satisfied). The violation is the
+// `@cost[Phase::Design]` in the node body (A10(c)).
+pub(bind) index Phase = { Design, Build, Test };
 param cost: Dimensionless[Phase] = {
     Phase::Design: 100.0,
     Phase::Build: 200.0,

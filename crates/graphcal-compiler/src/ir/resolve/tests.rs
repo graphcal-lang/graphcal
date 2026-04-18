@@ -276,7 +276,7 @@ fn resolve_import_decl_skipped() {
 fn resolve_indexed_param() {
     let resolved = parse_and_resolve(
         r"
-        index Color = { Red, Green, Blue };
+        pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -292,7 +292,7 @@ fn resolve_indexed_param() {
 fn resolve_for_comprehension() {
     let resolved = parse_and_resolve(
         r"
-        index Color = { Red, Green, Blue };
+        pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
             Color::Red: 1.0,
             Color::Green: 2.0,
@@ -311,7 +311,7 @@ fn resolve_for_comprehension() {
 fn resolve_scan_expression() {
     let resolved = parse_and_resolve(
         r"
-        index Step = { First, Second, Third };
+        pub index Step = { First, Second, Third };
         param vals: Dimensionless[Step] = {
             Step::First: 1.0,
             Step::Second: 2.0,
@@ -358,18 +358,69 @@ fn resolve_required_param_is_implicitly_bindable() {
 // `syntax::parser::decl::tests` for parser-level coverage.
 
 #[test]
-fn resolve_required_index_must_be_pub() {
+fn resolve_required_index_must_be_bindable() {
     let source = r"
         index Phase;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "index"));
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+    );
 }
 
 #[test]
-fn resolve_pub_required_index_ok() {
+fn resolve_required_pub_index_still_needs_bind() {
+    // `pub index Phase;` is now rejected: required indexes must be
+    // `pub(bind)` because A4 forces bindability.
     let source = r"
         pub index Phase;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_required_index_ok() {
+    let source = r"
+        pub(bind) index Phase;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_required_type_must_be_bindable() {
+    let source = r"
+        type Element;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "type")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_required_type_ok() {
+    let source = r"
+        pub(bind) type Element;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_required_dim_must_be_bindable() {
+    let source = r"
+        dim D;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "dim"));
+}
+
+#[test]
+fn resolve_pub_bind_required_dim_ok() {
+    let source = r"
+        pub(bind) dim D;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -440,15 +491,186 @@ fn resolve_pub_names_collected() {
 }
 
 #[test]
-fn resolve_param_with_private_dim_not_flagged_yet() {
-    // Post-A5 params are implicitly visible, so strictly a private dim
-    // in a param's type annotation should be flagged by V003. The V003
-    // checker currently only walks explicitly-pub declarations, so this
-    // case slips through — B4 audits V003 to cover implicitly-visible
-    // kinds.
+fn resolve_param_default_with_pub_bind_variant_literal_ok() {
+    // A10(a): `param` is implicitly bindable, so a variant literal of a
+    // `pub(bind)` index in a param default is allowed — V005 at the
+    // include site will ensure the importer re-binds the param when it
+    // rebinds the index.
+    let source = r"
+        pub(bind) index Phase = { Design, Build, Test };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 100.0,
+            Phase::Build: 200.0,
+            Phase::Test: 50.0,
+        };
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
+    // A10(c): `node` is non-bindable, so a variant literal of a
+    // `pub(bind)` index in a node body would orphan under rebinding.
+    let source = r"
+        pub(bind) index Phase = { Design, Build, Test };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+            Phase::Test: 3.0,
+        };
+        node design_cost: Dimensionless = @cost[Phase::Design];
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
+fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        pub const node costs: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
+fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
+    // A10(b) carve-out: private sink kinds are pruned from the merged
+    // IR when the file is used as a library, so literal mentions of
+    // `Phase::v` cannot orphan anything under override.
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+        assert design_cheap = @cost[Phase::Design] < 10.0;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
+    // A10(b): public sinks travel with the include and must abstract
+    // over pub(bind) indexes.
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+        pub assert design_cheap = @cost[Phase::Design] < 10.0;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
+fn resolve_node_with_plain_pub_variant_literal_ok() {
+    // Plain `pub` (fixed) indexes are not bindable, so A10 does not
+    // fire on their variant literals; importers cannot override them.
+    let source = r"
+        pub index Phase = { Design, Build };
+        pub const node costs: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_param_with_private_dim_fires_v003() {
+    // `param` is implicitly visible (A5 §4.0), so a private dim in a
+    // param's signature is V003 (A9 case 1).
     let source = r"
         dim Velocity = Length / Time;
         param speed: Velocity = 10.0 m/s;
     ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
+    );
+}
+
+#[test]
+fn resolve_param_with_pub_dim_ok() {
+    let source = r"
+        pub dim Velocity = Length / Time;
+        param speed: Velocity = 10.0 m/s;
+    ";
     parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_pub_dim_with_private_dim_fires_v003() {
+    // A9 case 1 also applies to dim/unit/type/index signatures.
+    let source = r"
+        dim Inner = Length;
+        pub dim Outer = Inner / Time;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "dim" && ref_name == "Inner")
+    );
+}
+
+#[test]
+fn resolve_pub_type_with_private_field_type_fires_v003() {
+    let source = r"
+        type Inner {}
+        pub type Outer { inner: Inner }
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "type" && ref_name == "Inner")
+    );
+}
+
+#[test]
+fn resolve_pub_union_type_with_private_member_fires_v003() {
+    let source = r"
+        pub type Ok {}
+        type Err {}
+        pub type Result = Ok | Err;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "type" && ref_name == "Err")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_index_with_private_dim_fires_v003() {
+    // A required range index carries a dim constraint that participates
+    // in A9 case 1.
+    let source = r"
+        dim Frequency = Time^-1;
+        pub(bind) index Channel: Frequency;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "index" && ref_name == "Frequency")
+    );
+}
+
+#[test]
+fn resolve_pub_unit_with_private_dim_fires_v003() {
+    let source = r"
+        dim Currency = Length;
+        pub unit usd: Currency = 1.0 m;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+            if pub_kind == "unit" && ref_name == "Currency")
+    );
 }

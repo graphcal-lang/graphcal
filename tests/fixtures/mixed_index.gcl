@@ -1,10 +1,10 @@
 // mixed_index.gcl -- Mixed range + label indexes
-dim Velocity = Length / Time;
-dim Acceleration = Velocity / Time;
+pub dim Velocity = Length / Time;
+pub dim Acceleration = Velocity / Time;
 
-index Maneuver = { Departure, Correction, Insertion };
+pub index Maneuver = { Departure, Correction, Insertion };
 
-index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
+pub index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 // Label-indexed acceleration
 param accel: Acceleration[Maneuver] = {

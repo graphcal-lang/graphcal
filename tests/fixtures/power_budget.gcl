@@ -5,7 +5,7 @@
 unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
-index Subsystem = {
+pub index Subsystem = {
     CommandAndData,
     AttitudeControl,
     Propulsion,
@@ -21,7 +21,7 @@ index Subsystem = {
 };
 
 // --- Operating modes (8 variants) ---
-index OpMode = {
+pub index OpMode = {
     Safe,
     Detumble,
     NominalSunlit,

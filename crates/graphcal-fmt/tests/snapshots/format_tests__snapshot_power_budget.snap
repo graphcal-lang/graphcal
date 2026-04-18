@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 485
 expression: formatted
 ---
 // power_budget.gcl -- Spacecraft power subsystem budget
@@ -9,7 +10,7 @@ expression: formatted
 unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
-index Subsystem = {
+pub index Subsystem = {
     CommandAndData,
     AttitudeControl,
     Propulsion,
@@ -25,7 +26,7 @@ index Subsystem = {
 };
 
 // --- Operating modes (8 variants) ---
-index OpMode = {
+pub index OpMode = {
     Safe,
     Detumble,
     NominalSunlit,

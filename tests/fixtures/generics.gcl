@@ -1,12 +1,12 @@
 // generics.gcl -- Generic structs with phantom type parameters
-dim Velocity = Length / Time;
+pub dim Velocity = Length / Time;
 
 // Marker types for reference frames
-type Eci {}
-type Body {}
+pub type Eci {}
+pub type Body {}
 
 // Generic struct with dim param and phantom type param
-type Vec3<D: Dim, F: Type> {
+pub type Vec3<D: Dim, F: Type> {
     x: D,
     y: D,
     z: D,
@@ -23,10 +23,10 @@ node y_vel: Velocity = @vel_eci.y;
 
 // --- Default type parameters ---
 // Unframed marker type
-type Unframed {}
+pub type Unframed {}
 
 // Generic struct with default type param: F defaults to Unframed
-type Pos3<D: Dim, F: Type = Unframed> {
+pub type Pos3<D: Dim, F: Type = Unframed> {
     x: D,
     y: D,
     z: D,
@@ -47,7 +47,7 @@ node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
 node pos_body_x: Length = @pos_body.x;
 
 // Non-generic struct still works alongside generics
-type TransferResult {
+pub type TransferResult {
     dv1: Velocity,
     dv2: Velocity,
 }
