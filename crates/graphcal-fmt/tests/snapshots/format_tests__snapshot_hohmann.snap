@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 463
 expression: formatted
 ---
 // hohmann.gcl -- Hohmann transfer orbit with structs and DAG
@@ -22,9 +23,9 @@ param target_alt: Length = 35786.0 km;
 dag hohmann_transfer {
     import .. { TransferResult, r_earth, gm_earth };
     
-    pub param parking_alt: Length;
+    param parking_alt: Length;
     
-    pub param target_alt: Length;
+    param target_alt: Length;
     
     node r1: Length = @r_earth + @parking_alt;
     

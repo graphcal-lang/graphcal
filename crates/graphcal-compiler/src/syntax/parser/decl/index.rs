@@ -1,4 +1,4 @@
-use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind};
+use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind, Visibility};
 use crate::syntax::names::{IndexName, VariantName};
 use crate::syntax::token::Token;
 
@@ -20,7 +20,7 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
-                is_pub: false,
+                visibility: Visibility::Private,
                 kind: DeclKind::Index(IndexDecl {
                     name,
                     kind: IndexDeclKind::RequiredNamed,
@@ -37,7 +37,7 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
-                is_pub: false,
+                visibility: Visibility::Private,
                 kind: DeclKind::Index(IndexDecl {
                     name,
                     kind: IndexDeclKind::RequiredRange { dimension },
@@ -73,7 +73,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     kind: DeclKind::Index(IndexDecl {
                         name,
                         kind: IndexDeclKind::Named { variants },
@@ -97,7 +97,7 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     kind: DeclKind::Index(IndexDecl {
                         name,
                         kind: IndexDeclKind::Range {

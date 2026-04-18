@@ -8,7 +8,7 @@
 
 use crate::syntax::ast::{
     AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportKind, IndexDeclKind, MulDivOp,
-    TypeExprKind,
+    TypeExprKind, Visibility,
 };
 use crate::syntax::parser::Parser;
 
@@ -141,18 +141,33 @@ fn parse_derived_dimension() {
     match &file.declarations[0].kind {
         DeclKind::Dimension(d) => {
             assert_eq!(d.name.value.as_str(), "Velocity");
-            assert_eq!(d.definition.terms.len(), 2);
-            assert_eq!(d.definition.terms[0].term.name.name, "Length");
-            assert_eq!(d.definition.terms[1].op, MulDivOp::Div);
-            assert_eq!(d.definition.terms[1].term.name.name, "Time");
+            let def = d.definition.as_ref().expect("derived dim has a body");
+            assert_eq!(def.terms.len(), 2);
+            assert_eq!(def.terms[0].term.name.name, "Length");
+            assert_eq!(def.terms[1].op, MulDivOp::Div);
+            assert_eq!(def.terms[1].term.name.name, "Time");
         }
         _ => panic!("expected dimension"),
     }
 }
 
 #[test]
+fn parse_required_dimension() {
+    // `dim D;` — the library requires a dimension to be bound from outside.
+    let file = Parser::new("dim Element;").parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Dimension(d) => {
+            assert_eq!(d.name.value.as_str(), "Element");
+            assert!(d.definition.is_none());
+        }
+        other => panic!("expected dimension, got {other:?}"),
+    }
+}
+
+#[test]
 fn parse_base_unit() {
-    let file = Parser::new("unit m: Length;").parse_file().unwrap();
+    // Post-A4: base units are spelled `base unit Name: Dim;`.
+    let file = Parser::new("base unit m: Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "m");
@@ -161,6 +176,12 @@ fn parse_base_unit() {
         }
         _ => panic!("expected unit"),
     }
+}
+
+#[test]
+fn parse_no_body_unit_without_base_is_rejected() {
+    // Post-A4: `unit X: Dim;` (without `base` prefix and without `=`) is a parse error.
+    assert!(Parser::new("unit m: Length;").parse_file().is_err());
 }
 
 #[test]
@@ -334,8 +355,9 @@ fn parse_type_decl_single_field() {
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Orbit");
-            assert_eq!(t.fields.len(), 1);
-            assert_eq!(t.fields[0].name.value.as_str(), "sma");
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].name.value.as_str(), "sma");
         }
         _ => panic!("expected type declaration"),
     }
@@ -349,9 +371,10 @@ fn parse_type_decl_multiple_fields() {
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "TransferResult");
-            assert_eq!(t.fields.len(), 2);
-            assert_eq!(t.fields[0].name.value.as_str(), "dv1");
-            assert_eq!(t.fields[1].name.value.as_str(), "dv2");
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name.value.as_str(), "dv1");
+            assert_eq!(fields[1].name.value.as_str(), "dv2");
         }
         _ => panic!("expected type declaration"),
     }
@@ -363,7 +386,8 @@ fn parse_type_decl_trailing_comma() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert_eq!(t.fields.len(), 2);
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 2);
         }
         _ => panic!("expected type declaration"),
     }
@@ -371,14 +395,30 @@ fn parse_type_decl_trailing_comma() {
 
 #[test]
 fn parse_type_decl_empty_type() {
+    // Post-A3: `type Eci {}` is an empty record (unit-like marker).
     let source = "type Eci {}";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Eci");
-            assert_eq!(t.fields.len(), 0);
+            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
+            assert_eq!(fields.len(), 0);
         }
         _ => panic!("expected type declaration"),
+    }
+}
+
+#[test]
+fn parse_type_decl_required() {
+    // Post-A3: `type T;` is a REQUIRED type (no body).
+    let source = "type Element;";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Type(t) => {
+            assert_eq!(t.name.value.as_str(), "Element");
+            assert!(t.fields.is_none());
+        }
+        other => panic!("expected type declaration, got {other:?}"),
     }
 }
 
@@ -402,9 +442,10 @@ fn parse_type_decl_with_dim_expr_field() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert_eq!(t.fields.len(), 1);
-            assert_eq!(t.fields[0].name.value.as_str(), "dv");
-            match &t.fields[0].type_ann.kind {
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].name.value.as_str(), "dv");
+            match &fields[0].type_ann.kind {
                 TypeExprKind::DimExpr(_) => {}
                 other => {
                     panic!("expected DimExpr, got {other:?}")
@@ -441,7 +482,8 @@ fn parse_type_decl_generic_params() {
             assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
             assert_eq!(t.generic_params[1].name.value.as_str(), "F");
             assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
-            assert_eq!(t.fields.len(), 3);
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 3);
         }
         _ => panic!("expected type declaration"),
     }
@@ -455,7 +497,8 @@ fn parse_type_decl_no_generics_empty() {
         DeclKind::Type(t) => {
             assert_eq!(t.name.value.as_str(), "Eci");
             assert!(t.generic_params.is_empty());
-            assert_eq!(t.fields.len(), 0);
+            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
+            assert_eq!(fields.len(), 0);
         }
         _ => panic!("expected type declaration"),
     }
@@ -471,7 +514,8 @@ fn parse_type_decl_generic_single_type_param() {
             assert_eq!(t.generic_params.len(), 1);
             assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
             assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
-            assert_eq!(t.fields.len(), 1);
+            let fields = t.fields.as_ref().expect("record type has fields");
+            assert_eq!(fields.len(), 1);
         }
         _ => panic!("expected type declaration"),
     }
@@ -530,7 +574,8 @@ fn parse_type_decl_no_attributes() {
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Type(t) => {
-            assert!(t.fields.is_empty());
+            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
+            assert!(fields.is_empty());
         }
         _ => panic!("expected type declaration"),
     }
@@ -1260,4 +1305,100 @@ fn parse_dag_with_import_parent() {
         }
         other => panic!("expected Dag, got {other:?}"),
     }
+}
+
+// --- Visibility / bindability annotations ---
+
+#[test]
+fn parse_private_declaration_has_private_visibility() {
+    let file = Parser::new("param x: Dimensionless = 1.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::Private);
+    assert!(!file.declarations[0].is_pub());
+    assert!(!file.declarations[0].is_bindable());
+}
+
+#[test]
+fn parse_pub_declaration_has_public_visibility() {
+    let file = Parser::new("pub node y: Dimensionless = 1.0;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::Public);
+    assert!(file.declarations[0].is_pub());
+    assert!(!file.declarations[0].is_bindable());
+}
+
+#[test]
+fn parse_pub_on_param_is_parse_error() {
+    // Per §4.0 of the axioms, `param` is annotation-free: `pub param`
+    // and `pub(bind) param` are parse errors.
+    assert!(
+        Parser::new("pub param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_bind_on_param_is_parse_error() {
+    assert!(
+        Parser::new("pub(bind) param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_on_required_param_is_parse_error() {
+    assert!(
+        Parser::new("pub param x: Dimensionless;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_bind_declaration_has_public_bind_visibility() {
+    let file = Parser::new("pub(bind) index Phase = { Design, Test };")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations[0].visibility, Visibility::PublicBind);
+    assert!(file.declarations[0].is_pub());
+    assert!(file.declarations[0].is_bindable());
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => assert_eq!(idx.name.value.as_str(), "Phase"),
+        other => panic!("expected Index, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_pub_bind_spans_extend_over_annotation() {
+    // The declaration span should start at `pub` — the annotation is included.
+    let src = "pub(bind) index Phase = { Design, Test };";
+    let file = Parser::new(src).parse_file().unwrap();
+    let span = file.declarations[0].span;
+    assert_eq!(span.offset(), 0);
+    // Span covers from `pub` up through the declaration body; `;` is
+    // consumed but not included in the per-decl span for index.
+    assert!(span.len() >= "pub(bind) index Phase = { Design, Test }".len());
+}
+
+#[test]
+fn parse_pub_paren_without_bind_is_error() {
+    // `pub(foo)` should not parse — `bind` is the only contextual keyword.
+    assert!(
+        Parser::new("pub(foo) index Phase = { A, B };")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_unclosed_paren_is_error() {
+    assert!(
+        Parser::new("pub(bind index Phase = { A, B };")
+            .parse_file()
+            .is_err()
+    );
 }

@@ -1182,7 +1182,15 @@ fn register_declarations_impl(
                 register_base_dimension_decl(d, registry, dag_id);
             }
             DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
-                derived_dims.push(d);
+                if d.definition.is_some() {
+                    derived_dims.push(d);
+                } else {
+                    // Required dim (`dim D;`) — no body. Compile as an opaque
+                    // base dimension so the library checks out in isolation;
+                    // substitution via include-time dim bindings happens in a
+                    // later phase (see visibility/bindability axioms plan §C2).
+                    register_required_dimension_decl(d, registry, dag_id);
+                }
             }
             DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
                 units.push(u);
@@ -1287,7 +1295,12 @@ fn topo_sort_derived_dims<'a>(
     for d in dims {
         let self_name = d.name.value.as_str();
         let from = name_to_idx[self_name];
-        for item in &d.definition.terms {
+        // Only derived dims reach this sort; required dims are routed
+        // directly to the base-dim registry in Phase 1.
+        let Some(definition) = &d.definition else {
+            continue;
+        };
+        for item in &definition.terms {
             let dep_name = item.term.name.name.as_str();
             if dep_name != self_name
                 && let Some(&to) = name_to_idx.get(dep_name)
@@ -1387,15 +1400,39 @@ fn register_dimension_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim = registry.resolve_dim_expr(&d.definition).ok_or_else(|| {
-        GraphcalError::UnknownDimension {
-            name: d.name.value.clone(),
-            src: src.clone(),
-            span: d.name.span.into(),
-        }
-    })?;
+    // Only derived dims reach this function; required dims (`dim D;`)
+    // are routed to `register_required_dimension_decl` in Phase 1 and
+    // never end up in the topo-sorted derived-dim list.
+    let Some(definition) = d.definition.as_ref() else {
+        return Ok(());
+    };
+    let dim =
+        registry
+            .resolve_dim_expr(definition)
+            .ok_or_else(|| GraphcalError::UnknownDimension {
+                name: d.name.value.clone(),
+                src: src.clone(),
+                span: d.name.span.into(),
+            })?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
+}
+
+/// Register a required dim (`dim D;`) as an opaque base dimension.
+///
+/// The library treats the required dim like a base SI dimension while
+/// compiling standalone. Later include-time substitution rewires
+/// references through the importer's dim bindings.
+fn register_required_dimension_decl(
+    d: &crate::syntax::ast::DimDecl,
+    registry: &mut RegistryBuilder,
+    dag_id: &crate::syntax::dag_id::DagId,
+) {
+    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+        dag: dag_id.clone(),
+        name: d.name.value.to_string(),
+    };
+    registry.register_base_dimension(d.name.value.clone(), dim_id);
 }
 
 fn register_unit_decl(
@@ -1768,18 +1805,22 @@ fn register_type_decl(t: &crate::syntax::ast::TypeDecl, registry: &mut RegistryB
         })
         .collect();
 
-    let kind = if t.fields.is_empty() {
-        types::TypeDefKind::Unit
-    } else {
-        let fields = t
-            .fields
-            .iter()
-            .map(|f| types::StructField {
-                name: f.name.value.clone(),
-                type_ann: f.type_ann.clone(),
-            })
-            .collect();
-        types::TypeDefKind::Record { fields }
+    // Required types (`type T;` with no body) are treated like opaque
+    // unit types at the library level; include-time substitution rewires
+    // references through the importer's type bindings (see plan §C1).
+    let kind = match &t.fields {
+        None => types::TypeDefKind::Unit,
+        Some(fields) if fields.is_empty() => types::TypeDefKind::Unit,
+        Some(fields) => {
+            let fields = fields
+                .iter()
+                .map(|f| types::StructField {
+                    name: f.name.value.clone(),
+                    type_ann: f.type_ann.clone(),
+                })
+                .collect();
+            types::TypeDefKind::Record { fields }
+        }
     };
 
     registry.register_type(types::TypeDef {

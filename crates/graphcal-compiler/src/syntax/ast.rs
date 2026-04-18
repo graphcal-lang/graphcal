@@ -51,13 +51,54 @@ impl AttributeArg {
     }
 }
 
+/// Visibility and bindability annotation on a declaration.
+///
+/// Tracks the two-axis split from the visibility / bindability axioms:
+/// - `Private`: no annotation — the declaration is not visible outside the library.
+/// - `Public`: `pub` — visible at the include boundary but not bindable.
+/// - `PublicBind`: `pub(bind)` — visible AND bindable via include param bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Private,
+    Public,
+    PublicBind,
+}
+
+impl Visibility {
+    /// Returns `true` for `Public` and `PublicBind`.
+    #[must_use]
+    pub const fn is_public(self) -> bool {
+        matches!(self, Self::Public | Self::PublicBind)
+    }
+
+    /// Returns `true` for `PublicBind`.
+    #[must_use]
+    pub const fn is_bindable(self) -> bool {
+        matches!(self, Self::PublicBind)
+    }
+}
+
 /// A top-level declaration.
 #[derive(Debug, Clone)]
 pub struct Declaration {
     pub attributes: Vec<Attribute>,
-    pub is_pub: bool,
+    pub visibility: Visibility,
     pub kind: DeclKind,
     pub span: Span,
+}
+
+impl Declaration {
+    /// Returns `true` if this declaration is visible (`pub` or `pub(bind)`).
+    #[must_use]
+    pub const fn is_pub(&self) -> bool {
+        self.visibility.is_public()
+    }
+
+    /// Returns `true` if this declaration is bindable (`pub(bind)`).
+    #[must_use]
+    pub const fn is_bindable(&self) -> bool {
+        self.visibility.is_bindable()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -453,21 +494,29 @@ pub struct BaseDimDecl {
     pub name: Spanned<DimName>,
 }
 
-/// Derived dimension declaration: `dim Velocity = Length / Time;`
+/// Dimension declaration with a body or required.
+///
+/// Two forms:
+/// - Derived: `dim Velocity = Length / Time;` — `definition: Some(...)`
+/// - Required: `dim D;` — `definition: None`. The library requires a
+///   dimension to be bound here from outside (via an include with
+///   dim bindings). Treated like an opaque base dimension when the
+///   library is compiled standalone.
 #[derive(Debug, Clone)]
 pub struct DimDecl {
     pub name: Spanned<DimName>,
-    pub definition: DimExpr,
+    pub definition: Option<DimExpr>,
 }
 
-/// Unit declaration: `unit km: Length = 1000 m;` or `const unit km: Length = 1000 m;`
+/// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
+/// or `base unit m: Length;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl {
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
-    /// `None` for base SI units: `unit m: Length;`
+    /// `None` iff this is a base unit (`base unit m: Length;`).
     pub definition: Option<UnitDef>,
 }
 
@@ -479,19 +528,22 @@ pub struct UnitDef {
     pub span: Span,
 }
 
-/// Type declaration: record types and unit types.
+/// Type declaration: record types and required types.
 ///
-/// Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
-///
-/// Empty record type: `type ECI {}`
-///
-/// Unit type: `type Coasting;`
+/// Forms:
+/// - Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
+/// - Empty record type (unit-like marker): `type Eci {}`
+/// - Required type: `type T;` — the library requires a type bound from
+///   outside; no body at declaration.
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam>,
-    /// Fields of the type. Empty for unit types and empty record types.
-    pub fields: Vec<FieldDecl>,
+    /// Fields of the type:
+    /// - `None` — required type (`type T;`, no body).
+    /// - `Some(vec![])` — empty record (`type T {}`).
+    /// - `Some(non-empty)` — record with fields.
+    pub fields: Option<Vec<FieldDecl>>,
 }
 
 /// Union type declaration: `type ManeuverKind = Impulsive | Coasting;`
@@ -1429,7 +1481,7 @@ mod tests {
         let file = File {
             declarations: vec![Declaration {
                 attributes: vec![],
-                is_pub: false,
+                visibility: Visibility::Private,
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {

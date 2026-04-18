@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl,
+    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, Visibility,
 };
 use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
@@ -24,7 +24,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Param(ParamDecl {
                 name,
                 type_ann,
@@ -45,7 +45,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Node(NodeDecl {
                 name,
                 type_ann,
@@ -71,7 +71,7 @@ impl Parser<'_> {
         let span = const_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::ConstNode(ConstNodeDecl {
                 name,
                 type_ann,
@@ -116,7 +116,7 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Assert(AssertDecl { name, body }),
             span,
         })

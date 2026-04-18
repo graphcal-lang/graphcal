@@ -1,7 +1,7 @@
 // Dynamic unit definitions: conversion factors from runtime values.
 // Example: currency exchange rates.
 base dim Money;
-unit USD: Money;
+base unit USD: Money;
 
 // Exchange rate as a param (can be overridden)
 param usd_per_eur: Dimensionless = 1.08;

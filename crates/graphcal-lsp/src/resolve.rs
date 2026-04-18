@@ -113,12 +113,12 @@ mod tests {
             },
             ImportedDefinition {
                 uri: Url::parse("file:///mod_a.gcl").unwrap(),
-                source: Arc::new("pub param x: Dimensionless = 1.0;".to_string()),
+                source: Arc::new("param x: Dimensionless = 1.0;".to_string()),
                 definition: DefinitionInfo {
                     name: "x".to_string(),
                     category: SymbolCategory::Param,
-                    name_span: graphcal_compiler::syntax::span::Span::new(10, 1),
-                    decl_span: graphcal_compiler::syntax::span::Span::new(0, 33),
+                    name_span: graphcal_compiler::syntax::span::Span::new(6, 1),
+                    decl_span: graphcal_compiler::syntax::span::Span::new(0, 29),
                     type_description: Some("Dimensionless".to_string()),
                     detail: None,
                 },
@@ -131,12 +131,12 @@ mod tests {
             },
             ImportedDefinition {
                 uri: Url::parse("file:///mod_b.gcl").unwrap(),
-                source: Arc::new("pub param x: Dimensionless = 2.0;".to_string()),
+                source: Arc::new("param x: Dimensionless = 2.0;".to_string()),
                 definition: DefinitionInfo {
                     name: "x".to_string(),
                     category: SymbolCategory::Param,
-                    name_span: graphcal_compiler::syntax::span::Span::new(10, 1),
-                    decl_span: graphcal_compiler::syntax::span::Span::new(0, 33),
+                    name_span: graphcal_compiler::syntax::span::Span::new(6, 1),
+                    decl_span: graphcal_compiler::syntax::span::Span::new(0, 29),
                     type_description: Some("Dimensionless".to_string()),
                     detail: None,
                 },

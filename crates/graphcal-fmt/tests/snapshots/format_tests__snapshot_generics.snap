@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 462
 expression: formatted
 ---
 // generics.gcl -- Generic structs with phantom type parameters
 dim Velocity = Length / Time;
 
 // Marker types for reference frames
-type Eci;
-type Body;
+type Eci {}
+type Body {}
 
 // Generic struct with dim param and phantom type param
 type Vec3<D: Dim, F: Type> {
@@ -27,7 +28,7 @@ node y_vel: Velocity = @vel_eci.y;
 
 // --- Default type parameters ---
 // Unframed marker type
-type Unframed;
+type Unframed {}
 
 // Generic struct with default type param: F defaults to Unframed
 type Pos3<D: Dim, F: Type = Unframed> {

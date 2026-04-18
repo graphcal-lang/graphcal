@@ -1,2 +1,2 @@
-// Error: required param is not marked `pub`.
+// Error: required param needs a value supplied at eval time.
 param x: Dimensionless;

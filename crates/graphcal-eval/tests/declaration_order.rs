@@ -140,7 +140,7 @@ fn forward_ref_derived_dimension() {
 fn forward_ref_unit() {
     let source = r"
         unit km_custom: Length = 1000 m_base;
-        unit m_base: Length;
+        base unit m_base: Length;
         const node dist: Length = 5.0 km_custom;
     ";
     compile_and_eval(source).expect("forward-ref unit must compile and evaluate");
@@ -163,7 +163,7 @@ fn forward_ref_derived_dimension_chain() {
 fn forward_ref_range_index_unit() {
     let source = r"
         index Distances = linspace(0.0 custom_m, 100.0 custom_m, step: 10.0 custom_m);
-        unit custom_m: Length;
+        base unit custom_m: Length;
         node num_points: Dimensionless = count(for d: Distances { 1.0 });
     ";
     compile_and_eval(source).expect("range index with forward-ref unit must compile and evaluate");

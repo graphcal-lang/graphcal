@@ -345,13 +345,17 @@ fn resolve_unfold_self_edge_excluded() {
 // --- Visibility tests ---
 
 #[test]
-fn resolve_required_param_must_be_pub() {
+fn resolve_required_param_is_implicitly_bindable() {
+    // Post-A5: `param` never carries `pub`; a bare required param is
+    // implicitly visible + bindable at the include site.
     let source = r"
         param x: Dimensionless;
     ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "param"));
+    parse_and_resolve(source).unwrap();
 }
+
+// `pub param` / `pub(bind) param` are rejected at parse time; see
+// `syntax::parser::decl::tests` for parser-level coverage.
 
 #[test]
 fn resolve_required_index_must_be_pub() {
@@ -360,14 +364,6 @@ fn resolve_required_index_must_be_pub() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "index"));
-}
-
-#[test]
-fn resolve_pub_required_param_ok() {
-    let source = r"
-        pub param x: Dimensionless;
-    ";
-    parse_and_resolve(source).unwrap();
 }
 
 #[test]
@@ -380,9 +376,11 @@ fn resolve_pub_required_index_ok() {
 
 #[test]
 fn resolve_private_in_public_dim() {
+    // V003 is triggered by a pub node (not pub param, which is rejected).
     let source = r"
         dim Velocity = Length / Time;
-        pub param speed: Velocity = 10.0 m/s;
+        param kmh: Velocity = 36.0 km/h;
+        pub node speed: Velocity = @kmh;
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
@@ -394,7 +392,8 @@ fn resolve_private_in_public_dim() {
 fn resolve_private_in_public_ok_when_dim_is_pub() {
     let source = r"
         pub dim Velocity = Length / Time;
-        pub param speed: Velocity = 10.0 m/s;
+        param kmh: Velocity = 36.0 km/h;
+        pub node speed: Velocity = @kmh;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -403,7 +402,8 @@ fn resolve_private_in_public_ok_when_dim_is_pub() {
 fn resolve_private_in_public_ok_for_builtin_dims() {
     // Built-in dimensions (Length, Time, etc.) don't need to be `pub`.
     let source = r"
-        pub param distance: Length = 1.0 m;
+        param origin: Length = 1.0 m;
+        pub node distance: Length = @origin;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -440,8 +440,12 @@ fn resolve_pub_names_collected() {
 }
 
 #[test]
-fn resolve_non_pub_private_param_ok() {
-    // Non-pub params can reference private dims freely.
+fn resolve_param_with_private_dim_not_flagged_yet() {
+    // Post-A5 params are implicitly visible, so strictly a private dim
+    // in a param's type annotation should be flagged by V003. The V003
+    // checker currently only walks explicitly-pub declarations, so this
+    // case slips through — B4 audits V003 to cover implicitly-visible
+    // kinds.
     let source = r"
         dim Velocity = Length / Time;
         param speed: Velocity = 10.0 m/s;

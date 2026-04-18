@@ -1,4 +1,4 @@
 // subsystems/power.gcl -- Power subsystem parameters
-pub param solar_array_power: Power = 800.0 W;
-pub param battery_capacity_wh: Dimensionless = 1200.0;
-pub param power_margin: Dimensionless = 0.15;
+param solar_array_power: Power = 800.0 W;
+param battery_capacity_wh: Dimensionless = 1200.0;
+param power_margin: Dimensionless = 0.15;

@@ -1,2 +1,4 @@
-// This param is private (no `pub` keyword).
-param secret: Dimensionless = 42.0;
+// This const node is private (no `pub` keyword).
+// Params are implicitly visible under the A5 rule, so a private
+// example must use `node` or `const node`.
+const node secret: Dimensionless = 42.0;

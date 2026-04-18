@@ -459,7 +459,9 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, table: &mut SymbolTable) {
         None,
         None,
     );
-    collect_dim_expr_refs(&d.definition, table);
+    if let Some(definition) = &d.definition {
+        collect_dim_expr_refs(definition, table);
+    }
 }
 
 fn collect_unit_decl(
@@ -492,9 +494,11 @@ fn collect_type_decl(t: &TypeDecl, decl_span: Span, table: &mut SymbolTable) {
         None,
         None,
     );
-    // Walk field type annotations.
-    for field in &t.fields {
-        collect_type_expr_refs(&field.type_ann, table);
+    // Walk field type annotations (required types have no fields).
+    if let Some(fields) = &t.fields {
+        for field in fields {
+            collect_type_expr_refs(&field.type_ann, table);
+        }
     }
 }
 

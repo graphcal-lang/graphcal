@@ -1,3 +1,3 @@
 // checks.gcl -- shared assertions
-pub param limit: Dimensionless = 100.0;
+param limit: Dimensionless = 100.0;
 pub assert limit_positive = @limit > 0.0;

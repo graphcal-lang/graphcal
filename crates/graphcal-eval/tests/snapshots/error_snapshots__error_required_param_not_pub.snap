@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 459
 expression: rendered
 ---
-required param `x` must be declared `pub`
+required param `x` has no value
     Diagnostic severity: error
 Begin snippet for required_param_not_pub.gcl starting at line 1, column 1
 
-snippet line 1: // Error: required param is not marked `pub`.
+snippet line 1: // Error: required param needs a value supplied at eval time.
 snippet line 2: param x: Dimensionless;
-    label at line 2, column 7: required item must be `pub`
-diagnostic help: required params and indexes form the public interface — add `pub` before the declaration
-diagnostic code: graphcal::V002
+    label at line 2, columns 1 to 23: declared here without a default value
+diagnostic help: provide a value via `--set 'x=<value>'`, `--input`, or a parameterized import binding
+diagnostic code: graphcal::O003

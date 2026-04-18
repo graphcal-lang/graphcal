@@ -126,10 +126,13 @@ fn collect_local_declarations(
     let mut source_order = Vec::new();
     let mut assert_names: HashSet<String> = HashSet::new();
 
-    // Collect names of all `pub` declarations (including type-system declarations).
+    // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`
+    // declarations contribute; params are implicitly visible+bindable under
+    // A5 and always contribute.
     let mut pub_names: HashSet<String> = HashSet::new();
     for decl in &file.declarations {
-        if !decl.is_pub {
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        if !decl.is_pub() && !implicitly_visible {
             continue;
         }
         let Some((name, _)) = decl.kind.name_and_span() else {
@@ -138,18 +141,13 @@ fn collect_local_declarations(
         pub_names.insert(name.to_string());
     }
 
-    // Validate: required params and indexes must be `pub`.
+    // Validate: required indexes must be `pub` (V002).
+    //
+    // (`param` carrying `pub` / `pub(bind)` is rejected at parse time —
+    // the parser refuses any annotation on `param` per the axioms §4.0.)
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Param(p) if p.value.is_none() && !decl.is_pub => {
-                return Err(GraphcalError::RequiredItemMustBePub {
-                    kind: "param".to_string(),
-                    name: p.name.value.to_string(),
-                    src: src.clone(),
-                    span: p.name.span.into(),
-                });
-            }
-            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub => {
+            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub() => {
                 return Err(GraphcalError::RequiredItemMustBePub {
                     kind: "index".to_string(),
                     name: idx.name.value.to_string(),
@@ -166,7 +164,7 @@ fn collect_local_declarations(
         .declarations
         .iter()
         .filter_map(|decl| {
-            if !decl.is_pub {
+            if !decl.is_pub() {
                 return None;
             }
             if let DeclKind::Index(idx) = &decl.kind
@@ -737,7 +735,7 @@ fn validate_private_in_public(
     }
 
     for decl in &file.declarations {
-        if !decl.is_pub {
+        if !decl.is_pub() {
             continue;
         }
 

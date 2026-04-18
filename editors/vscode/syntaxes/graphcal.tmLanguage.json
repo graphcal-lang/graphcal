@@ -63,7 +63,7 @@
     },
 
     "type-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(type)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(type)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.type.graphcal" },
@@ -72,7 +72,7 @@
     },
 
     "base-dimension-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(base)\\s+(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(base)\\s+(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.dimension.graphcal" },
@@ -82,7 +82,7 @@
     },
 
     "dimension-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(dim)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.dimension.graphcal" },
@@ -91,7 +91,7 @@
     },
 
     "unit-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.unit.graphcal" },
@@ -100,7 +100,7 @@
     },
 
     "index-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(index)\\s+([A-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(index)\\s+([A-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.index.graphcal" },
@@ -114,7 +114,7 @@
     },
 
     "param-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(param)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(param)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.param.graphcal" },
@@ -123,7 +123,7 @@
     },
 
     "node-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.node.graphcal" },
@@ -132,7 +132,7 @@
     },
 
     "const-node-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(const)\\s+(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(const)\\s+(node)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.const.graphcal" },
@@ -142,7 +142,7 @@
     },
 
     "const-unit-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(const)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(const)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.const.graphcal" },
@@ -179,7 +179,7 @@
     },
 
     "assert-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(assert)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(assert)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.assert.graphcal" },
@@ -188,7 +188,7 @@
     },
 
     "plot-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(plot)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(plot)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.plot.graphcal" },
@@ -212,7 +212,7 @@
     },
 
     "figure-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(figure)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(figure)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.figure.graphcal" },
@@ -221,7 +221,7 @@
     },
 
     "layer-declaration": {
-      "match": "(?:\\b(pub)\\s+)?\\b(layer)\\s+([a-z][a-z0-9_]*)",
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(layer)\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.layer.graphcal" },
@@ -230,7 +230,7 @@
     },
 
     "import-declaration": {
-      "begin": "(?:\\b(pub)\\s+)?\\b(import)\\b",
+      "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(import)\\b",
       "end": ";",
       "beginCaptures": {
         "1": { "name": "keyword.other.pub.graphcal" },
@@ -256,7 +256,7 @@
     },
 
     "dag-declaration": {
-      "begin": "(?:\\b(pub)\\s+)?\\b(dag)\\s+([a-z][a-z0-9_]*)\\s*\\{",
+      "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(dag)\\s+([a-z][a-z0-9_]*)\\s*\\{",
       "end": "\\}",
       "beginCaptures": {
         "1": { "name": "keyword.other.pub.graphcal" },
@@ -269,7 +269,7 @@
     },
 
     "include-declaration": {
-      "begin": "(?:\\b(pub)\\s+)?\\b(include)\\b",
+      "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(include)\\b",
       "end": ";",
       "beginCaptures": {
         "1": { "name": "keyword.other.pub.graphcal" },

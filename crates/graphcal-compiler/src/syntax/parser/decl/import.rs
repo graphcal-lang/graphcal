@@ -1,5 +1,6 @@
 use crate::syntax::ast::DeclKind;
 use crate::syntax::ast::Declaration;
+use crate::syntax::ast::Visibility;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -45,7 +46,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
             span,
         })
@@ -82,7 +83,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            is_pub: false,
+            visibility: Visibility::Private,
             kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
                 path,
                 param_bindings,

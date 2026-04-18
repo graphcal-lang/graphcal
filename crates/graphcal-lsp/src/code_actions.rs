@@ -333,19 +333,19 @@ mod tests {
 
     #[test]
     fn v003_adds_pub_to_private_dim() {
-        let source = "dim Velocity = Length / Time;\npub param speed: Velocity = 10.0 m/s;";
+        let source = "dim Velocity = Length / Time;\npub node speed: Velocity = 10.0 m/s;";
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V003",
-            "`pub param` `speed` references private dim `Velocity` in its type annotation\n\nhint: add `pub` to `Velocity` or remove `pub` from `speed`",
+            "`pub node` `speed` references private dim `Velocity` in its type annotation\n\nhint: add `pub` to `Velocity` or remove `pub` from `speed`",
             Range {
                 start: Position {
                     line: 1,
-                    character: 17,
+                    character: 16,
                 },
                 end: Position {
                     line: 1,
-                    character: 25,
+                    character: 24,
                 },
             },
         );
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn extract_private_ref_name_works() {
-        let msg = "`pub param` `speed` references private dim `Velocity` in its type annotation";
+        let msg = "`pub node` `speed` references private dim `Velocity` in its type annotation";
         assert_eq!(extract_private_ref_name(msg), Some("Velocity".to_string()));
     }
 

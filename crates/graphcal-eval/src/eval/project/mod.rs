@@ -284,11 +284,17 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
     std::borrow::Cow::Owned(ast)
 }
 
-/// Extract the set of `pub`-declared names from a file's AST.
+/// Extract the set of names visible to importers of a file.
+///
+/// Explicitly `pub`/`pub(bind)` declarations contribute. Params are
+/// implicitly visible under the A5 rule ("params are always visible
+/// and bindable") and therefore always contribute regardless of
+/// annotation.
 pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> HashSet<String> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
-        if !decl.is_pub {
+        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+        if !decl.is_pub() && !implicitly_visible {
             continue;
         }
         let name = match &decl.kind {

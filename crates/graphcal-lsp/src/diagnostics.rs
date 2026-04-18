@@ -307,16 +307,17 @@ mod tests {
     }
 
     #[test]
-    fn v002_required_param_not_pub_produces_diagnostic() {
-        let source = "param x: Dimensionless;";
+    fn pub_param_produces_parse_diagnostic() {
+        // `pub param` is rejected at parse time with a P001 unexpected-token
+        // diagnostic — params are annotation-free per axioms §4.0.
+        let source = "pub param x: Dimensionless = 1.0;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert_eq!(diags.len(), 1);
+        assert!(!diags.is_empty(), "expected at least one diagnostic");
         let code = diags[0].code.as_ref();
         assert!(
-            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V002"))),
-            "expected V002 error code, got {code:?}"
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("P001"))),
+            "expected P001 parse error code, got {code:?}"
         );
-        assert!(diags[0].message.contains("param"));
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
     }
 
@@ -335,7 +336,7 @@ mod tests {
 
     #[test]
     fn v003_private_in_public_produces_diagnostic() {
-        let source = "dim Velocity = Length / Time;\npub param speed: Velocity = 10.0 m/s;";
+        let source = "dim Velocity = Length / Time;\nparam kmh: Velocity = 36.0 km/h;\npub node speed: Velocity = @kmh;";
         let diags = produce_diagnostics(source, "test.gcl");
         assert_eq!(diags.len(), 1);
         let code = diags[0].code.as_ref();

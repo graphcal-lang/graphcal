@@ -6,7 +6,7 @@ const node speed_of_sound: Velocity = 343.0 m/s;
 pub dag double_speed {
     import .. { speed_of_sound };
 
-    pub param v: Velocity;
+    param v: Velocity;
 
     pub node result: Velocity = @v * 2.0;
 

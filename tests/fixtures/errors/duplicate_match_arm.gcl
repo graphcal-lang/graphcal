@@ -1,5 +1,5 @@
 // Error: duplicate match arm
-type Nominal;
+type Nominal {}
 type Warning {
     code: Dimensionless,
 }

@@ -1,4 +1,4 @@
-use crate::syntax::ast::{Attribute, AttributeArg, Declaration};
+use crate::syntax::ast::{Attribute, AttributeArg, Declaration, Visibility};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -23,13 +23,49 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        // Optional `pub` visibility modifier
-        let pub_span = if self.lexer.peek() == Some(&Token::Pub) {
-            let (_, span) = self.advance()?;
-            Some(span)
+        // Optional `pub` or `pub(bind)` visibility modifier.
+        //
+        // `bind` is a contextual keyword parsed as a literal identifier
+        // inside the parens; it is not a reserved token so it remains a
+        // valid identifier elsewhere.
+        let (visibility, visibility_span) = if self.lexer.peek() == Some(&Token::Pub) {
+            let (_, pub_span) = self.advance()?;
+            if self.lexer.peek() == Some(&Token::LParen) {
+                self.expect(Token::LParen)?;
+                let (bind_tok, bind_span) = self.advance()?;
+                if bind_tok != Token::Ident || self.lexer.slice_at(bind_span) != "bind" {
+                    return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
+                }
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                (Visibility::PublicBind, Some(pub_span.merge(rparen_span)))
+            } else {
+                (Visibility::Public, Some(pub_span))
+            }
         } else {
-            None
+            (Visibility::Private, None)
         };
+
+        // Reject `pub` / `pub(bind)` on `param` at parse time. The spec
+        // (visibility-bindability axioms §4.0) says `param` is
+        // annotation-free: it is inherently visible + bindable, and any
+        // annotation conveys no information. Catching this here keeps
+        // the grammar surface itself compliant without deferring to the
+        // resolver.
+        let found = match visibility {
+            Visibility::Private => None,
+            Visibility::Public => Some("`pub`"),
+            Visibility::PublicBind => Some("`pub(bind)`"),
+        };
+        if let Some(found) = found
+            && self.lexer.peek() == Some(&Token::Param)
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "no visibility annotation (params are always visible and bindable)",
+                found,
+                vis_span,
+            ));
+        }
 
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
@@ -55,11 +91,16 @@ impl Parser<'_> {
                 let (_, base_span) = self.advance()?;
                 match self.lexer.peek() {
                     Some(Token::Dimension) => self.parse_base_dimension_decl(base_span),
+                    Some(Token::Unit) => self.parse_base_unit_decl(base_span),
                     Some(_) => {
                         let (tok, span) = self.advance()?;
-                        Err(self.unexpected_token("`dim` after `base`", &tok.to_string(), span))
+                        Err(self.unexpected_token(
+                            "`dim` or `unit` after `base`",
+                            &tok.to_string(),
+                            span,
+                        ))
                     }
-                    None => Err(self.unexpected_eof("`dim` after `base`")),
+                    None => Err(self.unexpected_eof("`dim` or `unit` after `base`")),
                 }
             }
             Some(Token::Dimension) => self.parse_dimension_decl(),
@@ -81,11 +122,10 @@ impl Parser<'_> {
         }?;
 
         // Set visibility
-        let is_pub = pub_span.is_some();
-        decl.is_pub = is_pub;
+        decl.visibility = visibility;
 
-        // Extend the declaration span to include `pub` keyword
-        if let Some(ps) = pub_span {
+        // Extend the declaration span to include `pub` / `pub(bind)` prefix
+        if let Some(ps) = visibility_span {
             decl.span = ps.merge(decl.span);
         }
 

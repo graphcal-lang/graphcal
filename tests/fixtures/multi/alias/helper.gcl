@@ -1,1 +1,1 @@
-pub param x: Dimensionless = 42.0;
+param x: Dimensionless = 42.0;

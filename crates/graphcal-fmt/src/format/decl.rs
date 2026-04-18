@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
     IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef,
+    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -35,11 +35,11 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
     };
 
-    // Prepend `pub ` if the declaration is public
-    let body = if decl.is_pub {
-        RcDoc::text("pub ").append(body)
-    } else {
-        body
+    // Prepend the visibility annotation (if any).
+    let body = match decl.visibility {
+        Visibility::Private => body,
+        Visibility::Public => RcDoc::text("pub ").append(body),
+        Visibility::PublicBind => RcDoc::text("pub(bind) ").append(body),
     };
 
     if decl.attributes.is_empty() {
@@ -141,18 +141,26 @@ fn format_base_dim_decl(d: &BaseDimDecl) -> RcDoc<'static> {
         .append(RcDoc::text(";"))
 }
 
-/// `dim Name = DimExpr;`
+/// `dim Name = DimExpr;` or `dim Name;` (required).
 fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
-    RcDoc::text("dim ")
-        .append(RcDoc::text(d.name.value.as_str().to_string()))
-        .append(RcDoc::text(" = "))
-        .append(format_dim_expr_inline(&d.definition))
-        .append(RcDoc::text(";"))
+    let head = RcDoc::text("dim ").append(RcDoc::text(d.name.value.as_str().to_string()));
+    match &d.definition {
+        Some(def) => head
+            .append(RcDoc::text(" = "))
+            .append(format_dim_expr_inline(def))
+            .append(RcDoc::text(";")),
+        None => head.append(RcDoc::text(";")),
+    }
 }
 
-/// `unit name: Dim = scale unit_expr;` or `unit name: Dim;`
+/// `unit name: Dim = scale unit_expr;` or `base unit name: Dim;`.
 fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
-    let mut doc = RcDoc::text("unit ")
+    let head = if d.definition.is_none() {
+        RcDoc::text("base unit ")
+    } else {
+        RcDoc::text("unit ")
+    };
+    let mut doc = head
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(": "))
         .append(format_dim_expr_inline(&d.dim_type));
@@ -179,7 +187,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `type Name;` or `type Name<...> { ... }`
+/// `type Name { ... }` or `type Name;` (required) or `type Name {}` (empty).
 fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
@@ -187,18 +195,18 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
-    if d.fields.is_empty() {
-        // Unit type or empty record type — format as `type Name;`
-        return header.append(RcDoc::text(";"));
+    match &d.fields {
+        None => header.append(RcDoc::text(";")),
+        Some(fields) if fields.is_empty() => header.append(RcDoc::text(" {}")),
+        Some(fields) => {
+            let formatted = format_field_decls(fmt, fields);
+            header
+                .append(RcDoc::text(" {"))
+                .append(RcDoc::hardline().append(formatted).nest(INDENT))
+                .append(RcDoc::hardline())
+                .append(RcDoc::text("}"))
+        }
     }
-
-    // Record type with fields
-    let fields = format_field_decls(fmt, &d.fields);
-    header
-        .append(RcDoc::text(" {"))
-        .append(RcDoc::hardline().append(fields).nest(INDENT))
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("}"))
 }
 
 /// `type Name = A | B | C;` or `type Name<D: Dim> = Ok<D> | Err;`

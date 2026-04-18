@@ -1,11 +1,12 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 740
 expression: formatted
 ---
 // subsystems/propulsion.gcl -- Propulsion parameters
-pub param isp: Time = 320.0 s;
-pub param dry_mass: Mass = 2500.0 kg;
-pub param fuel_mass: Mass = 12000.0 kg;
+param isp: Time = 320.0 s;
+param dry_mass: Mass = 2500.0 kg;
+param fuel_mass: Mass = 12000.0 kg;
 
 pub node v_exhaust: Velocity = @isp * 9.80665 m/s^2;
 pub node total_mass: Mass = @dry_mass + @fuel_mass;
