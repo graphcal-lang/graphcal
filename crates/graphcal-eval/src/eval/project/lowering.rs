@@ -62,6 +62,7 @@ pub(super) fn lower_and_finalize(
         project,
         &ctx.deferred_instantiated,
         evaluated_files,
+        file_src,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -117,6 +118,7 @@ pub(super) fn process_deferred_instantiated_imports(
     project: &crate::loader::LoadedProject,
     deferred_imports: &[DeferredInstantiatedImport],
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    importer_src: &NamedSource<Arc<String>>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
@@ -180,6 +182,16 @@ pub(super) fn process_deferred_instantiated_imports(
         for (name, _) in &dep_unfrozen.source_order {
             dep_names.insert(name.member().to_string());
         }
+
+        // A8 / V005: the importer must re-bind every bindable symbol whose
+        // default mentions a nominally-tied name of an overridden bindable.
+        dep_unfrozen.check_include_reconciles_overrides(
+            &deferred.bindings,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+            importer_src,
+            deferred.import_span,
+        )?;
 
         // Merge the dependency's IR into the importer's IR.
         unfrozen.merge_dependency(
@@ -271,6 +283,16 @@ pub(super) fn process_deferred_inline_dag_includes(
         for (name, _) in &dag_unfrozen.source_order {
             dep_names.insert(name.member().to_string());
         }
+
+        // A8 / V005: the importer must re-bind every bindable symbol whose
+        // default mentions a nominally-tied name of an overridden bindable.
+        dag_unfrozen.check_include_reconciles_overrides(
+            &deferred.bindings,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+            file_src,
+            deferred.import_span,
+        )?;
 
         // Merge the DAG's IR into the importer's IR.
         unfrozen.merge_dependency(

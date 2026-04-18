@@ -1140,4 +1140,34 @@ pub enum GraphcalError {
         #[label("variant literal of pub(bind) index")]
         span: SourceSpan,
     },
+
+    /// An include overrides a bindable symbol `s`, but some kept
+    /// declaration's body or default mentions a name nominally tied to
+    /// `s` and was not itself re-bound by the same include statement
+    /// (A8).
+    ///
+    /// Nominally-tied mentions today are: variant literals `s::v` for
+    /// an overridden `index`, and constructors / field accesses of `s`
+    /// for an overridden `type`. `dim` and `param` overrides are
+    /// vacuous for A8 — their substitution is total — so they never
+    /// trigger this error.
+    #[error(
+        "include overrides {overridden_kind} `{overridden}` but does not re-bind `{orphan_decl}`, whose default mentions `{detail}`"
+    )]
+    #[diagnostic(
+        code(graphcal::V005),
+        help(
+            "add a binding for `{orphan_decl}` to this include, or keep `{overridden}` bound to its default"
+        )
+    )]
+    IncludeMustReconcileOverride {
+        overridden: String,
+        overridden_kind: String,
+        orphan_decl: String,
+        detail: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("include is missing a binding for `{orphan_decl}`")]
+        span: SourceSpan,
+    },
 }

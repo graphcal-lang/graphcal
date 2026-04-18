@@ -518,6 +518,50 @@ impl UnfrozenIR {
         self.source_order.push((name, DeclCategory::Node));
     }
 
+    /// Scan param defaults for variant literals of overridden `pub(bind)`
+    /// indexes (and nominally-tied names of overridden types) whose owning
+    /// `param` is not itself re-bound — axiom A8 / diagnostic V005.
+    ///
+    /// Per axiom §1, only `index` and `type` overrides have nominal
+    /// substructure; `dim` and `param` overrides substitute totally and
+    /// never trigger A8.
+    ///
+    /// Other non-bindable declaration kinds (`node`, `const`) are
+    /// guarded at library compile time by V004 (A10c), so their bodies
+    /// cannot mention overridden-symbol nominals once a library is
+    /// accepted. Sink-kind declarations (`assert`, `plot`, `figure`,
+    /// `layer`) pick up the A10(b) private-only carve-out; this check
+    /// stays focused on `param` for that reason.
+    pub fn check_include_reconciles_overrides(
+        &self,
+        bindings: &HashMap<String, Expr>,
+        index_bindings: &HashMap<String, String>,
+        type_bindings: &HashMap<String, String>,
+        importer_src: &NamedSource<Arc<String>>,
+        include_span: Span,
+    ) -> Result<(), GraphcalError> {
+        if index_bindings.is_empty() && type_bindings.is_empty() {
+            return Ok(());
+        }
+        for param in &self.params {
+            if bindings.contains_key(param.name.member()) {
+                continue;
+            }
+            let Some(default_expr) = &param.default_expr else {
+                continue;
+            };
+            let mut checker = OverrideReconciliationChecker {
+                index_bindings,
+                type_bindings,
+                orphan_decl: param.name.member(),
+                importer_src,
+                include_span,
+            };
+            checker.visit_expr(default_expr)?;
+        }
+        Ok(())
+    }
+
     /// Merge an instantiated dependency's IR into this IR.
     ///
     /// All declarations from the dependency are prefixed with `prefix::` and
@@ -864,6 +908,201 @@ fn expected_fail_key_from_attr_arg(
             if key.is_empty() { None } else { Some(key) }
         }
         AttributeArg::Path { .. } => None,
+    }
+}
+
+/// Visitor that detects V005 / A8 violations in a param default expression.
+///
+/// Emits [`GraphcalError::IncludeMustReconcileOverride`] on the first
+/// occurrence of a variant literal `s::v` where `s` is in
+/// `index_bindings`, or of a constructor / as-cast / generic type
+/// argument whose type name is in `type_bindings`. The spans reported
+/// point at the importer's include statement — the error blames the
+/// importer for omitting the required re-binding.
+struct OverrideReconciliationChecker<'a> {
+    index_bindings: &'a HashMap<String, String>,
+    type_bindings: &'a HashMap<String, String>,
+    orphan_decl: &'a str,
+    importer_src: &'a NamedSource<Arc<String>>,
+    include_span: Span,
+}
+
+impl OverrideReconciliationChecker<'_> {
+    fn orphan_error(
+        &self,
+        overridden_kind: &str,
+        overridden: &str,
+        detail: String,
+    ) -> GraphcalError {
+        GraphcalError::IncludeMustReconcileOverride {
+            overridden: overridden.to_string(),
+            overridden_kind: overridden_kind.to_string(),
+            orphan_decl: self.orphan_decl.to_string(),
+            detail,
+            src: self.importer_src.clone(),
+            span: self.include_span.into(),
+        }
+    }
+
+    fn check_type_expr(&self, type_expr: &TypeExpr) -> Result<(), GraphcalError> {
+        use crate::syntax::ast::TypeExprKind;
+        match &type_expr.kind {
+            TypeExprKind::DimExpr(dim_expr) => {
+                for item in &dim_expr.terms {
+                    let name = item.term.name.name.as_str();
+                    if self.type_bindings.contains_key(name) {
+                        return Err(self.orphan_error("type", name, format!("type `{name}`")));
+                    }
+                }
+                Ok(())
+            }
+            TypeExprKind::TypeApplication { name, type_args } => {
+                let n = name.name.as_str();
+                if self.type_bindings.contains_key(n) {
+                    return Err(self.orphan_error("type", n, format!("type `{n}`")));
+                }
+                for arg in type_args {
+                    self.check_type_expr(arg)?;
+                }
+                Ok(())
+            }
+            TypeExprKind::Indexed { base, .. } => self.check_type_expr(base),
+            TypeExprKind::Dimensionless
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime => Ok(()),
+        }
+    }
+}
+
+impl ExprVisitor for OverrideReconciliationChecker<'_> {
+    type Error = GraphcalError;
+
+    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        if let ExprKind::VariantLiteral { index, variant } = &expr.kind
+            && self.index_bindings.contains_key(index.value.as_str())
+        {
+            return Err(self.orphan_error(
+                "index",
+                index.value.as_ref(),
+                format!("`{}::{}`", index.value.as_ref(), variant.value.as_ref()),
+            ));
+        }
+        Ok(())
+    }
+
+    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
+        match &expr.kind {
+            ExprKind::IndexAccess { args, .. } => {
+                for arg in args {
+                    if let crate::syntax::ast::IndexArg::Variant { index, variant } = arg
+                        && self.index_bindings.contains_key(index.value.as_str())
+                    {
+                        return Err(self.orphan_error(
+                            "index",
+                            index.value.as_ref(),
+                            format!("`{}::{}`", index.value.as_ref(), variant.value.as_ref()),
+                        ));
+                    }
+                }
+            }
+            ExprKind::AsCast { target_type, .. } => {
+                self.check_type_expr(target_type)?;
+            }
+            _ => {}
+        }
+        self.visit_expr(inner)
+    }
+
+    fn visit_map_entries(
+        &mut self,
+        _expr: &Expr,
+        entries: &[crate::syntax::ast::MapEntry],
+    ) -> Result<(), Self::Error> {
+        for entry in entries {
+            if let Some(key) = entry.keys.first()
+                && self.index_bindings.contains_key(key.index.value.as_str())
+            {
+                return Err(self.orphan_error(
+                    "index",
+                    key.index.value.as_ref(),
+                    format!(
+                        "`{}::{}`",
+                        key.index.value.as_ref(),
+                        key.variant.value.as_ref()
+                    ),
+                ));
+            }
+            self.visit_expr(&entry.value)?;
+        }
+        Ok(())
+    }
+
+    fn visit_match(
+        &mut self,
+        _expr: &Expr,
+        scrutinee: &Expr,
+        arms: &[crate::syntax::ast::MatchArm],
+    ) -> Result<(), Self::Error> {
+        self.visit_expr(scrutinee)?;
+        for arm in arms {
+            if let Some(qi) = &arm.pattern.qualified_index
+                && self.index_bindings.contains_key(qi.value.as_str())
+            {
+                return Err(self.orphan_error(
+                    "index",
+                    qi.value.as_ref(),
+                    format!(
+                        "`{}::{}`",
+                        qi.value.as_ref(),
+                        arm.pattern.variant_name.value.as_ref()
+                    ),
+                ));
+            }
+            self.visit_expr(&arm.body)?;
+        }
+        Ok(())
+    }
+
+    fn visit_struct_construction(
+        &mut self,
+        expr: &Expr,
+        fields: &[crate::syntax::ast::FieldInit],
+    ) -> Result<(), Self::Error> {
+        if let ExprKind::StructConstruction {
+            type_name,
+            type_args,
+            ..
+        } = &expr.kind
+        {
+            let n = type_name.value.as_str();
+            if self.type_bindings.contains_key(n) {
+                return Err(self.orphan_error("type", n, format!("constructor `{n} {{ ... }}`")));
+            }
+            for ty in type_args {
+                self.check_type_expr(ty)?;
+            }
+        }
+        for f in fields {
+            if let Some(v) = &f.value {
+                self.visit_expr(v)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
+        if let ExprKind::FnCall { type_args, .. } = &expr.kind {
+            for ga in type_args {
+                if let crate::syntax::ast::GenericArg::Type(ty) = ga {
+                    self.check_type_expr(ty)?;
+                }
+            }
+        }
+        for arg in args {
+            self.visit_expr(arg)?;
+        }
+        Ok(())
     }
 }
 
