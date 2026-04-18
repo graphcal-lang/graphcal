@@ -1,0 +1,6 @@
+// middle.gcl -- selective re-export of `Acceleration` (issue #452).
+//
+// `pub Acceleration` inside the brace list marks the imported dim for
+// re-export at middle.gcl's visible surface, so a downstream importer
+// can reach it transitively.
+import "./leaf.gcl" { pub Acceleration, g0 };

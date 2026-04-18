@@ -247,6 +247,23 @@ impl Parser<'_> {
                 item_attributes.push(p.parse_attribute()?);
             }
 
+            // Optional `pub` prefix marks the item for re-export (issue #452).
+            // `pub(bind)` is rejected — re-exports are use-sites, not declarations,
+            // and A5 says use-sites are B ≡ fixed.
+            let is_pub = if p.lexer.peek() == Some(&Token::Pub) {
+                let (_, pub_span) = p.advance()?;
+                if p.lexer.peek() == Some(&Token::LParen) {
+                    return Err(p.unexpected_token(
+                        "an identifier (`pub(bind)` is not allowed on import/include items — use `pub`)",
+                        "(",
+                        pub_span,
+                    ));
+                }
+                true
+            } else {
+                false
+            };
+
             // Accept any identifier (imports can be any casing)
             let (name_str, name_span) = match p.lexer.next_token() {
                 Some((Token::Ident, span)) => (p.lexer.slice_at(span).to_string(), span),
@@ -286,6 +303,7 @@ impl Parser<'_> {
 
             Ok(crate::syntax::ast::ImportItem {
                 attributes: item_attributes,
+                is_pub,
                 name: crate::syntax::ast::Ident {
                     name: name_str,
                     span: name_span,

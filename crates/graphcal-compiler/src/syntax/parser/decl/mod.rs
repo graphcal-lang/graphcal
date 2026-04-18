@@ -1,4 +1,4 @@
-use crate::syntax::ast::{Attribute, AttributeArg, Declaration, Visibility};
+use crate::syntax::ast::{Attribute, AttributeArg, DeclKind, Declaration, Visibility};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -16,6 +16,10 @@ mod type_decl;
 mod value;
 
 impl Parser<'_> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single entry point dispatches across every declaration kind"
+    )]
     pub(super) fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
         // Collect any leading attributes: #[name] or #[name(arg1, arg2)]
         let mut attributes = Vec::new();
@@ -63,6 +67,20 @@ impl Parser<'_> {
             return Err(self.unexpected_token(
                 "no visibility annotation (params are always visible and bindable)",
                 found,
+                vis_span,
+            ));
+        }
+
+        // Reject `pub(bind)` on `import` / `include`. Use-sites are not
+        // bindable (A5: B ≡ fixed). `pub` is legal as a re-export marker
+        // per issue #452.
+        if visibility == Visibility::PublicBind
+            && matches!(self.lexer.peek(), Some(Token::Import | Token::Include))
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "`pub` (use-sites are not bindable — `pub(bind)` is only for declaration kinds)",
+                "`pub(bind)`",
                 vis_span,
             ));
         }
@@ -123,6 +141,35 @@ impl Parser<'_> {
 
         // Set visibility
         decl.visibility = visibility;
+
+        // Mutual exclusion for re-exports (issue #452 / spec §4.1):
+        // `pub import "X" { pub items };` mixes whole-module and selective
+        // re-export forms. Reject at parse so the semantics of a single
+        // re-export construct stays unambiguous.
+        if decl.visibility == Visibility::Public
+            && let Some(vis_span) = visibility_span
+        {
+            let selective_items = match &decl.kind {
+                DeclKind::Import(d) => match &d.kind {
+                    crate::syntax::ast::ImportKind::Selective(items) => Some(items.as_slice()),
+                    crate::syntax::ast::ImportKind::Module { .. } => None,
+                },
+                DeclKind::Include(d) => match &d.kind {
+                    crate::syntax::ast::ImportKind::Selective(items) => Some(items.as_slice()),
+                    crate::syntax::ast::ImportKind::Module { .. } => None,
+                },
+                _ => None,
+            };
+            if let Some(items) = selective_items
+                && items.iter().any(|it| it.is_pub)
+            {
+                return Err(self.unexpected_token(
+                    "either `pub include/import \"X\" ...` (whole-module re-export) or `include/import \"X\" { pub items }` (selective re-export), not both",
+                    "`pub`",
+                    vis_span,
+                ));
+            }
+        }
 
         // Extend the declaration span to include `pub` / `pub(bind)` prefix
         if let Some(ps) = visibility_span {

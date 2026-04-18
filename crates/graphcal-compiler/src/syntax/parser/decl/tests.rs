@@ -829,6 +829,90 @@ fn parse_import_with_param_bindings_error() {
 }
 
 #[test]
+fn parse_pub_import_whole_module() {
+    // `pub import "X";` re-exports every pub item from X.
+    let file = Parser::new(r#"pub import "./helper.gcl";"#)
+        .parse_file()
+        .unwrap();
+    let decl = &file.declarations[0];
+    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Public);
+    assert!(matches!(&decl.kind, DeclKind::Import(_)));
+}
+
+#[test]
+fn parse_pub_include_whole_module_with_alias() {
+    let file = Parser::new(r#"pub include "./container.gcl" as c;"#)
+        .parse_file()
+        .unwrap();
+    let decl = &file.declarations[0];
+    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Public);
+    let DeclKind::Include(i) = &decl.kind else {
+        panic!("expected Include");
+    };
+    let crate::syntax::ast::ImportKind::Module { alias } = &i.kind else {
+        panic!("expected Module");
+    };
+    assert_eq!(alias.as_ref().unwrap().name, "c");
+}
+
+#[test]
+fn parse_import_selective_pub_items() {
+    // `import "X" { pub a, b };` — only `a` is re-exported.
+    let file = Parser::new(r#"import "./helper.gcl" { pub x, Y as Z };"#)
+        .parse_file()
+        .unwrap();
+    let decl = &file.declarations[0];
+    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Private);
+    let DeclKind::Import(u) = &decl.kind else {
+        panic!("expected Import");
+    };
+    let crate::syntax::ast::ImportKind::Selective(items) = &u.kind else {
+        panic!("expected Selective");
+    };
+    assert_eq!(items.len(), 2);
+    assert!(items[0].is_pub);
+    assert_eq!(items[0].name.name, "x");
+    assert!(!items[1].is_pub);
+    assert_eq!(items[1].name.name, "Y");
+}
+
+#[test]
+fn parse_pub_import_mixed_with_selective_pub_error() {
+    // `pub import "X" { pub item };` mixes the two forms — reject (spec §4.1).
+    let result = Parser::new(r#"pub import "./f.gcl" { pub a };"#).parse_file();
+    assert!(
+        result.is_err(),
+        "mixing outer `pub` with selective `pub item` should error"
+    );
+}
+
+#[test]
+fn parse_pub_bind_on_import_error() {
+    // `pub(bind) import` is illegal — import is a use-site.
+    let result = Parser::new(r#"pub(bind) import "./f.gcl";"#).parse_file();
+    assert!(
+        result.is_err(),
+        "`pub(bind)` on import should error — use-sites are not bindable"
+    );
+}
+
+#[test]
+fn parse_pub_bind_on_include_error() {
+    let result = Parser::new(r#"pub(bind) include "./f.gcl";"#).parse_file();
+    assert!(
+        result.is_err(),
+        "`pub(bind)` on include should error — use-sites are not bindable"
+    );
+}
+
+#[test]
+fn parse_pub_bind_on_import_item_error() {
+    // `pub(bind)` inside the selective list is also rejected.
+    let result = Parser::new(r#"import "./f.gcl" { pub(bind) a };"#).parse_file();
+    assert!(result.is_err());
+}
+
+#[test]
 fn parse_import_bare_path_single_segment_error() {
     // Single-segment bare paths are ambiguous; require at least pkg/module
     let result = Parser::new("import foo;").parse_file();
