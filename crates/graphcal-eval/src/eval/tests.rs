@@ -1422,6 +1422,22 @@ fn project_instantiated_import_dim_binding() {
 }
 
 #[test]
+fn project_pub_import_reexport_selective() {
+    // Issue #452: selective `import "X" { pub item }` re-exports the
+    // item at the importer's visible surface, so a transitive importer
+    // can reach it via the intermediate file.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/pub_import_reexport_selective/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // result = 9.80665 m/s^2 (in the base unit, value 9.80665).
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - 9.806_65).abs() < 1e-10,
+        "result = {result_val}, expected 9.80665"
+    );
+}
+
+#[test]
 fn project_include_overrides_index_no_param_binding_v005() {
     // V005: overriding `Phase` orphans the `cost` default (which mentions
     // `Phase::Design` / `Phase::Build`) because the importer forgot to

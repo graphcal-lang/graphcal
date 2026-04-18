@@ -298,11 +298,39 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
 /// implicitly visible under the A5 rule ("params are always visible
 /// and bindable") and therefore always contribute regardless of
 /// annotation.
+///
+/// Selective `import "X" { pub name }` re-exports `name` at this file
+/// per issue #452 — those names also contribute. Whole-module
+/// `pub import "X";` / `pub include "X";` re-exports every `pub` item
+/// from X; that form is resolved transitively during import processing
+/// (the enumeration requires X's own `pub_names`, which this pure AST
+/// walk does not have), so it is not expanded here.
 pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> HashSet<String> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
         let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
         if !decl.is_pub() && !implicitly_visible {
+            match &decl.kind {
+                DeclKind::Import(d) => {
+                    if let graphcal_compiler::syntax::ast::ImportKind::Selective(items) = &d.kind {
+                        for item in items {
+                            if item.is_pub {
+                                pub_names.insert(item.local_name().to_string());
+                            }
+                        }
+                    }
+                }
+                DeclKind::Include(d) => {
+                    if let graphcal_compiler::syntax::ast::ImportKind::Selective(items) = &d.kind {
+                        for item in items {
+                            if item.is_pub {
+                                pub_names.insert(item.local_name().to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
             continue;
         }
         let name = match &decl.kind {
@@ -328,6 +356,11 @@ pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> 
 }
 
 /// selective import name is not found among the dependency's evaluated values.
+///
+/// Also matches re-exported names introduced by `import "X" { pub name }` or
+/// `include "X" { pub name }`. Issue #452 — a re-exported name stands in for a
+/// local declaration when a downstream importer asks "does this file have
+/// `name`?".
 pub(super) fn file_has_declaration(
     file: &graphcal_compiler::syntax::ast::File,
     name: &str,
@@ -347,7 +380,16 @@ pub(super) fn file_has_declaration(
         DeclKind::Figure(f) => f.name.value.as_str() == name,
         DeclKind::Layer(l) => l.name.value.as_str() == name,
         DeclKind::Dag(d) => d.name.value.as_str() == name,
-        DeclKind::Import(_) | DeclKind::Include(_) => false,
+        DeclKind::Import(d) => matches!(
+            &d.kind,
+            graphcal_compiler::syntax::ast::ImportKind::Selective(items)
+                if items.iter().any(|it| it.is_pub && it.local_name() == name)
+        ),
+        DeclKind::Include(d) => matches!(
+            &d.kind,
+            graphcal_compiler::syntax::ast::ImportKind::Selective(items)
+                if items.iter().any(|it| it.is_pub && it.local_name() == name)
+        ),
     })
 }
 

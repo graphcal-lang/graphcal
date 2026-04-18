@@ -303,9 +303,15 @@ index_decl
    1. Selective import:   import "./file.gcl" { name1, name2 as alias };
    2. Module import:      import "./file.gcl";
    3. Module with alias:  import "./file.gcl" as alias;
-*)
+
+   A leading `pub` re-exports the imported item(s). The whole-module
+   form (`pub import "X";`) re-exports every `pub` item from X; the
+   selective form (`import "X" { pub name }`) re-exports only the
+   marked items. The two forms are mutually exclusive -- `pub import
+   "X" { pub item };` is rejected. `pub(bind)` on import is illegal
+   (use-sites are not bindable per A5). *)
 import_decl
-   = "import", import_path, import_body;
+   = [ "pub" ], "import", import_path, import_body;
 
 import_path
    = STRING_LITERAL
@@ -322,7 +328,12 @@ import_item_list
    = import_item, { ",", import_item }, [ "," ];
 
 import_item
-   = { attribute }, IDENT, [ "as", IDENT ];
+   = { attribute }, [ "pub" ], IDENT, [ "as", IDENT ];
+
+(* `pub` inside the selective list marks the item for re-export at the
+   importer (issue #452). Mixing whole-module `pub` (on the outer
+   import/include) with selective `pub` inside the brace list is
+   rejected. *)
 
 (* --- include --- *)
 (* Include instantiates a DAG (inline or from file) with optional
@@ -338,9 +349,12 @@ import_item
    1. Selective:       include "./rocket.gcl"(dry_mass: 800 kg) { delta_v };
    2. Module:          include "./rocket.gcl"(dry_mass: 800 kg);
    3. Module w/ alias: include "./rocket.gcl"(dry_mass: 800 kg) as stage_1;
-*)
+
+   A leading `pub` re-exports the included item(s); selective items may
+   themselves carry `pub`. Mixing the two forms is rejected, and
+   `pub(bind)` on include is illegal (use-sites are not bindable). *)
 include_decl
-   = "include", include_path, [ include_param_bindings ], import_body;
+   = [ "pub" ], "include", include_path, [ include_param_bindings ], import_body;
 
 include_path
    = STRING_LITERAL

@@ -439,10 +439,13 @@ pub struct ParamBinding {
 ///
 /// Example: `name1 as local_name` → `ImportItem { name: "name1", alias: Some("local_name") }`
 /// Example: `name1` → `ImportItem { name: "name1", alias: None }`
+/// Example: `pub name1` → re-exported at the importer (selective form).
 #[derive(Debug, Clone)]
 pub struct ImportItem {
     /// Attributes on this import item (e.g., `#[expected_fail(...)]`).
     pub attributes: Vec<Attribute>,
+    /// Whether this item is re-exported (`pub` prefix) from the importer.
+    pub is_pub: bool,
     /// The original name from the imported file.
     pub name: Ident,
     /// Optional local alias (introduced by `as`).
