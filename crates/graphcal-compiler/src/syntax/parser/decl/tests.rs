@@ -166,7 +166,8 @@ fn parse_required_dimension() {
 
 #[test]
 fn parse_base_unit() {
-    let file = Parser::new("unit m: Length;").parse_file().unwrap();
+    // Post-A4: base units are spelled `base unit Name: Dim;`.
+    let file = Parser::new("base unit m: Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "m");
@@ -175,6 +176,12 @@ fn parse_base_unit() {
         }
         _ => panic!("expected unit"),
     }
+}
+
+#[test]
+fn parse_no_body_unit_without_base_is_rejected() {
+    // Post-A4: `unit X: Dim;` (without `base` prefix and without `=`) is a parse error.
+    assert!(Parser::new("unit m: Length;").parse_file().is_err());
 }
 
 #[test]

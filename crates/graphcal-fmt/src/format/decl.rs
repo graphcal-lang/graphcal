@@ -153,9 +153,14 @@ fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
     }
 }
 
-/// `unit name: Dim = scale unit_expr;` or `unit name: Dim;`
+/// `unit name: Dim = scale unit_expr;` or `base unit name: Dim;`.
 fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
-    let mut doc = RcDoc::text("unit ")
+    let head = if d.definition.is_none() {
+        RcDoc::text("base unit ")
+    } else {
+        RcDoc::text("unit ")
+    };
+    let mut doc = head
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(": "))
         .append(format_dim_expr_inline(&d.dim_type));

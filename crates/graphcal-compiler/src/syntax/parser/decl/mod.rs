@@ -69,11 +69,16 @@ impl Parser<'_> {
                 let (_, base_span) = self.advance()?;
                 match self.lexer.peek() {
                     Some(Token::Dimension) => self.parse_base_dimension_decl(base_span),
+                    Some(Token::Unit) => self.parse_base_unit_decl(base_span),
                     Some(_) => {
                         let (tok, span) = self.advance()?;
-                        Err(self.unexpected_token("`dim` after `base`", &tok.to_string(), span))
+                        Err(self.unexpected_token(
+                            "`dim` or `unit` after `base`",
+                            &tok.to_string(),
+                            span,
+                        ))
                     }
-                    None => Err(self.unexpected_eof("`dim` after `base`")),
+                    None => Err(self.unexpected_eof("`dim` or `unit` after `base`")),
                 }
             }
             Some(Token::Dimension) => self.parse_dimension_decl(),

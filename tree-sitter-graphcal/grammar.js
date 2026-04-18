@@ -135,18 +135,30 @@ module.exports = grammar({
       ";",
     ),
 
-    // unit m: Length;
-    // unit km: Length = 1000 m;
-    // const unit km: Length = 1000 m;
-    unit_declaration: $ => seq(
-      optional($.visibility),
-      optional("const"),
-      "unit",
-      field("name", $.identifier),
-      ":",
-      field("dimension", $.dim_expr),
-      optional(seq("=", field("definition", $.unit_def))),
-      ";",
+    // base unit m: Length;                 -- base unit (no body)
+    // unit km: Length = 1000 m;             -- derived unit
+    // const unit hr: Time = 3600 s;         -- compile-time-only unit
+    unit_declaration: $ => choice(
+      seq(
+        optional($.visibility),
+        "base",
+        "unit",
+        field("name", $.identifier),
+        ":",
+        field("dimension", $.dim_expr),
+        ";",
+      ),
+      seq(
+        optional($.visibility),
+        optional("const"),
+        "unit",
+        field("name", $.identifier),
+        ":",
+        field("dimension", $.dim_expr),
+        "=",
+        field("definition", $.unit_def),
+        ";",
+      ),
     ),
 
     // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type

@@ -203,9 +203,15 @@ dimension_decl
    | "dim", IDENT, "=", dim_expr, ";";
 
 (* --- unit --- *)
-(* Optionally prefixed with `const` for compile-time-only units. *)
+(* Three forms:
+   1. Base unit (no body):     base unit m: Length;
+   2. Derived unit:            unit km: Length = 1000 m;
+   3. Const unit:              const unit hr: Time = 3600 s;
+   The no-body form requires the `base` prefix; plain `unit X: Dim;`
+   is a parse error. *)
 unit_decl
-   = [ "const" ], "unit", IDENT, ":", dim_expr, [ "=", unit_def ], ";";
+   = "base", "unit", IDENT, ":", dim_expr, ";"
+   | [ "const" ], "unit", IDENT, ":", dim_expr, "=", unit_def, ";";
 
 unit_def
    = unit_scale, unit_expr;

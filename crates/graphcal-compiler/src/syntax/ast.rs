@@ -508,14 +508,15 @@ pub struct DimDecl {
     pub definition: Option<DimExpr>,
 }
 
-/// Unit declaration: `unit km: Length = 1000 m;` or `const unit km: Length = 1000 m;`
+/// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
+/// or `base unit m: Length;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl {
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
-    /// `None` for base SI units: `unit m: Length;`
+    /// `None` iff this is a base unit (`base unit m: Length;`).
     pub definition: Option<UnitDef>,
 }
 
