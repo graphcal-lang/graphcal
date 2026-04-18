@@ -1408,6 +1408,20 @@ fn project_instantiated_import_type_binding() {
 }
 
 #[test]
+fn project_instantiated_import_dim_binding() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_dim_binding/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // result = 10.0 m/s; the lib's `v: Speed = 10.0 m/s` has its type_ann
+    // rewritten Speed -> Velocity so main's Velocity dimension resolves.
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - 10.0).abs() < 1e-10,
+        "result = {result_val}, expected 10.0"
+    );
+}
+
+#[test]
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");

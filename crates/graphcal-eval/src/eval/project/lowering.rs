@@ -52,6 +52,7 @@ pub(super) fn lower_and_finalize(
             dep_registry,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             Some(pub_names),
         );
     }
@@ -143,6 +144,7 @@ pub(super) fn process_deferred_instantiated_imports(
             &dep_registry,
             &deferred.index_bindings,
             &deferred.type_bindings,
+            &deferred.dim_bindings,
         );
 
         // Validate range index dimension matching (Phase B — requires compiled registries).
@@ -187,6 +189,7 @@ pub(super) fn process_deferred_instantiated_imports(
             &dep_names,
             &deferred.index_bindings,
             &deferred.type_bindings,
+            &deferred.dim_bindings,
             &deferred.import_item_attributes,
         );
 
@@ -260,6 +263,7 @@ pub(super) fn process_deferred_inline_dag_includes(
             &dag_registry,
             &deferred.index_bindings,
             &deferred.type_bindings,
+            &deferred.dim_bindings,
         );
 
         // Collect all declaration names in the DAG body.
@@ -276,6 +280,7 @@ pub(super) fn process_deferred_inline_dag_includes(
             &dep_names,
             &deferred.index_bindings,
             &deferred.type_bindings,
+            &deferred.dim_bindings,
             &deferred.import_item_attributes,
         );
 
@@ -311,10 +316,18 @@ pub(super) fn add_inline_dag_selective_aliases(
             continue;
         };
 
-        // Substitute index names in the type annotation.
+        // Substitute index/type/dim names in the type annotation.
         graphcal_compiler::ir::lower::substitute_type_expr_index_names(
             &mut type_ann,
             &deferred.index_bindings,
+        );
+        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
+            &mut type_ann,
+            &deferred.type_bindings,
+        );
+        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
+            &mut type_ann,
+            &deferred.dim_bindings,
         );
 
         let is_const = dag_body.declarations.iter().any(
@@ -391,10 +404,19 @@ pub(super) fn add_selective_aliases(
             continue;
         };
 
-        // Substitute index names in the type annotation.
+        // Substitute index/type/dim names in the type annotation so the alias
+        // resolves against the importer's merged registry.
         graphcal_compiler::ir::lower::substitute_type_expr_index_names(
             &mut type_ann,
             &deferred.index_bindings,
+        );
+        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
+            &mut type_ann,
+            &deferred.type_bindings,
+        );
+        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
+            &mut type_ann,
+            &deferred.dim_bindings,
         );
 
         // Determine if this is a const or runtime declaration.
@@ -451,12 +473,14 @@ pub(super) fn merge_registry_into_builder(
     dep_registry: &Registry,
     index_bindings: &HashMap<String, String>,
     type_bindings: &HashMap<String, String>,
+    dim_bindings: &HashMap<String, String>,
 ) {
     merge_registry_into_builder_filtered(
         builder,
         dep_registry,
         index_bindings,
         type_bindings,
+        dim_bindings,
         None,
     );
 }
@@ -466,10 +490,14 @@ pub(super) fn merge_registry_into_builder_filtered(
     dep_registry: &Registry,
     index_bindings: &HashMap<String, String>,
     type_bindings: &HashMap<String, String>,
+    dim_bindings: &HashMap<String, String>,
     pub_names: Option<&HashSet<String>>,
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
+        if dim_bindings.contains_key(name) {
+            continue;
+        }
         if pub_names.is_some_and(|visible| !visible.contains(name)) {
             continue;
         }
@@ -481,6 +509,9 @@ pub(super) fn merge_registry_into_builder_filtered(
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
     for (name, dim) in dep_registry.dimensions.all_dimensions() {
+        if dim_bindings.contains_key(name.as_str()) {
+            continue;
+        }
         if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
             continue;
         }

@@ -543,6 +543,7 @@ impl UnfrozenIR {
         dep_names: &HashSet<String>,
         index_bindings: &HashMap<String, String>,
         type_bindings: &HashMap<String, String>,
+        dim_bindings: &HashMap<String, String>,
         import_item_attributes: &HashMap<String, Vec<crate::syntax::ast::Attribute>>,
     ) {
         /// Prefix a `ScopedName` dep if its member is in `dep_names`.
@@ -561,6 +562,7 @@ impl UnfrozenIR {
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             // Prefix const deps
             if let Some(deps) = dep.const_deps.get(&entry.name) {
@@ -596,6 +598,7 @@ impl UnfrozenIR {
             }
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = BTreeSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
@@ -630,6 +633,7 @@ impl UnfrozenIR {
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             if let Some(deps) = dep.runtime_deps.get(&entry.name) {
                 let prefixed_deps = deps

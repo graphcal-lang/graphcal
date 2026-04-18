@@ -1,0 +1,4 @@
+// lib.gcl -- library with a rebindable dimension
+pub dim Speed = Length / Time;
+
+pub const node v: Speed = 10.0 m/s;
