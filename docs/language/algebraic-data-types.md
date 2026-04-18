@@ -48,15 +48,19 @@ node time_hours: Time = @result.tof -> hour;
 
 ## Unit Types
 
-A `type` with no fields is declared with a semicolon (no braces):
+A `type` with no fields is declared as a record with an empty body:
 
 ```
-type Eci;
-type Body;
-type Coasting;
+type Eci {}
+type Body {}
+type Coasting {}
 ```
 
 Unit types are useful as marker types for phantom type parameters (e.g., reference frames).
+
+> **Note**: `type T;` (semicolon, no body) is **not** a unit type — it declares a
+> *required* type that importers must bind. See
+> [Multi-File Projects → Visibility and Bindability](multi-file.md#visibility-and-bindability).
 
 ## Union Types
 
@@ -73,7 +77,7 @@ type ManeuverKind = Impulsive | LowThrust;
 Members can be unit types (no fields) or struct types:
 
 ```
-type Nominal;
+type Nominal {}
 type Warning { code: Dimensionless }
 type Status = Nominal | Warning;
 ```
@@ -134,8 +138,8 @@ node bad: Force = match @maneuver {
 Types can have generic parameters for type-safe phantom typing:
 
 ```
-type Eci;
-type Body;
+type Eci {}
+type Body {}
 
 type Vec3<D: Dim, F: Type> {
     x: D,
@@ -158,7 +162,7 @@ The `as` operator only changes the phantom type parameter; the underlying data i
 ### Default Type Parameters
 
 ```
-type Unframed;
+type Unframed {}
 
 type Vec3<D: Dim, F: Type = Unframed> {
     x: D,

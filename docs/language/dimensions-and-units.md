@@ -100,12 +100,12 @@ Units are value-level scaling factors tied to a specific dimension. They define 
 ```
 unit mile: Length = 1609.344 m;
 unit knot: Velocity = 0.514444 m/s;
-unit bit: Information;              // base unit for a user-defined dimension
+base unit bit: Information;         // canonical unit for a user-defined dimension
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
 ```
 
-A base unit declaration (`unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension.
+A `base unit` declaration (`base unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension. Non-base units must always carry an `= ...` body.
 
 ### Dynamic Units
 
@@ -113,7 +113,7 @@ A unit's scale factor can depend on runtime values (params or nodes) by using a 
 
 ```
 base dim Money;
-unit USD: Money;
+base unit USD: Money;
 
 param usd_per_eur: Dimensionless = 1.08;
 unit EUR: Money = (@usd_per_eur) USD;

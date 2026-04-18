@@ -78,8 +78,8 @@ node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
 You can also define your own base dimensions and units for domain-specific quantities:
 
 ```gcl
-base dim Information;         // new base dimension
-unit bit: Information;              // base unit
+base dim Information;               // new base dimension
+base unit bit: Information;         // new base unit
 unit byte: Information = 8.0 bit;   // derived unit
 unit kB: Information = 1000.0 byte;
 
@@ -138,8 +138,8 @@ type Impulsive { delta_v: Velocity }
 type LowThrust { thrust: Force, duration: Time }
 type ManeuverKind = Impulsive | LowThrust;
 
-// Unit types (no fields)
-type Nominal;
+// Unit types (record with no fields)
+type Nominal {}
 type Warning { code: Dimensionless }
 type Status = Nominal | Warning;
 ```
@@ -194,8 +194,8 @@ DAG blocks unify what was previously split between pure functions (`fn`) and par
 Type declarations support generic parameters with four constraint kinds: `D: Dim` (dimension), `I: Index` (index set), `N: Nat` (type-level natural number), and `F: Type` (unconstrained/phantom). Default type parameters are supported.
 
 ```gcl
-type Eci;      // marker type for ECI reference frame
-type Body;     // marker type for body frame
+type Eci {}    // marker type for ECI reference frame
+type Body {}   // marker type for body frame
 
 type Vec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
@@ -278,6 +278,12 @@ Split calculations across files with `import` declarations. All declaration kind
 import "./constants.gcl" { g0 };
 import "./params.gcl" { dry_mass, fuel_mass, isp };
 ```
+
+Visibility uses a two-axis split: `pub` items cross the include boundary,
+`pub(bind)` items additionally accept overrides from importers. Required
+`index` / `type` / `dim` declarations are bindable by definition and must
+carry `pub(bind)`. Re-export transitively with `pub import` / `pub include`.
+See [Visibility and Bindability](docs/language/multi-file.md#visibility-and-bindability) for details.
 
 ### Plotting with Vega-Lite
 
@@ -564,8 +570,8 @@ node fuel_proxy: Force = match @maneuver {
 // frames.gcl
 dim Velocity = Length / Time;
 
-type Eci;
-type Body;
+type Eci {}
+type Body {}
 
 type Vec3<D: Dim, F: Type> {
     x: D, y: D, z: D,
@@ -638,7 +644,7 @@ node y: Dimensionless[Step] = unfold(@y0, |prev_t, t| @y[prev_t] * (1.0 - @k * (
 ```gcl
 // information.gcl
 base dim Information;
-unit bit: Information;
+base unit bit: Information;
 unit byte: Information = 8.0 bit;
 unit kB: Information = 1000.0 byte;
 
