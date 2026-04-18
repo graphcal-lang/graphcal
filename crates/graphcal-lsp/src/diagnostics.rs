@@ -350,10 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn v004_pub_index_variant_literal_produces_diagnostic() {
+    fn v004_pub_bind_index_variant_literal_produces_diagnostic() {
+        // V004 fires on `node` / `const` bodies that mention a
+        // `pub(bind)` index's variant literal (A10(c)). Param defaults
+        // are OK because `param` is implicitly bindable.
         let source = concat!(
-            "pub index Phase = { Design, Test };\n",
+            "pub(bind) index Phase = { Design, Test };\n",
             "param x: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };\n",
+            "node design: Dimensionless = @x[Phase::Design];\n",
         );
         let diags = produce_diagnostics(source, "test.gcl");
         assert!(!diags.is_empty());

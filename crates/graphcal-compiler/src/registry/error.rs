@@ -1109,14 +1109,20 @@ pub enum GraphcalError {
         pub_span: SourceSpan,
     },
 
-    /// A `pub index` with concrete variants has its variants used in the defining file's expressions.
+    /// A `pub(bind)` index with concrete variants has its variants used
+    /// in a non-bindable body (`node` / `const`) or a public sink
+    /// declaration in the defining file.
+    ///
+    /// Per axiom A10(c) / A10(b), a bindable index's variant literals
+    /// must not appear in bodies that cannot themselves be re-bound by
+    /// importers (the defining library must abstract over the index).
     #[error(
-        "variant literal `{index}::{variant}` of `pub index` cannot be used in the defining file"
+        "variant literal `{index}::{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
     #[diagnostic(
         code(graphcal::V004),
         help(
-            "pub indexes may be overridden by importers; use `param` declarations for variant-specific values instead"
+            "pub(bind) indexes may be overridden by importers; use `param` declarations for variant-specific values, or abstract over the index via `for p : I {{ … }}`"
         )
     )]
     PubIndexVariantLiteral {
@@ -1124,7 +1130,7 @@ pub enum GraphcalError {
         variant: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("variant literal of pub index")]
+        #[label("variant literal of pub(bind) index")]
         span: SourceSpan,
     },
 }

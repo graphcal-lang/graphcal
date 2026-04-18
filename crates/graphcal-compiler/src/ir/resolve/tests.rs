@@ -491,6 +491,67 @@ fn resolve_pub_names_collected() {
 }
 
 #[test]
+fn resolve_param_default_with_pub_bind_variant_literal_ok() {
+    // A10(a): `param` is implicitly bindable, so a variant literal of a
+    // `pub(bind)` index in a param default is allowed — V005 at the
+    // include site will ensure the importer re-binds the param when it
+    // rebinds the index.
+    let source = r"
+        pub(bind) index Phase = { Design, Build, Test };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 100.0,
+            Phase::Build: 200.0,
+            Phase::Test: 50.0,
+        };
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
+    // A10(c): `node` is non-bindable, so a variant literal of a
+    // `pub(bind)` index in a node body would orphan under rebinding.
+    let source = r"
+        pub(bind) index Phase = { Design, Build, Test };
+        param cost: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+            Phase::Test: 3.0,
+        };
+        node design_cost: Dimensionless = @cost[Phase::Design];
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
+fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
+    let source = r"
+        pub(bind) index Phase = { Design, Build };
+        pub const node costs: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+}
+
+#[test]
+fn resolve_node_with_plain_pub_variant_literal_ok() {
+    // Plain `pub` (fixed) indexes are not bindable, so A10 does not
+    // fire on their variant literals; importers cannot override them.
+    let source = r"
+        pub index Phase = { Design, Build };
+        pub const node costs: Dimensionless[Phase] = {
+            Phase::Design: 1.0,
+            Phase::Build: 2.0,
+        };
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
 fn resolve_param_with_private_dim_not_flagged_yet() {
     // Post-A5 params are implicitly visible, so strictly a private dim
     // in a param's type annotation should be flagged by V003. The V003

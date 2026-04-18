@@ -1,14 +1,15 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 443
+assertion_line: 450
 expression: rendered
 ---
 variant literal `Phase::Design` of `pub(bind) index` cannot be used in the defining file
     Diagnostic severity: error
-Begin snippet for variant_literal_in_node.gcl starting at line 11, column 1
+Begin snippet for variant_literal_in_const.gcl starting at line 6, column 1
 
-snippet line 11: };
-snippet line 12: node design_cost: Dimensionless = @cost[Phase::Design];
-    label at line 12, columns 35 to 54: variant literal of pub(bind) index
+snippet line 6: pub const node design_cost: Dimensionless[Phase] = {
+snippet line 7:     Phase::Design: 100.0,
+    label at line 7, columns 5 to 9: variant literal of pub(bind) index
+snippet line 8:     Phase::Build: 200.0,
 diagnostic help: pub(bind) indexes may be overridden by importers; use `param` declarations for variant-specific values, or abstract over the index via `for p : I { … }`
 diagnostic code: graphcal::V004
