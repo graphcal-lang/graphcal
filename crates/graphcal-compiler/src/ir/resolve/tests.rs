@@ -358,18 +358,69 @@ fn resolve_required_param_is_implicitly_bindable() {
 // `syntax::parser::decl::tests` for parser-level coverage.
 
 #[test]
-fn resolve_required_index_must_be_pub() {
+fn resolve_required_index_must_be_bindable() {
     let source = r"
         index Phase;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::RequiredItemMustBePub { kind, .. } if kind == "index"));
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+    );
 }
 
 #[test]
-fn resolve_pub_required_index_ok() {
+fn resolve_required_pub_index_still_needs_bind() {
+    // `pub index Phase;` is now rejected: required indexes must be
+    // `pub(bind)` because A4 forces bindability.
     let source = r"
         pub index Phase;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_required_index_ok() {
+    let source = r"
+        pub(bind) index Phase;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_required_type_must_be_bindable() {
+    let source = r"
+        type Element;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "type")
+    );
+}
+
+#[test]
+fn resolve_pub_bind_required_type_ok() {
+    let source = r"
+        pub(bind) type Element;
+    ";
+    parse_and_resolve(source).unwrap();
+}
+
+#[test]
+fn resolve_required_dim_must_be_bindable() {
+    let source = r"
+        dim D;
+    ";
+    let err = parse_and_resolve(source).unwrap_err();
+    assert!(matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "dim"));
+}
+
+#[test]
+fn resolve_pub_bind_required_dim_ok() {
+    let source = r"
+        pub(bind) dim D;
     ";
     parse_and_resolve(source).unwrap();
 }

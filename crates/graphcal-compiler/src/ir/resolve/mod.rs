@@ -141,18 +141,36 @@ fn collect_local_declarations(
         pub_names.insert(name.to_string());
     }
 
-    // Validate: required indexes must be `pub` (V002).
+    // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
     //
-    // (`param` carrying `pub` / `pub(bind)` is rejected at parse time —
-    // the parser refuses any annotation on `param` per the axioms §4.0.)
+    // Required `param` is excluded from this check: per axiom A5 §4.0,
+    // `param` is implicitly V=visible + B=bindable and never carries a
+    // visibility annotation. The parser rejects `pub`/`pub(bind)` on
+    // `param`.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub() => {
-                return Err(GraphcalError::RequiredItemMustBePub {
+            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "index".to_string(),
                     name: idx.name.value.to_string(),
                     src: src.clone(),
                     span: idx.name.span.into(),
+                });
+            }
+            DeclKind::Type(t) if t.fields.is_none() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
+                    kind: "type".to_string(),
+                    name: t.name.value.to_string(),
+                    src: src.clone(),
+                    span: t.name.span.into(),
+                });
+            }
+            DeclKind::Dimension(d) if d.definition.is_none() && !decl.is_bindable() => {
+                return Err(GraphcalError::RequiredItemMustBeBindable {
+                    kind: "dim".to_string(),
+                    name: d.name.value.to_string(),
+                    src: src.clone(),
+                    span: d.name.span.into(),
                 });
             }
             _ => {}

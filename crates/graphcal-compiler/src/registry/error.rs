@@ -1068,20 +1068,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A required param or index is not marked `pub`.
-    #[error("required {kind} `{name}` must be declared `pub`")]
+    /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
+    ///
+    /// `param` is excluded: required `param` is implicitly bindable (A5);
+    /// it never carries a visibility annotation.
+    #[error("required {kind} `{name}` must be declared `pub(bind)`")]
     #[diagnostic(
         code(graphcal::V002),
         help(
-            "required params and indexes form the public interface — add `pub` before the declaration"
+            "required indexes, types, and dimensions form the bindable interface — add `pub(bind)` before the declaration"
         )
     )]
-    RequiredItemMustBePub {
+    RequiredItemMustBeBindable {
         kind: String,
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("required item must be `pub`")]
+        #[label("required item must be `pub(bind)`")]
         span: SourceSpan,
     },
 
