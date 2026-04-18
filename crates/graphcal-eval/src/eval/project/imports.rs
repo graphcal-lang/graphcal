@@ -61,10 +61,12 @@ pub(super) fn process_instantiated_include<'a>(
     );
 
     // Classify and validate bindings against the dependency's AST.
-    // Each binding is either a param binding (name targets a `param`) or an
-    // index binding (name targets a `cat`/`range` index).
+    // Each binding is either a param binding (name targets a `param`), an
+    // index binding (name targets a `cat`/`range` index), or a type binding
+    // (name targets a `type`).
     let mut bindings = HashMap::new();
     let mut index_bindings = HashMap::new();
+    let mut type_bindings: HashMap<String, String> = HashMap::new();
     for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
 
@@ -74,6 +76,22 @@ pub(super) fn process_instantiated_include<'a>(
         );
         if is_param {
             bindings.insert(binding_name.clone(), binding.value.clone());
+            continue;
+        }
+
+        // Check if it's a type in the dependency.
+        let is_type = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
+            DeclKind::Type(t) => t.name.value.as_str() == binding_name,
+            DeclKind::UnionType(t) => t.name.value.as_str() == binding_name,
+            _ => false,
+        });
+        if is_type {
+            let rhs_name = lowering::extract_type_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
+            type_bindings.insert(binding_name.clone(), rhs_name);
             continue;
         }
 
@@ -355,6 +373,7 @@ pub(super) fn process_instantiated_include<'a>(
         prefix,
         bindings,
         index_bindings,
+        type_bindings,
         selective_names,
         import_span: decl.span,
         import_item_attributes,
@@ -460,6 +479,7 @@ pub(super) fn process_inline_dag_include(
     // Classify and validate bindings against the DAG body's declarations.
     let mut bindings = HashMap::new();
     let mut index_bindings = HashMap::new();
+    let mut type_bindings: HashMap<String, String> = HashMap::new();
     for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
 
@@ -469,6 +489,22 @@ pub(super) fn process_inline_dag_include(
         );
         if is_param {
             bindings.insert(binding_name.clone(), binding.value.clone());
+            continue;
+        }
+
+        // Check if it's a type in the DAG body.
+        let is_type = dag_body.declarations.iter().any(|d| match &d.kind {
+            DeclKind::Type(t) => t.name.value.as_str() == binding_name,
+            DeclKind::UnionType(t) => t.name.value.as_str() == binding_name,
+            _ => false,
+        });
+        if is_type {
+            let rhs_name = lowering::extract_type_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
+            type_bindings.insert(binding_name.clone(), rhs_name);
             continue;
         }
 
@@ -644,6 +680,7 @@ pub(super) fn process_inline_dag_include(
         prefix,
         bindings,
         index_bindings,
+        type_bindings,
         selective_names,
         import_span: decl.span,
         import_item_attributes,

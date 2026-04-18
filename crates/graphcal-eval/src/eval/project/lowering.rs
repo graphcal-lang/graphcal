@@ -51,6 +51,7 @@ pub(super) fn lower_and_finalize(
             &mut builder,
             dep_registry,
             &HashMap::new(),
+            &HashMap::new(),
             Some(pub_names),
         );
     }
@@ -137,7 +138,12 @@ pub(super) fn process_deferred_instantiated_imports(
 
         // Merge the dependency's type-system declarations into the importer's registry.
         let dep_registry = dep_builder.build();
-        merge_registry_into_builder(builder, &dep_registry, &deferred.index_bindings);
+        merge_registry_into_builder(
+            builder,
+            &dep_registry,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+        );
 
         // Validate range index dimension matching (Phase B — requires compiled registries).
         for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
@@ -180,6 +186,7 @@ pub(super) fn process_deferred_instantiated_imports(
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
+            &deferred.type_bindings,
             &deferred.import_item_attributes,
         );
 
@@ -248,7 +255,12 @@ pub(super) fn process_deferred_inline_dag_includes(
 
         // Merge the DAG's type-system declarations into the importer's registry.
         let dag_registry = dag_builder.build();
-        merge_registry_into_builder(builder, &dag_registry, &deferred.index_bindings);
+        merge_registry_into_builder(
+            builder,
+            &dag_registry,
+            &deferred.index_bindings,
+            &deferred.type_bindings,
+        );
 
         // Collect all declaration names in the DAG body.
         let mut dep_names: HashSet<String> = HashSet::new();
@@ -263,6 +275,7 @@ pub(super) fn process_deferred_inline_dag_includes(
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
+            &deferred.type_bindings,
             &deferred.import_item_attributes,
         );
 
@@ -437,14 +450,22 @@ pub(super) fn merge_registry_into_builder(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<String, String>,
+    type_bindings: &HashMap<String, String>,
 ) {
-    merge_registry_into_builder_filtered(builder, dep_registry, index_bindings, None);
+    merge_registry_into_builder_filtered(
+        builder,
+        dep_registry,
+        index_bindings,
+        type_bindings,
+        None,
+    );
 }
 
 pub(super) fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<String, String>,
+    type_bindings: &HashMap<String, String>,
     pub_names: Option<&HashSet<String>>,
 ) {
     // Import base dimension names (for display formatting).
@@ -489,8 +510,11 @@ pub(super) fn merge_registry_into_builder_filtered(
         }
     }
 
-    // Import struct types.
+    // Import struct types — skip bound types (they are replaced by the importer's type).
     for type_def in dep_registry.types.all_types() {
+        if type_bindings.contains_key(type_def.name.as_str()) {
+            continue;
+        }
         if pub_names.is_some_and(|visible| !visible.contains(type_def.name.as_str())) {
             continue;
         }
@@ -519,6 +543,31 @@ pub(super) fn extract_index_name_from_binding_expr(
         } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_index_name.to_string(),
+            src: file_src.clone(),
+            span: expr.span.into(),
+        })),
+    }
+}
+
+/// Extract a `PascalCase` type name from a binding expression.
+///
+/// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
+/// `PascalCase` identifier, which the parser produces as a zero-arg
+/// `StructConstruction` (same shape as the index-binding RHS).
+pub(super) fn extract_type_name_from_binding_expr(
+    expr: &Expr,
+    dep_type_name: &str,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<String, CompileError> {
+    match &expr.kind {
+        ExprKind::ConstRef(name) => Ok(name.value.to_string()),
+        ExprKind::StructConstruction {
+            type_name,
+            type_args,
+            fields,
+        } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
+        _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
+            name: dep_type_name.to_string(),
             src: file_src.clone(),
             span: expr.span.into(),
         })),
