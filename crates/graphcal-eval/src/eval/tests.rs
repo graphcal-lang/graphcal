@@ -1394,6 +1394,20 @@ fn project_injectable_index_basic() {
 }
 
 #[test]
+fn project_instantiated_import_type_binding() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi/instantiated_import_type_binding/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    // origin_size = 1.0 m (the lib's `Widget { size: 1.0 m }` rewritten to
+    // `MyWidget { size: 1.0 m }` after type substitution)
+    let result_val = find_value(&result, "result");
+    assert!(
+        (result_val - 1.0).abs() < 1e-10,
+        "result = {result_val}, expected 1.0"
+    );
+}
+
+#[test]
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");

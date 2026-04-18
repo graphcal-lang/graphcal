@@ -169,6 +169,8 @@ pub(super) struct DeferredInstantiatedImport {
     pub(super) bindings: HashMap<String, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
     pub(super) index_bindings: HashMap<String, String>,
+    /// Type bindings: `dep_type_name` → `importer_type_name`.
+    pub(super) type_bindings: HashMap<String, String>,
     /// For selective imports: the selected names and their local aliases.
     /// `None` for module imports (all names are accessible via `prefix::`).
     pub(super) selective_names: Option<Vec<(String, String)>>, // (orig_name, local_name)
@@ -194,6 +196,8 @@ pub(super) struct DeferredInlineDagInclude {
     pub(super) bindings: HashMap<String, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
     pub(super) index_bindings: HashMap<String, String>,
+    /// Type bindings: `dep_type_name` → `importer_type_name`.
+    pub(super) type_bindings: HashMap<String, String>,
     /// For selective imports: the selected names and their local aliases.
     /// `None` for module imports.
     pub(super) selective_names: Option<Vec<(String, String)>>,

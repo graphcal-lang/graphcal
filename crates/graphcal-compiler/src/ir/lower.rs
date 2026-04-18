@@ -531,6 +531,10 @@ impl UnfrozenIR {
         clippy::too_many_lines,
         reason = "single logical operation: prefix and merge all declaration kinds"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "merge_dependency coordinates every binding kind plus prefixing state"
+    )]
     pub fn merge_dependency(
         &mut self,
         dep: Self,
@@ -538,6 +542,7 @@ impl UnfrozenIR {
         bindings: &HashMap<String, Expr>,
         dep_names: &HashSet<String>,
         index_bindings: &HashMap<String, String>,
+        type_bindings: &HashMap<String, String>,
         import_item_attributes: &HashMap<String, Vec<crate::syntax::ast::Attribute>>,
     ) {
         /// Prefix a `ScopedName` dep if its member is in `dep_names`.
@@ -552,8 +557,10 @@ impl UnfrozenIR {
         // Merge consts
         for mut entry in dep.consts {
             substitute_index_names(&mut entry.expr, index_bindings);
+            substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             // Prefix const deps
             if let Some(deps) = dep.const_deps.get(&entry.name) {
@@ -582,11 +589,13 @@ impl UnfrozenIR {
             } else if let Some(ref mut expr) = entry.default_expr {
                 // Keep default, but substitute index names and prefix internal refs
                 substitute_index_names(expr, index_bindings);
+                substitute_type_names_in_expr(expr, type_bindings);
                 prefix_expr_refs(expr, prefix, dep_names);
             } else {
                 // Required param without binding — stays None, caught later in exec_plan
             }
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             // Rebuild runtime deps for the (possibly rewritten) expression
             let mut graph_refs = BTreeSet::new();
             if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
@@ -617,8 +626,10 @@ impl UnfrozenIR {
         // Merge nodes
         for mut entry in dep.nodes {
             substitute_index_names(&mut entry.expr, index_bindings);
+            substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             let prefixed = entry.name.with_prefix(prefix);
             if let Some(deps) = dep.runtime_deps.get(&entry.name) {
                 let prefixed_deps = deps
@@ -641,6 +652,7 @@ impl UnfrozenIR {
             match &mut entry.body {
                 crate::syntax::ast::AssertBody::Expr(e) => {
                     substitute_index_names(e, index_bindings);
+                    substitute_type_names_in_expr(e, type_bindings);
                     prefix_expr_refs(e, prefix, dep_names);
                 }
                 crate::syntax::ast::AssertBody::Tolerance {
@@ -650,10 +662,13 @@ impl UnfrozenIR {
                     ..
                 } => {
                     substitute_index_names(actual, index_bindings);
+                    substitute_type_names_in_expr(actual, type_bindings);
                     prefix_expr_refs(actual, prefix, dep_names);
                     substitute_index_names(expected, index_bindings);
+                    substitute_type_names_in_expr(expected, type_bindings);
                     prefix_expr_refs(expected, prefix, dep_names);
                     substitute_index_names(tolerance, index_bindings);
+                    substitute_type_names_in_expr(tolerance, type_bindings);
                     prefix_expr_refs(tolerance, prefix, dep_names);
                 }
             }
@@ -671,14 +686,17 @@ impl UnfrozenIR {
         for mut entry in dep.plots {
             for encoding in &mut entry.decl.encodings {
                 substitute_index_names(&mut encoding.value, index_bindings);
+                substitute_type_names_in_expr(&mut encoding.value, type_bindings);
                 prefix_expr_refs(&mut encoding.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.mark.properties {
                 substitute_index_names(&mut prop.value, index_bindings);
+                substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.properties {
                 substitute_index_names(&mut prop.value, index_bindings);
+                substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -695,6 +713,7 @@ impl UnfrozenIR {
         for mut entry in dep.figures {
             for field in &mut entry.decl.fields {
                 substitute_index_names(&mut field.value, index_bindings);
+                substitute_type_names_in_expr(&mut field.value, type_bindings);
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             // Prefix plot names referenced by the figure
@@ -719,6 +738,7 @@ impl UnfrozenIR {
         for mut entry in dep.layers {
             for field in &mut entry.decl.fields {
                 substitute_index_names(&mut field.value, index_bindings);
+                substitute_type_names_in_expr(&mut field.value, type_bindings);
                 prefix_expr_refs(&mut field.value, prefix, dep_names);
             }
             // Prefix plot names referenced by the layer
@@ -1068,6 +1088,192 @@ pub fn substitute_type_expr_index_names(
         | TypeExprKind::Int
         | TypeExprKind::Datetime
         | TypeExprKind::DimExpr(_) => {}
+    }
+}
+
+/// Rewrite nominally-tied names (types or dimensions) within a type expression.
+///
+/// `TypeExpr` uses `DimExpr` to carry single-identifier type references (the
+/// resolver disambiguates them into `StructType` / `Dim` later). Both type and
+/// dimension bindings therefore need to walk `DimExpr` terms and rewrite their
+/// names. `TypeApplication.name` is rewritten for type bindings (generic
+/// parametric types like `Vec3<Length>`), which is harmless for dim bindings
+/// because type and dim names can't collide (A6 nominal identity).
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn substitute_type_expr_nominal_names(
+    type_expr: &mut TypeExpr,
+    bindings: &HashMap<String, String>,
+) {
+    use crate::syntax::ast::TypeExprKind;
+
+    if bindings.is_empty() {
+        return;
+    }
+    match &mut type_expr.kind {
+        TypeExprKind::DimExpr(dim_expr) => {
+            for item in &mut dim_expr.terms {
+                if let Some(new_name) = bindings.get(&item.term.name.name) {
+                    item.term.name.name = new_name.clone();
+                }
+            }
+        }
+        TypeExprKind::Indexed { base, .. } => {
+            substitute_type_expr_nominal_names(base, bindings);
+        }
+        TypeExprKind::TypeApplication { name, type_args } => {
+            if let Some(new_name) = bindings.get(&name.name) {
+                name.name = new_name.clone();
+            }
+            for arg in type_args {
+                substitute_type_expr_nominal_names(arg, bindings);
+            }
+        }
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => {}
+    }
+}
+
+/// Rewrite struct-type names within an expression according to a binding map.
+///
+/// Covers `StructConstruction.type_name`, `StructConstruction.type_args`,
+/// `AsCast.target_type`, and `FnCall.type_args`. Recurses through child
+/// expressions so nested struct constructions are also rewritten.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single recursion covering every ExprKind variant"
+)]
+pub(crate) fn substitute_type_names_in_expr(expr: &mut Expr, bindings: &HashMap<String, String>) {
+    use crate::syntax::ast::{GenericArg, IndexArg};
+    use crate::syntax::names::StructTypeName;
+
+    if bindings.is_empty() {
+        return;
+    }
+    match &mut expr.kind {
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::LocalRef(_)
+        | ExprKind::NameRef(_)
+        | ExprKind::QualifiedNameRef { .. }
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::QualifiedGraphRef { .. }
+        | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::VariantLiteral { .. } => {}
+
+        ExprKind::StructConstruction {
+            type_name,
+            type_args,
+            fields,
+        } => {
+            if let Some(new_name) = bindings.get(type_name.value.as_str()) {
+                type_name.value = StructTypeName::new(new_name);
+            }
+            for ty in type_args.iter_mut() {
+                substitute_type_expr_nominal_names(ty, bindings);
+            }
+            for field in fields {
+                if let Some(val) = &mut field.value {
+                    substitute_type_names_in_expr(val, bindings);
+                }
+            }
+        }
+
+        ExprKind::AsCast {
+            expr: inner,
+            target_type,
+        } => {
+            substitute_type_expr_nominal_names(target_type, bindings);
+            substitute_type_names_in_expr(inner, bindings);
+        }
+        ExprKind::FnCall {
+            type_args, args, ..
+        } => {
+            for ga in type_args.iter_mut() {
+                if let GenericArg::Type(ty) = ga {
+                    substitute_type_expr_nominal_names(ty, bindings);
+                }
+            }
+            for arg in args {
+                substitute_type_names_in_expr(arg, bindings);
+            }
+        }
+
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            substitute_type_names_in_expr(lhs, bindings);
+            substitute_type_names_in_expr(rhs, bindings);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            substitute_type_names_in_expr(operand, bindings);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            substitute_type_names_in_expr(condition, bindings);
+            substitute_type_names_in_expr(then_branch, bindings);
+            substitute_type_names_in_expr(else_branch, bindings);
+        }
+        ExprKind::Convert { expr: inner, .. }
+        | ExprKind::DisplayTimezone { expr: inner, .. }
+        | ExprKind::FieldAccess { expr: inner, .. } => {
+            substitute_type_names_in_expr(inner, bindings);
+        }
+        ExprKind::IndexAccess { expr: inner, args } => {
+            substitute_type_names_in_expr(inner, bindings);
+            for arg in args {
+                if let IndexArg::Expr(e) = arg {
+                    substitute_type_names_in_expr(e, bindings);
+                }
+            }
+        }
+        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+            for entry in entries {
+                substitute_type_names_in_expr(&mut entry.value, bindings);
+            }
+        }
+        ExprKind::ForComp { body, .. } => {
+            substitute_type_names_in_expr(body, bindings);
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            substitute_type_names_in_expr(source, bindings);
+            substitute_type_names_in_expr(init, bindings);
+            substitute_type_names_in_expr(body, bindings);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            substitute_type_names_in_expr(init, bindings);
+            substitute_type_names_in_expr(body, bindings);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            substitute_type_names_in_expr(scrutinee, bindings);
+            for arm in arms {
+                substitute_type_names_in_expr(&mut arm.body, bindings);
+            }
+        }
+        ExprKind::TupleMatch { scrutinees, arms } => {
+            for s in scrutinees {
+                substitute_type_names_in_expr(s, bindings);
+            }
+            for arm in arms {
+                if let Some(patterns) = &mut arm.patterns {
+                    for p in patterns {
+                        substitute_type_names_in_expr(p, bindings);
+                    }
+                }
+                substitute_type_names_in_expr(&mut arm.body, bindings);
+            }
+        }
     }
 }
 
