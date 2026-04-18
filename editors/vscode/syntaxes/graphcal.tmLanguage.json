@@ -9,6 +9,7 @@
     { "include": "#type-declaration" },
     { "include": "#base-dimension-declaration" },
     { "include": "#dimension-declaration" },
+    { "include": "#base-unit-declaration" },
     { "include": "#unit-declaration" },
     { "include": "#index-declaration" },
     { "include": "#linspace-keyword" },
@@ -87,6 +88,16 @@
         "1": { "name": "keyword.other.pub.graphcal" },
         "2": { "name": "keyword.declaration.dimension.graphcal" },
         "3": { "name": "entity.name.type.graphcal" }
+      }
+    },
+
+    "base-unit-declaration": {
+      "match": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(base)\\s+(unit)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.pub.graphcal" },
+        "2": { "name": "keyword.declaration.unit.graphcal" },
+        "3": { "name": "keyword.declaration.unit.graphcal" },
+        "4": { "name": "entity.name.type.graphcal" }
       }
     },
 
@@ -340,6 +351,11 @@
         "0": { "name": "punctuation.brackets.curly.graphcal" }
       },
       "patterns": [
+        {
+          "comment": "Selective re-export marker: { pub item, item } — only `pub` items are re-exported",
+          "match": "\\b(pub)\\b(?!\\s*\\()",
+          "name": "keyword.other.pub.graphcal"
+        },
         {
           "match": "\\b(as)\\b",
           "name": "keyword.operator.as.graphcal"
