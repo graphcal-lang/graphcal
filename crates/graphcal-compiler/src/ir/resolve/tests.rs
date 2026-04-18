@@ -354,30 +354,8 @@ fn resolve_required_param_is_implicitly_bindable() {
     parse_and_resolve(source).unwrap();
 }
 
-#[test]
-fn resolve_pub_on_param_is_rejected() {
-    // Post-A5: `pub param` is a parse/resolve error (V007).
-    let source = r"
-        pub param x: Dimensionless = 1.0;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::ParamAnnotationForbidden { ref name, .. } if name == "x"),
-        "expected ParamAnnotationForbidden, got: {err:?}"
-    );
-}
-
-#[test]
-fn resolve_pub_bind_on_param_is_rejected() {
-    let source = r"
-        pub(bind) param x: Dimensionless = 1.0;
-    ";
-    let err = parse_and_resolve(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::ParamAnnotationForbidden { ref name, .. } if name == "x"),
-        "expected ParamAnnotationForbidden, got: {err:?}"
-    );
-}
+// `pub param` / `pub(bind) param` are rejected at parse time; see
+// `syntax::parser::decl::tests` for parser-level coverage.
 
 #[test]
 fn resolve_required_index_must_be_pub() {

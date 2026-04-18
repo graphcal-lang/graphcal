@@ -307,15 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn v007_pub_param_produces_diagnostic() {
-        // Post-A5: `pub param` is rejected with V007 (params are never pub).
+    fn pub_param_produces_parse_diagnostic() {
+        // `pub param` is rejected at parse time with a P001 unexpected-token
+        // diagnostic — params are annotation-free per axioms §4.0.
         let source = "pub param x: Dimensionless = 1.0;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert_eq!(diags.len(), 1);
+        assert!(!diags.is_empty(), "expected at least one diagnostic");
         let code = diags[0].code.as_ref();
         assert!(
-            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V007"))),
-            "expected V007 error code, got {code:?}"
+            code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("P001"))),
+            "expected P001 parse error code, got {code:?}"
         );
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
     }

@@ -141,22 +141,12 @@ fn collect_local_declarations(
         pub_names.insert(name.to_string());
     }
 
-    // Validate annotations on params (A5) and required indexes (V002).
+    // Validate: required indexes must be `pub` (V002).
     //
-    // Params must never carry `pub` or `pub(bind)` — they are implicitly
-    // visible and bindable at every include site. Required indexes
-    // (without a body) are still checked for visibility in this phase;
-    // B1 will generalise this to `required must be bindable` for all
-    // non-param kinds.
+    // (`param` carrying `pub` / `pub(bind)` is rejected at parse time —
+    // the parser refuses any annotation on `param` per the axioms §4.0.)
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Param(p) if decl.is_pub() => {
-                return Err(GraphcalError::ParamAnnotationForbidden {
-                    name: p.name.value.to_string(),
-                    src: src.clone(),
-                    span: p.name.span.into(),
-                });
-            }
             DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_pub() => {
                 return Err(GraphcalError::RequiredItemMustBePub {
                     kind: "index".to_string(),

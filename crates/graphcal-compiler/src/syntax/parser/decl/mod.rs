@@ -45,6 +45,28 @@ impl Parser<'_> {
             (Visibility::Private, None)
         };
 
+        // Reject `pub` / `pub(bind)` on `param` at parse time. The spec
+        // (visibility-bindability axioms §4.0) says `param` is
+        // annotation-free: it is inherently visible + bindable, and any
+        // annotation conveys no information. Catching this here keeps
+        // the grammar surface itself compliant without deferring to the
+        // resolver.
+        let found = match visibility {
+            Visibility::Private => None,
+            Visibility::Public => Some("`pub`"),
+            Visibility::PublicBind => Some("`pub(bind)`"),
+        };
+        if let Some(found) = found
+            && self.lexer.peek() == Some(&Token::Param)
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "no visibility annotation (params are always visible and bindable)",
+                found,
+                vis_span,
+            ));
+        }
+
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),

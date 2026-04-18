@@ -1321,14 +1321,41 @@ fn parse_private_declaration_has_private_visibility() {
 
 #[test]
 fn parse_pub_declaration_has_public_visibility() {
-    // The parser accepts any `pub` decl; the resolver rejects `pub param`
-    // separately (see ParamAnnotationForbidden / V007).
     let file = Parser::new("pub node y: Dimensionless = 1.0;")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations[0].visibility, Visibility::Public);
     assert!(file.declarations[0].is_pub());
     assert!(!file.declarations[0].is_bindable());
+}
+
+#[test]
+fn parse_pub_on_param_is_parse_error() {
+    // Per §4.0 of the axioms, `param` is annotation-free: `pub param`
+    // and `pub(bind) param` are parse errors.
+    assert!(
+        Parser::new("pub param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_bind_on_param_is_parse_error() {
+    assert!(
+        Parser::new("pub(bind) param x: Dimensionless = 1.0;")
+            .parse_file()
+            .is_err()
+    );
+}
+
+#[test]
+fn parse_pub_on_required_param_is_parse_error() {
+    assert!(
+        Parser::new("pub param x: Dimensionless;")
+            .parse_file()
+            .is_err()
+    );
 }
 
 #[test]
@@ -1361,7 +1388,7 @@ fn parse_pub_bind_spans_extend_over_annotation() {
 fn parse_pub_paren_without_bind_is_error() {
     // `pub(foo)` should not parse — `bind` is the only contextual keyword.
     assert!(
-        Parser::new("pub(foo) param x: Dimensionless = 1.0;")
+        Parser::new("pub(foo) index Phase = { A, B };")
             .parse_file()
             .is_err()
     );
@@ -1370,7 +1397,7 @@ fn parse_pub_paren_without_bind_is_error() {
 #[test]
 fn parse_pub_unclosed_paren_is_error() {
     assert!(
-        Parser::new("pub(bind param x: Dimensionless = 1.0;")
+        Parser::new("pub(bind index Phase = { A, B };")
             .parse_file()
             .is_err()
     );
