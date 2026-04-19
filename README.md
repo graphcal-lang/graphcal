@@ -187,6 +187,16 @@ include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) {
 }
 ```
 
+A DAG can also be invoked inline as an expression — each call site is a fresh
+instantiation, and arguments are evaluated in the surrounding scope (so they
+can reference loop variables):
+
+```gcl
+node v_at: Velocity[Region] = for r: Region {
+    @orbital_velocity(gm: @gm_earth, r: @altitude[r])::v
+};
+```
+
 DAG blocks unify what was previously split between pure functions (`fn`) and parameterized imports into a single, consistent mechanism.
 
 ### Generic types with phantom parameters

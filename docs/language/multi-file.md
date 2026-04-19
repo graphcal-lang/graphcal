@@ -345,6 +345,50 @@ include "./lib/orbital.gcl"/hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2) {
 
 The syntax is `include "path"/dag_name(param: value, ...) { output as alias, ... }`.
 
+### Inline DAG Invocation
+
+A `dag` can also be invoked directly inside an expression:
+
+```
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+```
+
+The form is `@dag_name(arg: expr, ...)::output`. Syntactically, it combines the
+call-and-projection pattern of `include`/`@alias::node` into a single
+expression position.
+
+**Semantics.**
+
+- Each syntactic call site is a fresh DAG instantiation. Two textually
+  distinct occurrences with identical arguments still denote two distinct
+  sub-graphs.
+- The projected output after `::` is mandatory and must name a `node` of the
+  called dag — there is no single-output elision.
+- Arguments are evaluated in the **surrounding expression scope**, so they may
+  reference local variables from an enclosing `for` comprehension, `scan`,
+  `unfold`, or `match` binding:
+
+  ```
+  node distances: Length[Region] = for r: Region {
+      @scale(factor: 2.0, v: @dist[r])::result
+  };
+  ```
+
+  This is a deliberate divergence from top-level `include`, whose bindings
+  have no access to enclosing binders.
+- Inline calls may appear anywhere an expression is valid: node bodies,
+  `match` arms, `if`/`else` branches, `for` / `scan` / `unfold` bodies, and as
+  arguments to other inline calls (composition).
+- The cross-file qualified form `@module::dag(args)::out` is planned but not
+  yet implemented at eval time; same-file calls work today.
+
 ## When to Use Each Style
 
 - **Selective imports** are best when you need only a few names, or when you need to import types and dimensions

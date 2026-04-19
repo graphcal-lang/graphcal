@@ -111,6 +111,22 @@ node clamped: Int = if @a > @seven { @seven } else { @a };
 
 Both branches must have the same type and dimension. The `else` branch is required.
 
+## Inline DAG Invocation (`@dag(args)::out`)
+
+A `dag` can be invoked as an expression, producing a fresh sub-graph at every
+syntactic call site:
+
+```
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+```
+
+The projected output after `::` is mandatory. Arguments are evaluated in the
+surrounding scope, so they may reference loop variables from an enclosing
+`for` comprehension or other local binders.
+
+See [Multi-File: Inline DAG Invocation](./multi-file.md#inline-dag-invocation)
+for the full semantics.
+
 ## Numeric Literals
 
 | Form | Example | Type |
