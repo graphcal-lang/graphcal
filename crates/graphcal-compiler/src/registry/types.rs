@@ -614,6 +614,11 @@ impl DagRegistry {
     pub fn get(&self, name: &str) -> Option<&DagDecl> {
         self.dags.get(name)
     }
+
+    /// Iterate over all registered dags.
+    pub fn all_dags(&self) -> impl Iterator<Item = (&String, &DagDecl)> {
+        self.dags.iter()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +675,56 @@ impl RegistryBuilder {
     /// expressions.
     pub fn register_dag(&mut self, name: String, decl: DagDecl) {
         self.dags.insert(name, decl);
+    }
+
+    /// Merge every entry from a frozen [`Registry`] into this builder.
+    ///
+    /// Used by inline-dag compilation: the dag body is lowered as a virtual
+    /// file whose registry is seeded with the enclosing file's dimensions,
+    /// units, indexes, types, and sibling dags so that name resolution and
+    /// type checking behave as if the dag body were declared inline at the
+    /// top level.
+    pub fn merge_from_registry(&mut self, parent: &Registry) {
+        for (id, name) in &parent.dimensions.base_dim_names {
+            self.base_dim_names
+                .entry(id.clone())
+                .or_insert_with(|| name.clone());
+        }
+        for (id, symbol) in &parent.dimensions.base_dim_symbols {
+            self.base_dim_symbols
+                .entry(id.clone())
+                .or_insert_with(|| symbol.clone());
+        }
+        for (name, dim) in &parent.dimensions.dimensions {
+            self.dimensions
+                .entry(name.clone())
+                .or_insert_with(|| dim.clone());
+        }
+        for (name, info) in &parent.units.units {
+            self.units
+                .entry(name.clone())
+                .or_insert_with(|| info.clone());
+        }
+        for (name, def) in &parent.types.types {
+            self.types
+                .entry(name.clone())
+                .or_insert_with(|| def.clone());
+        }
+        for (member, unions) in &parent.types.type_to_unions {
+            self.type_to_unions
+                .entry(member.clone())
+                .or_insert_with(|| unions.clone());
+        }
+        for (name, def) in &parent.indexes.indexes {
+            self.indexes
+                .entry(name.clone())
+                .or_insert_with(|| def.clone());
+        }
+        for (name, decl) in &parent.dags.dags {
+            self.dags
+                .entry(name.clone())
+                .or_insert_with(|| decl.clone());
+        }
     }
 
     // -- Mutation methods (only on builder) --

@@ -223,7 +223,7 @@ pub(crate) fn lower_to_builder(
     }
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new(), dag_id)
+    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new(), dag_id, None)
 }
 
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
@@ -255,7 +255,110 @@ pub fn lower_to_builder_with_imported_values(
     let type_anns = extract_type_annotations(ast);
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values, dag_id)
+    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values, dag_id, None)
+}
+
+/// Lower a `dag { ... }` body as if it were a standalone file.
+///
+/// The dag body is a virtual [`File`] whose registry is seeded with the
+/// enclosing file's frozen registry (dimensions, units, types, indexes, and
+/// sibling dags) so that name resolution and type checking behave exactly as
+/// they would for a top-level declaration. The dag body cannot reference the
+/// enclosing file's `const`/`param`/`node` values — cross-scope values must
+/// be passed in via the dag's own params and bound at each call site.
+///
+/// `import .. { ... }` declarations inside the dag body are processed here:
+/// const items are brought into scope as locally-named imported values;
+/// type-system items (dimensions, units, types, indexes, sibling dags) are
+/// already available through the parent-registry merge, so their import
+/// entries are elided from the virtual file before name resolution runs.
+///
+/// The returned `IR` has a `dag_id` formed by appending `dag_name` to
+/// `parent_dag_id`, so nested-scope diagnostics have a stable source location.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if name resolution or type-system construction
+/// fails for the dag body.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn lower_dag_body_to_ir(
+    dag_name: &str,
+    body: &[crate::syntax::ast::Declaration],
+    parent_registry: &Registry,
+    parent_const_names: &HashSet<String>,
+    src: &NamedSource<Arc<String>>,
+    parent_dag_id: &crate::syntax::dag_id::DagId,
+) -> Result<IR, GraphcalError> {
+    let (pure_body, dag_imported_names) =
+        split_dag_body_imports(body, parent_const_names, parent_registry);
+
+    let virtual_file = File {
+        declarations: pure_body,
+    };
+    let dag_dag_id = parent_dag_id.child(dag_name);
+
+    let resolved = resolve_with_imported_values(&virtual_file, src, &dag_imported_names)?;
+    let type_anns = extract_type_annotations(&virtual_file);
+
+    let (builder, unfrozen) = build_ir_from_resolved(
+        &virtual_file,
+        src,
+        resolved,
+        type_anns,
+        HashMap::new(),
+        &dag_dag_id,
+        Some(parent_registry),
+    )?;
+    Ok(unfrozen.freeze(builder.build()))
+}
+
+/// Separate `import .. { ... }` declarations from the rest of a dag body.
+///
+/// Returns the pure body declarations (suitable for treatment as a virtual
+/// [`File`]) alongside an [`ImportedValueNames`] that names any const items
+/// imported from the parent scope. Type-system items need no entry here
+/// because [`RegistryBuilder::merge_from_registry`] already makes them
+/// visible in the dag's registry.
+fn split_dag_body_imports(
+    body: &[crate::syntax::ast::Declaration],
+    parent_const_names: &HashSet<String>,
+    parent_registry: &Registry,
+) -> (Vec<crate::syntax::ast::Declaration>, ImportedValueNames) {
+    use crate::syntax::ast::{ImportKind, ImportPath};
+
+    let mut pure_body = Vec::with_capacity(body.len());
+    let mut imported_names = ImportedValueNames::default();
+
+    for decl in body {
+        if let DeclKind::Import(import_decl) = &decl.kind
+            && matches!(import_decl.path, ImportPath::ParentScope { .. })
+        {
+            if let ImportKind::Selective(items) = &import_decl.kind {
+                for item in items {
+                    let orig_name = item.name.name.as_str();
+                    let local_name = item.local_name().to_string();
+                    if parent_const_names.contains(orig_name) {
+                        imported_names
+                            .const_names
+                            .push((ScopedName::local(local_name), item.name.span));
+                        continue;
+                    }
+                    // Type-system items flow in via `merge_from_registry`. For
+                    // anything else (unknown names, runtime items), leave it
+                    // alone: the caller's existing include-time validation
+                    // still runs and will surface the error with its own span.
+                    let _ = parent_registry;
+                }
+            }
+            continue;
+        }
+        pure_body.push(decl.clone());
+    }
+
+    (pure_body, imported_names)
 }
 
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
@@ -273,10 +376,18 @@ fn build_ir_from_resolved(
     mut type_anns: HashMap<String, TypeExpr>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     dag_id: &crate::syntax::dag_id::DagId,
+    parent_registry: Option<&Registry>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Build registry (prelude + user-declared dimensions/units/indexes/structs)
+    // Build registry (prelude + user-declared dimensions/units/indexes/structs).
+    // When a parent registry is provided (inline-dag bodies), its entries are
+    // merged in before registering the virtual file's own declarations so that
+    // type annotations and dynamic-unit dep augmentation see the enclosing
+    // file's type system.
     let mut builder = RegistryBuilder::new();
     load_prelude(&mut builder);
+    if let Some(parent) = parent_registry {
+        builder.merge_from_registry(parent);
+    }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
 
     // Augment runtime deps with transitive dependencies through dynamic units.
