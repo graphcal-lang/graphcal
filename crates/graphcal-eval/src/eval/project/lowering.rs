@@ -204,11 +204,11 @@ pub(super) fn process_deferred_instantiated_imports(
 
         // Validate range index dimension matching (Phase B — requires compiled registries).
         for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
-            if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name)
+            if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name.as_str())
                 && let graphcal_compiler::registry::types::IndexKind::RequiredRange {
                     dimension: dep_dim,
                 } = &dep_idx_def.kind
-                && let Some(imp_idx_def) = builder.get_index(importer_idx_name)
+                && let Some(imp_idx_def) = builder.get_index(importer_idx_name.as_str())
                 && let graphcal_compiler::registry::types::IndexKind::Range(
                     graphcal_compiler::registry::types::RangeIndexData {
                         dimension: imp_dim, ..
@@ -221,9 +221,9 @@ pub(super) fn process_deferred_instantiated_imports(
             {
                 return Err(CompileError::Eval(
                     GraphcalError::IndexBindingDimensionMismatch {
-                        dep_index: dep_idx_name.clone(),
+                        dep_index: dep_idx_name.as_str().to_string(),
                         expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
-                        bound_index: importer_idx_name.clone(),
+                        bound_index: importer_idx_name.as_str().to_string(),
                         found_dim: builder.format_dimension(imp_dim),
                         src: dep_src.clone(),
                         span: deferred.import_span.into(),
@@ -585,9 +585,9 @@ pub(super) fn add_selective_aliases(
 pub(super) fn merge_registry_into_builder(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
-    index_bindings: &HashMap<String, String>,
-    type_bindings: &HashMap<String, String>,
-    dim_bindings: &HashMap<String, String>,
+    index_bindings: &HashMap<IndexName, IndexName>,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
 ) {
     merge_registry_into_builder_filtered(
         builder,
@@ -602,14 +602,14 @@ pub(super) fn merge_registry_into_builder(
 pub(super) fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
-    index_bindings: &HashMap<String, String>,
-    type_bindings: &HashMap<String, String>,
-    dim_bindings: &HashMap<String, String>,
+    index_bindings: &HashMap<IndexName, IndexName>,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
     pub_names: Option<&HashSet<String>>,
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
-        if dim_bindings.contains_key(name) {
+        if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
         if pub_names.is_some_and(|visible| !visible.contains(name)) {
@@ -932,9 +932,9 @@ fn check_generics_leakage(
     dep_ast: &graphcal_compiler::syntax::ast::File,
     pub_reexport_whole: bool,
     pub_reexport_items: &HashSet<String>,
-    index_bindings: &HashMap<String, String>,
-    type_bindings: &HashMap<String, String>,
-    dim_bindings: &HashMap<String, String>,
+    index_bindings: &HashMap<IndexName, IndexName>,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
     importer_pub_names: &HashSet<String>,
     importer_local_type_names: &HashMap<String, &'static str>,
     importer_src: &NamedSource<Arc<String>>,
@@ -1007,10 +1007,15 @@ fn check_generics_leakage(
         // importer's visibility table.
         for raw_name in refs {
             let substituted = index_bindings
-                .get(&raw_name)
-                .or_else(|| type_bindings.get(&raw_name))
-                .or_else(|| dim_bindings.get(&raw_name))
-                .map_or(raw_name.as_str(), String::as_str);
+                .get(raw_name.as_str())
+                .map(IndexName::as_str)
+                .or_else(|| {
+                    type_bindings
+                        .get(raw_name.as_str())
+                        .map(StructTypeName::as_str)
+                })
+                .or_else(|| dim_bindings.get(raw_name.as_str()).map(DimName::as_str))
+                .unwrap_or(raw_name.as_str());
 
             if let Some(kind) = importer_local_type_names.get(substituted)
                 && !importer_pub_names.contains(substituted)

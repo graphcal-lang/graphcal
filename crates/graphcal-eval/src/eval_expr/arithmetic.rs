@@ -1,7 +1,3 @@
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use graphcal_compiler::syntax::ast::{BinOp, Expr, UnaryOp};
 use graphcal_compiler::syntax::span::Span;
 
@@ -81,55 +77,38 @@ pub(super) fn eval_binop_expr(
                         .expect_scalar("comparison operand")
                         .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
                     return Ok(RuntimeValue::Bool(eval_comparison(
-                        *op, lv, rv, ctx.src, expr.span,
+                        *op, lv, rv, ctx, expr.span,
                     )?));
                 }
             };
             Ok(RuntimeValue::Bool(eq == is_eq))
         }
-        // Ordering comparisons: Int or Scalar operands, Bool result
+        // Ordering comparisons: Int, Datetime, or Scalar operands, Bool result.
+        // Int/Int and Datetime/Datetime dispatch identically via `Ord`; anything
+        // else falls through to the scalar path which handles Scalar/Int
+        // mixing and dimension checks.
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
-            if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
-                let result = match op {
-                    BinOp::Lt => li < ri,
-                    BinOp::Gt => li > ri,
-                    BinOp::Le => li <= ri,
-                    BinOp::Ge => li >= ri,
-                    _ => {
-                        return Err(ctx.internal_error(
-                            format!("unexpected operator {op:?} in integer comparison"),
-                            expr.span,
-                        ));
-                    }
-                };
-                return Ok(RuntimeValue::Bool(result));
+            match (&l, &r) {
+                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
+                    Ok(RuntimeValue::Bool(apply_ordering(*op, li, ri)))
+                }
+                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
+                    Ok(RuntimeValue::Bool(apply_ordering(*op, le, re)))
+                }
+                _ => {
+                    let lv = l
+                        .expect_scalar("comparison operand")
+                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
+                    let rv = r
+                        .expect_scalar("comparison operand")
+                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
+                    Ok(RuntimeValue::Bool(eval_comparison(
+                        *op, lv, rv, ctx, expr.span,
+                    )?))
+                }
             }
-            if let (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) = (&l, &r) {
-                let result = match op {
-                    BinOp::Lt => le < re,
-                    BinOp::Gt => le > re,
-                    BinOp::Le => le <= re,
-                    BinOp::Ge => le >= re,
-                    _ => {
-                        return Err(ctx.internal_error(
-                            format!("unexpected operator {op:?} in datetime comparison"),
-                            expr.span,
-                        ));
-                    }
-                };
-                return Ok(RuntimeValue::Bool(result));
-            }
-            let lv = l
-                .expect_scalar("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-            let rv = r
-                .expect_scalar("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-            Ok(RuntimeValue::Bool(eval_comparison(
-                *op, lv, rv, ctx.src, expr.span,
-            )?))
         }
         // Arithmetic operators: Int or Scalar operands
         _ => {
@@ -137,7 +116,7 @@ pub(super) fn eval_binop_expr(
             let r = eval_expr(rhs, values, local_values, ctx)?;
             if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
                 return Ok(RuntimeValue::Int(eval_int_binop(
-                    *op, *li, *ri, ctx.src, expr.span,
+                    *op, *li, *ri, ctx, expr.span,
                 )?));
             }
             // Datetime point-vs-vector arithmetic
@@ -180,7 +159,7 @@ pub(super) fn eval_binop_expr(
                 .expect_scalar("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Scalar(eval_scalar_binop(
-                *op, lv, rv, ctx.src, expr.span,
+                *op, lv, rv, ctx, expr.span,
             )?))
         }
     }
@@ -250,23 +229,37 @@ pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bo
 pub(super) fn check_finite(
     value: f64,
     context: &str,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<f64, GraphcalError> {
     if value.is_nan() {
-        Err(GraphcalError::EvalError {
-            message: format!("invalid argument for {context} (result is NaN)"),
-            src: src.clone(),
-            span: span.into(),
-        })
+        Err(ctx.eval_error(
+            format!("invalid argument for {context} (result is NaN)"),
+            span,
+        ))
     } else if value.is_infinite() {
-        Err(GraphcalError::EvalError {
-            message: format!("{context} produced infinite result"),
-            src: src.clone(),
-            span: span.into(),
-        })
+        Err(ctx.eval_error(format!("{context} produced infinite result"), span))
     } else {
         Ok(value)
+    }
+}
+
+/// Dispatch an ordering operator (`<`, `>`, `<=`, `>=`) to the `Ord`-derived
+/// comparison on any two homogeneous operands. Panics are impossible because
+/// the caller has already narrowed the operator to the four ordering
+/// variants — a debug assertion would fire on misuse but no caller does.
+fn apply_ordering<T: Ord + ?Sized>(op: BinOp, lhs: &T, rhs: &T) -> bool {
+    match op {
+        BinOp::Lt => lhs < rhs,
+        BinOp::Gt => lhs > rhs,
+        BinOp::Le => lhs <= rhs,
+        BinOp::Ge => lhs >= rhs,
+        // Callers guarantee `op` is one of the ordering operators.
+        #[expect(
+            clippy::unreachable,
+            reason = "invariant: caller matches only Lt/Gt/Le/Ge"
+        )]
+        _ => unreachable!("apply_ordering called with non-ordering operator {op:?}"),
     }
 }
 
@@ -276,7 +269,7 @@ fn eval_comparison(
     op: BinOp,
     l: f64,
     r: f64,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<bool, GraphcalError> {
     match op {
@@ -286,11 +279,7 @@ fn eval_comparison(
         BinOp::Gt => Ok(l > r),
         BinOp::Le => Ok(l <= r),
         BinOp::Ge => Ok(l >= r),
-        _ => Err(GraphcalError::InternalError {
-            message: format!("unexpected operator {op:?} in comparison"),
-            src: src.clone(),
-            span: span.into(),
-        }),
+        _ => Err(ctx.internal_error(format!("unexpected operator {op:?} in comparison"), span)),
     }
 }
 
@@ -299,7 +288,7 @@ fn eval_int_binop(
     op: BinOp,
     l: i64,
     r: i64,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<i64, GraphcalError> {
     match op {
@@ -308,52 +297,32 @@ fn eval_int_binop(
         BinOp::Mul => l.checked_mul(r),
         BinOp::Div => {
             if r == 0 {
-                return Err(GraphcalError::EvalError {
-                    message: "integer division by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(ctx.eval_error("integer division by zero", span));
             }
             l.checked_div(r)
         }
         BinOp::Mod => {
             if r == 0 {
-                return Err(GraphcalError::EvalError {
-                    message: "integer modulo by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(ctx.eval_error("integer modulo by zero", span));
             }
             l.checked_rem(r)
         }
         BinOp::Pow => {
             if r < 0 {
-                return Err(GraphcalError::EvalError {
-                    message: "integer exponent must be non-negative".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(ctx.eval_error("integer exponent must be non-negative", span));
             }
-            let exp = u32::try_from(r).map_err(|_| GraphcalError::EvalError {
-                message: "integer exponent too large".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })?;
+            let exp =
+                u32::try_from(r).map_err(|_| ctx.eval_error("integer exponent too large", span))?;
             l.checked_pow(exp)
         }
         _ => {
-            return Err(GraphcalError::InternalError {
-                message: format!("unexpected operator {op:?} in integer arithmetic"),
-                src: src.clone(),
-                span: span.into(),
-            });
+            return Err(ctx.internal_error(
+                format!("unexpected operator {op:?} in integer arithmetic"),
+                span,
+            ));
         }
     }
-    .ok_or_else(|| GraphcalError::EvalError {
-        message: "integer arithmetic overflow".to_string(),
-        src: src.clone(),
-        span: span.into(),
-    })
+    .ok_or_else(|| ctx.eval_error("integer arithmetic overflow", span))
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
@@ -361,7 +330,7 @@ fn eval_scalar_binop(
     op: BinOp,
     l: f64,
     r: f64,
-    src: &NamedSource<Arc<String>>,
+    ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<f64, GraphcalError> {
     let result = match op {
@@ -370,38 +339,24 @@ fn eval_scalar_binop(
         BinOp::Mul => l * r,
         BinOp::Div => {
             if r == 0.0 {
-                return Err(GraphcalError::EvalError {
-                    message: "division by zero".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(ctx.eval_error("division by zero", span));
             }
             l / r
         }
         BinOp::Pow => l.powf(r),
         _ => {
-            return Err(GraphcalError::InternalError {
-                message: format!("unexpected operator {op:?} in arithmetic"),
-                src: src.clone(),
-                span: span.into(),
-            });
+            return Err(
+                ctx.internal_error(format!("unexpected operator {op:?} in arithmetic"), span)
+            );
         }
     };
 
     // Post-check: if inputs were finite but result is not, report an error.
     if l.is_finite() && r.is_finite() && !result.is_finite() {
         if result.is_nan() {
-            Err(GraphcalError::EvalError {
-                message: "invalid arithmetic operation (result is NaN)".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })
+            Err(ctx.eval_error("invalid arithmetic operation (result is NaN)", span))
         } else {
-            Err(GraphcalError::EvalError {
-                message: "arithmetic overflow (result is infinite)".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })
+            Err(ctx.eval_error("arithmetic overflow (result is infinite)", span))
         }
     } else {
         Ok(result)

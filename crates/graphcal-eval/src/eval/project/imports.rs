@@ -65,9 +65,9 @@ pub(super) fn process_instantiated_include<'a>(
     // index binding (name targets a `cat`/`range` index), a type binding
     // (name targets a `type`), or a dim binding (name targets a `dim`).
     let mut bindings = HashMap::new();
-    let mut index_bindings = HashMap::new();
-    let mut type_bindings: HashMap<String, String> = HashMap::new();
-    let mut dim_bindings: HashMap<String, String> = HashMap::new();
+    let mut index_bindings: HashMap<IndexName, IndexName> = HashMap::new();
+    let mut type_bindings: HashMap<StructTypeName, StructTypeName> = HashMap::new();
+    let mut dim_bindings: HashMap<DimName, DimName> = HashMap::new();
     for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
 
@@ -92,7 +92,10 @@ pub(super) fn process_instantiated_include<'a>(
                 binding_name,
                 file_src,
             )?;
-            type_bindings.insert(binding_name.clone(), rhs_name);
+            type_bindings.insert(
+                StructTypeName::new(binding_name),
+                StructTypeName::new(rhs_name),
+            );
             continue;
         }
 
@@ -108,7 +111,7 @@ pub(super) fn process_instantiated_include<'a>(
                 binding_name,
                 file_src,
             )?;
-            dim_bindings.insert(binding_name.clone(), rhs_name);
+            dim_bindings.insert(DimName::new(binding_name), DimName::new(rhs_name));
             continue;
         }
 
@@ -197,7 +200,7 @@ pub(super) fn process_instantiated_include<'a>(
             // Dimension matching for range indexes is deferred to
             // process_deferred_instantiated_imports() where registries are available.
 
-            index_bindings.insert(binding_name.clone(), rhs_name);
+            index_bindings.insert(IndexName::new(binding_name), IndexName::new(rhs_name));
             continue;
         }
 
@@ -508,9 +511,9 @@ pub(super) fn process_inline_dag_include(
 
     // Classify and validate bindings against the DAG body's declarations.
     let mut bindings = HashMap::new();
-    let mut index_bindings = HashMap::new();
-    let mut type_bindings: HashMap<String, String> = HashMap::new();
-    let mut dim_bindings: HashMap<String, String> = HashMap::new();
+    let mut index_bindings: HashMap<IndexName, IndexName> = HashMap::new();
+    let mut type_bindings: HashMap<StructTypeName, StructTypeName> = HashMap::new();
+    let mut dim_bindings: HashMap<DimName, DimName> = HashMap::new();
     for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
 
@@ -535,7 +538,10 @@ pub(super) fn process_inline_dag_include(
                 binding_name,
                 file_src,
             )?;
-            type_bindings.insert(binding_name.clone(), rhs_name);
+            type_bindings.insert(
+                StructTypeName::new(binding_name),
+                StructTypeName::new(rhs_name),
+            );
             continue;
         }
 
@@ -551,7 +557,7 @@ pub(super) fn process_inline_dag_include(
                 binding_name,
                 file_src,
             )?;
-            dim_bindings.insert(binding_name.clone(), rhs_name);
+            dim_bindings.insert(DimName::new(binding_name), DimName::new(rhs_name));
             continue;
         }
 
@@ -566,7 +572,7 @@ pub(super) fn process_inline_dag_include(
                 binding_name,
                 file_src,
             )?;
-            index_bindings.insert(binding_name.clone(), rhs_name);
+            index_bindings.insert(IndexName::new(binding_name), IndexName::new(rhs_name));
             continue;
         }
 

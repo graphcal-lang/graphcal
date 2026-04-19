@@ -525,7 +525,7 @@ fn eval_builtin_fn(
     Ok(RuntimeValue::Scalar(check_finite(
         result,
         name.value.as_str(),
-        ctx.src,
+        ctx,
         expr.span,
     )?))
 }

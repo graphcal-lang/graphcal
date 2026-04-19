@@ -28,7 +28,7 @@ use crate::syntax::ast::{
     TypeExpr,
 };
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{DeclName, DimName, FnName};
+use crate::syntax::names::{DeclName, DimName, FnName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
@@ -640,8 +640,8 @@ impl UnfrozenIR {
     pub fn check_include_reconciles_overrides(
         &self,
         bindings: &HashMap<String, Expr>,
-        index_bindings: &HashMap<String, String>,
-        type_bindings: &HashMap<String, String>,
+        index_bindings: &HashMap<IndexName, IndexName>,
+        type_bindings: &HashMap<StructTypeName, StructTypeName>,
         importer_src: &NamedSource<Arc<String>>,
         include_span: Span,
     ) -> Result<(), GraphcalError> {
@@ -690,9 +690,9 @@ impl UnfrozenIR {
         prefix: &str,
         bindings: &HashMap<String, Expr>,
         dep_names: &HashSet<String>,
-        index_bindings: &HashMap<String, String>,
-        type_bindings: &HashMap<String, String>,
-        dim_bindings: &HashMap<String, String>,
+        index_bindings: &HashMap<IndexName, IndexName>,
+        type_bindings: &HashMap<StructTypeName, StructTypeName>,
+        dim_bindings: &HashMap<DimName, DimName>,
         import_item_attributes: &HashMap<String, Vec<crate::syntax::ast::Attribute>>,
         importer_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
@@ -981,8 +981,8 @@ impl UnfrozenIR {
 /// point at the importer's include statement — the error blames the
 /// importer for omitting the required re-binding.
 struct OverrideReconciliationChecker<'a> {
-    index_bindings: &'a HashMap<String, String>,
-    type_bindings: &'a HashMap<String, String>,
+    index_bindings: &'a HashMap<IndexName, IndexName>,
+    type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
     orphan_decl: &'a str,
     importer_src: &'a NamedSource<Arc<String>>,
     include_span: Span,
@@ -1228,30 +1228,28 @@ pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSe
 /// `TableLiteral`, `Match`) to rewrite those names before recursing into
 /// child expressions.
 struct IndexSubstituter<'a> {
-    bindings: &'a HashMap<String, String>,
+    bindings: &'a HashMap<IndexName, IndexName>,
 }
 
 impl ExprVisitorMut for IndexSubstituter<'_> {
     type Error = std::convert::Infallible;
 
     fn visit_variant_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        use crate::syntax::names::IndexName;
         if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
             && let Some(new) = self.bindings.get(index.value.as_str())
         {
-            index.value = IndexName::new(new);
+            index.value = new.clone();
         }
         Ok(())
     }
 
     fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        use crate::syntax::names::IndexName;
         if let ExprKind::ForComp { bindings, body } = &mut expr.kind {
             for b in bindings {
                 if let crate::syntax::ast::ForBindingIndex::Named(ref mut spanned_idx) = b.index
                     && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
                 {
-                    spanned_idx.value = IndexName::new(new);
+                    spanned_idx.value = new.clone();
                 }
             }
             self.visit_expr_mut(body)?;
@@ -1261,13 +1259,12 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
 
     fn visit_index_access_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         use crate::syntax::ast::IndexArg;
-        use crate::syntax::names::IndexName;
         if let ExprKind::IndexAccess { expr: inner, args } = &mut expr.kind {
             for arg in args.iter_mut() {
                 match arg {
                     IndexArg::Variant { index, .. } => {
                         if let Some(new) = self.bindings.get(index.value.as_str()) {
-                            index.value = IndexName::new(new);
+                            index.value = new.clone();
                         }
                     }
                     IndexArg::Expr(e) => {
@@ -1282,12 +1279,11 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
     }
 
     fn visit_map_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        use crate::syntax::names::IndexName;
         if let ExprKind::MapLiteral { entries } = &mut expr.kind {
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
                     if let Some(new) = self.bindings.get(key.index.value.as_str()) {
-                        key.index.value = IndexName::new(new);
+                        key.index.value = new.clone();
                     }
                 }
                 self.visit_expr_mut(&mut entry.value)?;
@@ -1298,19 +1294,18 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
 
     fn visit_table_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         use crate::syntax::ast::TableIndexSpec;
-        use crate::syntax::names::IndexName;
         if let ExprKind::TableLiteral { indexes, entries } = &mut expr.kind {
             for idx in indexes.iter_mut() {
                 if let TableIndexSpec::Named(spanned) = idx
                     && let Some(new) = self.bindings.get(spanned.value.as_str())
                 {
-                    spanned.value = IndexName::new(new);
+                    spanned.value = new.clone();
                 }
             }
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
                     if let Some(new) = self.bindings.get(key.index.value.as_str()) {
-                        key.index.value = IndexName::new(new);
+                        key.index.value = new.clone();
                     }
                 }
                 self.visit_expr_mut(&mut entry.value)?;
@@ -1320,14 +1315,13 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
     }
 
     fn visit_match_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        use crate::syntax::names::IndexName;
         if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
             self.visit_expr_mut(scrutinee)?;
             for arm in arms {
                 if let Some(ref mut idx) = arm.pattern.qualified_index
                     && let Some(new) = self.bindings.get(idx.value.as_str())
                 {
-                    idx.value = IndexName::new(new);
+                    idx.value = new.clone();
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }
@@ -1344,7 +1338,7 @@ impl ExprVisitorMut for IndexSubstituter<'_> {
 ///
 /// This must be called **before** `prefix_expr_refs` so that index names are
 /// correct before ref-prefixing adds the `prefix::` qualifier.
-pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<String, String>) {
+pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexName>) {
     if bindings.is_empty() {
         return;
     }
@@ -1364,7 +1358,7 @@ pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<String,
 )]
 pub fn substitute_type_expr_index_names(
     type_expr: &mut TypeExpr,
-    bindings: &HashMap<String, String>,
+    bindings: &HashMap<IndexName, IndexName>,
 ) {
     use crate::syntax::ast::TypeExprKind;
 
@@ -1375,9 +1369,9 @@ pub fn substitute_type_expr_index_names(
         TypeExprKind::Indexed { base, indexes } => {
             for idx_expr in indexes.iter_mut() {
                 if let crate::syntax::ast::IndexExpr::Name(ident) = idx_expr
-                    && let Some(new_name) = bindings.get(&ident.name)
+                    && let Some(new_name) = bindings.get(ident.name.as_str())
                 {
-                    ident.name = new_name.clone();
+                    ident.name = new_name.as_str().to_string();
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1407,10 +1401,10 @@ pub fn substitute_type_expr_index_names(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn substitute_type_expr_nominal_names(
-    type_expr: &mut TypeExpr,
-    bindings: &HashMap<String, String>,
-) {
+pub fn substitute_type_expr_nominal_names<K>(type_expr: &mut TypeExpr, bindings: &HashMap<K, K>)
+where
+    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
+{
     use crate::syntax::ast::TypeExprKind;
 
     if bindings.is_empty() {
@@ -1419,8 +1413,8 @@ pub fn substitute_type_expr_nominal_names(
     match &mut type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &mut dim_expr.terms {
-                if let Some(new_name) = bindings.get(&item.term.name.name) {
-                    item.term.name.name = new_name.clone();
+                if let Some(new_name) = bindings.get(item.term.name.name.as_str()) {
+                    item.term.name.name = new_name.as_ref().to_string();
                 }
             }
         }
@@ -1428,8 +1422,8 @@ pub fn substitute_type_expr_nominal_names(
             substitute_type_expr_nominal_names(base, bindings);
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            if let Some(new_name) = bindings.get(&name.name) {
-                name.name = new_name.clone();
+            if let Some(new_name) = bindings.get(name.name.as_str()) {
+                name.name = new_name.as_ref().to_string();
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
@@ -1451,9 +1445,11 @@ pub fn substitute_type_expr_nominal_names(
     clippy::too_many_lines,
     reason = "single recursion covering every ExprKind variant"
 )]
-pub(crate) fn substitute_type_names_in_expr(expr: &mut Expr, bindings: &HashMap<String, String>) {
+pub(crate) fn substitute_type_names_in_expr(
+    expr: &mut Expr,
+    bindings: &HashMap<StructTypeName, StructTypeName>,
+) {
     use crate::syntax::ast::{GenericArg, IndexArg};
-    use crate::syntax::names::StructTypeName;
 
     if bindings.is_empty() {
         return;
@@ -1485,7 +1481,7 @@ pub(crate) fn substitute_type_names_in_expr(expr: &mut Expr, bindings: &HashMap<
             fields,
         } => {
             if let Some(new_name) = bindings.get(type_name.value.as_str()) {
-                type_name.value = StructTypeName::new(new_name);
+                type_name.value = new_name.clone();
             }
             for ty in type_args.iter_mut() {
                 substitute_type_expr_nominal_names(ty, bindings);

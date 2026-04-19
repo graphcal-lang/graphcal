@@ -254,15 +254,22 @@ pub(super) fn eval_unfold(
     let mut scan_locals = HashMap::with_capacity(2);
     // Clone values once before the loop; only the self-reference entry changes per iteration.
     let mut overlay_values = values.clone();
+    // Seed the self-reference slot once. Per iteration we swap the accumulating
+    // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
+    // O(N) clone of the map every iteration (which would make the loop O(N²)).
+    overlay_values.insert(
+        self_name.to_string(),
+        RuntimeValue::Indexed {
+            index_name: index_name.clone(),
+            entries: IndexMap::new(),
+        },
+    );
     for i in 1..step_count {
-        // Update the self-reference entry with the partial result so far.
-        overlay_values.insert(
-            self_name.to_string(),
-            RuntimeValue::Indexed {
-                index_name: index_name.clone(),
-                entries: result_entries.clone(),
-            },
-        );
+        // Move the accumulated entries into the overlay (O(1)). `result_entries`
+        // is left as an empty IndexMap — it will be restored after body eval.
+        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(self_name) {
+            *entries = std::mem::take(&mut result_entries);
+        }
 
         let prev_value = range_data.step_value(i - 1);
         let curr_value = range_data.step_value(i);
@@ -283,6 +290,13 @@ pub(super) fn eval_unfold(
         );
 
         let body_val = eval_expr(body, &overlay_values, &scan_locals, ctx)?;
+
+        // Take the entries back out of the overlay (O(1)) so we can append the
+        // new result without cloning. The overlay's slot is left with an empty
+        // IndexMap until the next iteration repopulates it.
+        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(self_name) {
+            result_entries = std::mem::take(entries);
+        }
         result_entries.insert(variants[i].clone(), body_val);
     }
 
