@@ -75,11 +75,6 @@ impl std::fmt::Display for SymbolKey {
 }
 
 impl SymbolKey {
-    /// Returns `true` if this is a `Variant` whose parent matches the given name.
-    pub fn is_variant_of(&self, parent_name: &str) -> bool {
-        matches!(self, Self::Variant { parent, .. } if parent == parent_name)
-    }
-
     /// Returns the top-level name if this is a `TopLevel` key.
     pub fn top_level_name(&self) -> Option<&str> {
         match self {
@@ -169,6 +164,13 @@ pub struct SymbolTable {
     /// Populated alongside `definitions` so that `find_definition_key` is O(1)
     /// instead of a linear reverse scan.
     name_span_to_key: HashMap<usize, SymbolKey>,
+    /// Definition name-spans sorted by offset, each paired with the entry's
+    /// `SymbolKey`. Used by `find_definition_at` for O(log n) lookup instead
+    /// of scanning every definition on every hover/goto/rename request.
+    ///
+    /// Populated by [`SymbolTable::finalize`]; definitions added after
+    /// `finalize` is called will not appear here until it is called again.
+    defs_by_name_span: Vec<(Span, SymbolKey)>,
 }
 
 impl SymbolTable {
@@ -191,10 +193,44 @@ impl SymbolTable {
     }
 
     /// Find the definition whose name span contains the given byte offset, if any.
+    ///
+    /// O(log n) via [`SymbolTable::defs_by_name_span`], which is populated by
+    /// [`SymbolTable::finalize`]. If `finalize` has not been called, falls back
+    /// to a linear scan so callers that forget to finalize still see correct
+    /// results.
     pub fn find_definition_at(&self, offset: usize) -> Option<&DefinitionInfo> {
-        self.definitions.values().find(|d| {
-            offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len()
-        })
+        if self.defs_by_name_span.is_empty() {
+            return self.definitions.values().find(|d| {
+                offset >= d.name_span.offset() && offset < d.name_span.offset() + d.name_span.len()
+            });
+        }
+        let idx = self
+            .defs_by_name_span
+            .binary_search_by(|(span, _)| {
+                if offset < span.offset() {
+                    std::cmp::Ordering::Greater
+                } else if offset >= span.offset() + span.len() {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .ok()?;
+        let key = &self.defs_by_name_span[idx].1;
+        self.definitions.get(key)
+    }
+
+    /// Build the sorted `defs_by_name_span` index after all definitions have
+    /// been inserted. Called once at the end of `build_from_ast`.
+    fn finalize(&mut self) {
+        self.defs_by_name_span = self
+            .definitions
+            .iter()
+            .filter(|(_, d)| !d.name_span.is_empty())
+            .map(|(k, d)| (d.name_span, k.clone()))
+            .collect();
+        self.defs_by_name_span
+            .sort_by_key(|(span, _)| span.offset());
     }
 
     /// Look up the key for a definition by its name-span byte offset.
@@ -340,6 +376,8 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
 
     // Sort references by offset for binary search.
     table.references.sort_by_key(|r| r.span.offset());
+    // Build the sorted `defs_by_name_span` index for O(log n) lookups.
+    table.finalize();
     table
 }
 
@@ -1692,13 +1730,6 @@ mod tests {
 
     #[test]
     fn symbol_key_helpers() {
-        let variant = SymbolKey::Variant {
-            parent: "Phase".to_string(),
-            variant: "Launch".to_string(),
-        };
-        assert!(variant.is_variant_of("Phase"));
-        assert!(!variant.is_variant_of("Other"));
-
         assert_eq!(
             SymbolKey::TopLevel("x".to_string()).top_level_name(),
             Some("x")
