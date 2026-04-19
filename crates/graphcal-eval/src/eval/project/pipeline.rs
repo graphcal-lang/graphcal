@@ -282,6 +282,10 @@ pub(super) fn evaluate_and_store_file(
     let file_runtime_values =
         extract_runtime_values(&compiled.tir, &plan, &compiled.declared_types, file_src);
 
+    // Capture dag TIRs so cross-file qualified inline calls can merge them
+    // into the importer's TIR::dags under module-prefixed keys.
+    let dag_tirs = compiled.tir.dags.clone();
+
     evaluated_files.insert(
         file_dag_id.clone(),
         EvaluatedFile {
@@ -299,6 +303,7 @@ pub(super) fn evaluate_and_store_file(
                 .collect(),
             registry: compiled.tir.registry,
             pub_names,
+            dag_tirs,
         },
     );
     Ok(())

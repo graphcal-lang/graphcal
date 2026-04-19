@@ -429,7 +429,7 @@ fn resolve_unit_dimension_impl(
 
 /// Dimension registry: maps dimension names to `Dimension` values and tracks
 /// base dimension metadata (ID assignment, names, SI symbols).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DimensionRegistry {
     /// Base dimension ID → dimension name (for display).
     base_dim_names: BTreeMap<BaseDimId, String>,
@@ -488,7 +488,7 @@ impl DimensionRegistry {
 }
 
 /// Unit registry: maps unit names to `UnitInfo` (dimension + scale).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnitRegistry {
     units: HashMap<UnitName, UnitInfo>,
 }
@@ -525,7 +525,7 @@ impl UnitRegistry {
 }
 
 /// Type registry: maps type names to `TypeDef` and provides union membership lookup.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeRegistry {
     types: HashMap<StructTypeName, TypeDef>,
     /// Reverse lookup: member type name → union type names it belongs to.
@@ -562,7 +562,7 @@ impl TypeRegistry {
 }
 
 /// Index registry: maps index names to `IndexDef`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexRegistry {
     indexes: HashMap<IndexName, IndexDef>,
 }
@@ -588,7 +588,7 @@ impl IndexRegistry {
 ///
 /// Produced by [`RegistryBuilder::build`]. All fields are public so that
 /// consumers can access individual domain registries directly.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Registry {
     pub dimensions: DimensionRegistry,
     pub units: UnitRegistry,
@@ -603,7 +603,7 @@ pub struct Registry {
 /// Used during dim-checking (and later, evaluation) to resolve inline DAG
 /// invocations `@dag(args)::out` against the called `dag`'s `pub param` and
 /// `pub node` signatures.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DagRegistry {
     dags: HashMap<String, DagDecl>,
 }

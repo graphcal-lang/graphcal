@@ -130,6 +130,13 @@ pub(super) struct EvaluatedFile {
     /// Names of declarations marked `pub` in the source file.
     /// Used to enforce private-by-default visibility during imports.
     pub(super) pub_names: HashSet<String>,
+    /// Compiled dag TIRs for each `dag { ... }` declared in this file.
+    ///
+    /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
+    /// under `"alias::dag_name"` keys so qualified inline calls
+    /// (`@alias::dag(args)::out`) resolve through the same machinery as
+    /// same-file inline calls.
+    pub(super) dag_tirs: HashMap<String, crate::tir::TIR>,
 }
 
 impl EvaluatedFile {
