@@ -230,6 +230,12 @@ Language Server Protocol implementation (async, tower-lsp).
 | `convert.rs`          | Type conversions for LSP protocol types                 |
 | `symbol_table.rs`     | Symbol table management for analysis                    |
 
+`run_analysis()` skips the evaluation pipeline for library files
+(`TIR::is_library()` — any required `param` or required `index`), so the editor
+doesn't surface `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics
+on files meant to be consumed via a parameterized `include`. Inlay hints will
+not appear for such files; this asymmetry is intentional.
+
 ---
 
 ## 3. Key Data Structures
