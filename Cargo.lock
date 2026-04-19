@@ -471,12 +471,14 @@ dependencies = [
  "graphcal-fmt",
  "graphcal-io",
  "graphcal-lsp",
+ "indexmap",
  "insta",
  "miette",
  "open",
  "serde_json",
  "tabled",
  "tempfile",
+ "thiserror",
  "tokio",
  "walkdir",
 ]
@@ -528,6 +530,9 @@ dependencies = [
 [[package]]
 name = "graphcal-io"
 version = "0.0.1-alpha.2"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "graphcal-lsp"
