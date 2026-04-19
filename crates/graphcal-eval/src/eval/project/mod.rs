@@ -8,7 +8,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
-use graphcal_compiler::syntax::names::{DeclName, Spanned};
+use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
@@ -175,11 +175,11 @@ pub(super) struct DeferredInstantiatedImport {
     /// Param bindings: `param_name` → binding expression.
     pub(super) bindings: HashMap<String, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
-    pub(super) index_bindings: HashMap<String, String>,
+    pub(super) index_bindings: HashMap<IndexName, IndexName>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
-    pub(super) type_bindings: HashMap<String, String>,
+    pub(super) type_bindings: HashMap<StructTypeName, StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    pub(super) dim_bindings: HashMap<String, String>,
+    pub(super) dim_bindings: HashMap<DimName, DimName>,
     /// For selective imports: the selected names and their local aliases.
     /// `None` for module imports (all names are accessible via `prefix::`).
     pub(super) selective_names: Option<Vec<(String, String)>>, // (orig_name, local_name)
@@ -209,11 +209,11 @@ pub(super) struct DeferredInlineDagInclude {
     /// Param bindings: `param_name` → binding expression.
     pub(super) bindings: HashMap<String, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
-    pub(super) index_bindings: HashMap<String, String>,
+    pub(super) index_bindings: HashMap<IndexName, IndexName>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
-    pub(super) type_bindings: HashMap<String, String>,
+    pub(super) type_bindings: HashMap<StructTypeName, StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    pub(super) dim_bindings: HashMap<String, String>,
+    pub(super) dim_bindings: HashMap<DimName, DimName>,
     /// For selective imports: the selected names and their local aliases.
     /// `None` for module imports.
     pub(super) selective_names: Option<Vec<(String, String)>>,
