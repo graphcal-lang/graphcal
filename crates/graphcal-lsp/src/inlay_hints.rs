@@ -2,41 +2,34 @@
 
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
-use crate::convert::byte_offset_to_position;
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
 
 /// Produce inlay hints for declarations within the given range.
 ///
 /// Shows computed values (from evaluation) when available, falling back to
 /// type descriptions. Only top-level `param`, `node`, and `const` declarations
 /// produce hints.
+///
+/// Iterates the precomputed `inlay_hint_entries` list (already filtered to
+/// the right categories and paired with cached LSP `Position`s at
+/// `SymbolTable::finalize` time), so the request path does no
+/// O(source-length) scans and no work for builtins/imports.
 pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayHint>> {
-    let source = &analysis.source;
     let mut hints = Vec::new();
 
-    for (key, def) in &analysis.symbol_table.definitions {
-        // Only show hints for top-level declarations with computed values.
-        if !matches!(
-            def.category,
-            SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
-        ) {
-            continue;
-        }
-
-        // Skip builtins and synthetic definitions.
-        if def.name_span.is_empty() {
-            continue;
-        }
-
+    for entry in analysis.symbol_table.inlay_hint_entries() {
         // Check if the definition is within the requested range.
-        let name_pos = byte_offset_to_position(source, def.name_span.offset());
-        if name_pos.line < range.start.line || name_pos.line > range.end.line {
+        if entry.name_start.line < range.start.line || entry.name_start.line > range.end.line {
             continue;
         }
+
+        let Some(def) = analysis.symbol_table.definitions.get(&entry.key) else {
+            continue;
+        };
 
         // Build the label: prefer computed value, fall back to type.
-        let label = if let Some(value_str) = key
+        let label = if let Some(value_str) = entry
+            .key
             .top_level_name()
             .and_then(|name| analysis.eval_values.get(name))
         {
@@ -47,12 +40,8 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
             continue;
         };
 
-        // Position the hint after the declaration name.
-        let hint_position =
-            byte_offset_to_position(source, def.name_span.offset() + def.name_span.len());
-
         hints.push(InlayHint {
-            position: hint_position,
+            position: entry.name_end,
             label: InlayHintLabel::String(label),
             kind: Some(InlayHintKind::TYPE),
             text_edits: None,
@@ -63,8 +52,9 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
         });
     }
 
-    // Sort by position for consistent ordering.
-    hints.sort_by_key(|h| (h.position.line, h.position.character));
+    // `inlay_hint_entries` is already sorted by `name_start`, which matches
+    // the order of `name_end` for declarations that don't span lines, so the
+    // resulting hints are already in position order.
 
     if hints.is_empty() { None } else { Some(hints) }
 }

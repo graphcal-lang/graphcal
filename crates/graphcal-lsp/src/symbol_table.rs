@@ -15,6 +15,9 @@ use graphcal_compiler::registry::format::format_unit_expr_with_config;
 use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
 use graphcal_compiler::tir::typed::{ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
+use tower_lsp::lsp_types::Position;
+
+use crate::convert::{byte_offset_to_position_cached, compute_line_starts};
 
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,6 +155,22 @@ pub struct ReferenceInfo {
     pub target: SymbolKey,
 }
 
+/// A precomputed inlay-hint candidate: a declaration that could produce a hint.
+///
+/// Populated at [`SymbolTable::finalize`] time so the inlay-hint handler
+/// avoids walking every definition (including builtins/imports) and avoids
+/// O(source-length) scans to turn each name-span into an LSP `Position` on
+/// every request.
+#[derive(Debug, Clone)]
+pub struct InlayHintEntry {
+    /// Key into [`SymbolTable::definitions`] for this declaration.
+    pub key: SymbolKey,
+    /// LSP position of the declaration's name start.
+    pub name_start: Position,
+    /// LSP position of the declaration's name end (where the hint is placed).
+    pub name_end: Position,
+}
+
 /// The complete symbol table for one file.
 #[derive(Debug, Default)]
 pub struct SymbolTable {
@@ -171,6 +190,14 @@ pub struct SymbolTable {
     /// Populated by [`SymbolTable::finalize`]; definitions added after
     /// `finalize` is called will not appear here until it is called again.
     defs_by_name_span: Vec<(Span, SymbolKey)>,
+    /// Precomputed inlay-hint candidates, sorted by name-start line/column.
+    ///
+    /// Only `Param`, `Node`, and `Const` declarations with non-empty name
+    /// spans appear here — builtins, imports, and other categories are
+    /// filtered out up front so the request path does zero work for them.
+    ///
+    /// Populated by [`SymbolTable::finalize`].
+    inlay_hint_entries: Vec<InlayHintEntry>,
 }
 
 impl SymbolTable {
@@ -220,9 +247,13 @@ impl SymbolTable {
         self.definitions.get(key)
     }
 
-    /// Build the sorted `defs_by_name_span` index after all definitions have
-    /// been inserted. Called once at the end of `build_from_ast`.
-    fn finalize(&mut self) {
+    /// Build the sorted `defs_by_name_span` index and precompute inlay-hint
+    /// candidate positions. Called once at the end of `build_from_ast`.
+    ///
+    /// `source` is used to turn byte offsets into LSP `Position`s ahead of
+    /// time, so the inlay-hint request path avoids O(source) scans per
+    /// declaration.
+    fn finalize(&mut self, source: &str) {
         self.defs_by_name_span = self
             .definitions
             .iter()
@@ -231,6 +262,43 @@ impl SymbolTable {
             .collect();
         self.defs_by_name_span
             .sort_by_key(|(span, _)| span.offset());
+
+        // Precompute inlay-hint entries: only the categories the handler
+        // actually emits hints for, and only non-empty spans (skipping
+        // builtins and synthetic defs). Position is computed once via a
+        // shared line-starts cache so the request path is O(log n + col).
+        let line_starts = compute_line_starts(source);
+        self.inlay_hint_entries = self
+            .definitions
+            .iter()
+            .filter(|(_, d)| {
+                !d.name_span.is_empty()
+                    && matches!(
+                        d.category,
+                        SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
+                    )
+            })
+            .map(|(k, d)| {
+                let start = d.name_span.offset();
+                let end = start + d.name_span.len();
+                InlayHintEntry {
+                    key: k.clone(),
+                    name_start: byte_offset_to_position_cached(&line_starts, source, start),
+                    name_end: byte_offset_to_position_cached(&line_starts, source, end),
+                }
+            })
+            .collect();
+        self.inlay_hint_entries
+            .sort_by_key(|e| (e.name_start.line, e.name_start.character));
+    }
+
+    /// Returns the precomputed inlay-hint candidates.
+    ///
+    /// Only `Param`/`Node`/`Const` declarations with non-empty name spans
+    /// are included, sorted by name-start position. The inlay-hint request
+    /// handler iterates this directly instead of filtering every definition.
+    pub fn inlay_hint_entries(&self) -> &[InlayHintEntry] {
+        &self.inlay_hint_entries
     }
 
     /// Look up the key for a definition by its name-span byte offset.
@@ -342,7 +410,11 @@ impl ScopeStack {
 }
 
 /// Build a symbol table from a parsed AST file.
-pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable {
+///
+/// `source` is the text the `ast` was parsed from — it is used to precompute
+/// LSP `Position`s for inlay-hint candidates so the request path avoids
+/// O(source) scans.
+pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File, source: &str) -> SymbolTable {
     let mut table = SymbolTable::default();
     let mut scopes = ScopeStack::new();
 
@@ -376,8 +448,9 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File) -> SymbolTable
 
     // Sort references by offset for binary search.
     table.references.sort_by_key(|r| r.span.offset());
-    // Build the sorted `defs_by_name_span` index for O(log n) lookups.
-    table.finalize();
+    // Build the sorted `defs_by_name_span` index for O(log n) lookups and
+    // precompute inlay-hint candidate positions.
+    table.finalize(source);
     table
 }
 
@@ -1630,7 +1703,7 @@ mod tests {
         let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let table = build_from_ast(&file);
+        let table = build_from_ast(&file, source);
 
         let x_key = SymbolKey::TopLevel("x".to_string());
         let y_key = SymbolKey::TopLevel("y".to_string());
@@ -1652,7 +1725,7 @@ mod tests {
         let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let table = build_from_ast(&file);
+        let table = build_from_ast(&file, source);
 
         // Find the @x reference -- it should be near the end of the source
         let at_x_offset = source.find("@x").unwrap() + 1; // offset of 'x' in '@x'
@@ -1718,7 +1791,7 @@ mod tests {
         let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let table = build_from_ast(&ast);
+        let table = build_from_ast(&ast, source);
 
         let expected_key = SymbolKey::Qualified {
             module: "lib".to_string(),
@@ -1756,7 +1829,7 @@ node doubled: Length = @scale(factor: 2.0, v: @src)::result;
         let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let table = build_from_ast(&file);
+        let table = build_from_ast(&file, source);
 
         // The dag itself is a TopLevel definition.
         let dag_key = SymbolKey::TopLevel("scale".to_string());
@@ -1800,7 +1873,7 @@ node doubled: Length = @scale(factor: 2.0, v: @src)::result;
         let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let table = build_from_ast(&file);
+        let table = build_from_ast(&file, source);
 
         // `@scale` reference points to the dag (goto-def → dag decl).
         let dag_refs = table.find_all_references(&SymbolKey::TopLevel("scale".to_string()));

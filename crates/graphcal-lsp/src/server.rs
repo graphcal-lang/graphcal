@@ -297,7 +297,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
     match compile_to_tir_from_project(&project) {
         Ok(tir) => {
             // Full success: symbol table from AST + TIR enrichment.
-            let mut symbol_table = symbol_table::build_from_ast(root_ast);
+            let mut symbol_table = symbol_table::build_from_ast(root_ast, text);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
             let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
@@ -324,7 +324,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
         }
         Err(e) => {
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
-            let symbol_table = symbol_table::build_from_ast(root_ast);
+            let symbol_table = symbol_table::build_from_ast(root_ast, text);
             let imported_definitions = collect_imported_definitions(uri, &project, None);
             let diagnostics = compile_error_to_diagnostics(&e, text);
 
@@ -654,7 +654,7 @@ fn collect_imported_definitions(
 
         let (imported_table, imported_uri, source) =
             table_cache.entry(dag_id).or_insert_with(|| {
-                let mut table = symbol_table::build_from_ast(&loaded_file.ast);
+                let mut table = symbol_table::build_from_ast(&loaded_file.ast, &loaded_file.source);
                 if let Some(tir) = tir {
                     symbol_table::enrich_from_tir(&mut table, tir);
                 }

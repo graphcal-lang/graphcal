@@ -5,7 +5,7 @@ use graphcal_compiler::syntax::ast::{
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, format_type_expr_inline, format_unit_expr_inline, is_nil, prepend_comments,
+    Formatter, INDENT, format_type_expr_inline, format_unit_expr_inline, prepend_comments,
     render_doc_to_string,
 };
 
@@ -207,15 +207,16 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
     // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
     let comment = fmt.drain_comments_before(rhs.span.offset());
     let rhs_doc = format_binop_child(fmt, rhs, op, true);
-    if is_nil(&comment) {
-        lhs_doc.append(RcDoc::text(op_str(op))).append(rhs_doc)
-    } else {
-        // Force multi-line: put operator and comment on the lhs line,
-        // then rhs on the next line
-        lhs_doc
-            .append(RcDoc::text(op_str(op)))
-            .append(comment)
-            .append(rhs_doc)
+    match comment {
+        None => lhs_doc.append(RcDoc::text(op_str(op))).append(rhs_doc),
+        Some(comment) => {
+            // Force multi-line: put operator and comment on the lhs line,
+            // then rhs on the next line
+            lhs_doc
+                .append(RcDoc::text(op_str(op)))
+                .append(comment)
+                .append(rhs_doc)
+        }
     }
 }
 
@@ -233,7 +234,9 @@ pub fn format_fn_call_expr(
         let arg_doc = format_expr(fmt, arg);
         // Drain trailing comment after this argument
         let arg_end = arg.span.offset() + arg.span.len();
-        let trailing = fmt.drain_trailing_comment(arg_end);
+        let trailing = fmt
+            .drain_trailing_comment(arg_end)
+            .unwrap_or_else(RcDoc::nil);
         arg_docs.push(prepend_comments(leading, arg_doc.append(trailing)));
     }
     let sep = RcDoc::text(",").append(RcDoc::line());
@@ -367,7 +370,9 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
             .append(RcDoc::text(","));
         // Drain trailing comment after this entry's value (but before next entry)
         let value_end = e.value.span.offset() + e.value.span.len();
-        let trailing = fmt.drain_trailing_comment(value_end);
+        let trailing = fmt
+            .drain_trailing_comment(value_end)
+            .unwrap_or_else(RcDoc::nil);
         lines.push(prepend_comments(leading, entry_doc.append(trailing)));
     }
 
@@ -466,7 +471,9 @@ fn format_table_1d(
 
         // Drain trailing comment on the same line after this entry's value
         let value_end = e.value.span.offset() + e.value.span.len();
-        let trailing = fmt.drain_trailing_comment(value_end);
+        let trailing = fmt
+            .drain_trailing_comment(value_end)
+            .unwrap_or_else(RcDoc::nil);
 
         // Prepend leading comments (they already end with hardline)
         let row_doc = prepend_comments(leading, RcDoc::text(row_text).append(trailing));
@@ -598,9 +605,8 @@ fn format_table_2d_body(
     for (ri, row_label) in row_labels.iter().enumerate() {
         // Drain leading comments before this row (use first entry's value span)
         let first_entry_idx = entry_indices[ri].iter().find_map(|idx| *idx);
-        let leading = first_entry_idx.map_or_else(RcDoc::nil, |ei| {
-            fmt.drain_comments_before(entries[ei].value.span.offset())
-        });
+        let leading = first_entry_idx
+            .and_then(|ei| fmt.drain_comments_before(entries[ei].value.span.offset()));
 
         let cells: Vec<String> = (0..num_cols)
             .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
@@ -619,10 +625,12 @@ fn format_table_2d_body(
 
         // Drain trailing comment from last entry in this row
         let last_entry_idx = entry_indices[ri].iter().rev().find_map(|idx| *idx);
-        let trailing = last_entry_idx.map_or_else(RcDoc::nil, |ei| {
-            let value_end = entries[ei].value.span.offset() + entries[ei].value.span.len();
-            fmt.drain_trailing_comment(value_end)
-        });
+        let trailing = last_entry_idx
+            .and_then(|ei| {
+                let value_end = entries[ei].value.span.offset() + entries[ei].value.span.len();
+                fmt.drain_trailing_comment(value_end)
+            })
+            .unwrap_or_else(RcDoc::nil);
 
         let row_doc = prepend_comments(leading, RcDoc::text(row_line).append(trailing));
         all_rows.push(row_doc);
@@ -679,7 +687,9 @@ fn format_table_sliced(
         // Drain trailing comment on the same line as the slice header "]"
         let last_slice_key = &entries[first_idx].keys[slice_dims - 1];
         let header_end = last_slice_key.variant.span.offset() + last_slice_key.variant.span.len();
-        let trailing = fmt.drain_trailing_comment(header_end);
+        let trailing = fmt
+            .drain_trailing_comment(header_end)
+            .unwrap_or_else(RcDoc::nil);
 
         let slice_entries: Vec<MapEntry> = entry_indices
             .iter()
@@ -817,7 +827,9 @@ pub fn format_match(
             .append(RcDoc::text(","));
         // Drain trailing comment after this arm
         let arm_end = arm.span.offset() + arm.span.len();
-        let trailing = fmt.drain_trailing_comment(arm_end);
+        let trailing = fmt
+            .drain_trailing_comment(arm_end)
+            .unwrap_or_else(RcDoc::nil);
         arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
     }
 
@@ -893,7 +905,9 @@ pub fn format_tuple_match(
             .append(body)
             .append(RcDoc::text(","));
         let arm_end = arm.span.offset() + arm.span.len();
-        let trailing = fmt.drain_trailing_comment(arm_end);
+        let trailing = fmt
+            .drain_trailing_comment(arm_end)
+            .unwrap_or_else(RcDoc::nil);
         arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
     }
 

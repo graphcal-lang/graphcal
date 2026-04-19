@@ -37,7 +37,10 @@ impl<'src> Formatter<'src> {
 
     /// Drain all comments whose span starts before `before_offset`,
     /// returning them as a Doc with hardlines.
-    pub fn drain_comments_before(&mut self, before_offset: usize) -> RcDoc<'static> {
+    ///
+    /// Returns `None` when there are no comments to emit, so callers can
+    /// avoid rendering a known-empty doc just to check for emptiness.
+    pub fn drain_comments_before(&mut self, before_offset: usize) -> Option<RcDoc<'static>> {
         let mut docs: Vec<RcDoc<'static>> = Vec::new();
         while self.next_comment < self.metadata.comments.len() {
             let comment = &self.metadata.comments[self.next_comment];
@@ -48,14 +51,19 @@ impl<'src> Formatter<'src> {
             docs.push(RcDoc::hardline());
             self.next_comment += 1;
         }
-        RcDoc::concat(docs)
+        if docs.is_empty() {
+            None
+        } else {
+            Some(RcDoc::concat(docs))
+        }
     }
 
     /// Drain a trailing comment on the same line as `line_end_offset`.
-    /// Returns the comment text (with leading space) or nil.
-    pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> RcDoc<'static> {
+    /// Returns the comment text (with leading space) or `None` when there
+    /// isn't one.
+    pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> Option<RcDoc<'static>> {
         if self.next_comment >= self.metadata.comments.len() {
-            return RcDoc::nil();
+            return None;
         }
         let comment = &self.metadata.comments[self.next_comment];
         // A trailing comment must be on the same line — its offset must be
@@ -67,10 +75,10 @@ impl<'src> Formatter<'src> {
                 &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if !between.contains('\n') {
                 self.next_comment += 1;
-                return RcDoc::text(format!(" {}", comment.text));
+                return Some(RcDoc::text(format!(" {}", comment.text)));
             }
         }
-        RcDoc::nil()
+        None
     }
 
     /// Check if there's a blank line in the source between two byte offsets.
@@ -94,7 +102,7 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     for (i, decl) in file.declarations.iter().enumerate() {
         // Emit leading comments before this declaration
         let leading = fmt.drain_comments_before(decl.span.offset());
-        let has_leading_comments = !is_nil(&leading);
+        let has_leading_comments = leading.is_some();
 
         if i > 0 {
             docs.push(RcDoc::hardline());
@@ -103,20 +111,21 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
                 docs.push(RcDoc::hardline());
             }
         }
-        if has_leading_comments {
+        if let Some(leading) = leading {
             docs.push(leading);
         }
 
         let decl_doc = format_decl(&mut fmt, decl);
         let decl_end = decl.span.offset() + decl.span.len();
-        let trailing = fmt.drain_trailing_comment(decl_end);
+        let trailing = fmt
+            .drain_trailing_comment(decl_end)
+            .unwrap_or_else(RcDoc::nil);
         docs.push(decl_doc.append(trailing));
         prev_end = decl_end;
     }
 
     // Drain any remaining comments at end of file
-    let remaining = fmt.drain_comments_before(usize::MAX);
-    if !is_nil(&remaining) {
+    if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
         docs.push(RcDoc::hardline());
         docs.push(remaining);
     }
@@ -127,21 +136,12 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     RcDoc::concat(docs)
 }
 
-/// Helper: check if an `RcDoc` is effectively nil (empty).
-/// We use a simple heuristic — render to empty string.
-pub fn is_nil(doc: &RcDoc<'static>) -> bool {
-    let mut buf = Vec::new();
-    let _ = doc.render(1000, &mut buf);
-    buf.is_empty()
-}
-
 /// Prepend leading comments before a doc. Returns the doc unchanged if
 /// there are no comments. Like Gleam's `commented()` helper.
-pub fn prepend_comments(leading: RcDoc<'static>, doc: RcDoc<'static>) -> RcDoc<'static> {
-    if is_nil(&leading) {
-        doc
-    } else {
-        leading.append(doc)
+pub fn prepend_comments(leading: Option<RcDoc<'static>>, doc: RcDoc<'static>) -> RcDoc<'static> {
+    match leading {
+        Some(leading) => leading.append(doc),
+        None => doc,
     }
 }
 

@@ -138,7 +138,7 @@ mod tests {
         let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let symbol_table = symbol_table::build_from_ast(&ast);
+        let symbol_table = symbol_table::build_from_ast(&ast, source);
         AnalysisResult {
             source: source.to_string(),
             symbol_table,

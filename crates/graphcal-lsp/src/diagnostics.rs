@@ -201,7 +201,7 @@ mod tests {
         let mut parser = Parser::new(source);
         parser
             .parse_file()
-            .map(|ast| build_from_ast(&ast))
+            .map(|ast| build_from_ast(&ast, source))
             .unwrap_or_default()
     }
 
