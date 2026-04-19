@@ -627,6 +627,16 @@ pub struct TIR {
             crate::registry::declared_type::DeclaredType,
         ),
     >,
+    /// Per-dag compiled TIRs, one per `dag { ... }` declaration in this file.
+    ///
+    /// Each entry is the TIR of the dag body, compiled as if it were a
+    /// top-level Graphcal file whose registry inherits the enclosing file's
+    /// dimensions, units, types, and indexes. Produced by [`type_resolve`]
+    /// and consumed by `dim_check` and `eval` to resolve inline
+    /// `@dag(args)::out` invocations.
+    ///
+    /// Key-lookup only; order irrelevant.
+    pub dags: HashMap<String, Self>,
 }
 
 impl TIR {
@@ -680,18 +690,66 @@ impl TIR {
 /// Resolve all type annotations in an `IR`, producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic
-/// params in scope.
+/// params in scope. Additionally, compiles each `dag { ... }` declaration's
+/// body as its own inner TIR and stores the result on [`TIR::dags`] so that
+/// downstream stages (`dim_check`, `eval`) can resolve inline
+/// `@dag(args)::out` invocations against the compiled dag body.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index.
+/// dimension, struct, or index, or if compiling a dag body fails.
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
+    let parent_dag_id =
+        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
+    let mut tir = type_resolve_single(ir, src)?;
+
+    // Snapshot dag names before iterating so we can take immutable borrows of
+    // `tir.registry` inside the loop while mutating `tir.dags`.
+    let dag_names: Vec<String> = tir
+        .registry
+        .dags
+        .all_dags()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let parent_const_names: std::collections::HashSet<String> = tir
+        .consts
+        .iter()
+        .map(|c| c.name.member().to_string())
+        .collect();
+    for name in dag_names {
+        let body = tir
+            .registry
+            .dags
+            .get(&name)
+            .map(|d| d.body.clone())
+            .unwrap_or_default();
+        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
+            &name,
+            &body,
+            &tir.registry,
+            &parent_const_names,
+            src,
+            &parent_dag_id,
+        )?;
+        let compiled_dag = type_resolve_single(dag_body_ir, src)?;
+        tir.dags.insert(name, compiled_dag);
+    }
+
+    Ok(tir)
+}
+
+/// Resolve type annotations without recursively compiling nested dag bodies.
+///
+/// Used both as the base case for the file-level [`type_resolve`] and to
+/// type-resolve each dag-body IR that it produces. The returned TIR has an
+/// empty `dags` map; cross-dag references are resolved against the enclosing
+/// file TIR's `dags` map.
+fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
 
     let no_generic_params: &[GenericParamName] = &[];
 
-    // Resolve type annotations for all consts/params/nodes (no generic params in scope).
     for entry in &ir.consts {
         let resolved = resolve_type_expr(
             &entry.type_ann,
@@ -744,6 +802,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         resolved_decl_types,
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
+        dags: HashMap::new(),
     })
 }
 
