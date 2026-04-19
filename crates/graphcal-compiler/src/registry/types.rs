@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::syntax::ast::{
-    DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+    DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
 use crate::syntax::names::{
@@ -594,6 +594,26 @@ pub struct Registry {
     pub units: UnitRegistry,
     pub types: TypeRegistry,
     pub indexes: IndexRegistry,
+    pub dags: DagRegistry,
+}
+
+/// Registry of `dag` declaration bodies accessible by name within a file.
+///
+/// Populated at IR lowering time with the raw AST body for each declared `dag`.
+/// Used during dim-checking (and later, evaluation) to resolve inline DAG
+/// invocations `@dag(args)::out` against the called `dag`'s `pub param` and
+/// `pub node` signatures.
+#[derive(Debug, Default)]
+pub struct DagRegistry {
+    dags: HashMap<String, DagDecl>,
+}
+
+impl DagRegistry {
+    /// Return the AST body of the named `dag`, if one is declared in this file.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&DagDecl> {
+        self.dags.get(name)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +634,7 @@ pub struct RegistryBuilder {
     types: HashMap<StructTypeName, TypeDef>,
     type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
     indexes: HashMap<IndexName, IndexDef>,
+    dags: HashMap<String, DagDecl>,
 }
 
 impl RegistryBuilder {
@@ -639,7 +660,16 @@ impl RegistryBuilder {
             indexes: IndexRegistry {
                 indexes: self.indexes,
             },
+            dags: DagRegistry { dags: self.dags },
         }
+    }
+
+    /// Register a `dag` declaration body keyed by the declaration's name.
+    ///
+    /// Accessed later during dim-checking of inline `@dag(args)::out`
+    /// expressions.
+    pub fn register_dag(&mut self, name: String, decl: DagDecl) {
+        self.dags.insert(name, decl);
     }
 
     // -- Mutation methods (only on builder) --

@@ -1667,6 +1667,9 @@ fn register_declarations_impl(
             DeclKind::UnionType(t) if should_register(t.name.value.as_str()) => {
                 register_union_type_decl(t, registry);
             }
+            DeclKind::Dag(d) if should_register(d.name.value.as_str()) => {
+                registry.register_dag(d.name.value.to_string(), d.clone());
+            }
             _ => {}
         }
     }

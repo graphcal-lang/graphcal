@@ -1200,4 +1200,88 @@ pub enum GraphcalError {
         #[label("leaks private `{leaked_name}` across the include boundary")]
         span: SourceSpan,
     },
+
+    #[error("unknown dag `{name}`")]
+    #[diagnostic(
+        code(graphcal::G002),
+        help("the inline call references a dag that is not declared in this file")
+    )]
+    UnknownDag {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown dag")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown param `{name}` in inline dag call to `{dag_name}`")]
+    #[diagnostic(
+        code(graphcal::G003),
+        help("the binding name must match a `param` declared in the called dag")
+    )]
+    UnknownInlineDagParam {
+        name: String,
+        dag_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a param in `{dag_name}`")]
+        span: SourceSpan,
+    },
+
+    #[error("missing required binding(s) {missing:?} in inline dag call to `{dag_name}`")]
+    #[diagnostic(
+        code(graphcal::G004),
+        help("every `param` declared in the dag must be bound at each inline call site")
+    )]
+    MissingInlineDagBindings {
+        missing: Vec<String>,
+        dag_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("missing binding(s)")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown output `{name}` in inline dag call to `{dag_name}`")]
+    #[diagnostic(
+        code(graphcal::G005),
+        help("the projection after `::` must name a `node` declared in the called dag")
+    )]
+    UnknownInlineDagOutput {
+        name: String,
+        dag_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a node in `{dag_name}`")]
+        span: SourceSpan,
+    },
+
+    #[error("inline dag call binding `{param_name}`: expected {expected}, found {found}")]
+    #[diagnostic(
+        code(graphcal::G006),
+        help("the binding expression must have the same type as the dag's param declaration")
+    )]
+    InlineDagArgDimensionMismatch {
+        param_name: String,
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("type mismatch")]
+        span: SourceSpan,
+    },
+
+    #[error("qualified inline dag call `@{module}::{dag_name}(...)` is not yet implemented")]
+    #[diagnostic(
+        code(graphcal::G007),
+        help("only local (same-file) inline dag calls are currently supported")
+    )]
+    QualifiedInlineDagNotYetImplemented {
+        module: String,
+        dag_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("qualified inline dag call")]
+        span: SourceSpan,
+    },
 }

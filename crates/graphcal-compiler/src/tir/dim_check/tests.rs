@@ -1050,3 +1050,151 @@ fn const_domain_bound_well_formed_passes_dim_check() {
     let source = "const node MAX_M: Mass(min: 1.0 kg, max: 100.0 kg) = 50.0 kg;";
     check(source).unwrap();
 }
+
+// --- Inline DAG invocation (issue #451) ---
+
+const INLINE_DAG_CALL_SCALE: &str = "\
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+";
+
+#[test]
+fn inline_dag_call_basic_returns_output_type() {
+    let types = check(INLINE_DAG_CALL_SCALE).unwrap();
+    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    assert_eq!(types["doubled"], DeclaredType::Scalar(length));
+}
+
+#[test]
+fn inline_dag_call_unknown_dag() {
+    let source = "\
+param src: Length = 10.0 m;
+node y: Length = @nope(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownDag { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_unknown_param() {
+    let source = "\
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @id_len(bogus: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownInlineDagParam { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_missing_binding() {
+    let source = "\
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @scale(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::MissingInlineDagBindings { missing, .. } if missing == &vec!["factor".to_string()]),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_unknown_output() {
+    let source = "\
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @id_len(v: @src)::nope;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownInlineDagOutput { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_arg_dim_mismatch() {
+    let source = "\
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param src: Time = 10.0 s;
+node y: Length = @id_len(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InlineDagArgDimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_qualified_not_yet_implemented() {
+    let source = "\
+param src: Length = 10.0 m;
+node y: Length = @geom::id_len(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::QualifiedInlineDagNotYetImplemented { .. }
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_inside_for_comp_with_loop_var() {
+    // Motivating shape: inline call inside a `for` comprehension whose
+    // argument references the loop variable via an indexed graph ref.
+    let source = "\
+pub index Region = { A, B };
+
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
+";
+    let types = check(source).unwrap();
+    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    assert_eq!(
+        types["distances"],
+        DeclaredType::Indexed {
+            element: Box::new(DeclaredType::Scalar(length)),
+            index: crate::syntax::names::IndexName::new("Region".to_string()),
+        }
+    );
+}

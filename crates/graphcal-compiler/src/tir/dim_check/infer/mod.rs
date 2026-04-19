@@ -369,13 +369,147 @@ pub(super) fn infer_type_with_owner(
             unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
         }
 
-        // InlineDagRef is desugared to synthetic includes before dim-checking.
-        #[expect(
-            clippy::unreachable,
-            reason = "invariant: desugared before dim-checking"
-        )]
-        ExprKind::InlineDagRef { .. } => {
-            unreachable!("InlineDagRef should be desugared before dim-checking")
+        ExprKind::InlineDagRef {
+            module,
+            dag,
+            args,
+            output,
+        } => infer_inline_dag_ref(
+            expr,
+            module.as_ref(),
+            dag,
+            args,
+            output,
+            declared_types,
+            local_types,
+            registry,
+            builtin_fns,
+            src,
+        ),
+    }
+}
+
+/// Infer the type of an inline DAG invocation `@dag(args)::out`.
+///
+/// Step 2 scope: same-file (non-qualified) calls only. Qualified form
+/// `@module::dag(args)::out` returns an explicit `NotYetImplemented`
+/// diagnostic; later steps will integrate with the cross-file pipeline.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes inference context through"
+)]
+fn infer_inline_dag_ref(
+    expr: &Expr,
+    module: Option<&crate::syntax::ast::Ident>,
+    dag: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
+    args: &[crate::syntax::ast::ParamBinding],
+    output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
+    declared_types: &HashMap<String, DeclaredType>,
+    local_types: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use crate::syntax::ast::DeclKind;
+
+    if let Some(m) = module {
+        return Err(GraphcalError::QualifiedInlineDagNotYetImplemented {
+            module: m.name.clone(),
+            dag_name: dag.value.to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        });
+    }
+
+    let dag_decl =
+        registry
+            .dags
+            .get(dag.value.as_str())
+            .ok_or_else(|| GraphcalError::UnknownDag {
+                name: dag.value.to_string(),
+                src: src.clone(),
+                span: dag.span.into(),
+            })?;
+
+    // Collect param and node declarations from the dag body so we can look them
+    // up by name for binding and projection checks.
+    let mut param_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
+    let mut node_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
+    for body_decl in &dag_decl.body {
+        match &body_decl.kind {
+            DeclKind::Param(p) => {
+                param_type_anns.insert(p.name.value.as_str(), &p.type_ann);
+            }
+            DeclKind::Node(n) => {
+                node_type_anns.insert(n.name.value.as_str(), &n.type_ann);
+            }
+            _ => {}
         }
     }
+
+    // Check each binding names a real param and type-matches its annotation.
+    let mut bound_names: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(args.len());
+    for binding in args {
+        let binding_name = binding.name.name.as_str();
+        let param_type_ann = param_type_anns.get(binding_name).ok_or_else(|| {
+            GraphcalError::UnknownInlineDagParam {
+                name: binding_name.to_string(),
+                dag_name: dag.value.to_string(),
+                src: src.clone(),
+                span: binding.name.span.into(),
+            }
+        })?;
+        let resolved =
+            crate::tir::typed::resolve_type_expr(param_type_ann, registry, &[], &[], &[], src)?;
+        let expected = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+        let found = infer_type(
+            &binding.value,
+            declared_types,
+            local_types,
+            registry,
+            builtin_fns,
+            src,
+        )?;
+        if !super::helpers::types_match(&expected, &found, registry) {
+            return Err(GraphcalError::InlineDagArgDimensionMismatch {
+                param_name: binding_name.to_string(),
+                expected: super::helpers::format_declared_type(&expected, registry),
+                found: super::helpers::format_inferred_type(&found, registry),
+                src: src.clone(),
+                span: binding.value.span.into(),
+            });
+        }
+        bound_names.insert(binding_name);
+    }
+
+    // Every param declared in the dag must be bound at the call site.
+    let mut missing: Vec<String> = param_type_anns
+        .keys()
+        .filter(|p| !bound_names.contains(*p))
+        .map(|s| (*s).to_string())
+        .collect();
+    if !missing.is_empty() {
+        missing.sort();
+        return Err(GraphcalError::MissingInlineDagBindings {
+            missing,
+            dag_name: dag.value.to_string(),
+            src: src.clone(),
+            span: expr.span.into(),
+        });
+    }
+
+    // Resolve the projected output node's type and return it as inferred.
+    let output_type_ann = node_type_anns.get(output.value.as_str()).ok_or_else(|| {
+        GraphcalError::UnknownInlineDagOutput {
+            name: output.value.to_string(),
+            dag_name: dag.value.to_string(),
+            src: src.clone(),
+            span: output.span.into(),
+        }
+    })?;
+    let resolved =
+        crate::tir::typed::resolve_type_expr(output_type_ann, registry, &[], &[], &[], src)?;
+    let declared = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+    Ok(InferredType::from(&declared))
 }
