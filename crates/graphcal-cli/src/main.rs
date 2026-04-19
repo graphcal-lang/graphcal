@@ -261,7 +261,11 @@ fn handle_eval(
                             }
                         }
                         PlotOutput::Json => {
-                            println!("{}", plot::render_json(&rendered));
+                            let json = plot::render_json(&rendered).unwrap_or_else(|e| {
+                                eprintln!("error: could not render plots as JSON: {e}");
+                                process::exit(2);
+                            });
+                            println!("{json}");
                         }
                     }
                 }

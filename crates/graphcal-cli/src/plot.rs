@@ -405,7 +405,13 @@ pub fn render_html(figures: &[RenderedFigure]) -> Result<String, serde_json::Err
 }
 
 /// Render all figures as a JSON array of `{{ "name": "...", "spec": {{...}} }}`.
-pub fn render_json(figures: &[RenderedFigure]) -> String {
+///
+/// # Errors
+///
+/// Returns an error if JSON serialization fails. Previously this was masked by
+/// `unwrap_or_else(|_| "[]".to_string())`, which produced a confusing empty
+/// result with no signal to the user.
+pub fn render_json(figures: &[RenderedFigure]) -> Result<String, serde_json::Error> {
     let entries: Vec<JsonValue> = figures
         .iter()
         .map(|fig| {
@@ -415,7 +421,7 @@ pub fn render_json(figures: &[RenderedFigure]) -> String {
             })
         })
         .collect();
-    serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
+    serde_json::to_string_pretty(&entries)
 }
 
 #[cfg(test)]

@@ -26,6 +26,11 @@ impl InMemoryFileSystem {
     pub fn add_file(&mut self, path: PathBuf, content: String) {
         self.files.insert(path, content);
     }
+
+    /// Returns `true` if `path` is a directory-like prefix of any stored file.
+    fn is_dir(&self, path: &Path) -> bool {
+        self.files.keys().any(|k| k.starts_with(path) && k != path)
+    }
 }
 
 impl FileSystemReader for InMemoryFileSystem {
@@ -37,14 +42,9 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        // In-memory: if the path exists, return it as-is (already "canonical").
-        // Also check parent directories for directory-like queries.
-        if self.files.contains_key(path) {
-            return Ok(path.to_path_buf());
-        }
-        // Check if any file has this path as a prefix (i.e., it's a "directory").
-        let is_dir = self.files.keys().any(|k| k.starts_with(path) && k != path);
-        if is_dir {
+        // In-memory: if the path exists (as a file or directory), return it
+        // as-is (already "canonical"). Otherwise, propagate NotFound.
+        if self.files.contains_key(path) || self.is_dir(path) {
             return Ok(path.to_path_buf());
         }
         Err(io::Error::new(
@@ -58,11 +58,7 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn exists(&self, path: &Path) -> bool {
-        if self.files.contains_key(path) {
-            return true;
-        }
-        // Check if it's a "directory" (prefix of any file path).
-        self.files.keys().any(|k| k.starts_with(path) && k != path)
+        self.files.contains_key(path) || self.is_dir(path)
     }
 }
 
