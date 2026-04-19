@@ -8,25 +8,37 @@ use tower_lsp::lsp_types::{
 use graphcal_eval::eval::CompileError;
 
 use crate::convert::{offset_len_to_range, span_to_range};
+use crate::symbol_table::{SymbolKey, SymbolTable};
 
 /// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
+///
+/// `symbol_table` is used to resolve the declaration span for each per-node
+/// error, so the diagnostic points at the failing declaration rather than the
+/// start of the file.
 pub fn eval_result_to_diagnostics(
     result: &graphcal_eval::eval::EvalResult,
     source: &str,
+    symbol_table: &SymbolTable,
 ) -> Vec<Diagnostic> {
     // Node/param evaluation errors
     let mut diagnostics: Vec<Diagnostic> = result
         .all
         .iter()
         .filter_map(|(name, r, _)| match r {
-            Err(err) => Some(Diagnostic {
-                range: Range::default(),
-                severity: Some(DiagnosticSeverity::WARNING),
-                code: Some(NumberOrString::String("graphcal::E001".to_string())),
-                source: Some("graphcal".to_string()),
-                message: format!("{}: {err}", name.as_str()),
-                ..Default::default()
-            }),
+            Err(err) => {
+                let range = symbol_table
+                    .definitions
+                    .get(&SymbolKey::TopLevel(name.as_str().to_string()))
+                    .map_or_else(Range::default, |def| span_to_range(source, def.name_span));
+                Some(Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String("graphcal::E001".to_string())),
+                    source: Some("graphcal".to_string()),
+                    message: format!("{}: {err}", name.as_str()),
+                    ..Default::default()
+                })
+            }
             Ok(_) => None,
         })
         .collect();
@@ -178,23 +190,56 @@ mod tests {
 
     use std::collections::HashMap;
 
+    use graphcal_compiler::syntax::parser::Parser;
     use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
     use graphcal_io::RealFileSystem;
 
     use super::*;
+    use crate::symbol_table::build_from_ast;
+
+    fn build_symbol_table(source: &str) -> SymbolTable {
+        let mut parser = Parser::new(source);
+        parser
+            .parse_file()
+            .map(|ast| build_from_ast(&ast))
+            .unwrap_or_default()
+    }
 
     fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
+        let symbol_table = build_symbol_table(source);
         match compile_and_eval_named(source, name) {
-            Ok(result) => eval_result_to_diagnostics(&result, source),
+            Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
+        let symbol_table = build_symbol_table(source);
         match compile_and_eval_project(path, &HashMap::new(), None, true, &RealFileSystem) {
-            Ok(result) => eval_result_to_diagnostics(&result, source),
+            Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }
+    }
+
+    #[test]
+    fn eval_error_range_points_at_declaration_name() {
+        // `@bad` references a non-existent node; the E001 runtime error for
+        // `broken` should point at `broken`'s name-span, not at line 0 col 0.
+        let source = "\n\nnode broken: Dimensionless = 1.0 / 0.0;\n";
+        let diags = produce_diagnostics(source, "test.gcl");
+        let e001: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                d.code.as_ref().is_some_and(
+                    |c| matches!(c, NumberOrString::String(s) if s == "graphcal::E001"),
+                )
+            })
+            .collect();
+        assert!(!e001.is_empty(), "expected at least one E001 diagnostic");
+        // The declaration is on line 2 (0-based), so the diagnostic must land
+        // there rather than at the default (0, 0) range.
+        assert_eq!(e001[0].range.start.line, 2);
+        assert_ne!(e001[0].range, Range::default());
     }
 
     #[test]

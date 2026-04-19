@@ -352,14 +352,26 @@ fn html_escape(s: &str) -> String {
     out
 }
 
+/// Escape a JSON string for safe embedding inside an HTML `<script>` element.
+///
+/// `serde_json` does not escape `</`, so a user-controlled string containing
+/// `</script>` would close the script tag. Replace `<` with `\u003c` to neutralize
+/// any `</script>` or `<!--` sequences in the JSON payload.
+fn escape_json_for_script(s: &str) -> String {
+    s.replace('<', r"\u003c")
+}
+
 /// Render all figures as a single HTML page using Vega-Embed.
-pub fn render_html(figures: &[RenderedFigure]) -> String {
+///
+/// # Errors
+///
+/// Returns an error if any figure's spec cannot be serialized to JSON.
+pub fn render_html(figures: &[RenderedFigure]) -> Result<String, serde_json::Error> {
     use std::fmt::Write;
     let mut divs = String::new();
     for (i, fig) in figures.iter().enumerate() {
         let div_id = format!("graphcal-plot-{i}");
-        // Serialize spec via serde_json (properly escaped for JS context)
-        let spec_json = serde_json::to_string(&fig.spec).unwrap_or_default();
+        let spec_json = escape_json_for_script(&serde_json::to_string(&fig.spec)?);
         let escaped_name = html_escape(&fig.name);
         let _ = write!(
             divs,
@@ -371,7 +383,7 @@ pub fn render_html(figures: &[RenderedFigure]) -> String {
 "#,
         );
     }
-    format!(
+    Ok(format!(
         r#"<!DOCTYPE html>
 <html>
 <head>
@@ -389,7 +401,7 @@ pub fn render_html(figures: &[RenderedFigure]) -> String {
 {divs}
 </body>
 </html>"#
-    )
+    ))
 }
 
 /// Render all figures as a JSON array of `{{ "name": "...", "spec": {{...}} }}`.
@@ -404,4 +416,48 @@ pub fn render_json(figures: &[RenderedFigure]) -> String {
         })
         .collect();
     serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test code"
+    )]
+
+    use super::*;
+
+    #[test]
+    fn script_close_sequence_in_title_is_escaped() {
+        let rendered = vec![RenderedFigure {
+            name: "legitimate title".to_string(),
+            spec: json!({"title": "</script><script>alert(1)</script>"}),
+        }];
+        let html = render_html(&rendered).unwrap();
+        // The raw `</script>` from the JSON payload must not appear verbatim
+        // inside the emitted `<script>` block; the `<` must be escaped to `\u003c`.
+        let script_block = html
+            .split("vegaEmbed")
+            .nth(1)
+            .expect("expected a vegaEmbed script block");
+        assert!(
+            !script_block.contains("</script><script>alert(1)"),
+            "unescaped </script> sequence leaked into the script block: {script_block}"
+        );
+        assert!(
+            script_block.contains(r"\u003c/script>\u003cscript>alert(1)"),
+            "expected `<` to be escaped as `\\u003c` in emitted script block: {script_block}"
+        );
+    }
+
+    #[test]
+    fn html_escape_handles_critical_characters() {
+        assert_eq!(
+            html_escape("<img src=x onerror=alert(1)>"),
+            "&lt;img src=x onerror=alert(1)&gt;"
+        );
+        assert_eq!(html_escape("\"'&"), "&quot;&#x27;&amp;");
+    }
 }
