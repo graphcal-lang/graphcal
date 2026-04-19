@@ -1221,6 +1221,24 @@ node y: Length = @bogus(v: @src)::result;
 }
 
 #[test]
+fn inline_dag_indexed_output_type_flows_through() {
+    let source = "\
+pub index Region = { A, B };
+
+dag doubler {
+    param v: Length[Region];
+    pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
+}
+
+param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 3.0 m };
+node out: Length = @doubler(v: @dist)::result[Region::A];
+";
+    let types = check(source).unwrap();
+    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    assert_eq!(types["out"], DeclaredType::Scalar(length));
+}
+
+#[test]
 fn inline_dag_projection_requires_pub() {
     // Projecting a non-`pub` body node is rejected with the same error
     // shape as `include lib_dag(...) { private_result }`.
