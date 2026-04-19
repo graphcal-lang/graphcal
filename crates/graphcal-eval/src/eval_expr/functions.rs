@@ -193,6 +193,13 @@ fn eval_aggregation_fn(
             RuntimeValue::Scalar(max)
         }
         AggregationFn::Mean => {
+            if entries.is_empty() {
+                return Err(GraphcalError::EvalError {
+                    message: "mean() over an empty Indexed value is undefined".to_string(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "indexed collection length fits in f64"
@@ -398,8 +405,20 @@ fn eval_datetime_extract_fn(
         DatetimeExtractFn::DayOfYear => {
             let start_of_year = hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
             let diff = epoch - start_of_year;
-            #[expect(clippy::cast_possible_truncation, reason = "day-of-year fits in i64")]
-            let doy = diff.to_seconds().div_euclid(86400.0) as i64 + 1;
+            let doy_f64 = diff.to_seconds().div_euclid(86400.0);
+            // A valid in-year offset lies in [0, 366); reject anything outside
+            // that range rather than silently truncating with `as i64`.
+            if !doy_f64.is_finite() || !(0.0..366.0).contains(&doy_f64) {
+                return Err(ctx.eval_error(
+                    format!("day_of_year() input is outside the current Gregorian year: {doy_f64}"),
+                    args[0].span,
+                ));
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "bounds-checked above: doy_f64 is in [0, 366), safe to cast"
+            )]
+            let doy = doy_f64 as i64 + 1;
             doy
         }
     };
