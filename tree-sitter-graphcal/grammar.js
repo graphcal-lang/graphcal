@@ -1109,6 +1109,11 @@ module.exports = grammar({
       "@",
       optional(seq(field("module", $.identifier), "::")),
       field("name", $.identifier),
+      optional(seq(
+        field("args", $.include_param_bindings),
+        "::",
+        field("output", $.identifier),
+      )),
     ),
 
     // TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }

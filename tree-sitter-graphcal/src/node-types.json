@@ -1919,6 +1919,16 @@
     "type": "graph_ref",
     "named": true,
     "fields": {
+      "args": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "include_param_bindings",
+            "named": true
+          }
+        ]
+      },
       "module": {
         "multiple": false,
         "required": false,
@@ -1932,6 +1942,16 @@
       "name": {
         "multiple": false,
         "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "output": {
+        "multiple": false,
+        "required": false,
         "types": [
           {
             "type": "identifier",
