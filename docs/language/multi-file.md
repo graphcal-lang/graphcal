@@ -386,8 +386,27 @@ expression position.
 - Inline calls may appear anywhere an expression is valid: node bodies,
   `match` arms, `if`/`else` branches, `for` / `scan` / `unfold` bodies, and as
   arguments to other inline calls (composition).
-- The cross-file qualified form `@module::dag(args)::out` is planned but not
-  yet implemented at eval time; same-file calls work today.
+
+**Known limitations (will be lifted in follow-up work).**
+
+- The cross-file qualified form `@module::dag(args)::out` parses but errors at
+  dim-check / eval with `graphcal::G007` — only same-file (local) dag calls
+  resolve today.
+- Recursive inline calls (dag `A` calls dag `B` that calls `A`, or a dag that
+  calls itself) are not detected and will stack-overflow at eval. Cycle
+  detection across dag boundaries is pending.
+- Nodes inside a dag body are evaluated in source order. Forward references
+  — a node that references a later-declared sibling — are rejected at eval
+  time. Declare dependencies before dependents.
+- `pub` visibility is not yet enforced on dag body nodes: projection
+  `@dag(args)::private_result` is currently accepted even when `result` is
+  not `pub`. The spec requires the same privacy rules as `include` selective
+  projection; enforcement is pending.
+- Indexed-output projections (`@dag(args)::out[r]` where `out: T[I]`) have
+  not been end-to-end verified.
+- `const node` declarations inside a dag body are re-evaluated per call
+  site rather than once at compile time. Semantically equivalent for pure
+  expressions but inconsistent with top-level `const node`.
 
 ## When to Use Each Style
 
