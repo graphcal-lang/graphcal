@@ -14,6 +14,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
+use graphcal_compiler::syntax::names::DeclName;
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
@@ -91,7 +92,7 @@ impl EvalContext<'_> {
 #[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
 pub fn eval_expr(
     expr: &Expr,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -317,7 +318,7 @@ fn eval_inline_dag_call(
     dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     args: &[graphcal_compiler::syntax::ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
-    caller_values: &HashMap<String, RuntimeValue>,
+    caller_values: &HashMap<DeclName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -335,10 +336,10 @@ fn eval_inline_dag_call(
 
     // Evaluate argument expressions in the caller's scope so loop variables
     // and other enclosing bindings resolve correctly.
-    let mut dag_values: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut dag_values: HashMap<DeclName, RuntimeValue> = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(binding.name.name.clone(), value);
+        dag_values.insert(DeclName::new(&binding.name.name), value);
     }
 
     // Resolve parent-scope `import .. { name }` references inside the dag
@@ -367,7 +368,7 @@ fn eval_inline_dag_call(
             .map(|(v, _)| v)
             .or_else(|| caller_values.get(member));
         if let Some(value) = value {
-            dag_values.insert(member.to_string(), value.clone());
+            dag_values.insert(DeclName::new(member), value.clone());
         }
     }
 
@@ -399,7 +400,7 @@ fn eval_inline_dag_call(
             continue;
         };
         let value = eval_expr(expr, &dag_values, &empty_locals, &dag_ctx)?;
-        dag_values.insert(key.to_string(), value);
+        dag_values.insert(DeclName::new(key), value);
     }
 
     dag_values
@@ -517,7 +518,7 @@ fn lookup_dag_body_expr<'a>(
 /// fails to evaluate to a scalar.
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {

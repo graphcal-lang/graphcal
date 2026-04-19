@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use graphcal_compiler::syntax::ast::{Expr, MapEntry};
-use graphcal_compiler::syntax::names::VariantName;
+use graphcal_compiler::syntax::names::{DeclName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -67,7 +67,7 @@ pub(super) fn eval_index_access(
     expr: &Expr,
     inner: &Expr,
     args: &[graphcal_compiler::syntax::ast::IndexArg],
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -144,7 +144,7 @@ pub(super) fn eval_scan(
     acc_name: &graphcal_compiler::syntax::ast::Ident,
     val_name: &graphcal_compiler::syntax::ast::Ident,
     body: &Expr,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -194,7 +194,7 @@ pub(super) fn eval_unfold(
     prev_name: &graphcal_compiler::syntax::ast::Ident,
     curr_name: &graphcal_compiler::syntax::ast::Ident,
     body: &Expr,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
@@ -258,7 +258,7 @@ pub(super) fn eval_unfold(
     // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
     // O(N) clone of the map every iteration (which would make the loop O(N²)).
     overlay_values.insert(
-        self_name.to_string(),
+        DeclName::new(self_name),
         RuntimeValue::Indexed {
             index_name: index_name.clone(),
             entries: IndexMap::new(),
@@ -317,7 +317,7 @@ pub(super) fn eval_unfold(
 /// builds nested `Indexed` values from the remaining keys.
 pub(super) fn eval_map_literal(
     entries: &[MapEntry],
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -404,7 +404,7 @@ pub(super) fn eval_map_literal(
 pub(super) fn eval_for_comp(
     bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

@@ -17,6 +17,7 @@ use crate::registry::resolve_types::{
 };
 use crate::syntax::ast::TypeExpr;
 use crate::syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File};
+use crate::syntax::names::DeclName;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -26,7 +27,8 @@ pub use crate::registry::resolve_types::{
 };
 
 // Re-export items from submodules (crate-internal only).
-pub use deps::collect_graph_refs;
+pub(crate) use deps::collect_scoped_graph_refs;
+pub use deps::{collect_graph_ref_names, collect_graph_refs, contains_graph_ref};
 
 // Import helpers from submodules for use within this file.
 use deps::{extract_all_refs, extract_const_refs};
@@ -88,11 +90,11 @@ struct CollectedDeclarations {
     plots: Vec<ResolvedPlotEntry>,
     figures: Vec<ResolvedFigureEntry>,
     layers: Vec<ResolvedLayerEntry>,
-    runtime_deps: HashMap<String, HashSet<String>>,
-    const_deps: HashMap<String, HashSet<String>>,
-    source_order: Vec<(String, DeclCategory)>,
-    assert_names: HashSet<String>,
-    pub_names: HashSet<String>,
+    runtime_deps: HashMap<DeclName, HashSet<DeclName>>,
+    const_deps: HashMap<DeclName, HashSet<DeclName>>,
+    source_order: Vec<(DeclName, DeclCategory)>,
+    assert_names: HashSet<DeclName>,
+    pub_names: HashSet<DeclName>,
 }
 
 /// Collect all local declarations, check for duplicates and casing violations.
@@ -116,15 +118,15 @@ fn collect_local_declarations(
     let mut plots = Vec::new();
     let mut figures = Vec::new();
     let mut layers = Vec::new();
-    let mut runtime_deps: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut const_deps: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut source_order = Vec::new();
-    let mut assert_names: HashSet<String> = HashSet::new();
+    let mut runtime_deps: HashMap<DeclName, HashSet<DeclName>> = HashMap::new();
+    let mut const_deps: HashMap<DeclName, HashSet<DeclName>> = HashMap::new();
+    let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
+    let mut assert_names: HashSet<DeclName> = HashSet::new();
 
     // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`
     // declarations contribute; params are implicitly visible+bindable under
     // A5 and always contribute.
-    let mut pub_names: HashSet<String> = HashSet::new();
+    let mut pub_names: HashSet<DeclName> = HashSet::new();
     for decl in &file.declarations {
         let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
         if !decl.is_pub() && !implicitly_visible {
@@ -133,7 +135,7 @@ fn collect_local_declarations(
         let Some((name, _)) = decl.kind.name_and_span() else {
             continue;
         };
-        pub_names.insert(name.to_string());
+        pub_names.insert(DeclName::new(name));
     }
 
     // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
@@ -239,7 +241,7 @@ fn collect_local_declarations(
             DeclKind::ConstNode(_) => DeclCategory::Const,
             DeclKind::Node(_) => DeclCategory::Node,
             DeclKind::Assert(_) => {
-                assert_names.insert(name.clone());
+                assert_names.insert(DeclName::new(name.as_str()));
                 DeclCategory::Assert
             }
             DeclKind::Plot(_) => DeclCategory::Plot,
@@ -258,7 +260,7 @@ fn collect_local_declarations(
                 continue;
             }
         };
-        source_order.push((name.clone(), category));
+        source_order.push((DeclName::new(name.as_str()), category));
     }
 
     // Build the set of all known names for reference checking.
@@ -459,9 +461,9 @@ fn collect_local_declarations(
                         src,
                         None,
                     )?;
-                    runtime_deps.insert(pname.clone(), graph_refs);
+                    runtime_deps.insert(DeclName::new(pname.as_str()), graph_refs);
                 } else {
-                    runtime_deps.insert(pname.clone(), HashSet::new());
+                    runtime_deps.insert(DeclName::new(pname.as_str()), HashSet::new());
                 }
                 params.push(ResolvedParamEntry {
                     name: pname,
@@ -480,7 +482,7 @@ fn collect_local_declarations(
                     src,
                 )?;
                 let cname = c.name.value.to_string();
-                const_deps.insert(cname.clone(), deps);
+                const_deps.insert(DeclName::new(cname.as_str()), deps);
                 consts.push(ResolvedConstEntry {
                     name: cname,
                     expr: c.value.clone(),
@@ -500,7 +502,7 @@ fn collect_local_declarations(
                     src,
                     Some(&nname),
                 )?;
-                runtime_deps.insert(nname.clone(), graph_refs);
+                runtime_deps.insert(DeclName::new(nname.as_str()), graph_refs);
                 nodes.push(ResolvedNodeEntry {
                     name: nname,
                     expr: n.value.clone(),
@@ -554,7 +556,7 @@ struct ValidatedAttributes {
 fn validate_attributes(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    assert_names: &HashSet<String>,
+    assert_names: &HashSet<DeclName>,
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
@@ -733,7 +735,7 @@ fn validate_attributes(
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    pub_names: &HashSet<String>,
+    pub_names: &HashSet<DeclName>,
 ) -> Result<(), GraphcalError> {
     use crate::syntax::ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
 
@@ -828,7 +830,7 @@ fn validate_private_in_public(
                 refs: &[(String, Span)]|
      -> Result<(), GraphcalError> {
         for (ref_name, ref_span) in refs {
-            if local_type_names.contains_key(ref_name) && !pub_names.contains(ref_name) {
+            if local_type_names.contains_key(ref_name) && !pub_names.contains(ref_name.as_str()) {
                 return Err(GraphcalError::PrivateInPublic {
                     pub_kind: pub_kind.to_string(),
                     pub_name,
@@ -981,9 +983,9 @@ pub(crate) fn resolve_with_imports(
     let (all_const_names, all_runtime_names) = build_name_sets(&names);
 
     // Build assert names (imported + local) for attribute validation
-    let mut all_assert_names = HashSet::new();
+    let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _, _) in &imported.asserts {
-        all_assert_names.insert(name.clone());
+        all_assert_names.insert(DeclName::new(name.as_str()));
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
@@ -995,7 +997,7 @@ pub(crate) fn resolve_with_imports(
 
     for (name, _, expr, _) in &imported.consts {
         let deps = extract_const_refs(expr, &all_const_names, builtin_consts, builtin_fns, src)?;
-        const_deps.insert(name.clone(), deps);
+        const_deps.insert(DeclName::new(name.as_str()), deps);
     }
     for (name, _, expr, _) in &imported.params {
         let (graph_refs, _const_refs) = extract_all_refs(
@@ -1007,7 +1009,7 @@ pub(crate) fn resolve_with_imports(
             src,
             None,
         )?;
-        runtime_deps.insert(name.clone(), graph_refs);
+        runtime_deps.insert(DeclName::new(name.as_str()), graph_refs);
     }
     for (name, _, expr, _) in &imported.nodes {
         let (graph_refs, _const_refs) = extract_all_refs(
@@ -1019,7 +1021,7 @@ pub(crate) fn resolve_with_imports(
             src,
             Some(name.as_str()),
         )?;
-        runtime_deps.insert(name.clone(), graph_refs);
+        runtime_deps.insert(DeclName::new(name.as_str()), graph_refs);
     }
 
     // Prepend imported declarations so they appear before local ones in eval order.
@@ -1066,18 +1068,18 @@ pub(crate) fn resolve_with_imports(
     all_asserts.extend(local.asserts);
 
     // Prepend imported source_order entries
-    let mut all_source_order: Vec<(String, DeclCategory)> = Vec::new();
+    let mut all_source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     for (name, _, _, _) in &imported.consts {
-        all_source_order.push((name.clone(), DeclCategory::Const));
+        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Const));
     }
     for (name, _, _, _) in &imported.params {
-        all_source_order.push((name.clone(), DeclCategory::Param));
+        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Param));
     }
     for (name, _, _, _) in &imported.nodes {
-        all_source_order.push((name.clone(), DeclCategory::Node));
+        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Node));
     }
     for (name, _, _) in &imported.asserts {
-        all_source_order.push((name.clone(), DeclCategory::Assert));
+        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Assert));
     }
     all_source_order.extend(local.source_order);
 
@@ -1152,9 +1154,9 @@ pub(crate) fn resolve_with_imported_values(
     let local = collect_local_declarations(file, src, &mut names, builtin_consts, builtin_fns)?;
 
     // Build assert names (imported + local) for attribute validation
-    let mut all_assert_names = HashSet::new();
+    let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _) in &imported.assert_names {
-        all_assert_names.insert(name.clone());
+        all_assert_names.insert(DeclName::new(name.as_str()));
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
