@@ -307,11 +307,12 @@ pub fn eval_expr(
 /// dag's own registry is used for all nested lookups so sibling dag calls
 /// from inside the body resolve through the same pipeline.
 ///
-/// Qualified form `@module::dag(args)::out` is not yet supported and returns
-/// an explicit diagnostic.
+/// Qualified form `@module::dag(args)::out` resolves through
+/// `ctx.compiled_dags` under the `"module::dag"` key, matching the merge
+/// scheme used by the project pipeline.
 #[expect(clippy::too_many_arguments, reason = "passes eval context through")]
 fn eval_inline_dag_call(
-    call_expr: &Expr,
+    _call_expr: &Expr,
     module: Option<&graphcal_compiler::syntax::ast::Ident>,
     dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     args: &[graphcal_compiler::syntax::ast::ParamBinding],
@@ -320,23 +321,14 @@ fn eval_inline_dag_call(
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    if let Some(m) = module {
-        return Err(ctx.eval_error(
-            format!(
-                "qualified inline dag call `@{}::{}(...)` is not yet supported at eval time",
-                m.name,
-                dag.value.as_str(),
-            ),
-            call_expr.span,
-        ));
-    }
+    let key = module.as_ref().map_or_else(
+        || dag.value.to_string(),
+        |m| format!("{}::{}", m.name, dag.value.as_str()),
+    );
 
-    let dag_tir = ctx.compiled_dags.get(dag.value.as_str()).ok_or_else(|| {
+    let dag_tir = ctx.compiled_dags.get(&key).ok_or_else(|| {
         ctx.internal_error(
-            format!(
-                "dag `{}` has no compiled TIR (should have been caught by dim-check)",
-                dag.value,
-            ),
+            format!("dag `{key}` has no compiled TIR (should have been caught by dim-check)"),
             dag.span,
         )
     })?;
@@ -347,6 +339,34 @@ fn eval_inline_dag_call(
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
         dag_values.insert(binding.name.name.clone(), value);
+    }
+
+    // Resolve parent-scope `import .. { name }` references inside the dag
+    // body. The dag's own decls arrive via `args` or execute below; any
+    // other name listed in `resolved_decl_types` must come from an outer
+    // scope — either pre-injected onto the dag TIR's `imported_values`
+    // (cross-file merge) or present in the caller's values (same-file).
+    let own_names: std::collections::HashSet<&str> = dag_tir
+        .consts
+        .iter()
+        .map(|e| e.name.member())
+        .chain(dag_tir.params.iter().map(|e| e.name.member()))
+        .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
+        .collect();
+    for scoped in dag_tir.resolved_decl_types.keys() {
+        let member = scoped.member();
+        if own_names.contains(member) || dag_values.contains_key(member) {
+            continue;
+        }
+        if let Some((value, _)) = dag_tir.imported_values.get(scoped) {
+            dag_values.insert(member.to_string(), value.clone());
+        } else if let Some(value) = caller_values.get(member) {
+            dag_values.insert(member.to_string(), value.clone());
+        } else {
+            // Name is not available in any scope; the dim-check layer
+            // already verifies reachability, so body eval will surface
+            // a concrete error if it actually dereferences this name.
+        }
     }
 
     // Inside the dag body the visible registry is the dag's own (merged

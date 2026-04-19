@@ -75,6 +75,7 @@ fn check_decl_expr_type(
     type_ann_span: &crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -86,6 +87,7 @@ fn check_decl_expr_type(
         Some(name_str.as_str()),
         declared_types,
         empty_locals,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -105,11 +107,13 @@ fn check_decl_expr_type(
 ///
 /// For expression asserts, verifies the body is boolean. For tolerance asserts,
 /// verifies actual/expected have matching dimensions and tolerance is compatible.
+#[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_assert_body(
     body: &crate::syntax::ast::AssertBody,
     span: crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -120,6 +124,7 @@ fn check_assert_body(
                 body_expr,
                 declared_types,
                 empty_locals,
+                dag_tirs,
                 registry,
                 builtin_fns,
                 src,
@@ -142,6 +147,7 @@ fn check_assert_body(
                 actual,
                 declared_types,
                 empty_locals,
+                dag_tirs,
                 registry,
                 builtin_fns,
                 src,
@@ -150,6 +156,7 @@ fn check_assert_body(
                 expected,
                 declared_types,
                 empty_locals,
+                dag_tirs,
                 registry,
                 builtin_fns,
                 src,
@@ -158,6 +165,7 @@ fn check_assert_body(
                 tolerance,
                 declared_types,
                 empty_locals,
+                dag_tirs,
                 registry,
                 builtin_fns,
                 src,
@@ -242,6 +250,7 @@ pub fn check_dimensions_tir(
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
+            &tir.dags,
             &tir.registry,
             builtin_fns,
             src,
@@ -254,6 +263,7 @@ pub fn check_dimensions_tir(
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
+            &tir.dags,
             &tir.registry,
             builtin_fns,
             src,
@@ -269,6 +279,7 @@ pub fn check_dimensions_tir(
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
+            &tir.dags,
             &tir.registry,
             builtin_fns,
             src,
@@ -282,6 +293,7 @@ pub fn check_dimensions_tir(
             entry.span,
             &declared_types,
             &empty_locals,
+            &tir.dags,
             &tir.registry,
             builtin_fns,
             src,
@@ -289,7 +301,14 @@ pub fn check_dimensions_tir(
     }
 
     // Validate domain constraint bound expression dimensions
-    check_domain_constraint_dimensions(tir, &declared_types, &empty_locals, builtin_fns, src)?;
+    check_domain_constraint_dimensions(
+        tir,
+        &declared_types,
+        &empty_locals,
+        &tir.dags,
+        builtin_fns,
+        src,
+    )?;
 
     // Recursively dim-check every compiled inline-dag body.
     //
@@ -328,6 +347,7 @@ fn check_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -362,6 +382,7 @@ fn check_domain_constraint_dimensions(
                 &bound.value,
                 declared_types,
                 empty_locals,
+                dag_tirs,
                 &tir.registry,
                 builtin_fns,
                 src,
@@ -464,6 +485,7 @@ pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,
     declared_types: &HashMap<String, DeclaredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -475,6 +497,7 @@ pub fn check_override_dimension(
         expr,
         declared_types,
         &empty_locals,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -523,10 +546,12 @@ impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
         expr: &crate::syntax::ast::Expr,
         args: &[crate::syntax::ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::syntax::ast::ExprKind::InlineDagRef { module, dag, .. } = &expr.kind
-            && module.is_none()
-        {
-            self.out.insert(dag.value.to_string());
+        if let crate::syntax::ast::ExprKind::InlineDagRef { module, dag, .. } = &expr.kind {
+            let key = module.as_ref().map_or_else(
+                || dag.value.to_string(),
+                |m| format!("{}::{}", m.name, dag.value),
+            );
+            self.out.insert(key);
         }
         for b in args {
             self.visit_expr(&b.value)?;
@@ -535,22 +560,27 @@ impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
     }
 }
 
-fn collect_dag_call_targets(
-    body: &[crate::syntax::ast::Declaration],
+/// Collect inline dag call targets from a compiled TIR's body expressions.
+///
+/// Walks every const/param/node RHS expression and records the target key
+/// for each `@dag(args)::out` / `@mod::dag(args)::out` found. Keys match
+/// the format used by [`crate::tir::typed::TIR::dags`]: bare dag name for
+/// same-file calls, `"mod::dag"` for cross-file qualified calls.
+fn collect_dag_call_targets_from_tir(
+    dag_tir: &crate::tir::typed::TIR,
     out: &mut std::collections::BTreeSet<String>,
 ) {
-    use crate::syntax::ast::DeclKind;
     use crate::syntax::visitor::ExprVisitor;
 
     let mut collector = DagTargetCollector { out };
-    for decl in body {
-        let expr_opt: Option<&crate::syntax::ast::Expr> = match &decl.kind {
-            DeclKind::Node(n) => Some(&n.value),
-            DeclKind::ConstNode(c) => Some(&c.value),
-            DeclKind::Param(p) => p.value.as_ref(),
-            _ => None,
-        };
-        if let Some(expr) = expr_opt {
+    for entry in &dag_tir.consts {
+        let _ = collector.visit_expr(&entry.expr);
+    }
+    for entry in &dag_tir.nodes {
+        let _ = collector.visit_expr(&entry.expr);
+    }
+    for entry in &dag_tir.params {
+        if let Some(expr) = &entry.default_expr {
             let _ = collector.visit_expr(expr);
         }
     }
@@ -564,11 +594,18 @@ fn detect_cross_dag_cycles(
 
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
-    for (name, decl) in tir.registry.dags.all_dags() {
+    for (name, dag_tir) in &tir.dags {
         let mut targets = BTreeSet::new();
-        collect_dag_call_targets(&decl.body, &mut targets);
+        collect_dag_call_targets_from_tir(dag_tir, &mut targets);
         edges.insert(name.clone(), targets);
-        spans.insert(name.clone(), decl.name.span);
+        // Best-effort span: prefer the registry entry (available for same-file
+        // dags) and fall back to a zero span for cross-file merged dags.
+        let span = tir
+            .registry
+            .dags
+            .get(name)
+            .map_or_else(|| crate::syntax::span::Span::new(0, 0), |d| d.name.span);
+        spans.insert(name.clone(), span);
     }
 
     let mut visited: HashSet<String> = HashSet::new();
