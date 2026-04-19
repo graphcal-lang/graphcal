@@ -1,0 +1,8 @@
+pub const node r_earth: Length = 6_371_000.0 m;
+
+pub dag scale_earth {
+    import .. { r_earth };
+
+    param factor: Dimensionless;
+    pub node result: Length = @r_earth * @factor;
+}

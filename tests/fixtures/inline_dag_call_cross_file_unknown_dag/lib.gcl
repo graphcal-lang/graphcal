@@ -1,0 +1,4 @@
+pub dag known {
+    param v: Length;
+    pub node result: Length = @v;
+}

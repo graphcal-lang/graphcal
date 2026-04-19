@@ -1638,6 +1638,83 @@ fn cross_file_dag_selective() {
     );
 }
 
+// ---- Cross-file qualified inline dag calls (issue #467) ----
+
+#[test]
+fn inline_dag_call_cross_file_happy_path() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let doubled = find_value(&result, "doubled");
+    assert!(
+        (doubled - 20.0).abs() < 1e-10,
+        "expected 20 m/s, got {doubled}"
+    );
+}
+
+#[test]
+fn inline_dag_call_cross_file_non_pub_node_rejected() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file_private/main.gcl");
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let CompileError::Eval(inner) = err else {
+        panic!("expected Eval error, got: {err:?}")
+    };
+    assert!(
+        matches!(inner, GraphcalError::ImportPrivateItem { .. }),
+        "expected ImportPrivateItem, got: {inner:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_cross_file_indexed_output() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file_indexed/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let picked = find_value(&result, "picked");
+    assert!((picked - 2.0).abs() < 1e-10, "expected 2 m, got {picked}");
+}
+
+#[test]
+fn inline_dag_call_cross_file_unknown_dag_diagnostic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file_unknown_dag/main.gcl");
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let CompileError::Eval(inner) = err else {
+        panic!("expected Eval error, got: {err:?}")
+    };
+    assert!(
+        matches!(inner, GraphcalError::UnknownDag { ref name, .. } if name == "lib::nonexistent"),
+        "expected UnknownDag(lib::nonexistent), got: {inner:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_cross_file_unknown_output_diagnostic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file_unknown_output/main.gcl");
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let CompileError::Eval(inner) = err else {
+        panic!("expected Eval error, got: {err:?}")
+    };
+    assert!(
+        matches!(inner, GraphcalError::UnknownInlineDagOutput { .. }),
+        "expected UnknownInlineDagOutput, got: {inner:?}"
+    );
+}
+
+#[test]
+fn inline_dag_call_cross_file_parent_const_reachable() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/inline_dag_call_cross_file_parent_const/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let half = find_value(&result, "earth_half");
+    assert!(
+        (half - 3_185_500.0).abs() < 1e-6,
+        "expected 3_185_500 m, got {half}"
+    );
+}
+
 // ---- Bare module path DAG reference tests ----
 
 #[test]
