@@ -1830,6 +1830,28 @@ node out: Length = @forward(v: @src)::b;
 }
 
 #[test]
+fn eval_inline_dag_call_indexed_output_projection() {
+    // Projected output is itself indexed; the call site reads one cell.
+    let source = "\
+pub index Region = { A, B };
+
+dag doubler {
+    param v: Length[Region];
+    pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
+}
+
+param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 3.0 m };
+node out_a: Length = @doubler(v: @dist)::result[Region::A];
+node out_b: Length = @doubler(v: @dist)::result[Region::B];
+";
+    let result = compile_and_eval(source).unwrap();
+    let a = find_value(&result, "out_a");
+    let b = find_value(&result, "out_b");
+    assert!((a - 2.0).abs() < 1e-10, "expected 2.0, got {a}");
+    assert!((b - 6.0).abs() < 1e-10, "expected 6.0, got {b}");
+}
+
+#[test]
 fn eval_inline_dag_call_const_node_in_body() {
     // `const node` inside a dag body should participate in the same
     // topological evaluation as runtime nodes.
