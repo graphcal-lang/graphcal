@@ -358,14 +358,16 @@ fn eval_inline_dag_call(
         if own_names.contains(member) || dag_values.contains_key(member) {
             continue;
         }
+        // Name may not be available in any scope; the dim-check layer
+        // already verifies reachability, so body eval will surface a
+        // concrete error if it actually dereferences this name.
         if let Some((value, _)) = dag_tir.imported_values.get(scoped) {
             dag_values.insert(member.to_string(), value.clone());
         } else if let Some(value) = caller_values.get(member) {
             dag_values.insert(member.to_string(), value.clone());
         } else {
-            // Name is not available in any scope; the dim-check layer
-            // already verifies reachability, so body eval will surface
-            // a concrete error if it actually dereferences this name.
+            // Name is unresolved here; body eval will surface the concrete
+            // error if it actually dereferences this name.
         }
     }
 

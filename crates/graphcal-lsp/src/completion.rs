@@ -7,8 +7,14 @@ use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
 /// Top-level declaration keywords.
+///
+/// Mirrors the grammar keywords that can introduce a declaration at the file
+/// level. `fn` remains here for the impending function-syntax work; the
+/// obsolete `cat` / `range` entries from an earlier grammar experiment were
+/// dropped in 2026-04.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "param", "node", "const", "fn", "type", "dim", "unit", "cat", "range", "import",
+    "param", "node", "const", "fn", "type", "dim", "unit", "index", "assert", "dag", "plot",
+    "figure", "layer", "import", "include",
 ];
 
 /// Built-in type keywords available in type annotation position.

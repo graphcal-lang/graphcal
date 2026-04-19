@@ -3,14 +3,13 @@ use std::collections::HashMap;
 use graphcal_compiler::syntax::names::DeclName;
 
 mod display;
-pub(crate) mod format;
 mod project;
 mod runtime;
 #[cfg(test)]
 mod tests;
 mod types;
 
-pub use format::format_number;
+pub use crate::format::format_number;
 pub use project::{
     compile_and_eval_from_project, compile_and_eval_project, compile_to_tir,
     compile_to_tir_from_project, compile_to_tir_project,

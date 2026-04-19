@@ -525,6 +525,11 @@ fn format_indexed_table(
 }
 
 /// Recursively peel outer index dimensions and render 2D table slices with section headers.
+#[expect(
+    clippy::only_used_in_recursion,
+    reason = "symbols is threaded through for consistency with sibling formatters; \
+              2D leaves ignore it but higher-depth calls forward it unchanged"
+)]
 fn format_table_slices(
     value: &graphcal_eval::eval::Value,
     symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
@@ -548,7 +553,6 @@ fn format_table_slices(
     }
 
     // depth >= 3: emit section headers and recurse
-    let _ = symbols; // passed through for recursion; not used at this level
     for (variant, inner_val) in entries {
         parts.push(format!("\n  [{index_name}::{variant}]"));
         format_table_slices(inner_val, symbols, depth - 1, parts);
