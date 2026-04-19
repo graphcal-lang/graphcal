@@ -33,6 +33,7 @@
     { "include": "#return-type" },
     { "include": "#type-annotation" },
     { "include": "#fn-call" },
+    { "include": "#inline-dag-output-projection" },
     { "include": "#graph-ref" },
     { "include": "#qualified-const-ref" },
     { "include": "#qualified-variant" },
@@ -561,13 +562,23 @@
     },
 
     "graph-ref": {
-      "comment": "Graph references: @name or @module::name",
+      "comment": "Graph references: @name, @module::name, or @name(args)::out (inline DAG invocation).",
       "match": "(@)(?:([a-z][a-z0-9_]*)(::))?([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "punctuation.definition.variable.graphcal" },
         "2": { "name": "entity.name.namespace.graphcal" },
         "3": { "name": "punctuation.separator.namespace.graphcal" },
         "4": { "name": "variable.other.graphcal" }
+      }
+    },
+
+    "inline-dag-output-projection": {
+      "comment": "Output projection following an inline DAG invocation: `)::output`",
+      "match": "(\\))(::)([a-zA-Z][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.brackets.round.graphcal" },
+        "2": { "name": "punctuation.separator.namespace.graphcal" },
+        "3": { "name": "variable.other.graphcal" }
       }
     },
 
