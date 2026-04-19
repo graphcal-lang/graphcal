@@ -265,7 +265,15 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 
             let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
             let fn_signatures = build_fn_signatures();
-            let (diagnostics, eval_values) = run_eval_from_project(&project, text);
+            // Library files (required param/index not yet bound) cannot be evaluated
+            // standalone. Skip the eval pipeline so editors don't surface false-positive
+            // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
+            // user opens such a file for editing.
+            let (diagnostics, eval_values) = if tir.is_library() {
+                (Vec::new(), HashMap::new())
+            } else {
+                run_eval_from_project(&project, text)
+            };
 
             AnalysisResult {
                 source: text.to_string(),
@@ -1194,5 +1202,58 @@ mod tests {
             "result too long: {result}"
         );
         assert!(result.ends_with("... }"), "expected truncation: {result}");
+    }
+
+    /// Use an `untitled:` URI so `build_project` falls through to the in-memory
+    /// `LoadedProject::from_source` branch (disk-less analysis).
+    fn untitled_uri() -> Url {
+        Url::parse("untitled:test.gcl").unwrap()
+    }
+
+    #[test]
+    fn library_file_with_required_index_has_no_diagnostics() {
+        let text = "\
+pub(bind) dim Velocity = Length / Time;
+pub(bind) dim Acceleration = Length / Time^2;
+
+pub(bind) index Phase;
+pub(bind) index Step: Time;
+pub(bind) index Accel: Length / Time^2;
+";
+        let analysis = run_analysis(&untitled_uri(), text);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "library file should have no diagnostics, got: {:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
+    fn library_file_with_required_param_has_no_diagnostics() {
+        let text = "\
+param mass: Mass;
+";
+        let analysis = run_analysis(&untitled_uri(), text);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "file with required param should have no diagnostics, got: {:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
+    fn executable_file_with_dim_mismatch_still_reports_diagnostic() {
+        // Not a library (no required params/indexes) — real dim errors must still
+        // surface, i.e., the library bypass must not swallow genuine diagnostics.
+        let text = "\
+param mass: Mass = 1.0 kg;
+param length: Length = 1.0 m;
+node bad: Mass = mass + length;
+";
+        let analysis = run_analysis(&untitled_uri(), text);
+        assert!(
+            !analysis.diagnostics.is_empty(),
+            "dim mismatch in executable file must still produce a diagnostic",
+        );
     }
 }

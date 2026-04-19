@@ -415,11 +415,7 @@ pub(super) fn evaluate_project_perfile(
         // Files with required params (no default) or required indexes cannot be
         // evaluated standalone. They are only consumed via instantiated imports
         // where `merge_dependency` provides the bindings.
-        let has_required_params = compiled
-            .tir
-            .params
-            .iter()
-            .any(|entry| entry.default_expr.is_none());
+        let is_library = compiled.tir.is_library();
         let has_required_indexes = compiled
             .tir
             .registry
@@ -427,7 +423,7 @@ pub(super) fn evaluate_project_perfile(
             .all_indexes()
             .any(graphcal_compiler::registry::types::IndexDef::is_required);
 
-        if !is_root && (has_required_params || has_required_indexes) {
+        if !is_root && is_library {
             continue;
         }
 

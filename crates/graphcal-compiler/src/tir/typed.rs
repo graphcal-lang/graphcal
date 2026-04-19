@@ -630,6 +630,20 @@ pub struct TIR {
 }
 
 impl TIR {
+    /// Returns true if this file declares any required param or required index.
+    ///
+    /// Such files cannot be evaluated standalone; they must be bound via a
+    /// parameterized include from another file.
+    #[must_use]
+    pub fn is_library(&self) -> bool {
+        self.params.iter().any(|p| p.default_expr.is_none())
+            || self
+                .registry
+                .indexes
+                .all_indexes()
+                .any(crate::registry::types::IndexDef::is_required)
+    }
+
     /// Build a concrete `DeclaredType` map from resolved types.
     ///
     /// Converts each entry in `resolved_decl_types` via [`resolved_to_declared_type`]
