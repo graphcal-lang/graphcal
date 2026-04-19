@@ -56,13 +56,9 @@ pub(super) fn eval_binop_expr(
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
             let is_eq = *op == BinOp::Eq;
-            match (&l, &r) {
-                (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => {
-                    Ok(RuntimeValue::Bool(if is_eq { lb == rb } else { lb != rb }))
-                }
-                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
-                    Ok(RuntimeValue::Bool(if is_eq { li == ri } else { li != ri }))
-                }
+            let eq = match (&l, &r) {
+                (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
+                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
                 (
                     RuntimeValue::Label {
                         index_name: li,
@@ -72,18 +68,11 @@ pub(super) fn eval_binop_expr(
                         index_name: ri,
                         variant: rv,
                     },
-                ) => {
-                    let eq = li == ri && lv == rv;
-                    Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
-                }
+                ) => li == ri && lv == rv,
                 (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => {
-                    let eq = runtime_value_equals(&l, &r);
-                    Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
+                    runtime_value_equals(&l, &r)
                 }
-                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
-                    let eq = le == re;
-                    Ok(RuntimeValue::Bool(if is_eq { eq } else { !eq }))
-                }
+                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => le == re,
                 _ => {
                     let lv = l
                         .expect_scalar("comparison operand")
@@ -91,11 +80,12 @@ pub(super) fn eval_binop_expr(
                     let rv = r
                         .expect_scalar("comparison operand")
                         .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-                    Ok(RuntimeValue::Bool(eval_comparison(
+                    return Ok(RuntimeValue::Bool(eval_comparison(
                         *op, lv, rv, ctx.src, expr.span,
-                    )?))
+                    )?));
                 }
-            }
+            };
+            Ok(RuntimeValue::Bool(eq == is_eq))
         }
         // Ordering comparisons: Int or Scalar operands, Bool result
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {

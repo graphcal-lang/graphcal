@@ -405,22 +405,28 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
         }
     }
 
-    // Now resolve NameRef / QualifiedNameRef at this node
-    match std::mem::replace(
-        &mut expr.kind,
-        ExprKind::Bool(false), // placeholder, will be overwritten
+    // Resolve NameRef / QualifiedNameRef at this node. Other variants are
+    // already handled above; leave them untouched.
+    if !matches!(
+        &expr.kind,
+        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. }
     ) {
-        ExprKind::NameRef(ident) => {
-            expr.kind = resolve_name_ref(ident, ctx);
-        }
-        ExprKind::QualifiedNameRef { qualifier, member } => {
-            expr.kind = resolve_qualified_name_ref(qualifier, member, ctx);
-        }
-        other => {
-            // Put it back — shouldn't happen
-            expr.kind = other;
-        }
+        return;
     }
+    // Take ownership of the target variant so the resolver functions can
+    // consume the identifier. The placeholder is overwritten unconditionally
+    // below.
+    let taken = std::mem::replace(&mut expr.kind, ExprKind::Bool(false));
+    expr.kind = match taken {
+        ExprKind::NameRef(ident) => resolve_name_ref(ident, ctx),
+        ExprKind::QualifiedNameRef { qualifier, member } => {
+            resolve_qualified_name_ref(qualifier, member, ctx)
+        }
+        // The `matches!` guard above eliminates all other variants. We can't
+        // use `unreachable!()` here because clippy's lint forbids it in
+        // non-test code — restore the taken value instead.
+        other => other,
+    };
 }
 
 /// Resolve a bare `NameRef` to a concrete [`ExprKind`].

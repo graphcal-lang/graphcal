@@ -754,6 +754,31 @@ pub fn format_for_comp(
     multi_line.flat_alt(single_line).group()
 }
 
+/// Format a call of the shape `head(<args>, |p1, p2| <body>)`.
+///
+/// `scan`, `unfold`, and similar builtins all follow this pattern — a fixed
+/// `head`, a list of positional argument expressions, and a closing lambda
+/// over two identifiers whose body is another expression.
+fn format_lambda_call(
+    fmt: &mut Formatter<'_>,
+    head: &'static str,
+    args: &[&Expr],
+    lambda_params: (&Ident, &Ident),
+    body: &Expr,
+) -> RcDoc<'static> {
+    let mut doc = RcDoc::text(head).append(RcDoc::text("("));
+    for arg in args {
+        doc = doc.append(format_expr(fmt, arg)).append(RcDoc::text(", "));
+    }
+    doc.append(RcDoc::text("|"))
+        .append(RcDoc::text(lambda_params.0.name.clone()))
+        .append(RcDoc::text(", "))
+        .append(RcDoc::text(lambda_params.1.name.clone()))
+        .append(RcDoc::text("| "))
+        .append(format_expr(fmt, body))
+        .append(RcDoc::text(")"))
+}
+
 fn format_scan(
     fmt: &mut Formatter<'_>,
     source: &Expr,
@@ -762,17 +787,7 @@ fn format_scan(
     val_name: &Ident,
     body: &Expr,
 ) -> RcDoc<'static> {
-    RcDoc::text("scan(")
-        .append(format_expr(fmt, source))
-        .append(RcDoc::text(", "))
-        .append(format_expr(fmt, init))
-        .append(RcDoc::text(", |"))
-        .append(RcDoc::text(acc_name.name.clone()))
-        .append(RcDoc::text(", "))
-        .append(RcDoc::text(val_name.name.clone()))
-        .append(RcDoc::text("| "))
-        .append(format_expr(fmt, body))
-        .append(RcDoc::text(")"))
+    format_lambda_call(fmt, "scan", &[source, init], (acc_name, val_name), body)
 }
 
 fn format_unfold(
@@ -782,15 +797,7 @@ fn format_unfold(
     curr_name: &Ident,
     body: &Expr,
 ) -> RcDoc<'static> {
-    RcDoc::text("unfold(")
-        .append(format_expr(fmt, init))
-        .append(RcDoc::text(", |"))
-        .append(RcDoc::text(prev_name.name.clone()))
-        .append(RcDoc::text(", "))
-        .append(RcDoc::text(curr_name.name.clone()))
-        .append(RcDoc::text("| "))
-        .append(format_expr(fmt, body))
-        .append(RcDoc::text(")"))
+    format_lambda_call(fmt, "unfold", &[init], (prev_name, curr_name), body)
 }
 
 pub fn format_match(

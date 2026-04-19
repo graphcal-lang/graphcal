@@ -62,27 +62,6 @@ fn eval_nat_expr(
     }
 }
 
-/// Evaluate a map/table literal expression.
-pub(super) fn eval_map_or_table(
-    entries: &[MapEntry],
-    values: &HashMap<String, RuntimeValue>,
-    local_values: &HashMap<String, RuntimeValue>,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    eval_map_literal(entries, values, local_values, ctx)
-}
-
-/// Evaluate a `for` comprehension expression.
-pub(super) fn eval_for_comp_expr(
-    bindings: &[graphcal_compiler::syntax::ast::ForBinding],
-    body: &Expr,
-    values: &HashMap<String, RuntimeValue>,
-    local_values: &HashMap<String, RuntimeValue>,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    eval_for_comp(bindings, body, values, local_values, ctx)
-}
-
 /// Evaluate an index access expression.
 pub(super) fn eval_index_access(
     expr: &Expr,
@@ -320,7 +299,7 @@ pub(super) fn eval_unfold(
 /// For single-axis (`keys.len() == 1`), builds a flat `Indexed`.
 /// For multi-axis, groups entries by the first key's variant and recursively
 /// builds nested `Indexed` values from the remaining keys.
-fn eval_map_literal(
+pub(super) fn eval_map_literal(
     entries: &[MapEntry],
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -406,7 +385,7 @@ fn eval_map_literal(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
-fn eval_for_comp(
+pub(super) fn eval_for_comp(
     bindings: &[graphcal_compiler::syntax::ast::ForBinding],
     body: &Expr,
     values: &HashMap<String, RuntimeValue>,

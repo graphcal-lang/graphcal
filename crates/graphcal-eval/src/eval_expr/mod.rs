@@ -179,10 +179,10 @@ pub fn eval_expr(
 
         // --- Collections (delegated) ---
         ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            collections::eval_map_or_table(entries, values, local_values, ctx)
+            collections::eval_map_literal(entries, values, local_values, ctx)
         }
         ExprKind::ForComp { bindings, body } => {
-            collections::eval_for_comp_expr(bindings, body, values, local_values, ctx)
+            collections::eval_for_comp(bindings, body, values, local_values, ctx)
         }
         ExprKind::IndexAccess { expr: inner, args } => {
             collections::eval_index_access(expr, inner, args, values, local_values, ctx)
