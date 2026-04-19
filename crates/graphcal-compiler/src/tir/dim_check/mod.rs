@@ -290,6 +290,17 @@ pub fn check_dimensions_tir(
     // Validate domain constraint bound expression dimensions
     check_domain_constraint_dimensions(tir, &declared_types, &empty_locals, builtin_fns, src)?;
 
+    // Recursively dim-check every compiled inline-dag body.
+    //
+    // Each dag body was compiled as a virtual file in `type_resolve`, so its
+    // own registry already contains the enclosing file's types plus any
+    // sibling dags. Checking it here catches dimension errors in dag body
+    // expressions at compile time, rather than letting them slip through to
+    // runtime on the first call site.
+    for dag_tir in tir.dags.values() {
+        check_dimensions_tir(dag_tir, src)?;
+    }
+
     Ok(())
 }
 
