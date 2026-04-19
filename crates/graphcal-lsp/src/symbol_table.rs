@@ -782,6 +782,27 @@ fn collect_expr_refs(
                 },
             });
         }
+        ExprKind::InlineDagRef {
+            module,
+            dag,
+            args,
+            output: _,
+        } => {
+            let dag_target = module.as_ref().map_or_else(
+                || SymbolKey::TopLevel(dag.value.to_string()),
+                |m| SymbolKey::Qualified {
+                    module: m.name.clone(),
+                    name: dag.value.to_string(),
+                },
+            );
+            table.references.push(ReferenceInfo {
+                span: dag.span,
+                target: dag_target,
+            });
+            for binding in args {
+                collect_expr_refs(&binding.value, table, scopes);
+            }
+        }
         ExprKind::FnCall { name, args, .. } => {
             table.references.push(ReferenceInfo {
                 span: name.span,

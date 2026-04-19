@@ -264,6 +264,12 @@ pub fn eval_expr(
         ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
             unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
         }
+
+        // InlineDagRef is desugared to synthetic includes before evaluation.
+        #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
+        ExprKind::InlineDagRef { .. } => {
+            unreachable!("InlineDagRef should be desugared before eval")
+        }
     }
 }
 

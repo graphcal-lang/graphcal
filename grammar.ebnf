@@ -624,12 +624,22 @@ bool_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", [ IDENT, "::" ], IDENT;
+   = "@", [ IDENT, "::" ], IDENT, [ inline_dag_call_suffix ];
+
+inline_dag_call_suffix
+   = "(", include_param_binding,
+     { ",", include_param_binding }, [ "," ],
+     ")", "::", IDENT;
 
 (* @name -- graph ref (param, node, or const node).
    @module::name -- qualified graph ref.
-   Built-in constants (PI, E, TAU) and user-defined const nodes both
-   use their names directly; graph declarations require @. *)
+   @name(args)::out -- inline DAG invocation projecting output `out`.
+   @module::name(args)::out -- qualified inline DAG invocation.
+   Each inline-call call site denotes a fresh DAG instantiation and
+   desugars to a synthetic `include ... as <id>; @<id>::out` during
+   TIR lowering. Built-in constants (PI, E, TAU) and user-defined
+   const nodes both use their names directly; graph declarations
+   require @. *)
 
 (* --- Identifier expression --- *)
 (* Dispatches based on the token(s) following the identifier:
