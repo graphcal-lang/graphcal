@@ -1,6 +1,6 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, MapEntry, MatchArm,
-    MatchPattern, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
+    MatchPattern, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
 };
 use pretty::RcDoc;
 
@@ -28,6 +28,18 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             module.name.as_str(),
             name.value.as_str()
         )),
+        ExprKind::InlineDagRef {
+            module,
+            dag,
+            args,
+            output,
+        } => format_inline_dag_ref(
+            fmt,
+            module.as_ref(),
+            dag.value.as_str(),
+            args,
+            output.value.as_str(),
+        ),
         ExprKind::ConstRef(name) => RcDoc::text(name.value.as_str().to_string()),
         ExprKind::QualifiedConstRef { module, name } => {
             RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
@@ -888,4 +900,30 @@ pub fn format_tuple_match(
         )
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"))
+}
+
+fn format_inline_dag_ref(
+    fmt: &mut Formatter<'_>,
+    module: Option<&Ident>,
+    dag: &str,
+    args: &[ParamBinding],
+    output: &str,
+) -> RcDoc<'static> {
+    let head = module.map_or_else(
+        || format!("@{dag}"),
+        |m| format!("@{}::{}", m.name.as_str(), dag),
+    );
+    let binding_docs: Vec<RcDoc<'static>> = args
+        .iter()
+        .map(|b| {
+            RcDoc::text(b.name.name.clone())
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &b.value))
+        })
+        .collect();
+    RcDoc::text(head)
+        .append(RcDoc::text("("))
+        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+        .append(RcDoc::text(")::"))
+        .append(RcDoc::text(output.to_string()))
 }

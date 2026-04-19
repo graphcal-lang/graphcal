@@ -317,7 +317,7 @@ impl Parser<'_> {
     }
 
     /// Parse the `(name: expr, ...)` param bindings of an include declaration.
-    fn parse_import_param_bindings(
+    pub(in crate::syntax::parser) fn parse_import_param_bindings(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;

@@ -1,0 +1,16 @@
+// Inline DAG invocation in expression position: `@dag(args)::out`.
+// This fixture exercises the parse-only step of the feature; TIR lowering
+// and evaluation are added in later steps.
+pub dim Velocity = Length / Time;
+
+dag scale {
+    param factor: Dimensionless;
+
+    param v: Velocity;
+
+    node result: Velocity = @v * @factor;
+}
+
+param speed: Velocity = 10.0 m/s;
+
+node doubled_result: Velocity = @scale(factor: 2.0, v: @speed)::result;

@@ -368,5 +368,14 @@ pub(super) fn infer_type_with_owner(
         ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
             unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
         }
+
+        // InlineDagRef is desugared to synthetic includes before dim-checking.
+        #[expect(
+            clippy::unreachable,
+            reason = "invariant: desugared before dim-checking"
+        )]
+        ExprKind::InlineDagRef { .. } => {
+            unreachable!("InlineDagRef should be desugared before dim-checking")
+        }
     }
 }

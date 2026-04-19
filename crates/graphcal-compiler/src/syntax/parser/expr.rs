@@ -340,21 +340,42 @@ impl Parser<'_> {
                 let (_, at_span) = self.advance()?;
                 let ident = self.parse_any_ident()?;
                 // Check for module-qualified graph ref: @module::name
-                if self.lexer.peek() == Some(&Token::ColonColon) {
+                let (module, dag_or_name) = if self.lexer.peek() == Some(&Token::ColonColon) {
                     self.lexer.next_token(); // consume '::'
                     let member = self.parse_any_ident()?;
-                    let span = at_span.merge(member.span);
+                    (Some(ident), member)
+                } else {
+                    (None, ident)
+                };
+                // Check for inline DAG invocation: `@dag(args)::out` or
+                // `@module::dag(args)::out`.
+                if self.lexer.peek() == Some(&Token::LParen) {
+                    let args = self.parse_import_param_bindings()?;
+                    self.expect(Token::ColonColon)?;
+                    let output = self.parse_any_ident()?;
+                    let span = at_span.merge(output.span);
+                    Ok(Expr {
+                        kind: ExprKind::InlineDagRef {
+                            module,
+                            dag: dag_or_name.into_spanned::<DeclName>(),
+                            args,
+                            output: output.into_spanned::<DeclName>(),
+                        },
+                        span,
+                    })
+                } else if let Some(module) = module {
+                    let span = at_span.merge(dag_or_name.span);
                     Ok(Expr {
                         kind: ExprKind::QualifiedGraphRef {
-                            module: ident,
-                            name: member.into_spanned::<DeclName>(),
+                            module,
+                            name: dag_or_name.into_spanned::<DeclName>(),
                         },
                         span,
                     })
                 } else {
-                    let span = at_span.merge(ident.span);
+                    let span = at_span.merge(dag_or_name.span);
                     Ok(Expr {
-                        kind: ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
+                        kind: ExprKind::GraphRef(dag_or_name.into_spanned::<DeclName>()),
                         span,
                     })
                 }
@@ -1269,6 +1290,122 @@ mod tests {
             }
             other => panic!("expected QualifiedGraphRef, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_basic() {
+        let file = Parser::new("node y: Length = @clamp(x: @p)::result;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::InlineDagRef {
+                module,
+                dag,
+                args,
+                output,
+            } => {
+                assert!(module.is_none());
+                assert_eq!(dag.value.as_str(), "clamp");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0].name.name, "x");
+                assert!(
+                    matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.value.as_str() == "p")
+                );
+                assert_eq!(output.value.as_str(), "result");
+            }
+            other => panic!("expected InlineDagRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_multi_arg() {
+        let file = Parser::new("node y: Velocity = @scale(factor: 2.0, v: @speed)::out;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::InlineDagRef {
+                module,
+                dag,
+                args,
+                output,
+            } => {
+                assert!(module.is_none());
+                assert_eq!(dag.value.as_str(), "scale");
+                assert_eq!(args.len(), 2);
+                assert_eq!(args[0].name.name, "factor");
+                assert_eq!(args[1].name.name, "v");
+                assert_eq!(output.value.as_str(), "out");
+            }
+            other => panic!("expected InlineDagRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_qualified() {
+        let file = Parser::new("node y: Length = @geom::clamp(x: @p)::result;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::InlineDagRef {
+                module,
+                dag,
+                args,
+                output,
+            } => {
+                let module = module.as_ref().expect("expected module qualifier");
+                assert_eq!(module.name, "geom");
+                assert_eq!(dag.value.as_str(), "clamp");
+                assert_eq!(args.len(), 1);
+                assert_eq!(output.value.as_str(), "result");
+            }
+            other => panic!("expected InlineDagRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_preserves_non_call_qualified_ref() {
+        // `@alias::node` (no parens) still parses as QualifiedGraphRef.
+        let file = Parser::new("node y: Length = @doubled::result;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        assert!(matches!(
+            &node.value.kind,
+            ExprKind::QualifiedGraphRef { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_inline_dag_call_basic_fixture() {
+        let source = include_str!("../../../../../tests/fixtures/inline_dag_call_basic/main.gcl");
+        let file = Parser::new(source)
+            .parse_file()
+            .expect("fixture should parse");
+        // Locate the `doubled_result` node and assert its body is an InlineDagRef.
+        let node = file
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Node(n) if n.name.value.as_str() == "doubled_result" => Some(n),
+                _ => None,
+            })
+            .expect("doubled_result node");
+        assert!(matches!(&node.value.kind, ExprKind::InlineDagRef { .. }));
     }
 
     #[test]

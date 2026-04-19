@@ -266,6 +266,13 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
         | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::QualifiedConstRef { .. } => return,
 
+        ExprKind::InlineDagRef { args, .. } => {
+            for arg in args {
+                resolve_expr(&mut arg.value, ctx);
+            }
+            return;
+        }
+
         // NameRef and QualifiedNameRef are handled below after this match
         ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {}
 

@@ -80,6 +80,20 @@ fn collect_const_refs(
                 })
             }
         }
+        ExprKind::InlineDagRef { args, .. } => {
+            for binding in args {
+                collect_const_refs(
+                    &binding.value,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    deps,
+                )?;
+            }
+            Ok(())
+        }
         ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();
             if !builtin_fns.contains_key(name_str)
@@ -425,6 +439,22 @@ fn collect_all_refs(
                     span: ident.span.into(),
                 })
             }
+        }
+        ExprKind::InlineDagRef { args, .. } => {
+            for binding in args {
+                collect_all_refs(
+                    &binding.value,
+                    all_runtime_names,
+                    all_const_names,
+                    builtin_consts,
+                    builtin_fns,
+                    user_fn_names,
+                    src,
+                    graph_refs,
+                    const_refs,
+                )?;
+            }
+            Ok(())
         }
         ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();

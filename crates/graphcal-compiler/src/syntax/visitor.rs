@@ -41,6 +41,7 @@ pub(crate) trait ExprVisitor {
             ExprKind::ConstRef(_) => self.visit_const_ref(expr),
             ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref(expr),
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref(expr),
+            ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
             ExprKind::FnCall { args, .. } => self.visit_fn_call(expr, args),
 
@@ -114,6 +115,18 @@ pub(crate) trait ExprVisitor {
     }
 
     fn visit_qualified_const_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
+    fn visit_inline_dag_ref(
+        &mut self,
+        _expr: &Expr,
+        args: &[crate::syntax::ast::ParamBinding],
+    ) -> Result<(), Self::Error> {
+        for arg in args {
+            self.visit_expr(&arg.value)?;
+        }
         Ok(())
     }
 
@@ -254,6 +267,7 @@ pub trait ExprVisitorMut {
             ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
             ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
+            ExprKind::InlineDagRef { .. } => self.visit_inline_dag_ref_mut(expr),
 
             ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
 
@@ -342,6 +356,16 @@ pub trait ExprVisitorMut {
         if let ExprKind::FnCall { args, .. } = &mut expr.kind {
             for arg in args {
                 self.visit_expr_mut(arg)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
+    fn visit_inline_dag_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::InlineDagRef { args, .. } = &mut expr.kind {
+            for arg in args {
+                self.visit_expr_mut(&mut arg.value)?;
             }
         }
         Ok(())

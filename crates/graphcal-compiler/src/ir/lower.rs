@@ -1412,6 +1412,12 @@ pub(crate) fn substitute_type_names_in_expr(expr: &mut Expr, bindings: &HashMap<
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::VariantLiteral { .. } => {}
 
+        ExprKind::InlineDagRef { args, .. } => {
+            for binding in args {
+                substitute_type_names_in_expr(&mut binding.value, bindings);
+            }
+        }
+
         ExprKind::StructConstruction {
             type_name,
             type_args,

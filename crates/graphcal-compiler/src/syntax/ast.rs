@@ -982,6 +982,22 @@ pub enum ExprKind {
         module: Ident,
         name: Spanned<DeclName>,
     },
+    /// Inline DAG invocation: `@dag(args)::out` or `@module::dag(args)::out`.
+    ///
+    /// Each syntactic occurrence denotes a fresh DAG instantiation that is
+    /// desugared during TIR lowering to the equivalent
+    /// `include dag(args) as <synthetic>; @<synthetic>::out`. Preserved as a
+    /// distinct AST variant so source spans survive for diagnostics.
+    InlineDagRef {
+        /// Optional module qualifier (for cross-file `dag`s).
+        module: Option<Ident>,
+        /// Name of the `dag` being invoked.
+        dag: Spanned<DeclName>,
+        /// Param/index bindings, same shape as `include` bindings.
+        args: Vec<ParamBinding>,
+        /// Projected output node name (after `::`).
+        output: Spanned<DeclName>,
+    },
     /// Module-qualified built-in constant reference: `module::CONST_NAME`
     QualifiedConstRef {
         module: Ident,
@@ -1313,6 +1329,11 @@ fn desugar_expr(expr: &mut Expr) {
         | ExprKind::QualifiedNameRef { .. }
         // TupleMatch is handled below after recursing into children.
         | ExprKind::TupleMatch { .. } => {}
+        ExprKind::InlineDagRef { args, .. } => {
+            for b in args {
+                desugar_expr(&mut b.value);
+            }
+        }
         ExprKind::BinOp { lhs, rhs, .. } => {
             desugar_expr(lhs);
             desugar_expr(rhs);
