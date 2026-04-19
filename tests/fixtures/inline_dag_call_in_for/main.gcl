@@ -5,7 +5,7 @@ pub index Region = { A, B };
 
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };

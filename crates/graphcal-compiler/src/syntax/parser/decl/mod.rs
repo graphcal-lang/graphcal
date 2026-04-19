@@ -85,6 +85,21 @@ impl Parser<'_> {
             ));
         }
 
+        // Reject `pub(bind)` on `node` / `const node`. Nodes are computed
+        // values, not a bindable surface; `param` already plays that role.
+        // `pub` on `node` is legal and controls projection visibility from
+        // inline-dag call sites.
+        if visibility == Visibility::PublicBind
+            && matches!(self.lexer.peek(), Some(Token::Node | Token::Const))
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
+                "`pub(bind)`",
+                vis_span,
+            ));
+        }
+
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
         let mut decl = match self.lexer.peek() {
             Some(Token::Param) => self.parse_param(),

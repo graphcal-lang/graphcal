@@ -433,8 +433,13 @@ fn infer_inline_dag_ref(
 
     // Collect param and node declarations from the dag body so we can look them
     // up by name for binding and projection checks.
+    //
+    // Nodes additionally carry the declaration's visibility; projection of a
+    // non-`pub` node is rejected below with the same error shape used by
+    // `include lib_dag(...) { private_result }`.
     let mut param_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
     let mut node_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
+    let mut node_is_pub: HashMap<&str, bool> = HashMap::new();
     for body_decl in &dag_decl.body {
         match &body_decl.kind {
             DeclKind::Param(p) => {
@@ -442,6 +447,7 @@ fn infer_inline_dag_ref(
             }
             DeclKind::Node(n) => {
                 node_type_anns.insert(n.name.value.as_str(), &n.type_ann);
+                node_is_pub.insert(n.name.value.as_str(), body_decl.visibility.is_public());
             }
             _ => {}
         }
@@ -508,6 +514,21 @@ fn infer_inline_dag_ref(
             span: output.span.into(),
         }
     })?;
+
+    // Reject projection of a non-`pub` node. Same error shape as the
+    // `include lib_dag(args) { private_result }` form.
+    if !node_is_pub
+        .get(output.value.as_str())
+        .copied()
+        .unwrap_or(false)
+    {
+        return Err(GraphcalError::ImportPrivateItem {
+            name: output.value.to_string(),
+            file_path: dag.value.to_string(),
+            src: src.clone(),
+            span: output.span.into(),
+        });
+    }
     let resolved =
         crate::tir::typed::resolve_type_expr(output_type_ann, registry, &[], &[], &[], src)?;
     let declared = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
