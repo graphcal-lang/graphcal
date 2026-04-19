@@ -574,7 +574,7 @@ pub struct ResolvedDomainConstraint {
 ///
 /// Contains everything from `IR` plus resolved type annotations for
 /// every declaration and function signature.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TIR {
     /// The type/unit/dimension/index/struct registry.
     pub registry: Registry,
@@ -635,8 +635,18 @@ pub struct TIR {
     /// and consumed by `dim_check` and `eval` to resolve inline
     /// `@dag(args)::out` invocations.
     ///
+    /// Cross-file qualified calls (`@mod::dag(args)::out`) are merged in
+    /// by `graphcal-eval`'s project pipeline using `"mod::dag"` keys.
+    ///
     /// Key-lookup only; order irrelevant.
     pub dags: HashMap<String, Self>,
+    /// Names of `pub` nodes declared in this dag body.
+    ///
+    /// Used by `dim_check` to reject cross-file projection of private
+    /// nodes (`@mod::dag(args)::private_node` → `ImportPrivateItem`). The
+    /// same-file case reads visibility from the AST; cross-file merges
+    /// drop the AST, so this set is the compiled proxy.
+    pub pub_nodes: std::collections::HashSet<String>,
 }
 
 impl TIR {
@@ -734,10 +744,30 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         )?;
         let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
         inject_parent_imported_const_types(&mut compiled_dag, &body, &tir);
+        populate_pub_nodes(&mut compiled_dag, &body);
         tir.dags.insert(name, compiled_dag);
     }
 
     Ok(tir)
+}
+
+/// Populate a dag TIR's `pub_nodes` set from the AST body declarations.
+///
+/// Downstream cross-file qualified calls (`@mod::dag(args)::out`) use this
+/// set to enforce projection of `pub` nodes only. Same-file calls still
+/// read visibility from the raw AST because the body is reachable through
+/// `registry.dags`; this set is the proxy that survives cross-file merges.
+fn populate_pub_nodes(dag_tir: &mut TIR, dag_body: &[crate::syntax::ast::Declaration]) {
+    use crate::syntax::ast::DeclKind;
+
+    for decl in dag_body {
+        if !decl.visibility.is_public() {
+            continue;
+        }
+        if let DeclKind::Node(n) = &decl.kind {
+            dag_tir.pub_nodes.insert(n.name.value.to_string());
+        }
+    }
 }
 
 /// Inject parent-scope `resolved_decl_types` into a dag's TIR for every
@@ -843,6 +873,7 @@ fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Gr
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
         dags: HashMap::new(),
+        pub_nodes: std::collections::HashSet::new(),
     })
 }
 

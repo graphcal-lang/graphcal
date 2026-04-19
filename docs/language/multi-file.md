@@ -387,11 +387,22 @@ expression position.
   `match` arms, `if`/`else` branches, `for` / `scan` / `unfold` bodies, and as
   arguments to other inline calls (composition).
 
-**Known limitation.** The cross-file qualified form
-`@module::dag(args)::out` parses but errors at dim-check / eval with
-`graphcal::G007` — only same-file (local) dag calls resolve today.
-Cross-file inline dag calls compile through the project pipeline and
-are planned as a follow-up.
+**Cross-file inline dag calls.** The qualified form
+`@module::dag(args)::out` resolves through a module-style import, the
+same way qualified const and graph refs do:
+
+```
+import "./geom.gcl" as geom;
+
+param src: Length = 10.0 m;
+node doubled: Length = @geom::scale(factor: 2.0, v: @src)::result;
+```
+
+The dependency's `dag scale { ... }` must be declared `pub` to be
+callable across files; projection of a non-`pub` node raises the same
+`ImportPrivateItem` error as any other cross-file visibility violation,
+and cycles that span files are rejected at compile time with
+`CyclicDependency`.
 
 All other MVP limitations (recursive-cycle detection, topological
 ordering of dag body nodes, `pub` projection enforcement, indexed

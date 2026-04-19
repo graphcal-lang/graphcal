@@ -32,6 +32,7 @@ pub(super) fn infer_type(
     expr: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -41,6 +42,7 @@ pub(super) fn infer_type(
         None,
         declared_types,
         local_types,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -54,6 +56,7 @@ pub(super) fn infer_type_with_owner(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -158,6 +161,7 @@ pub(super) fn infer_type_with_owner(
             rhs,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -168,6 +172,7 @@ pub(super) fn infer_type_with_owner(
             operand,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -181,6 +186,7 @@ pub(super) fn infer_type_with_owner(
             target,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -195,6 +201,7 @@ pub(super) fn infer_type_with_owner(
             timezone,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -209,6 +216,7 @@ pub(super) fn infer_type_with_owner(
             target_type,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -220,6 +228,7 @@ pub(super) fn infer_type_with_owner(
             args,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -236,6 +245,7 @@ pub(super) fn infer_type_with_owner(
             else_branch,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -249,6 +259,7 @@ pub(super) fn infer_type_with_owner(
             arms,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -260,6 +271,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -271,6 +283,7 @@ pub(super) fn infer_type_with_owner(
                 entries,
                 declared_types,
                 local_types,
+                dag_tirs,
                 registry,
                 builtin_fns,
                 src,
@@ -283,6 +296,7 @@ pub(super) fn infer_type_with_owner(
             args,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -302,6 +316,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -320,6 +335,7 @@ pub(super) fn infer_type_with_owner(
             owner_decl_name,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -330,6 +346,7 @@ pub(super) fn infer_type_with_owner(
             field,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -346,6 +363,7 @@ pub(super) fn infer_type_with_owner(
             fields,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -382,6 +400,7 @@ pub(super) fn infer_type_with_owner(
             output,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
@@ -391,9 +410,11 @@ pub(super) fn infer_type_with_owner(
 
 /// Infer the type of an inline DAG invocation `@dag(args)::out`.
 ///
-/// Step 2 scope: same-file (non-qualified) calls only. Qualified form
-/// `@module::dag(args)::out` returns an explicit `NotYetImplemented`
-/// diagnostic; later steps will integrate with the cross-file pipeline.
+/// Looks up the called dag via `dag_tirs` using `"{module}::{dag}"` for
+/// qualified calls and the bare name for same-file calls. Both variants
+/// share the same compiled-TIR resolution path: param types come from
+/// `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates projection
+/// of non-`pub` outputs.
 #[expect(
     clippy::too_many_arguments,
     reason = "passes inference context through"
@@ -406,131 +427,111 @@ fn infer_inline_dag_ref(
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::syntax::ast::DeclKind;
+    let key = module.as_ref().map_or_else(
+        || dag.value.to_string(),
+        |m| format!("{}::{}", m.name, dag.value),
+    );
+    let qualified_span = module.as_ref().map_or_else(|| dag.span, |_| expr.span);
 
-    if let Some(m) = module {
-        return Err(GraphcalError::QualifiedInlineDagNotYetImplemented {
-            module: m.name.clone(),
-            dag_name: dag.value.to_string(),
+    let dag_tir = dag_tirs
+        .get(&key)
+        .ok_or_else(|| GraphcalError::UnknownDag {
+            name: key.clone(),
             src: src.clone(),
-            span: expr.span.into(),
-        });
+            span: qualified_span.into(),
+        })?;
+
+    // Map param/node member names to their pre-resolved declared types.
+    // Using the compiled TIR (not the raw AST) means the same code path
+    // serves same-file and cross-file calls — the dep's TIR has already
+    // resolved its type annotations in its own registry's scope.
+    let mut param_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    for p in &dag_tir.params {
+        if let Some(resolved) = dag_tir.resolved_decl_types.get(&p.name) {
+            let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
+            param_decl_types.insert(p.name.member().to_string(), dt);
+        }
     }
-
-    let dag_decl =
-        registry
-            .dags
-            .get(dag.value.as_str())
-            .ok_or_else(|| GraphcalError::UnknownDag {
-                name: dag.value.to_string(),
-                src: src.clone(),
-                span: dag.span.into(),
-            })?;
-
-    // Collect param and node declarations from the dag body so we can look them
-    // up by name for binding and projection checks.
-    //
-    // Nodes additionally carry the declaration's visibility; projection of a
-    // non-`pub` node is rejected below with the same error shape used by
-    // `include lib_dag(...) { private_result }`.
-    let mut param_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
-    let mut node_type_anns: HashMap<&str, &crate::syntax::ast::TypeExpr> = HashMap::new();
-    let mut node_is_pub: HashMap<&str, bool> = HashMap::new();
-    for body_decl in &dag_decl.body {
-        match &body_decl.kind {
-            DeclKind::Param(p) => {
-                param_type_anns.insert(p.name.value.as_str(), &p.type_ann);
-            }
-            DeclKind::Node(n) => {
-                node_type_anns.insert(n.name.value.as_str(), &n.type_ann);
-                node_is_pub.insert(n.name.value.as_str(), body_decl.visibility.is_public());
-            }
-            _ => {}
+    let mut node_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    for n in &dag_tir.nodes {
+        if let Some(resolved) = dag_tir.resolved_decl_types.get(&n.name) {
+            let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
+            node_decl_types.insert(n.name.member().to_string(), dt);
         }
     }
 
     // Check each binding names a real param and type-matches its annotation.
-    let mut bound_names: std::collections::HashSet<&str> =
+    let mut bound_names: std::collections::HashSet<String> =
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
         let binding_name = binding.name.name.as_str();
-        let param_type_ann = param_type_anns.get(binding_name).ok_or_else(|| {
+        let expected = param_decl_types.get(binding_name).ok_or_else(|| {
             GraphcalError::UnknownInlineDagParam {
                 name: binding_name.to_string(),
-                dag_name: dag.value.to_string(),
+                dag_name: key.clone(),
                 src: src.clone(),
                 span: binding.name.span.into(),
             }
         })?;
-        let resolved =
-            crate::tir::typed::resolve_type_expr(param_type_ann, registry, &[], &[], &[], src)?;
-        let expected = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
         let found = infer_type(
             &binding.value,
             declared_types,
             local_types,
+            dag_tirs,
             registry,
             builtin_fns,
             src,
         )?;
-        if !super::helpers::types_match(&expected, &found, registry) {
+        if !super::helpers::types_match(expected, &found, registry) {
             return Err(GraphcalError::InlineDagArgDimensionMismatch {
                 param_name: binding_name.to_string(),
-                expected: super::helpers::format_declared_type(&expected, registry),
+                expected: super::helpers::format_declared_type(expected, registry),
                 found: super::helpers::format_inferred_type(&found, registry),
                 src: src.clone(),
                 span: binding.value.span.into(),
             });
         }
-        bound_names.insert(binding_name);
+        bound_names.insert(binding_name.to_string());
     }
 
     // Every param declared in the dag must be bound at the call site.
-    let mut missing: Vec<String> = param_type_anns
+    let mut missing: Vec<String> = param_decl_types
         .keys()
-        .filter(|p| !bound_names.contains(*p))
-        .map(|s| (*s).to_string())
+        .filter(|p| !bound_names.contains(p.as_str()))
+        .cloned()
         .collect();
     if !missing.is_empty() {
         missing.sort();
         return Err(GraphcalError::MissingInlineDagBindings {
             missing,
-            dag_name: dag.value.to_string(),
+            dag_name: key.clone(),
             src: src.clone(),
             span: expr.span.into(),
         });
     }
 
-    // Resolve the projected output node's type and return it as inferred.
-    let output_type_ann = node_type_anns.get(output.value.as_str()).ok_or_else(|| {
+    // Project the output node; reject projection of a non-`pub` node with
+    // the same shape as the `include lib_dag(args) { private_result }` form.
+    let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
         GraphcalError::UnknownInlineDagOutput {
             name: output.value.to_string(),
-            dag_name: dag.value.to_string(),
+            dag_name: key.clone(),
             src: src.clone(),
             span: output.span.into(),
         }
     })?;
-
-    // Reject projection of a non-`pub` node. Same error shape as the
-    // `include lib_dag(args) { private_result }` form.
-    if !node_is_pub
-        .get(output.value.as_str())
-        .copied()
-        .unwrap_or(false)
-    {
+    if !dag_tir.pub_nodes.contains(output.value.as_str()) {
         return Err(GraphcalError::ImportPrivateItem {
             name: output.value.to_string(),
-            file_path: dag.value.to_string(),
+            file_path: key.clone(),
             src: src.clone(),
             span: output.span.into(),
         });
     }
-    let resolved =
-        crate::tir::typed::resolve_type_expr(output_type_ann, registry, &[], &[], &[], src)?;
-    let declared = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-    Ok(InferredType::from(&declared))
+    Ok(InferredType::from(output_decl))
 }
