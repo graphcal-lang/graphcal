@@ -99,6 +99,18 @@ node a: Dimensionless = @b + 1.0;
 node b: Dimensionless = @a + 1.0;  // ERROR: cycle detected
 ```
 
+### Call-Site Identity
+
+When a `dag` is instantiated — whether via top-level `include` or via the
+inline `@dag(args)::out` expression form — each **syntactic call site** is a
+fresh instantiation. Two textually distinct occurrences with identical
+arguments denote two distinct sub-graphs in the underlying DAG, not a shared
+sub-graph. Programs must not rely on sharing across call sites.
+
+An eval engine is free to detect structurally identical sub-graphs and reuse
+their computation as an internal optimization, but this is not part of the
+language semantics.
+
 ## Fault Isolation
 
 If a node's evaluation fails (e.g., division by zero), only that node and its dependents are affected. Independent nodes still evaluate successfully.
