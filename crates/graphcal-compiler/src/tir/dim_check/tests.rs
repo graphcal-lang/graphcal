@@ -1198,3 +1198,44 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
         }
     );
 }
+
+#[test]
+fn inline_dag_body_dimension_mismatch_caught_at_compile_time() {
+    // A dag body that returns a value whose dimension disagrees with its
+    // declared node type. The MVP never dim-checked dag body expressions;
+    // the compile-pipeline refactor catches it.
+    let source = "\
+dag bogus {
+    param v: Length;
+    node result: Length = @v + 1.0 s;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @bogus(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "expected DimensionMismatch from inside dag body, got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_body_forward_reference_resolves() {
+    // A dag body that references a later node — formerly broken at eval
+    // (source-order walk), now works because the dag body is compiled
+    // through the same IR path as a file and gets topological ordering.
+    let source = "\
+dag forward {
+    param v: Length;
+    node b: Length = @a;
+    node a: Length = @v;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @forward(v: @src)::b;
+";
+    // Phase B only covers compile; actual runtime topo-sort is Phase C.
+    // Still, compile must accept this program (no dim errors).
+    check(source).unwrap();
+}

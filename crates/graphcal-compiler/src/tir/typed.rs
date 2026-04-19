@@ -732,11 +732,51 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             src,
             &parent_dag_id,
         )?;
-        let compiled_dag = type_resolve_single(dag_body_ir, src)?;
+        let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
+        inject_parent_imported_const_types(&mut compiled_dag, &body, &tir);
         tir.dags.insert(name, compiled_dag);
     }
 
     Ok(tir)
+}
+
+/// Inject parent-scope `resolved_decl_types` into a dag's TIR for every
+/// const brought into the dag via `import .. { ... }`.
+///
+/// The dag body's resolver already added these names to its scope (via
+/// [`crate::ir::lower::lower_dag_body_to_ir`]), but name resolution doesn't
+/// carry resolved types across scopes. Without this patch, dimension checking
+/// a `@r_earth` reference inside the dag body fails to find a declared type
+/// for `r_earth`. Post-compile, we copy the parent's resolved type for each
+/// imported const into the dag TIR keyed by the dag-local alias.
+fn inject_parent_imported_const_types(
+    dag_tir: &mut TIR,
+    dag_body: &[crate::syntax::ast::Declaration],
+    parent_tir: &TIR,
+) {
+    use crate::syntax::ast::{DeclKind, ImportKind, ImportPath};
+
+    for decl in dag_body {
+        let DeclKind::Import(import_decl) = &decl.kind else {
+            continue;
+        };
+        if !matches!(import_decl.path, ImportPath::ParentScope { .. }) {
+            continue;
+        }
+        let ImportKind::Selective(items) = &import_decl.kind else {
+            continue;
+        };
+        for item in items {
+            let orig_name = item.name.name.as_str();
+            let local_name = item.local_name().to_string();
+            let parent_scoped = ScopedName::local(orig_name);
+            if let Some(resolved) = parent_tir.resolved_decl_types.get(&parent_scoped) {
+                dag_tir
+                    .resolved_decl_types
+                    .insert(ScopedName::local(local_name), resolved.clone());
+            }
+        }
+    }
 }
 
 /// Resolve type annotations without recursively compiling nested dag bodies.
