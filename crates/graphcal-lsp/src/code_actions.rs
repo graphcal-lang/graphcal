@@ -123,7 +123,7 @@ fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> 
 /// then insert `pub ` before the keyword.
 fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
     // Extract ref_name from the message: "... references private {kind} `{ref_name}` ..."
-    let ref_name = extract_private_ref_name(&diag.message)?;
+    let ref_name = extract_referenced_private_name(&diag.message)?;
 
     // Find the declaration of ref_name in the source.
     let decl_line = find_declaration_line(source, &ref_name)?;
@@ -163,7 +163,7 @@ fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Optio
 /// the re-export marker — depends on syntactic context that is not available
 /// here, so the quick-fix focuses on the "make the symbol visible" branch.
 fn make_add_pub_action_v006(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    let leaked_name = extract_leaked_name_v006(&diag.message)?;
+    let leaked_name = extract_referenced_private_name(&diag.message)?;
     let decl_line = find_declaration_line(source, &leaked_name)?;
     let insert_pos = find_keyword_position(source, decl_line)?;
 
@@ -220,25 +220,12 @@ fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
     })
 }
 
-/// Extract the private item name from a V003 diagnostic message.
+/// Extract the backticked identifier that follows "references private" in a
+/// V003 or V006 diagnostic message.
 ///
-/// Message format: "`pub {kind}` `{pub_name}` references private `ref_kind` `{ref_name}` in ..."
-fn extract_private_ref_name(message: &str) -> Option<String> {
-    // Find "references private ... `{ref_name}`"
-    let marker = "references private ";
-    let after_marker = message.find(marker).map(|i| &message[i + marker.len()..])?;
-    // Skip the ref_kind word(s) to reach `ref_name`
-    let backtick_start = after_marker.find('`')? + 1;
-    let rest = &after_marker[backtick_start..];
-    let backtick_end = rest.find('`')?;
-    Some(rest[..backtick_end].to_string())
-}
-
-/// Extract the leaked item name from a V006 diagnostic message.
-///
-/// Message format: `` "re-exported <kind> `<name>`'s signature references
-/// private <kind> `<leaked_name>`" ``
-fn extract_leaked_name_v006(message: &str) -> Option<String> {
+/// V003 message shape: `` "`pub {kind}` `{pub_name}` references private `ref_kind` `{ref_name}` in ..." ``
+/// V006 message shape: `` "re-exported <kind> `<name>`'s signature references private <kind> `<leaked_name>`" ``
+fn extract_referenced_private_name(message: &str) -> Option<String> {
     let marker = "references private ";
     let after_marker = message.find(marker).map(|i| &message[i + marker.len()..])?;
     let backtick_start = after_marker.find('`')? + 1;
@@ -434,9 +421,12 @@ mod tests {
     }
 
     #[test]
-    fn extract_private_ref_name_works() {
+    fn extract_referenced_private_name_works() {
         let msg = "`pub node` `speed` references private dim `Velocity` in its type annotation";
-        assert_eq!(extract_private_ref_name(msg), Some("Velocity".to_string()));
+        assert_eq!(
+            extract_referenced_private_name(msg),
+            Some("Velocity".to_string())
+        );
     }
 
     #[test]
@@ -479,9 +469,12 @@ mod tests {
     }
 
     #[test]
-    fn extract_leaked_name_v006_works() {
+    fn extract_referenced_private_name_handles_v006_shape() {
         let msg = "re-exported type `Widget`'s signature references private type `Inner`";
-        assert_eq!(extract_leaked_name_v006(msg), Some("Inner".to_string()));
+        assert_eq!(
+            extract_referenced_private_name(msg),
+            Some("Inner".to_string())
+        );
     }
 
     #[test]

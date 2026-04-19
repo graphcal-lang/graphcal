@@ -506,15 +506,9 @@ fn format_value_inline_with_budget(
             if fields.is_empty() {
                 return format!("{type_name} {{}}");
             }
-            format_braced_entries(
-                &format!("{type_name} "),
-                fields
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v))
-                    .collect::<Vec<_>>(),
-                symbols,
-                max_len,
-            )
+            let entries: Vec<(&str, &Value)> =
+                fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            format_braced_entries(&format!("{type_name} "), &entries, symbols, max_len)
         }
         Value::Indexed { entries, .. } => {
             if entries.is_empty() {
@@ -529,15 +523,9 @@ fn format_value_inline_with_budget(
             if is_multi {
                 format_tuple_keyed_entries("", &flat, symbols, max_len)
             } else {
-                format_braced_entries(
-                    "",
-                    entries
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), v))
-                        .collect::<Vec<_>>(),
-                    symbols,
-                    max_len,
-                )
+                let single: Vec<(&str, &Value)> =
+                    entries.iter().map(|(k, v)| (k.as_str(), v)).collect();
+                format_braced_entries("", &single, symbols, max_len)
             }
         }
     }
@@ -545,9 +533,14 @@ fn format_value_inline_with_budget(
 
 /// Format a list of key-value pairs as `{prefix}{ k1: v1, k2: v2, ... }`,
 /// truncating with `...` when the result would exceed `max_len`.
-fn format_braced_entries(
+///
+/// `render_key` shapes each entry's key — e.g., `|k| k.to_string()` for
+/// single-axis variants or `|keys| format!("({})", keys.join(", "))` for
+/// tuple-keyed multi-axis entries.
+fn format_entries<K>(
     prefix: &str,
-    entries: Vec<(&str, &Value)>,
+    entries: &[(K, &Value)],
+    render_key: impl Fn(&K) -> String,
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
@@ -556,19 +549,18 @@ fn format_braced_entries(
     let ellipsis = "... }";
     let total = entries.len();
 
-    for (i, (key, val)) in entries.into_iter().enumerate() {
+    for (i, (key, val)) in entries.iter().enumerate() {
         let remaining_budget = max_len.saturating_sub(result.len() + suffix.len());
         let entry_str = format!(
-            "{key}: {}",
+            "{}: {}",
+            render_key(key),
             format_value_inline_with_budget(val, symbols, remaining_budget)
         );
 
-        // Check if adding this entry (plus separator and closing) would exceed budget
         let separator = if i + 1 < total { ", " } else { "" };
         let needed = entry_str.len() + separator.len();
 
         if i > 0 && result.len() + needed + suffix.len() > max_len {
-            // Truncate: replace with ellipsis
             result.push_str(ellipsis);
             return result;
         }
@@ -581,6 +573,15 @@ fn format_braced_entries(
 
     result.push_str(suffix);
     result
+}
+
+fn format_braced_entries(
+    prefix: &str,
+    entries: &[(&str, &Value)],
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    max_len: usize,
+) -> String {
+    format_entries(prefix, entries, |k| (*k).to_string(), symbols, max_len)
 }
 
 /// Recursively flatten nested `Indexed` values into a list of `(key_path, leaf_value)` pairs.
@@ -604,43 +605,19 @@ fn flatten_indexed_entries<'a>(
     }
 }
 
-/// Format flattened tuple-keyed entries as `{ (A, X): v1, (A, Y): v2, ... }`,
-/// truncating with `...` when the result would exceed `max_len`.
 fn format_tuple_keyed_entries(
     prefix: &str,
     entries: &[(Vec<&str>, &Value)],
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
-    let mut result = format!("{prefix}{{ ");
-    let suffix = " }";
-    let ellipsis = "... }";
-    let total = entries.len();
-
-    for (i, (keys, val)) in entries.iter().enumerate() {
-        let remaining_budget = max_len.saturating_sub(result.len() + suffix.len());
-        let key_str = format!("({})", keys.join(", "));
-        let entry_str = format!(
-            "{key_str}: {}",
-            format_value_inline_with_budget(val, symbols, remaining_budget)
-        );
-
-        let separator = if i + 1 < total { ", " } else { "" };
-        let needed = entry_str.len() + separator.len();
-
-        if i > 0 && result.len() + needed + suffix.len() > max_len {
-            result.push_str(ellipsis);
-            return result;
-        }
-
-        result.push_str(&entry_str);
-        if i + 1 < total {
-            result.push_str(", ");
-        }
-    }
-
-    result.push_str(suffix);
-    result
+    format_entries(
+        prefix,
+        entries,
+        |keys| format!("({})", keys.join(", ")),
+        symbols,
+        max_len,
+    )
 }
 
 /// Collect imported definitions from a loaded project.

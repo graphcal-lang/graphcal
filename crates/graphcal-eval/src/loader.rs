@@ -100,7 +100,7 @@ impl LoadedProject {
     /// Returns a [`CompileError`] if parsing fails.
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
         let source = Arc::new(source.to_string());
-        let named_source = NamedSource::new(name, Arc::clone(&source));
+        let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
         let mut ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
@@ -220,7 +220,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let name = canonical_path
         .file_name()
         .map_or_else(|| display_name.clone(), |n| n.to_string_lossy().to_string());
-    let named_source = NamedSource::new(&name, Arc::clone(&source));
+    let named_source = graphcal_compiler::syntax::named_source(&name, Arc::clone(&source));
     let mut ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
