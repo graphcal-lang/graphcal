@@ -1,0 +1,14 @@
+// Inline DAG invocation composed: an inline call as an argument to another
+// inline call. `@add_one(v: @double(v: @src)::result)::result`.
+dag double {
+    param v: Length;
+    node result: Length = @v * 2.0;
+}
+
+dag add_one {
+    param v: Length;
+    node result: Length = @v + 1.0 m;
+}
+
+param src: Length = 3.0 m;
+node y: Length = @add_one(v: @double(v: @src)::result)::result;

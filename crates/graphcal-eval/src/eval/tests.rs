@@ -1786,3 +1786,24 @@ node effective: Length[Source, Region] = for s: Source, r: Region {
     assert!((cells[&("Secondary".into(), "A".into())] - 10.0).abs() < 1e-10);
     assert!((cells[&("Secondary".into(), "B".into())] - 20.0).abs() < 1e-10);
 }
+
+#[test]
+fn eval_inline_dag_call_composition_fixture() {
+    let source = include_str!("../../../../tests/fixtures/inline_dag_call_composition/main.gcl");
+    let result = compile_and_eval(source).unwrap();
+    // ((3 * 2) + 1) m = 7 m
+    let y = find_value(&result, "y");
+    assert!((y - 7.0).abs() < 1e-10, "expected 7.0, got {y}");
+}
+
+#[test]
+fn eval_inline_dag_call_in_for_fixture() {
+    let source = include_str!("../../../../tests/fixtures/inline_dag_call_in_for/main.gcl");
+    let _result = compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn eval_inline_dag_call_in_match_fixture() {
+    let source = include_str!("../../../../tests/fixtures/inline_dag_call_in_match/main.gcl");
+    let _result = compile_and_eval(source).unwrap();
+}

@@ -1,0 +1,9 @@
+// Error fixture: inline call binds a name that is not a param of the dag.
+// Expected diagnostic: `graphcal::G003` — unknown param in inline dag call.
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @id_len(bogus: @src)::result;

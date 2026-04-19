@@ -1,0 +1,10 @@
+// Error fixture: inline call omits a required param binding.
+// Expected diagnostic: `graphcal::G004` — missing required binding(s).
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @scale(v: @src)::result;

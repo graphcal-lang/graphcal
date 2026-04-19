@@ -1,0 +1,27 @@
+// Inline DAG invocation inside `match` arms of a nested `for` comprehension.
+// Each arm is a distinct syntactic call site and denotes a fresh
+// instantiation; the `match` selects which arm's value the cell receives.
+pub index Source = { Primary, Secondary };
+pub index Region = { A, B };
+
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param dist_primary: Length[Region] = {
+    Region::A: 1.0 m,
+    Region::B: 2.0 m,
+};
+
+param dist_secondary: Length[Region] = {
+    Region::A: 10.0 m,
+    Region::B: 20.0 m,
+};
+
+node effective: Length[Source, Region] = for s: Source, r: Region {
+    match s {
+        Source::Primary => @id_len(v: @dist_primary[r])::result,
+        Source::Secondary => @id_len(v: @dist_secondary[r])::result,
+    }
+};

@@ -1,0 +1,6 @@
+// Error fixture: qualified inline call form `@module::dag(args)::out` is
+// accepted by the parser but not yet supported at dim-check / eval time.
+// Expected diagnostic: `graphcal::G007` — qualified inline dag call not yet
+// implemented.
+param src: Length = 10.0 m;
+node y: Length = @geom::id_len(v: @src)::result;
