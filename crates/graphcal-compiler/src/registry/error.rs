@@ -1270,18 +1270,4 @@ pub enum GraphcalError {
         #[label("type mismatch")]
         span: SourceSpan,
     },
-
-    #[error("qualified inline dag call `@{module}::{dag_name}(...)` is not yet implemented")]
-    #[diagnostic(
-        code(graphcal::G007),
-        help("only local (same-file) inline dag calls are currently supported")
-    )]
-    QualifiedInlineDagNotYetImplemented {
-        module: String,
-        dag_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("qualified inline dag call")]
-        span: SourceSpan,
-    },
 }

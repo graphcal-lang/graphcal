@@ -1,0 +1,4 @@
+pub dag scale {
+    param v: Length;
+    node hidden: Length = @v;
+}

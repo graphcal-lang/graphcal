@@ -1158,22 +1158,6 @@ node y: Length = @id_len(v: @src)::result;
 }
 
 #[test]
-fn inline_dag_call_qualified_not_yet_implemented() {
-    let source = "\
-param src: Length = 10.0 m;
-node y: Length = @geom::id_len(v: @src)::result;
-";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            GraphcalError::QualifiedInlineDagNotYetImplemented { .. }
-        ),
-        "got: {err:?}"
-    );
-}
-
-#[test]
 fn inline_dag_call_inside_for_comp_with_loop_var() {
     // Motivating shape: inline call inside a `for` comprehension whose
     // argument references the loop variable via an indexed graph ref.

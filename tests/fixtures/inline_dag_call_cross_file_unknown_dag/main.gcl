@@ -1,0 +1,4 @@
+import "./lib.gcl" as lib;
+
+param src: Length = 1.0 m;
+node bad: Length = @lib::nonexistent(v: @src)::result;
