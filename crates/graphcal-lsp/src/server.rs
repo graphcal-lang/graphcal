@@ -255,7 +255,7 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
             // raw path when the overlay file is not yet on disk — this makes
             // unsaved LSP buffers work without a preflight `FileNotFound`.
             let fs = graphcal_io::OverlayFileSystem::new(
-                graphcal_io::RealFileSystem,
+                graphcal_io::RealFileSystem::default(),
                 path.clone(),
                 text.to_string(),
             );

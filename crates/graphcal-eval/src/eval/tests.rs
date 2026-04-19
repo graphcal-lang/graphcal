@@ -9,7 +9,9 @@ use super::*;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_io::RealFileSystem;
 
-const FS: RealFileSystem = RealFileSystem;
+fn fs() -> RealFileSystem {
+    RealFileSystem::default()
+}
 
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
@@ -679,7 +681,7 @@ fn required_param_with_override_succeeds() {
 fn project_multi_file_rocket() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/rocket_split/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected_delta_v = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
@@ -692,7 +694,7 @@ fn project_multi_file_rocket() {
 fn project_import_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -701,7 +703,7 @@ fn project_import_alias() {
 fn project_import_alias_conflict_resolution() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/alias_conflict/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let sum = find_value(&result, "sum");
     assert!(
         (sum - 3.0).abs() < f64::EPSILON,
@@ -715,7 +717,7 @@ fn project_import_alias_conflict_resolution() {
 fn project_module_import_const() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -724,7 +726,7 @@ fn project_module_import_const() {
 fn project_module_import_const_alias() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_alias/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-6, "g = {g}, expected 9.80665");
 }
@@ -733,7 +735,7 @@ fn project_module_import_const_alias() {
 fn project_module_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let total = find_value(&result, "total_mass");
     assert!(
         (total - 4000.0).abs() < f64::EPSILON,
@@ -745,7 +747,7 @@ fn project_module_import_graph_ref() {
 fn project_module_import_mixed() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/module_import_mixed/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let delta_v = find_value(&result, "delta_v");
     let expected = 320.0 * 9.80665 * (4000.0_f64 / 1200.0).ln();
     assert!(
@@ -1008,7 +1010,7 @@ fn eval_int_with_unit_parse_error() {
 fn project_instantiated_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // dry_mass overridden to 800 kg, fuel_mass default 2800 kg, isp default 320 s
     // delta_v = 320 * 9.80665 * ln((800 + 2800) / 800) = 3138.128 * ln(4.5)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1023,7 +1025,7 @@ fn project_instantiated_import_selective() {
 fn project_instantiated_import_multi() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_multi/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // stage_1: dry_mass=800, fuel_mass=2800 (default), isp=320
     // stage_1::delta_v = 320 * 9.80665 * ln(3600/800)
     let dv_stage1 = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1042,7 +1044,7 @@ fn project_instantiated_import_multi() {
 fn project_instantiated_import_partial() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_partial/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // dry_mass overridden to 800, fuel_mass and isp keep defaults (2800 kg, 320 s)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
     let result_val = find_value(&result, "result");
@@ -1056,7 +1058,7 @@ fn project_instantiated_import_partial() {
 fn project_instantiated_import_module() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_module/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // dry_mass overridden to 800, fuel_mass default 2800, isp default 320
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
     let dv = find_value(&result, "dv");
@@ -1072,7 +1074,7 @@ fn project_instantiated_import_module() {
 fn project_instantiated_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // my_mass = 800 kg, passed as dry_mass binding via @my_mass
     // delta_v = 320 * 9.80665 * ln(3600/800)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -1089,7 +1091,7 @@ fn project_instantiated_import_graph_ref() {
 fn project_bare_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_selective/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let total_mass = find_value(&result, "total_mass");
     assert!(
         (total_mass - 4000.0).abs() < f64::EPSILON,
@@ -1101,7 +1103,7 @@ fn project_bare_import_selective() {
 fn project_bare_import_module() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_module/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let g = find_value(&result, "g");
     assert!((g - 9.80665).abs() < 1e-10, "g = {g}, expected 9.80665");
 }
@@ -1110,7 +1112,7 @@ fn project_bare_import_module() {
 fn project_bare_import_nested() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_nested/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let dv = find_value(&result, "dv");
     assert!((dv - 2460.0).abs() < 0.01, "dv = {dv}, expected 2460.0");
 }
@@ -1119,7 +1121,7 @@ fn project_bare_import_nested() {
 fn project_bare_import_instantiated() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_instantiated/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // dry_mass = 800 kg, fuel_mass = 3200 kg, isp = 320 s
     // delta_v = 320 * 9.80665 * ln(4000/800)
     let expected_dv = 320.0 * 9.80665 * (4000.0_f64 / 800.0).ln();
@@ -1134,7 +1136,7 @@ fn project_bare_import_instantiated() {
 fn project_bare_import_mixed() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_mixed/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let v_exhaust = find_value(&result, "v_exhaust");
     let expected = 320.0 * 9.80665;
     assert!(
@@ -1147,7 +1149,7 @@ fn project_bare_import_mixed() {
 fn project_bare_import_custom_src() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_import_custom_src/lib/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -1274,7 +1276,7 @@ fn import_strict_partial_binding_errors() {
     // Parameterized import without #[allow_defaults] and partial binding → error
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_strict_error/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided { name, .. })) => {
             // Should error on one of the unbound default params (fuel_mass or isp)
@@ -1292,7 +1294,7 @@ fn import_with_allow_defaults_succeeds() {
     // Parameterized import WITH #[allow_defaults] and partial binding → success
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     assert!(
         result.is_ok(),
         "import with #[allow_defaults] should succeed: {result:?}"
@@ -1337,7 +1339,7 @@ fn allow_defaults_on_param_errors() {
 fn project_required_param_import() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/required_param_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // radius = 6371 km, circumference = 2 * PI * radius
     let expected = 2.0 * std::f64::consts::PI * 6_371_000.0; // in metres (SI)
     let circumference = find_value(&result, "circumference");
@@ -1353,7 +1355,7 @@ fn project_required_param_import() {
 fn project_injectable_index_kind_mismatch() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_kind_mismatch/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
             dep_index,
@@ -1371,7 +1373,7 @@ fn project_injectable_index_kind_mismatch() {
 fn project_injectable_index_strict_default_not_provided() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_strict/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided { name, .. })) => {
             assert_eq!(name, "Phase");
@@ -1384,7 +1386,7 @@ fn project_injectable_index_strict_default_not_provided() {
 fn project_injectable_index_basic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_basic/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // total = sum(10.0 + 20.0) = 30.0
     let result_val = find_value(&result, "result");
     assert!(
@@ -1397,7 +1399,7 @@ fn project_injectable_index_basic() {
 fn project_instantiated_import_type_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_type_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // origin_size = 1.0 m (the lib's `Widget { size: 1.0 m }` rewritten to
     // `MyWidget { size: 1.0 m }` after type substitution)
     let result_val = find_value(&result, "result");
@@ -1411,7 +1413,7 @@ fn project_instantiated_import_type_binding() {
 fn project_instantiated_import_dim_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_dim_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // result = 10.0 m/s; the lib's `v: Speed = 10.0 m/s` has its type_ann
     // rewritten Speed -> Velocity so main's Velocity dimension resolves.
     let result_val = find_value(&result, "result");
@@ -1428,7 +1430,7 @@ fn project_pub_import_reexport_selective() {
     // can reach it via the intermediate file.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_import_reexport_selective/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // result = 9.80665 m/s^2 (in the base unit, value 9.80665).
     let result_val = find_value(&result, "result");
     assert!(
@@ -1444,7 +1446,7 @@ fn project_include_overrides_index_no_param_binding_v005() {
     // re-bind `cost` in the same include statement.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/include_overrides_index_no_param_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::IncludeMustReconcileOverride {
             overridden,
@@ -1466,7 +1468,7 @@ fn project_include_overrides_index_with_param_binding_ok() {
     // supplying a fresh `cost` binding satisfies A8.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/include_overrides_index_with_param_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let result_val = find_value(&result, "result");
     // total = 10 + 20 = 30
     assert!(
@@ -1482,7 +1484,7 @@ fn project_pub_include_leaks_private_type_v006() {
     // private-local type at the importer.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_include_leaks_private_type/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::GenericsLeakage {
             reexport_name,
@@ -1504,7 +1506,7 @@ fn project_pub_include_with_public_type_binding_ok() {
     // binding `Element` to a `pub` importer-local type satisfies A9.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_include_with_public_type_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
     assert!(
         result.is_ok(),
         "`pub include` re-exporting a `pub` type binding should compile: {result:?}"
@@ -1515,7 +1517,7 @@ fn project_pub_include_with_public_type_binding_ok() {
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // The within_limit assertion should pass overall because Overdrive is marked expected_fail.
     let assert_result = result
         .assertions
@@ -1535,7 +1537,7 @@ fn project_injectable_index_expected_fail() {
 fn inline_dag_basic_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_basic/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let val = find_value(&result, "final_result");
     assert!((val - 20.0).abs() < 1e-10, "expected 20.0, got {val}");
 }
@@ -1544,7 +1546,7 @@ fn inline_dag_basic_selective() {
 fn inline_dag_import_parent_scope() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_import_parent/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     // Orbital velocity at 400 km: sqrt(GM / (R + h))
     // GM = 3.986004418e14, R = 6371000, h = 400000
     let expected = (3.986_004_418e14_f64 / (6_371_000.0 + 400_000.0)).sqrt();
@@ -1559,7 +1561,7 @@ fn inline_dag_import_parent_scope() {
 fn inline_dag_namespace_multi_instantiation() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_namespace/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let doubled = find_value(&result, "doubled_result");
     let tripled = find_value(&result, "tripled_result");
     assert!(
@@ -1620,7 +1622,7 @@ node result: Velocity = @total;
 fn cross_file_dag_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/cross_file_dag/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
 
     // double_speed doubles the input: 200.0 * 2.0 = 400.0
     let doubled = find_value(&result, "final_result");
@@ -1644,7 +1646,7 @@ fn cross_file_dag_selective() {
 fn inline_dag_call_cross_file_happy_path() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let doubled = find_value(&result, "doubled");
     assert!(
         (doubled - 20.0).abs() < 1e-10,
@@ -1656,7 +1658,7 @@ fn inline_dag_call_cross_file_happy_path() {
 fn inline_dag_call_cross_file_non_pub_node_rejected() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file_private/main.gcl");
-    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap_err();
     let CompileError::Eval(inner) = err else {
         panic!("expected Eval error, got: {err:?}")
     };
@@ -1670,7 +1672,7 @@ fn inline_dag_call_cross_file_non_pub_node_rejected() {
 fn inline_dag_call_cross_file_indexed_output() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file_indexed/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let picked = find_value(&result, "picked");
     assert!((picked - 2.0).abs() < 1e-10, "expected 2 m, got {picked}");
 }
@@ -1679,7 +1681,7 @@ fn inline_dag_call_cross_file_indexed_output() {
 fn inline_dag_call_cross_file_unknown_dag_diagnostic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file_unknown_dag/main.gcl");
-    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap_err();
     let CompileError::Eval(inner) = err else {
         panic!("expected Eval error, got: {err:?}")
     };
@@ -1693,7 +1695,7 @@ fn inline_dag_call_cross_file_unknown_dag_diagnostic() {
 fn inline_dag_call_cross_file_unknown_output_diagnostic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file_unknown_output/main.gcl");
-    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap_err();
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap_err();
     let CompileError::Eval(inner) = err else {
         panic!("expected Eval error, got: {err:?}")
     };
@@ -1707,7 +1709,7 @@ fn inline_dag_call_cross_file_unknown_output_diagnostic() {
 fn inline_dag_call_cross_file_parent_const_reachable() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_call_cross_file_parent_const/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
     let half = find_value(&result, "earth_half");
     assert!(
         (half - 3_185_500.0).abs() < 1e-6,
@@ -1721,7 +1723,7 @@ fn inline_dag_call_cross_file_parent_const_reachable() {
 fn bare_module_dag_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/bare_dag_ref/src/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &FS).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
 
     // double DAG: 21.0 * 2.0 = 42.0
     let answer = find_value(&result, "answer");

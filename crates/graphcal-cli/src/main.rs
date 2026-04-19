@@ -1,8 +1,9 @@
+mod display;
 mod json_input;
+mod overrides;
 mod plot;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -11,6 +12,9 @@ use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
 use graphcal_io::RealFileSystem;
+
+use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
+use crate::overrides::{OverrideParseError, parse_overrides};
 
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
@@ -34,6 +38,9 @@ enum Commands {
         /// JSON input file for param values
         #[arg(long)]
         input: Option<PathBuf>,
+        /// Maximum size (in bytes) of the --input JSON file. Defaults to 1 MiB.
+        #[arg(long)]
+        input_max_bytes: Option<u64>,
         /// Skip assertion checking
         #[arg(long)]
         no_assert: bool,
@@ -81,51 +88,6 @@ enum PlotOutput {
     Json,
 }
 
-/// Parse `--set` overrides and `--input` JSON file into a combined overrides map.
-///
-/// `--set` values take precedence over `--input` values for the same name.
-/// Returns an error message suitable for `stderr` on the first failure.
-fn parse_overrides(
-    set: &[String],
-    input: Option<&std::path::Path>,
-) -> Result<std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>, String> {
-    let mut overrides = std::collections::HashMap::new();
-    for s in set {
-        let Some((name, value_str)) = s.split_once('=') else {
-            return Err(format!(
-                "invalid --set format: {s:?} (expected 'name=expr')"
-            ));
-        };
-        let name = name.trim();
-        let value_str = value_str.trim();
-        if name.is_empty() {
-            return Err(format!("invalid --set format: {s:?} (name is empty)"));
-        }
-        if value_str.is_empty() {
-            return Err(format!("invalid --set format: {s:?} (expression is empty)"));
-        }
-        match graphcal_compiler::syntax::parser::Parser::new(value_str).parse_single_expr() {
-            Ok(expr) => {
-                overrides.insert(DeclName::new(name), expr);
-            }
-            Err(e) => {
-                return Err(format!("failed to parse --set value for `{name}`: {e}"));
-            }
-        }
-    }
-
-    if let Some(input_path) = input {
-        let json_str = std::fs::read_to_string(input_path)
-            .map_err(|e| format!("cannot read input file {}: {e}", input_path.display()))?;
-        let json_overrides = json_input::json_to_overrides(&json_str).map_err(|e| e.to_string())?;
-        for (name, expr) in json_overrides {
-            overrides.entry(name).or_insert(expr);
-        }
-    }
-
-    Ok(overrides)
-}
-
 fn main() {
     // Install miette's fancy graphical error handler
     miette::set_hook(Box::new(|_| {
@@ -162,23 +124,15 @@ fn main() {
             format,
             set,
             input,
+            input_max_bytes,
             no_assert,
             root,
             allow_defaults,
             plot: plot_output,
         } => {
-            let overrides = match parse_overrides(&set, input.as_deref()) {
+            let overrides = match parse_overrides(&set, input.as_deref(), input_max_bytes) {
                 Ok(o) => o,
-                Err(msg) => {
-                    #[expect(
-                        clippy::print_stderr,
-                        reason = "CLI binary, stderr output is expected for errors"
-                    )]
-                    {
-                        eprintln!("error: {msg}");
-                    }
-                    process::exit(2);
-                }
+                Err(e) => report_override_error(&e),
             };
             handle_eval(
                 &file,
@@ -191,6 +145,19 @@ fn main() {
             );
         }
     }
+}
+
+/// Print an override-parse error and exit with code 2.
+///
+/// Kept separate so both the return type (`!`) and the `print_stderr` lint
+/// suppression stay out of the happy path in `main`.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn report_override_error(e: &OverrideParseError) -> ! {
+    eprintln!("error: {e}");
+    process::exit(2);
 }
 
 #[expect(
@@ -210,7 +177,12 @@ fn handle_eval(
     allow_defaults: bool,
     plot_output: Option<&PlotOutput>,
 ) {
-    match compile_and_eval_project(file, overrides, root, allow_defaults, &RealFileSystem) {
+    // Rooted sandbox: derive the project root from the loader's rules and
+    // confine reads to it. `root` (the user's explicit --root) takes
+    // precedence; otherwise walk up from `file`'s parent looking for
+    // `graphcal.toml`, falling back to `file`'s parent.
+    let fs = build_rooted_fs(file, root);
+    match compile_and_eval_project(file, overrides, root, allow_defaults, &fs) {
         Ok(result) => {
             match format {
                 OutputFormat::Text => print_text(&result, no_assert),
@@ -292,6 +264,37 @@ fn handle_eval(
     }
 }
 
+/// Build a [`RealFileSystem`] sandboxed to the project root, if one can be
+/// determined.
+///
+/// Resolution order mirrors `graphcal_eval::loader::resolve_project_root`:
+/// 1. Explicit `--root` (canonicalized).
+/// 2. Walk up from `file`'s parent looking for `graphcal.toml`.
+/// 3. Fall back to the unrooted form so CLI one-shots of single loose files
+///    keep working exactly as before.
+fn build_rooted_fs(file: &Path, root_override: Option<&Path>) -> RealFileSystem {
+    if let Some(explicit) = root_override
+        && let Ok(canonical) = explicit.canonicalize()
+    {
+        return RealFileSystem::rooted(canonical);
+    }
+
+    let Ok(canonical_file) = file.canonicalize() else {
+        return RealFileSystem::default();
+    };
+    let mut dir = canonical_file.parent().unwrap_or(&canonical_file);
+    loop {
+        if dir.join("graphcal.toml").is_file() {
+            return RealFileSystem::rooted(dir.to_path_buf());
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+    RealFileSystem::default()
+}
+
 /// Resolve CLI path arguments to a list of `.gcl` files.
 ///
 /// If `paths` is empty, collects all `.gcl` files from the current directory.
@@ -327,7 +330,8 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 
     let mut error_count = 0;
     for file in &targets {
-        match compile_to_tir_project(file, project_root, &RealFileSystem) {
+        let fs = build_rooted_fs(file, project_root);
+        match compile_to_tir_project(file, project_root, &fs) {
             Ok(_) => {
                 println!("ok: {}", file.display());
             }
@@ -455,258 +459,27 @@ fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Count how many levels of `Indexed` nesting a value has.
-fn index_depth(value: &graphcal_eval::eval::Value) -> usize {
-    match value {
-        graphcal_eval::eval::Value::Indexed { entries, .. } => {
-            entries.values().next().map_or(1, |v| 1 + index_depth(v))
-        }
-        _ => 0,
-    }
-}
-
-/// Walk into nested `Indexed` to find the first leaf scalar's display label (unit).
-fn extract_unit_label(
-    value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
-) -> Option<String> {
-    match value {
-        graphcal_eval::eval::Value::Scalar { .. } => value.display_label(symbols),
-        graphcal_eval::eval::Value::Indexed { entries, .. } => entries
-            .values()
-            .next()
-            .and_then(|v| extract_unit_label(v, symbols)),
-        _ => None,
-    }
-}
-
-/// Render a 2D `Indexed` value as a formatted table grid (without name/unit header).
-fn format_table_grid(value: &graphcal_eval::eval::Value) -> String {
-    use graphcal_eval::eval::Value;
-    use tabled::builder::Builder;
-    use tabled::settings::{Alignment, Style, object::Columns};
-
-    let Value::Indexed {
-        entries: row_entries,
-        ..
-    } = value
-    else {
-        return String::new();
-    };
-
-    // Extract column names from first row
-    let Some(first_row) = row_entries.values().next() else {
-        return String::new();
-    };
-    let Value::Indexed {
-        entries: col_entries,
-        ..
-    } = first_row
-    else {
-        return String::new();
-    };
-    let col_names: Vec<&str> = col_entries
-        .keys()
-        .map(graphcal_compiler::syntax::names::VariantName::as_str)
-        .collect();
-
-    let mut builder = Builder::default();
-
-    // Header row: empty corner cell + column variant names
-    let mut header_row = vec![String::new()];
-    header_row.extend(col_names.iter().map(|s| (*s).to_string()));
-    builder.push_record(header_row);
-
-    // Data rows: row variant name + cell values
-    for (row_variant, row_val) in row_entries {
-        let mut row = vec![row_variant.as_str().to_string()];
-        if let Value::Indexed { entries: cells, .. } = row_val {
-            for col_name in &col_names {
-                let cell_val = cells
-                    .iter()
-                    .find(|(k, _)| k.as_str() == *col_name)
-                    .map(|(_, v)| v.format_display(None))
-                    .unwrap_or_default();
-                row.push(cell_val);
-            }
-        }
-        builder.push_record(row);
-    }
-
-    let mut table = builder.build();
-    table
-        .with(Style::rounded())
-        .modify(Columns::new(1..), Alignment::right());
-    table.to_string()
-}
-
-/// Render an N-dimensional indexed value (N >= 2) as formatted table(s).
-fn format_indexed_table(
-    name: &str,
-    value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
-) -> String {
-    let unit_label = extract_unit_label(value, symbols);
-    let header = unit_label
-        .as_ref()
-        .map_or_else(|| format!("{name}:"), |label| format!("{name} ({label}):"));
-
-    let depth = index_depth(value);
-    if depth == 2 {
-        let grid = format_table_grid(value);
-        return format!("{header}\n{grid}");
-    }
-
-    // depth >= 3: peel off outermost index levels until we reach 2D slices
-    let mut parts = vec![header];
-    format_table_slices(value, symbols, depth, &mut parts);
-    parts.join("\n")
-}
-
-/// Recursively peel outer index dimensions and render 2D table slices with section headers.
-#[expect(
-    clippy::only_used_in_recursion,
-    reason = "symbols is threaded through for consistency with sibling formatters; \
-              2D leaves ignore it but higher-depth calls forward it unchanged"
-)]
-fn format_table_slices(
-    value: &graphcal_eval::eval::Value,
-    symbols: &BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
-    depth: usize,
-    parts: &mut Vec<String>,
-) {
-    use graphcal_eval::eval::Value;
-
-    let Value::Indexed {
-        index_name,
-        entries,
-    } = value
-    else {
-        return;
-    };
-
-    if depth == 2 {
-        let grid = format_table_grid(value);
-        parts.push(grid);
-        return;
-    }
-
-    // depth >= 3: emit section headers and recurse
-    for (variant, inner_val) in entries {
-        parts.push(format!("\n  [{index_name}::{variant}]"));
-        format_table_slices(inner_val, symbols, depth - 1, parts);
-    }
-}
-
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "text output formatting with assertion display"
-)]
 fn print_text(result: &EvalResult, no_assert: bool) {
-    use graphcal_eval::eval::{NodeError, Value};
+    use graphcal_eval::eval::Value;
 
-    /// A block of output: either a batch of flat lines or a table block.
-    enum OutputBlock<'a> {
-        Flat(Vec<FlatEntry<'a>>),
-        Table(&'a str, &'a Value),
-    }
+    // Build output blocks preserving source order.
+    let items = result.all.iter().map(|(name, r, _)| (name.as_str(), r));
+    let blocks = build_output_blocks(items);
+    let max_name_len = max_flat_name_len(&blocks);
 
-    enum FlatEntry<'a> {
-        Value(String, &'a Value),
-        Error(String, &'a NodeError),
-    }
-
-    // Flatten entries: scalars are one line, structs expand to `name.field` lines,
-    // indexed values (1D only) expand to `name[Variant]` lines
-    fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatEntry<'a>>) {
-        match value {
-            Value::Scalar { .. }
-            | Value::Bool(_)
-            | Value::Int(_)
-            | Value::Label { .. }
-            | Value::Datetime { .. } => {
-                entries.push(FlatEntry::Value(prefix.to_string(), value));
-            }
-            Value::Struct {
-                type_name: _,
-                fields,
-            } => {
-                if fields.is_empty() {
-                    entries.push(FlatEntry::Value(prefix.to_string(), value));
-                } else {
-                    for (field_name, field_val) in fields {
-                        flatten_value(
-                            &format!("{prefix}.{}", field_name.as_str()),
-                            field_val,
-                            entries,
-                        );
-                    }
-                }
-            }
-            Value::Indexed { entries: idx, .. } => {
-                for (variant, entry_val) in idx {
-                    flatten_value(
-                        &format!("{prefix}[{}]", variant.as_str()),
-                        entry_val,
-                        entries,
-                    );
-                }
-            }
-        }
-    }
-
-    // Build output blocks preserving source order
-    let mut blocks: Vec<OutputBlock> = Vec::new();
-    let mut current_flat: Vec<FlatEntry> = Vec::new();
-
-    for (name, node_result, _) in &result.all {
-        match node_result {
-            Ok(value) if index_depth(value) >= 2 => {
-                // Flush accumulated flat entries before the table
-                if !current_flat.is_empty() {
-                    blocks.push(OutputBlock::Flat(std::mem::take(&mut current_flat)));
-                }
-                blocks.push(OutputBlock::Table(name.as_str(), value));
-            }
-            Ok(value) => {
-                flatten_value(name.as_str(), value, &mut current_flat);
-            }
-            Err(err) => {
-                current_flat.push(FlatEntry::Error(name.as_str().to_string(), err));
-            }
-        }
-    }
-    // Flush remaining flat entries
-    if !current_flat.is_empty() {
-        blocks.push(OutputBlock::Flat(current_flat));
-    }
-
-    // Compute max name width across all flat entries for alignment
-    let max_name_len = blocks
-        .iter()
-        .filter_map(|b| match b {
-            OutputBlock::Flat(entries) => Some(entries.iter().map(|e| match e {
-                FlatEntry::Value(n, _) | FlatEntry::Error(n, _) => n.len(),
-            })),
-            OutputBlock::Table(..) => None,
-        })
-        .flatten()
-        .max()
-        .unwrap_or(0);
-
-    // Print all blocks in order
+    // Print all blocks in order.
     for block in &blocks {
         match block {
             OutputBlock::Flat(entries) => {
                 let width = max_name_len;
                 for entry in entries {
                     match entry {
-                        FlatEntry::Error(name, err) => {
+                        display::FlatEntry::Error(name, err) => {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
-                        FlatEntry::Value(name, value) => {
+                        display::FlatEntry::Value(name, value) => {
                             if let Value::Scalar { .. } = value {
                                 #[expect(
                                     clippy::expect_used,
@@ -1028,68 +801,5 @@ mod tests {
     #[test]
     fn format_large_decimal() {
         assert_eq!(format_number(3138.128), "3138.128");
-    }
-
-    #[test]
-    fn parse_overrides_happy_path() {
-        let set = vec!["x=1.0 m".to_string(), "y=2".to_string()];
-        let overrides = parse_overrides(&set, None).unwrap();
-        assert_eq!(overrides.len(), 2);
-        assert!(overrides.contains_key(&DeclName::new("x")));
-        assert!(overrides.contains_key(&DeclName::new("y")));
-    }
-
-    #[test]
-    fn parse_overrides_trims_whitespace() {
-        let set = vec!["  x  =  42  ".to_string()];
-        let overrides = parse_overrides(&set, None).unwrap();
-        assert!(overrides.contains_key(&DeclName::new("x")));
-    }
-
-    #[test]
-    fn parse_overrides_missing_equals() {
-        let set = vec!["just_a_name".to_string()];
-        let err = parse_overrides(&set, None).unwrap_err();
-        assert!(
-            err.contains("invalid --set format"),
-            "unexpected message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_overrides_empty_name() {
-        let set = vec!["=42".to_string()];
-        let err = parse_overrides(&set, None).unwrap_err();
-        assert!(err.contains("name is empty"), "unexpected message: {err}");
-    }
-
-    #[test]
-    fn parse_overrides_empty_expression() {
-        let set = vec!["x=".to_string()];
-        let err = parse_overrides(&set, None).unwrap_err();
-        assert!(
-            err.contains("expression is empty"),
-            "unexpected message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_overrides_unparsable_expression() {
-        let set = vec!["x=###".to_string()];
-        let err = parse_overrides(&set, None).unwrap_err();
-        assert!(
-            err.contains("failed to parse --set value for `x`"),
-            "unexpected message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_overrides_missing_input_file() {
-        let missing = std::path::Path::new("/nonexistent/path/file.json");
-        let err = parse_overrides(&[], Some(missing)).unwrap_err();
-        assert!(
-            err.contains("cannot read input file"),
-            "unexpected message: {err}"
-        );
     }
 }

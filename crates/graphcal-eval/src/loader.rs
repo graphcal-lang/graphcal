@@ -570,7 +570,9 @@ mod tests {
 
     use graphcal_io::RealFileSystem;
 
-    const FS: RealFileSystem = RealFileSystem;
+    fn fs() -> RealFileSystem {
+        RealFileSystem::default()
+    }
 
     /// Create a temporary directory with the given files and return its path.
     fn setup_temp_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -588,7 +590,7 @@ mod tests {
     #[test]
     fn load_standalone_file() {
         let dir = setup_temp_dir(&[("standalone.gcl", "param x: Dimensionless = 1.0;")]);
-        let project = load_project(&dir.path().join("standalone.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("standalone.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 1);
         assert_eq!(project.load_order.len(), 1);
     }
@@ -602,7 +604,7 @@ mod tests {
                 "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper should be loaded before main (topological order)
@@ -624,7 +626,7 @@ mod tests {
                 "import \"./a.gcl\" { x };\nparam y: Dimensionless = 2.0;",
             ),
         ]);
-        let result = load_project(&dir.path().join("a.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("a.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -636,7 +638,7 @@ mod tests {
     #[test]
     fn load_missing_import_file() {
         let dir = setup_temp_dir(&[("main.gcl", "import \"./nonexistent.gcl\" { x };")]);
-        let result = load_project(&dir.path().join("main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("main.gcl"), None, &fs());
         assert!(result.is_err());
     }
 
@@ -665,7 +667,7 @@ mod tests {
         let overlay_source = "param x: Dimensionless = 99.0;";
         let canonical = root_path.canonicalize().unwrap();
         let fs = graphcal_io::OverlayFileSystem::new(
-            RealFileSystem,
+            RealFileSystem::default(),
             canonical,
             overlay_source.to_string(),
         );
@@ -689,7 +691,7 @@ mod tests {
         let overlay_source = "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
         let fs = graphcal_io::OverlayFileSystem::new(
-            RealFileSystem,
+            RealFileSystem::default(),
             canonical,
             overlay_source.to_string(),
         );
@@ -712,8 +714,11 @@ mod tests {
 
         let bad_overlay = "this is not valid graphcal";
         let canonical = root_path.canonicalize().unwrap();
-        let fs =
-            graphcal_io::OverlayFileSystem::new(RealFileSystem, canonical, bad_overlay.to_string());
+        let fs = graphcal_io::OverlayFileSystem::new(
+            RealFileSystem::default(),
+            canonical,
+            bad_overlay.to_string(),
+        );
         let result = load_project(&root_path, None, &fs);
         assert!(result.is_err());
     }
@@ -737,7 +742,7 @@ mod tests {
                 "import \"./b.gcl\" { x };\nimport \"./c.gcl\" { y };\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
-        let project = load_project(&dir.path().join("a.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
         let d_dag_id = DagId::new(["d"]);
@@ -806,7 +811,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_project(&project_dir.join("main.gcl"), None, &FS);
+        let result = load_project(&project_dir.join("main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -824,7 +829,7 @@ mod tests {
                 "import \"./sub/helper.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -837,7 +842,7 @@ mod tests {
                 "import \"../lib.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let result = load_project(&dir.path().join("sub/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("sub/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -849,7 +854,7 @@ mod tests {
     #[test]
     fn project_root_is_entry_point_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let result = project_root_for(dir.path(), &FS);
+        let result = project_root_for(dir.path(), &fs());
         assert_eq!(result, dir.path());
     }
 
@@ -861,7 +866,7 @@ mod tests {
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
         // From the subdirectory, the manifest in the parent should be found.
-        let result = project_root_for(&sub, &FS);
+        let result = project_root_for(&sub, &fs());
         assert_eq!(result, dir.path());
     }
 
@@ -876,7 +881,7 @@ mod tests {
         ]);
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
-        let project = load_project(&dir.path().join("sub/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("sub/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -891,7 +896,7 @@ mod tests {
         ]);
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
-        let project = load_project(&dir.path().join("deep/nested/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("deep/nested/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -904,7 +909,7 @@ mod tests {
                 "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
             ),
         ]);
-        let result = load_project(&dir.path().join("sub/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("sub/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -925,7 +930,7 @@ mod tests {
         fs::write(dir.path().join("graphcal.toml"), "").unwrap();
 
         let sub_dir = dir.path().join("sub");
-        let result = load_project(&dir.path().join("sub/main.gcl"), Some(&sub_dir), &FS);
+        let result = load_project(&dir.path().join("sub/main.gcl"), Some(&sub_dir), &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -945,7 +950,7 @@ mod tests {
         ]);
 
         let project =
-            load_project(&dir.path().join("sub/main.gcl"), Some(dir.path()), &FS).unwrap();
+            load_project(&dir.path().join("sub/main.gcl"), Some(dir.path()), &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -961,7 +966,7 @@ mod tests {
                 "import nasa/rocket { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -978,7 +983,7 @@ mod tests {
                 "import nasa/orbital/transfer { dv };\nnode x: Dimensionless = @dv;",
             ),
         ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -998,14 +1003,14 @@ mod tests {
                 "import myproject/helpers { x };\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("lib/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("lib/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
     #[test]
     fn load_bare_import_without_manifest_error() {
         let dir = setup_temp_dir(&[("main.gcl", "import nasa/rocket { x };")]);
-        let result = load_project(&dir.path().join("main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -1021,7 +1026,7 @@ mod tests {
             ("src/other/rocket.gcl", "param x: Dimensionless = 1.0;"),
             ("src/main.gcl", "import other/rocket { x };"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -1036,7 +1041,7 @@ mod tests {
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/main.gcl", "import graphcal/math { sin };"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -1051,7 +1056,7 @@ mod tests {
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/main.gcl", "import nasa/nonexistent { x };"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
     }
 
@@ -1072,7 +1077,7 @@ mod tests {
                 "include nasa/rocket/double(x: 5.0) { result as y };\nnode z: Dimensionless = @y;",
             ),
         ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &FS).unwrap();
+        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
         // The parent file `nasa/rocket.gcl` should be loaded.
         assert_eq!(project.files.len(), 2);
     }
@@ -1087,7 +1092,7 @@ mod tests {
                 "include nasa/rocket/nonexistent(x: 5.0) { result as y };",
             ),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &FS);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
     }
 }
