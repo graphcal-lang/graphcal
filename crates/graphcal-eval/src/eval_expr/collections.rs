@@ -452,31 +452,20 @@ fn eval_for_comp(
     let mut entries = IndexMap::new();
     // Clone local_values once before the loop; only the binding value changes per iteration.
     let mut inner_locals = local_values.clone();
-    for variant in &variants {
+    // Iterating with `enumerate()` gives us the step index directly for
+    // Range / NatRange kinds instead of round-tripping it through the
+    // `#N`-prefixed variant name.
+    for (step_index, variant) in variants.iter().enumerate() {
         let binding_value = match &idx_def.kind {
             crate::registry::IndexKind::Named { .. }
             | crate::registry::IndexKind::RequiredNamed => RuntimeValue::Label {
                 index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
-            crate::registry::IndexKind::Range(data) => {
-                let step_index = variant
-                    .as_str()
-                    .strip_prefix('#')
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or_else(|| {
-                        ctx.internal_error(
-                            format!(
-                                "range variant `{variant}` has unexpected format (expected #N)"
-                            ),
-                            error_span,
-                        )
-                    })?;
-                RuntimeValue::RangeLabel {
-                    step_index,
-                    value: data.step_value(step_index),
-                }
-            }
+            crate::registry::IndexKind::Range(data) => RuntimeValue::RangeLabel {
+                step_index,
+                value: data.step_value(step_index),
+            },
             // RequiredRange has 0 variants, so this loop body is never reached.
             crate::registry::IndexKind::RequiredRange { .. } => {
                 return Err(ctx.internal_error(
@@ -485,19 +474,7 @@ fn eval_for_comp(
                 ));
             }
             crate::registry::IndexKind::NatRange { .. } => {
-                // Nat range loop variable: integer value
-                let step_index = variant
-                    .as_str()
-                    .strip_prefix('#')
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or_else(|| {
-                        ctx.internal_error(
-                            format!(
-                                "nat range variant `{variant}` has unexpected format (expected #N)"
-                            ),
-                            error_span,
-                        )
-                    })?;
+                // Nat range loop variable: integer value from the step index.
                 RuntimeValue::Int(i64::try_from(step_index).map_err(|_| {
                     ctx.internal_error(
                         format!("nat range step {step_index} too large for i64"),

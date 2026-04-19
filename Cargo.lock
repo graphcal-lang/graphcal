@@ -522,6 +522,7 @@ dependencies = [
  "graphcal-compiler",
  "insta",
  "pretty",
+ "thiserror",
 ]
 
 [[package]]

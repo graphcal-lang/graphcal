@@ -233,9 +233,10 @@ fn trailing_newline() {
 }
 
 #[test]
-fn parse_error_returns_none() {
+fn parse_error_returns_err() {
     let source = "this is not valid gcl }{}{";
-    assert!(format_source(source).is_none());
+    let err = format_source(source).expect_err("expected parse error");
+    assert!(matches!(err, graphcal_fmt::FormatError::Parse(_)));
 }
 
 #[test]

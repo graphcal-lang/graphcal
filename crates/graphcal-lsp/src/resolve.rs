@@ -53,16 +53,14 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
         }
     }
     // Then check definitions.
-    if let Some(definition) = analysis.symbol_table.find_definition_at(offset) {
-        let span = definition.name_span;
-        // Find the actual key in the definitions map (may differ from `definition.name`
-        // for scoped symbols like `fn_name::param`).
-        let key = analysis.symbol_table.find_definition_key(definition);
+    if let Some(definition) = analysis.symbol_table.find_definition_at(offset)
+        && let Some(key) = analysis.symbol_table.find_definition_key(definition)
+    {
         return Some(ResolvedSymbol {
             key,
             location: SymbolLocation::Local(definition),
             is_reference: false,
-            cursor_span: span,
+            cursor_span: definition.name_span,
         });
     }
     None

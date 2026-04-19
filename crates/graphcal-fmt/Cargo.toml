@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 graphcal-compiler = { workspace = true }
 pretty = { workspace = true }
+thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

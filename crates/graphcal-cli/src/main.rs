@@ -360,9 +360,12 @@ fn run_format(paths: &[PathBuf], check: bool) {
             process::exit(1);
         });
 
-        let Some(formatted) = graphcal_fmt::format_source(&source) else {
-            eprintln!("warning: {} has parse errors, skipping", file.display());
-            continue;
+        let formatted = match graphcal_fmt::format_source(&source) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("warning: {}: {e}, skipping", file.display());
+                continue;
+            }
         };
 
         if source == formatted {
