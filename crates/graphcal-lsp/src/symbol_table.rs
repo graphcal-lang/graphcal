@@ -722,6 +722,69 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table:
         None,
         visibility,
     );
+    // Register the dag's body params and nodes as `Qualified` members so that
+    // inline-call projections (`@dag(...)::out`) and future goto-def on dag
+    // params can resolve to their definitions inside the dag body.
+    let dag_name = d.name.value.to_string();
+    for body_decl in &d.body {
+        match &body_decl.kind {
+            graphcal_compiler::syntax::ast::DeclKind::Param(p) => {
+                let member = p.name.value.to_string();
+                table.insert_definition(
+                    SymbolKey::Qualified {
+                        module: dag_name.clone(),
+                        name: member.clone(),
+                    },
+                    DefinitionInfo {
+                        name: member,
+                        category: SymbolCategory::Param,
+                        name_span: p.name.span,
+                        decl_span: body_decl.span,
+                        type_description: None,
+                        detail: None,
+                        visibility: Some(body_decl.visibility),
+                    },
+                );
+            }
+            graphcal_compiler::syntax::ast::DeclKind::Node(n) => {
+                let member = n.name.value.to_string();
+                table.insert_definition(
+                    SymbolKey::Qualified {
+                        module: dag_name.clone(),
+                        name: member.clone(),
+                    },
+                    DefinitionInfo {
+                        name: member,
+                        category: SymbolCategory::Node,
+                        name_span: n.name.span,
+                        decl_span: body_decl.span,
+                        type_description: None,
+                        detail: None,
+                        visibility: Some(body_decl.visibility),
+                    },
+                );
+            }
+            graphcal_compiler::syntax::ast::DeclKind::ConstNode(c) => {
+                let member = c.name.value.to_string();
+                table.insert_definition(
+                    SymbolKey::Qualified {
+                        module: dag_name.clone(),
+                        name: member.clone(),
+                    },
+                    DefinitionInfo {
+                        name: member,
+                        category: SymbolCategory::Const,
+                        name_span: c.name.span,
+                        decl_span: body_decl.span,
+                        type_description: None,
+                        detail: None,
+                        visibility: Some(body_decl.visibility),
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
@@ -786,7 +849,7 @@ fn collect_expr_refs(
             module,
             dag,
             args,
-            output: _,
+            output,
         } => {
             let dag_target = module.as_ref().map_or_else(
                 || SymbolKey::TopLevel(dag.value.to_string()),
@@ -798,6 +861,19 @@ fn collect_expr_refs(
             table.references.push(ReferenceInfo {
                 span: dag.span,
                 target: dag_target,
+            });
+            // The projected output resolves to `dag_name::output` as a
+            // qualified member; goto-def jumps into the dag body.
+            // For qualified inline calls `@mod::dag(...)::out`, cross-file
+            // dag-member resolution is deferred; we still record the
+            // reference against the local qualified key so that, if the
+            // caller's dag body is also in this file, goto-def works.
+            table.references.push(ReferenceInfo {
+                span: output.span,
+                target: SymbolKey::Qualified {
+                    module: dag.value.to_string(),
+                    name: output.value.to_string(),
+                },
             });
             for binding in args {
                 collect_expr_refs(&binding.value, table, scopes);
@@ -1663,6 +1739,100 @@ mod tests {
         assert!(
             top_level_refs.is_empty(),
             "qualified ref should not create a TopLevel key"
+        );
+    }
+
+    // --- Inline DAG invocation LSP coverage (issue #451) ---
+
+    #[test]
+    fn inline_dag_call_registers_dag_and_member_definitions() {
+        let source = "\
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+";
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let table = build_from_ast(&file);
+
+        // The dag itself is a TopLevel definition.
+        let dag_key = SymbolKey::TopLevel("scale".to_string());
+        assert!(table.definitions.contains_key(&dag_key));
+        assert_eq!(table.definitions[&dag_key].category, SymbolCategory::Dag);
+
+        // The dag's params and nodes are registered as Qualified members.
+        let factor_key = SymbolKey::Qualified {
+            module: "scale".to_string(),
+            name: "factor".to_string(),
+        };
+        let v_key = SymbolKey::Qualified {
+            module: "scale".to_string(),
+            name: "v".to_string(),
+        };
+        let result_key = SymbolKey::Qualified {
+            module: "scale".to_string(),
+            name: "result".to_string(),
+        };
+        assert!(table.definitions.contains_key(&factor_key));
+        assert!(table.definitions.contains_key(&v_key));
+        assert!(table.definitions.contains_key(&result_key));
+        assert_eq!(
+            table.definitions[&result_key].category,
+            SymbolCategory::Node
+        );
+    }
+
+    #[test]
+    fn inline_dag_call_records_dag_and_output_references() {
+        let source = "\
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+";
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let table = build_from_ast(&file);
+
+        // `@scale` reference points to the dag (goto-def → dag decl).
+        let dag_refs = table.find_all_references(&SymbolKey::TopLevel("scale".to_string()));
+        assert!(
+            !dag_refs.is_empty(),
+            "expected a reference for the inline-call dag token"
+        );
+
+        // `::result` reference points into the dag body (goto-def → result node).
+        let output_refs = table.find_all_references(&SymbolKey::Qualified {
+            module: "scale".to_string(),
+            name: "result".to_string(),
+        });
+        assert!(
+            !output_refs.is_empty(),
+            "expected a reference for the inline-call output token"
+        );
+
+        // The output reference span should cover the `result` token at the end of
+        // the inline call, not the dag-name or arg-list tokens.
+        let result_tok_offset = source.rfind("::result").unwrap() + "::".len();
+        let tok = table.find_reference_at(result_tok_offset);
+        assert!(tok.is_some(), "expected to find a reference at ::result");
+        assert_eq!(
+            tok.unwrap().target,
+            SymbolKey::Qualified {
+                module: "scale".to_string(),
+                name: "result".to_string(),
+            }
         );
     }
 }
