@@ -100,7 +100,7 @@ mod tests {
         let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "main.gcl")
             .parse_file()
             .unwrap();
-        let symbol_table = symbol_table::build_from_ast(&ast);
+        let symbol_table = symbol_table::build_from_ast(&ast, source);
 
         // Simulate imported definitions from two different modules.
         let mut imported_definitions = std::collections::HashMap::new();

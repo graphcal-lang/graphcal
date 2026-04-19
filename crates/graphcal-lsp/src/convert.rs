@@ -26,6 +26,57 @@ pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
     }
 }
 
+/// Precompute a sorted table of line-start byte offsets for `source`.
+///
+/// Pairs with [`byte_offset_to_position_cached`] to answer many position
+/// queries against the same source without rescanning it on each call.
+///
+/// The returned vector always starts with `0` (the first line starts at the
+/// beginning of the source) and has one entry per line.
+pub fn compute_line_starts(source: &str) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(source.bytes().filter(|&b| b == b'\n').count() + 1);
+    starts.push(0);
+    for (i, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+/// Convert a byte offset to an LSP `Position` using a precomputed `line_starts` table.
+///
+/// `line_starts` must be the output of [`compute_line_starts`] for the same
+/// `source` being queried. The line lookup is O(log lines); the column
+/// computation is O(col) (UTF-16 widths on the one line the offset sits in).
+///
+/// This is the hot-path variant called by inlay hints, which answers many
+/// position queries per request.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "char::len_utf16() returns 1 or 2, never truncates to u32; line count fits in u32 for any realistic source"
+)]
+pub fn byte_offset_to_position_cached(
+    line_starts: &[usize],
+    source: &str,
+    offset: usize,
+) -> Position {
+    let offset = offset.min(source.len());
+    // Find the line whose start is <= offset. `partition_point` returns the
+    // first index where the predicate is false, so we subtract 1.
+    let line_idx = line_starts.partition_point(|&start| start <= offset).max(1) - 1;
+    let line_start = line_starts[line_idx];
+    // Compute UTF-16 columns on the single line containing `offset`.
+    let col: u32 = source[line_start..offset]
+        .chars()
+        .map(|ch| ch.len_utf16() as u32)
+        .sum();
+    Position {
+        line: line_idx as u32,
+        character: col,
+    }
+}
+
 /// Convert an LSP `Position` (0-based line and UTF-16 character offset) to a byte offset in `source`.
 ///
 /// The returned offset is always at a valid UTF-8 `char` boundary, clamped to the
@@ -278,5 +329,52 @@ mod tests {
                 "round-trip failed for offset {offset} via {pos:?}"
             );
         }
+    }
+
+    #[test]
+    fn compute_line_starts_basic() {
+        let source = "hello\nworld\nfoo";
+        let starts = compute_line_starts(source);
+        assert_eq!(starts, vec![0, 6, 12]);
+    }
+
+    #[test]
+    fn compute_line_starts_empty() {
+        let starts = compute_line_starts("");
+        assert_eq!(starts, vec![0]);
+    }
+
+    #[test]
+    fn cached_matches_uncached_ascii() {
+        let source = "hello\nworld\nfoo bar\nbaz";
+        let starts = compute_line_starts(source);
+        for offset in 0..=source.len() {
+            let a = byte_offset_to_position(source, offset);
+            let b = byte_offset_to_position_cached(&starts, source, offset);
+            assert_eq!(a, b, "mismatch at offset {offset}");
+        }
+    }
+
+    #[test]
+    fn cached_matches_uncached_non_bmp() {
+        let source = "a🙂\nb🎉c\nend";
+        let starts = compute_line_starts(source);
+        for offset in 0..=source.len() {
+            if !source.is_char_boundary(offset) {
+                continue;
+            }
+            let a = byte_offset_to_position(source, offset);
+            let b = byte_offset_to_position_cached(&starts, source, offset);
+            assert_eq!(a, b, "mismatch at offset {offset}");
+        }
+    }
+
+    #[test]
+    fn cached_clamps_past_end() {
+        let source = "hi";
+        let starts = compute_line_starts(source);
+        let pos = byte_offset_to_position_cached(&starts, source, 100);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.character, 2);
     }
 }
