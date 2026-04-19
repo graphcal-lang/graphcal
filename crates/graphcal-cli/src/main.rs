@@ -354,11 +354,19 @@ fn run_format(paths: &[PathBuf], check: bool) {
     }
 
     let mut unformatted_count = 0;
+    let mut error_count = 0;
     for file in &targets {
-        let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
-            eprintln!("error: cannot read {}: {e}", file.display());
-            process::exit(1);
-        });
+        let source = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                // Match `run_check`'s behavior: accumulate errors across the
+                // batch instead of aborting on the first failure so users see
+                // the full picture in one run.
+                eprintln!("error: cannot read {}: {e}", file.display());
+                error_count += 1;
+                continue;
+            }
+        };
 
         let formatted = match graphcal_fmt::format_source(&source) {
             Ok(f) => f,
@@ -388,6 +396,10 @@ fn run_format(paths: &[PathBuf], check: bool) {
         eprintln!("{unformatted_count} file(s) would be reformatted");
         process::exit(1);
     }
+    if error_count > 0 {
+        eprintln!("{error_count} file(s) could not be read");
+        process::exit(1);
+    }
 }
 
 /// Directories to skip during recursive `.gcl` file collection.
@@ -397,21 +409,44 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pyca
 ///
 /// Uses `walkdir` for safe traversal: symlinks are not followed and common
 /// generated directories (`.git`, `target`, `node_modules`, etc.) are skipped.
+/// Traversal errors (permission denied, transient I/O) are logged to stderr
+/// rather than silently dropped so users know when `format` only saw part of
+/// the tree.
+#[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
 fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
-            // Skip well-known generated/vendored directories
+            // Skip well-known generated/vendored directories.
+            // Non-UTF-8 directory names are not skipped — they won't match
+            // any SKIP_DIRS entry anyway, so we intentionally let them
+            // through rather than treating them as if they were the empty
+            // string.
             if e.file_type().is_dir() {
-                return !SKIP_DIRS.contains(&e.file_name().to_str().unwrap_or(""));
+                return !e
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| SKIP_DIRS.contains(&name));
             }
             true
         })
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "gcl"))
-        .map(walkdir::DirEntry::into_path)
-        .collect();
+    {
+        match entry {
+            Ok(e) if e.path().extension().is_some_and(|ext| ext == "gcl") => {
+                files.push(e.into_path());
+            }
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!(
+                    "warning: could not traverse {}: {err}",
+                    err.path()
+                        .map_or_else(|| dir.display().to_string(), |p| p.display().to_string())
+                );
+            }
+        }
+    }
     files.sort();
     files
 }
