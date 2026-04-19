@@ -1659,7 +1659,7 @@ fn eval_inline_dag_call_basic() {
 dag scale {
     param factor: Dimensionless;
     param v: Length;
-    node result: Length = @v * @factor;
+    pub node result: Length = @v * @factor;
 }
 
 param src: Length = 10.0 m;
@@ -1681,7 +1681,7 @@ fn eval_inline_dag_call_chains_through_body_nodes() {
 dag two_step {
     param v: Length;
     node mid: Length = @v * 2.0;
-    node result: Length = @mid + 1.0 m;
+    pub node result: Length = @mid + 1.0 m;
 }
 
 param src: Length = 3.0 m;
@@ -1702,7 +1702,7 @@ pub index Region = { A, B };
 
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
@@ -1742,7 +1742,7 @@ pub index Region = { A, B };
 
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param dist_primary: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
@@ -1816,7 +1816,7 @@ fn eval_inline_dag_call_forward_reference_within_body() {
     let source = "\
 dag forward {
     param v: Length;
-    node b: Length = @a * 2.0;
+    pub node b: Length = @a * 2.0;
     node a: Length = @v + 1.0 m;
 }
 
@@ -1837,7 +1837,7 @@ fn eval_inline_dag_call_const_node_in_body() {
 dag with_const {
     param v: Length;
     const node multiplier: Dimensionless = 3.0;
-    node result: Length = @v * @multiplier;
+    pub node result: Length = @v * @multiplier;
 }
 
 param src: Length = 4.0 m;

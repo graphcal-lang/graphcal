@@ -1057,7 +1057,7 @@ const INLINE_DAG_CALL_SCALE: &str = "\
 dag scale {
     param factor: Dimensionless;
     param v: Length;
-    node result: Length = @v * @factor;
+    pub node result: Length = @v * @factor;
 }
 
 param src: Length = 10.0 m;
@@ -1089,7 +1089,7 @@ fn inline_dag_call_unknown_param() {
     let source = "\
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param src: Length = 10.0 m;
@@ -1108,7 +1108,7 @@ fn inline_dag_call_missing_binding() {
 dag scale {
     param factor: Dimensionless;
     param v: Length;
-    node result: Length = @v * @factor;
+    pub node result: Length = @v * @factor;
 }
 
 param src: Length = 10.0 m;
@@ -1144,7 +1144,7 @@ fn inline_dag_call_arg_dim_mismatch() {
     let source = "\
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param src: Time = 10.0 s;
@@ -1182,7 +1182,7 @@ pub index Region = { A, B };
 
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
 param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
@@ -1207,7 +1207,7 @@ fn inline_dag_body_dimension_mismatch_caught_at_compile_time() {
     let source = "\
 dag bogus {
     param v: Length;
-    node result: Length = @v + 1.0 s;
+    pub node result: Length = @v + 1.0 s;
 }
 
 param src: Length = 10.0 m;
@@ -1221,11 +1221,44 @@ node y: Length = @bogus(v: @src)::result;
 }
 
 #[test]
+fn inline_dag_projection_requires_pub() {
+    // Projecting a non-`pub` body node is rejected with the same error
+    // shape as `include lib_dag(...) { private_result }`.
+    let source = "\
+dag private_result {
+    param v: Length;
+    node hidden: Length = @v;
+}
+
+param src: Length = 10.0 m;
+node y: Length = @private_result(v: @src)::hidden;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ImportPrivateItem { .. }),
+        "expected ImportPrivateItem for non-pub projection, got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_pub_bind_on_node_rejected_at_parse() {
+    // `pub(bind)` on a node is not meaningful — `param` is how you declare
+    // a bindable input. The parser rejects this at parse time.
+    let source = "\
+dag broken {
+    param v: Length;
+    pub(bind) node result: Length = @v;
+}
+";
+    assert!(Parser::new(source).parse_file().is_err());
+}
+
+#[test]
 fn inline_dag_self_recursive_cycle_detected() {
     let source = "\
 dag loop_self {
     param v: Length;
-    node result: Length = @loop_self(v: @v)::result;
+    pub node result: Length = @loop_self(v: @v)::result;
 }
 
 param src: Length = 1.0 m;
@@ -1243,12 +1276,12 @@ fn inline_dag_mutual_recursion_cycle_detected() {
     let source = "\
 dag a {
     param v: Length;
-    node out: Length = @b(v: @v)::out;
+    pub node out: Length = @b(v: @v)::out;
 }
 
 dag b {
     param v: Length;
-    node out: Length = @a(v: @v)::out;
+    pub node out: Length = @a(v: @v)::out;
 }
 
 param src: Length = 1.0 m;
@@ -1269,7 +1302,7 @@ fn inline_dag_body_forward_reference_resolves() {
     let source = "\
 dag forward {
     param v: Length;
-    node b: Length = @a;
+    pub node b: Length = @a;
     node a: Length = @v;
 }
 

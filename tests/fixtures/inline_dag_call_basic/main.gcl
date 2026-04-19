@@ -8,7 +8,7 @@ dag scale {
 
     param v: Velocity;
 
-    node result: Velocity = @v * @factor;
+    pub node result: Velocity = @v * @factor;
 }
 
 param speed: Velocity = 10.0 m/s;
