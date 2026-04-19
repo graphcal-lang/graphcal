@@ -1221,6 +1221,47 @@ node y: Length = @bogus(v: @src)::result;
 }
 
 #[test]
+fn inline_dag_self_recursive_cycle_detected() {
+    let source = "\
+dag loop_self {
+    param v: Length;
+    node result: Length = @loop_self(v: @v)::result;
+}
+
+param src: Length = 1.0 m;
+node y: Length = @loop_self(v: @src)::result;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::CyclicDependency { .. }),
+        "expected CyclicDependency, got: {err:?}"
+    );
+}
+
+#[test]
+fn inline_dag_mutual_recursion_cycle_detected() {
+    let source = "\
+dag a {
+    param v: Length;
+    node out: Length = @b(v: @v)::out;
+}
+
+dag b {
+    param v: Length;
+    node out: Length = @a(v: @v)::out;
+}
+
+param src: Length = 1.0 m;
+node y: Length = @a(v: @src)::out;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::CyclicDependency { .. }),
+        "expected CyclicDependency, got: {err:?}"
+    );
+}
+
+#[test]
 fn inline_dag_body_forward_reference_resolves() {
     // A dag body that references a later node — formerly broken at eval
     // (source-order walk), now works because the dag body is compiled
