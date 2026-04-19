@@ -15,13 +15,13 @@ use miette::NamedSource;
 
 use graphcal_compiler::syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 
-use crate::builtins::BuiltinFunction;
-use crate::declared_type::DeclaredType;
-use crate::error::GraphcalError;
-use crate::registry::{Registry, UnitScale};
-use crate::tir::TIR;
+use graphcal_compiler::registry::builtins::BuiltinFunction;
+use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::types::{Registry, UnitScale};
+use graphcal_compiler::tir::typed::TIR;
 
-pub use crate::runtime_value::RuntimeValue;
+pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
@@ -361,13 +361,13 @@ fn eval_inline_dag_call(
         // Name may not be available in any scope; the dim-check layer
         // already verifies reachability, so body eval will surface a
         // concrete error if it actually dereferences this name.
-        if let Some((value, _)) = dag_tir.imported_values.get(scoped) {
+        let value = dag_tir
+            .imported_values
+            .get(scoped)
+            .map(|(v, _)| v)
+            .or_else(|| caller_values.get(member));
+        if let Some(value) = value {
             dag_values.insert(member.to_string(), value.clone());
-        } else if let Some(value) = caller_values.get(member) {
-            dag_values.insert(member.to_string(), value.clone());
-        } else {
-            // Name is unresolved here; body eval will surface the concrete
-            // error if it actually dereferences this name.
         }
     }
 

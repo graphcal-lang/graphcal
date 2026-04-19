@@ -336,7 +336,15 @@ impl Parser<'_> {
         })?;
 
         if bindings.is_empty() {
-            let (tok, span) = self.advance()?;
+            // Peek at the current token to report its span; `parse_comma_separated`
+            // leaves us positioned at `RParen` when no bindings were parsed, but
+            // we should not consume it — the caller's `expect(RParen)` below
+            // would never fire in that case, so emit the error here using a
+            // non-destructive peek.
+            let (tok, span) = match self.lexer.peek_with_span() {
+                Some((tok, span)) => (tok.clone(), span),
+                None => return Err(self.unexpected_eof("at least one param binding")),
+            };
             return Err(self.unexpected_token(
                 "at least one param binding",
                 &tok.to_string(),

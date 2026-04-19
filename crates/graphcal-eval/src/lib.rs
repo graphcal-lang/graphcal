@@ -8,26 +8,6 @@
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
 
-// Re-export foundation modules from graphcal-registry.
-pub use graphcal_compiler::registry::builtins;
-pub use graphcal_compiler::registry::declared_type;
-pub use graphcal_compiler::registry::error;
-pub use graphcal_compiler::registry::format;
-pub use graphcal_compiler::registry::manifest;
-pub use graphcal_compiler::registry::prelude;
-pub use graphcal_compiler::registry::resolve_types;
-pub use graphcal_compiler::registry::runtime_value;
-pub use graphcal_compiler::registry::time_scale;
-pub use graphcal_compiler::registry::types as registry;
-
-// Re-export IR modules from graphcal-ir.
-pub use graphcal_compiler::ir::lower as ir;
-pub use graphcal_compiler::ir::resolve;
-
-// Re-export TIR modules from graphcal-tir.
-pub use graphcal_compiler::tir::dim_check;
-pub use graphcal_compiler::tir::typed as tir;
-
 // Modules owned by graphcal-eval.
 pub(crate) mod domain_check;
 pub mod eval;

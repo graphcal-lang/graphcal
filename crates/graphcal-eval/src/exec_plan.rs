@@ -14,10 +14,10 @@ use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::builtins::{builtin_constants, builtin_functions};
-use crate::error::GraphcalError;
 use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
-use crate::tir::{ResolvedDomainConstraint, TIR};
+use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::tir::typed::{ResolvedDomainConstraint, TIR};
 
 /// An assert body entry for execution.
 #[derive(Debug, Clone)]
@@ -59,7 +59,7 @@ pub struct ExecPlan {
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
     /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
-    pub(crate) imported_values: HashMap<crate::resolve::ScopedName, RuntimeValue>,
+    pub(crate) imported_values: HashMap<graphcal_compiler::ir::resolve::ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub(crate) topo_order: Vec<DeclName>,
     /// Runtime expressions keyed by declaration name (params + nodes).
@@ -78,7 +78,7 @@ pub struct ExecPlan {
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<DeclName, crate::resolve::ExpectedFail>,
+    pub(crate) expected_fail: HashMap<DeclName, graphcal_compiler::ir::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>,
@@ -261,7 +261,7 @@ fn build_runtime_dag(
     }
 
     impl DeclRef<'_> {
-        const fn name(&self) -> &crate::resolve::ScopedName {
+        const fn name(&self) -> &graphcal_compiler::ir::resolve::ScopedName {
             match self {
                 Self::Param(e) => &e.name,
                 Self::Node(e) => &e.name,
@@ -510,7 +510,7 @@ fn resolve_domain_constraints(
 /// Format a runtime value for inclusion in a `DomainViolation` error message.
 fn format_runtime_value(rv: &RuntimeValue) -> String {
     match rv {
-        RuntimeValue::Scalar(v) => crate::format::format_number(*v),
+        RuntimeValue::Scalar(v) => graphcal_compiler::registry::format::format_number(*v),
         RuntimeValue::Int(i) => format!("{i}"),
         RuntimeValue::Indexed { entries, .. } => {
             // Show the first violating entry's value if recoverable; otherwise summary.
@@ -542,9 +542,13 @@ fn extract_domain_bounds(
 }
 
 /// Strip `Indexed` wrapper to get the base resolved type.
-fn strip_indexed(resolved: &crate::tir::ResolvedTypeExpr) -> &crate::tir::ResolvedTypeExpr {
+fn strip_indexed(
+    resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
+) -> &graphcal_compiler::tir::typed::ResolvedTypeExpr {
     match resolved {
-        crate::tir::ResolvedTypeExpr::Indexed { base, .. } => strip_indexed(base),
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Indexed { base, .. } => {
+            strip_indexed(base)
+        }
         other => other,
     }
 }
@@ -552,7 +556,7 @@ fn strip_indexed(resolved: &crate::tir::ResolvedTypeExpr) -> &crate::tir::Resolv
 /// Validate that the resolved type supports domain constraints.
 fn validate_constraint_target(
     _name: &str,
-    base_resolved: Option<&crate::tir::ResolvedTypeExpr>,
+    base_resolved: Option<&graphcal_compiler::tir::typed::ResolvedTypeExpr>,
     decl_span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -560,38 +564,44 @@ fn validate_constraint_target(
         return Ok(()); // No resolved type — skip validation (will be caught elsewhere)
     };
     match resolved {
-        crate::tir::ResolvedTypeExpr::Scalar(_)
-        | crate::tir::ResolvedTypeExpr::Dimensionless
-        | crate::tir::ResolvedTypeExpr::Int => Ok(()),
-        crate::tir::ResolvedTypeExpr::Bool => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: "Bool".to_string(),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        crate::tir::ResolvedTypeExpr::Datetime(_) => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: "Datetime".to_string(),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        crate::tir::ResolvedTypeExpr::Label(idx, _) => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: format!("Label({idx})"),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        crate::tir::ResolvedTypeExpr::Struct(name_s, _)
-        | crate::tir::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Scalar(_)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::Dimensionless
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::Int => Ok(()),
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Bool => {
+            Err(GraphcalError::InvalidDomainTarget {
+                type_kind: "Bool".to_string(),
+                src: src.clone(),
+                span: decl_span.into(),
+            })
+        }
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Datetime(_) => {
+            Err(GraphcalError::InvalidDomainTarget {
+                type_kind: "Datetime".to_string(),
+                src: src.clone(),
+                span: decl_span.into(),
+            })
+        }
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
+            Err(GraphcalError::InvalidDomainTarget {
+                type_kind: format!("Label({idx})"),
+                src: src.clone(),
+                span: decl_span.into(),
+            })
+        }
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
             Err(GraphcalError::InvalidDomainTarget {
                 type_kind: format!("struct `{name_s}`"),
                 src: src.clone(),
                 span: decl_span.into(),
             })
         }
-        crate::tir::ResolvedTypeExpr::GenericDimParam(_, _)
-        | crate::tir::ResolvedTypeExpr::GenericDimExpr { .. } => {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. } => {
             // Generic types in function signatures — constraints don't apply here
             Ok(())
         }
-        crate::tir::ResolvedTypeExpr::Indexed { .. } => {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Indexed { .. } => {
             // Already stripped, shouldn't reach here
             Ok(())
         }
@@ -606,11 +616,11 @@ fn validate_constraint_target(
 fn format_bound_display(expr: &graphcal_compiler::syntax::ast::Expr, si_value: f64) -> String {
     use graphcal_compiler::syntax::ast::ExprKind;
     match &expr.kind {
-        ExprKind::Number(n) => crate::format::format_number(*n),
+        ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::UnitLiteral { value, unit } => {
-            let unit_str = crate::format::format_unit_expr(unit);
-            let val_str = crate::format::format_number(*value);
+            let unit_str = graphcal_compiler::registry::format::format_unit_expr(unit);
+            let val_str = graphcal_compiler::registry::format::format_number(*value);
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
@@ -620,7 +630,7 @@ fn format_bound_display(expr: &graphcal_compiler::syntax::ast::Expr, si_value: f
             format!("-{}", format_bound_display(operand, -si_value))
         }
         // Fallback: display the already-evaluated SI value.
-        _ => crate::format::format_number(si_value),
+        _ => graphcal_compiler::registry::format::format_number(si_value),
     }
 }
 
@@ -634,9 +644,9 @@ mod tests {
         reason = "test code"
     )]
     use super::*;
-    use crate::ir::lower;
-    use crate::tir::type_resolve;
+    use graphcal_compiler::ir::lower::lower;
     use graphcal_compiler::syntax::parser::Parser;
+    use graphcal_compiler::tir::typed::type_resolve;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test", Arc::new(source.to_string()))

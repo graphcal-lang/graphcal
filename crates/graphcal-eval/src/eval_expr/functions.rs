@@ -7,12 +7,12 @@ use miette::NamedSource;
 use graphcal_compiler::syntax::ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::VariantName;
 
-use crate::error::GraphcalError;
-use crate::resolve_types::{
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::resolve_types::{
     AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
     TypeConversionFn, classify_special_fn,
 };
-use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::arithmetic::check_finite;
@@ -47,8 +47,10 @@ pub(super) fn eval_fn_call(
                 clippy::expect_used,
                 reason = "TimeScaleConversion variant guarantees a valid time scale name"
             )]
-            let scale = crate::time_scale::time_scale_from_conversion_fn(name.value.as_str())
-                .expect("TimeScaleConversion variant guarantees a valid time scale name");
+            let scale = graphcal_compiler::registry::time_scale::time_scale_from_conversion_fn(
+                name.value.as_str(),
+            )
+            .expect("TimeScaleConversion variant guarantees a valid time scale name");
             fn_ctx.dispatch_timescale(scale)
         }
         Some(SpecialFnKind::Constructor(kind)) => {
@@ -87,7 +89,10 @@ impl FnDispatch<'_, '_> {
 
     /// Fallback: check for a time-scale conversion, then builtins.
     fn dispatch_timescale_or_builtin(&self) -> Result<RuntimeValue, GraphcalError> {
-        crate::time_scale::time_scale_from_conversion_fn(self.name.value.as_str()).map_or_else(
+        graphcal_compiler::registry::time_scale::time_scale_from_conversion_fn(
+            self.name.value.as_str(),
+        )
+        .map_or_else(
             || self.dispatch_builtin(),
             |scale| self.dispatch_timescale(scale),
         )
@@ -95,7 +100,7 @@ impl FnDispatch<'_, '_> {
 
     fn dispatch_timescale(
         &self,
-        target_scale: crate::time_scale::TimeScale,
+        target_scale: graphcal_compiler::registry::time_scale::TimeScale,
     ) -> Result<RuntimeValue, GraphcalError> {
         eval_timescale_fn(
             self.expr,
@@ -359,7 +364,7 @@ fn eval_timescale_fn(
     _expr: &Expr,
     name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
-    target_scale: crate::time_scale::TimeScale,
+    target_scale: graphcal_compiler::registry::time_scale::TimeScale,
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,

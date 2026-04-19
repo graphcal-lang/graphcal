@@ -11,12 +11,14 @@ use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::syntax::names::{DeclName, IndexName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
-use crate::builtins::{BuiltinFunction, builtin_constants, builtin_functions};
-use crate::declared_type::DeclaredType;
-use crate::error::GraphcalError;
 use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
-use crate::registry::Registry;
-use crate::resolve::{DeclCategory, ExpectedFail};
+use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail};
+use graphcal_compiler::registry::builtins::{
+    BuiltinFunction, builtin_constants, builtin_functions,
+};
+use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::types::Registry;
 
 use super::display::{attach_display_units, extract_flat_display_unit, format_range_step};
 use super::project::resolve_field_declared_type;
@@ -125,7 +127,7 @@ pub(super) fn runtime_to_value(
         RuntimeValue::Datetime(epoch) => {
             let time_scale = match declared_type {
                 Some(DeclaredType::Datetime(s)) => *s,
-                _ => crate::time_scale::TimeScale::UTC,
+                _ => graphcal_compiler::registry::time_scale::TimeScale::UTC,
             };
             Value::Datetime {
                 epoch: *epoch,
@@ -151,8 +153,8 @@ pub(super) struct EvalLoopResult {
 /// Returns all computed values and any per-node errors.
 pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
-    tir: &crate::tir::TIR,
-    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    tir: &graphcal_compiler::tir::typed::TIR,
+    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
@@ -261,9 +263,9 @@ pub(super) fn run_eval_loop(
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
 pub(super) fn evaluate_plan(
-    tir: &crate::tir::TIR,
+    tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> EvalResult {
     let builtin_consts = builtin_constants();
@@ -844,7 +846,7 @@ fn evaluate_plot(
     values: &HashMap<String, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
-    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
 ) -> Option<PlotSpec> {
     let mut encodings = Vec::new();
     let mut encoding_meta = Vec::new();
@@ -917,7 +919,7 @@ fn evaluate_plot(
 /// unit literals and conversion targets.
 fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::syntax::ast::Expr,
-    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> AxisMeta {
@@ -932,7 +934,7 @@ fn extract_encoding_axis_meta(
 /// Walk an expression tree to find the first `@`-reference and extract its dimension name.
 fn extract_dimension_from_expr(
     expr: &graphcal_compiler::syntax::ast::Expr,
-    declared_types: &HashMap<String, crate::declared_type::DeclaredType>,
+    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
 ) -> Option<String> {
     use graphcal_compiler::syntax::ast::ExprKind;
@@ -959,18 +961,18 @@ fn extract_dimension_from_expr(
 ///
 /// Returns `None` for dimensionless, bool, int, etc.
 fn dimension_label_from_declared_type(
-    dt: &crate::declared_type::DeclaredType,
+    dt: &graphcal_compiler::registry::declared_type::DeclaredType,
     registry: &Registry,
 ) -> Option<String> {
     match dt {
-        crate::declared_type::DeclaredType::Scalar(dim) => {
+        graphcal_compiler::registry::declared_type::DeclaredType::Scalar(dim) => {
             if dim.is_dimensionless() {
                 None
             } else {
                 Some(registry.dimensions.format_dimension(dim))
             }
         }
-        crate::declared_type::DeclaredType::Indexed { element, .. } => {
+        graphcal_compiler::registry::declared_type::DeclaredType::Indexed { element, .. } => {
             dimension_label_from_declared_type(element, registry)
         }
         _ => None,

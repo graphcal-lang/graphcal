@@ -51,7 +51,7 @@ impl<'src> Formatter<'src> {
         RcDoc::concat(docs)
     }
 
-    /// Drain a trailing comment on the same line as `after_offset`.
+    /// Drain a trailing comment on the same line as `line_end_offset`.
     /// Returns the comment text (with leading space) or nil.
     pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> RcDoc<'static> {
         if self.next_comment >= self.metadata.comments.len() {
@@ -59,9 +59,10 @@ impl<'src> Formatter<'src> {
         }
         let comment = &self.metadata.comments[self.next_comment];
         // A trailing comment must be on the same line — its offset must be
-        // between the end of the node and the next newline.
-        if comment.span.offset() > line_end_offset {
-            // Check there's no newline between node end and comment start
+        // between the end of the node and the next newline. The boundary is
+        // inclusive: a comment starting exactly at `line_end_offset` (no
+        // whitespace between the node and `//`) is still trailing.
+        if comment.span.offset() >= line_end_offset {
             let between =
                 &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if !between.contains('\n') {

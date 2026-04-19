@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use graphcal_compiler::syntax::ast::{Expr, MatchArm};
 
-use crate::error::GraphcalError;
-use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::eval_expr;

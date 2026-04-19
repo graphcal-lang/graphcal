@@ -4,7 +4,7 @@
 //! evaluation time (validating param/node values in `eval::runtime`).
 
 use crate::eval_expr::RuntimeValue;
-use crate::tir::ResolvedDomainConstraint;
+use graphcal_compiler::tir::typed::ResolvedDomainConstraint;
 
 /// A domain-constraint violation with a human-readable message.
 ///
