@@ -12,11 +12,11 @@ use graphcal_compiler::syntax::names::{DeclName, Spanned};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
-use crate::declared_type::DeclaredType;
-use crate::error::GraphcalError;
-use crate::registry::{Registry, RegistryBuilder};
-use crate::resolve::{DeclCategory, ImportedValueNames, ScopedName};
-use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
+use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::types::{Registry, RegistryBuilder};
 
 use super::runtime::evaluate_plan;
 use super::types::{AssertResult, CompileError, EvalResult};
@@ -136,7 +136,7 @@ pub(super) struct EvaluatedFile {
     /// under `"alias::dag_name"` keys so qualified inline calls
     /// (`@alias::dag(args)::out`) resolve through the same machinery as
     /// same-file inline calls.
-    pub(super) dag_tirs: HashMap<String, crate::tir::TIR>,
+    pub(super) dag_tirs: HashMap<String, graphcal_compiler::tir::typed::TIR>,
 }
 
 impl EvaluatedFile {
@@ -151,7 +151,7 @@ impl EvaluatedFile {
 /// Produced by [`compile_single_file_in_project`] and consumed by the
 /// per-file evaluation and TIR compilation pipelines.
 pub(super) struct CompiledFile {
-    pub(super) tir: crate::tir::TIR,
+    pub(super) tir: graphcal_compiler::tir::typed::TIR,
     pub(super) declared_types: HashMap<String, DeclaredType>,
     /// Imported values for this file (cloned before being consumed by IR).
     /// Used by the root file to enrich output with imported value names.
@@ -416,7 +416,7 @@ pub(super) fn file_has_declaration(
 /// `Vec3<D: Dim, F: Type>`), the substitution map provides the concrete type.
 /// Otherwise, falls back to direct registry resolution.
 pub(super) fn resolve_field_declared_type(
-    field: &crate::registry::StructField,
+    field: &graphcal_compiler::registry::types::StructField,
     generic_sub: &HashMap<&str, &DeclaredType>,
     registry: &Registry,
 ) -> Option<DeclaredType> {
@@ -439,7 +439,7 @@ pub(super) fn resolve_field_declared_type(
 
 /// Validate and apply parameter overrides to an IR.
 pub(super) fn apply_overrides(
-    ir: &mut crate::ir::IR,
+    ir: &mut graphcal_compiler::ir::lower::IR,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
@@ -471,7 +471,11 @@ pub(super) fn apply_overrides(
             .chain(ir.nodes.iter().map(|e| e.name.member()))
             .collect();
         let mut graph_refs = std::collections::HashSet::new();
-        crate::resolve::collect_graph_refs(override_expr, &all_runtime, &mut graph_refs);
+        graphcal_compiler::ir::resolve::collect_graph_refs(
+            override_expr,
+            &all_runtime,
+            &mut graph_refs,
+        );
         ir.runtime_deps.insert(
             ScopedName::local(name_str),
             graph_refs.into_iter().map(ScopedName::local).collect(),
@@ -496,7 +500,7 @@ pub(super) fn apply_overrides(
 /// Returns a [`CompileError`] if lowering, resolution, or checking fails.
 pub fn compile_to_tir_from_project(
     project: &crate::loader::LoadedProject,
-) -> Result<crate::tir::TIR, CompileError> {
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     pipeline::compile_to_tir_project_perfile(project)
 }
 
@@ -555,7 +559,10 @@ pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
 /// # Errors
 ///
 /// Returns a [`CompileError`] if parsing, lowering, or checking fails.
-pub fn compile_to_tir(source: &str, name: &str) -> Result<crate::tir::TIR, CompileError> {
+pub fn compile_to_tir(
+    source: &str,
+    name: &str,
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let project = crate::loader::LoadedProject::from_source(source, name)?;
     compile_to_tir_from_project(&project)
 }
@@ -574,7 +581,13 @@ pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     project_root: Option<&Path>,
     fs: &F,
-) -> Result<(crate::tir::TIR, crate::loader::LoadedProject), CompileError> {
+) -> Result<
+    (
+        graphcal_compiler::tir::typed::TIR,
+        crate::loader::LoadedProject,
+    ),
+    CompileError,
+> {
     let project = crate::loader::load_project(root_path, project_root, fs)?;
     let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))

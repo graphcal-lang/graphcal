@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::error::GraphcalError;
 use crate::eval::CompileError;
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::FileSystemReader;
@@ -153,7 +153,7 @@ pub fn load_project<F: FileSystemReader>(
     let mut loading: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
-    let mut manifest: Option<crate::manifest::Manifest> = None;
+    let mut manifest: Option<graphcal_compiler::registry::manifest::Manifest> = None;
 
     load_file_dfs(
         &root_canonical,
@@ -191,7 +191,7 @@ fn load_file_dfs<F: FileSystemReader>(
     load_order: &mut Vec<DagId>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
-    manifest: &mut Option<crate::manifest::Manifest>,
+    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<(), CompileError> {
     // Already fully loaded — skip.
@@ -406,7 +406,7 @@ fn resolve_import_path<F: FileSystemReader>(
     parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: &mut Option<crate::manifest::Manifest>,
+    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     match import_path {
@@ -457,7 +457,7 @@ fn resolve_module_path<F: FileSystemReader>(
     span: graphcal_compiler::syntax::span::Span,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: &mut Option<crate::manifest::Manifest>,
+    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     let display_path = segments
@@ -492,7 +492,8 @@ fn resolve_module_path<F: FileSystemReader>(
                 message: e.to_string(),
             })
         })?;
-        let parsed = crate::manifest::parse_manifest_str(&manifest_content).map_err(|e| {
+        let parsed = graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
+            .map_err(|e| {
             CompileError::Eval(GraphcalError::ManifestError {
                 message: e.to_string(),
             })

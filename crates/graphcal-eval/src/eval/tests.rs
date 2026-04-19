@@ -6,7 +6,7 @@
     reason = "test code"
 )]
 use super::*;
-use crate::error::GraphcalError;
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_io::RealFileSystem;
 
 const FS: RealFileSystem = RealFileSystem;

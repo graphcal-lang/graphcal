@@ -10,11 +10,11 @@ use graphcal_compiler::syntax::ast::{
 };
 use graphcal_compiler::syntax::span::Span;
 
-use graphcal_eval::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::registry::format::format_unit_expr_with_config;
+use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
+use graphcal_compiler::tir::typed::{ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
-use graphcal_eval::format::format_unit_expr_with_config;
-use graphcal_eval::registry::{IndexKind, Registry, UnitScale};
-use graphcal_eval::tir::{ResolvedIndex, ResolvedTypeExpr, TIR};
 
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -761,63 +761,33 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table:
     // params can resolve to their definitions inside the dag body.
     let dag_name = d.name.value.to_string();
     for body_decl in &d.body {
-        match &body_decl.kind {
+        let (member_name, member_span, category) = match &body_decl.kind {
             graphcal_compiler::syntax::ast::DeclKind::Param(p) => {
-                let member = p.name.value.to_string();
-                table.insert_definition(
-                    SymbolKey::Qualified {
-                        module: dag_name.clone(),
-                        name: member.clone(),
-                    },
-                    DefinitionInfo {
-                        name: member,
-                        category: SymbolCategory::Param,
-                        name_span: p.name.span,
-                        decl_span: body_decl.span,
-                        type_description: None,
-                        detail: None,
-                        visibility: Some(body_decl.visibility),
-                    },
-                );
+                (p.name.value.to_string(), p.name.span, SymbolCategory::Param)
             }
             graphcal_compiler::syntax::ast::DeclKind::Node(n) => {
-                let member = n.name.value.to_string();
-                table.insert_definition(
-                    SymbolKey::Qualified {
-                        module: dag_name.clone(),
-                        name: member.clone(),
-                    },
-                    DefinitionInfo {
-                        name: member,
-                        category: SymbolCategory::Node,
-                        name_span: n.name.span,
-                        decl_span: body_decl.span,
-                        type_description: None,
-                        detail: None,
-                        visibility: Some(body_decl.visibility),
-                    },
-                );
+                (n.name.value.to_string(), n.name.span, SymbolCategory::Node)
             }
             graphcal_compiler::syntax::ast::DeclKind::ConstNode(c) => {
-                let member = c.name.value.to_string();
-                table.insert_definition(
-                    SymbolKey::Qualified {
-                        module: dag_name.clone(),
-                        name: member.clone(),
-                    },
-                    DefinitionInfo {
-                        name: member,
-                        category: SymbolCategory::Const,
-                        name_span: c.name.span,
-                        decl_span: body_decl.span,
-                        type_description: None,
-                        detail: None,
-                        visibility: Some(body_decl.visibility),
-                    },
-                );
+                (c.name.value.to_string(), c.name.span, SymbolCategory::Const)
             }
-            _ => {}
-        }
+            _ => continue,
+        };
+        table.insert_definition(
+            SymbolKey::Qualified {
+                module: dag_name.clone(),
+                name: member_name.clone(),
+            },
+            DefinitionInfo {
+                name: member_name,
+                category,
+                name_span: member_span,
+                decl_span: body_decl.span,
+                type_description: None,
+                detail: None,
+                visibility: Some(body_decl.visibility),
+            },
+        );
     }
 }
 

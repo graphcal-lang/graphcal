@@ -357,6 +357,25 @@ fn split_dag_body_imports(
     (pure_body, imported_names)
 }
 
+/// Remove and return the type annotation for `name`, or raise an internal error
+/// if it was dropped during resolution. The parser and resolver jointly
+/// guarantee that every top-level const/param/node ends up in `type_anns`;
+/// a missing entry is a compiler invariant violation.
+fn take_type_ann(
+    type_anns: &mut HashMap<String, TypeExpr>,
+    name: &str,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<TypeExpr, GraphcalError> {
+    type_anns
+        .remove(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("missing type annotation for `{name}`"),
+            src: src.clone(),
+            span: span.into(),
+        })
+}
+
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
@@ -400,14 +419,7 @@ fn build_ir_from_resolved(
         .consts
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
+            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
             Ok(ConstEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -420,14 +432,7 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
+            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
             Ok(ParamEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -440,14 +445,7 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let type_ann =
-                type_anns
-                    .remove(&entry.name)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!("internal: missing type annotation for `{}`", entry.name),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
+            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
             Ok(NodeEntry {
                 name: ScopedName::local(entry.name),
                 type_ann,
@@ -1573,18 +1571,13 @@ pub(crate) fn substitute_type_names_in_expr(expr: &mut Expr, bindings: &HashMap<
                 substitute_type_names_in_expr(&mut arm.body, bindings);
             }
         }
-        ExprKind::TupleMatch { scrutinees, arms } => {
-            for s in scrutinees {
-                substitute_type_names_in_expr(s, bindings);
-            }
-            for arm in arms {
-                if let Some(patterns) = &mut arm.patterns {
-                    for p in patterns {
-                        substitute_type_names_in_expr(p, bindings);
-                    }
-                }
-                substitute_type_names_in_expr(&mut arm.body, bindings);
-            }
+        // TupleMatch is desugared to If/BinOp(Eq) chains before this pass runs.
+        #[expect(
+            clippy::unreachable,
+            reason = "invariant: desugared before IR lowering"
+        )]
+        ExprKind::TupleMatch { .. } => {
+            unreachable!("TupleMatch should be desugared before substitute_type_names_in_expr")
         }
     }
 }

@@ -25,18 +25,19 @@ pub(super) fn lower_and_finalize(
 ) -> Result<CompiledFile, CompileError> {
     let saved_imported_values = ctx.imported_values.clone();
 
-    let (mut builder, mut unfrozen) = crate::ir::lower_to_builder_with_imported_values(
-        file_ast,
-        file_src,
-        &ctx.imported_names,
-        ctx.imported_values,
-        file_dag_id,
-    )?;
+    let (mut builder, mut unfrozen) =
+        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+            file_ast,
+            file_src,
+            &ctx.imported_names,
+            ctx.imported_values,
+            file_dag_id,
+        )?;
 
     // Register type-system declarations from selectively imported files.
     for (dep_dag_id, names) in &ctx.imported_type_system_names {
         let dep_loaded = &project.files[dep_dag_id];
-        crate::ir::register_selected_declarations(
+        graphcal_compiler::ir::lower::register_selected_declarations(
             &dep_loaded.ast,
             &mut builder,
             &dep_loaded.named_source,
@@ -91,14 +92,14 @@ pub(super) fn lower_and_finalize(
     }
 
     // Type-resolve, merge dep dag TIRs from module imports, then check dimensions.
-    let mut tir = crate::tir::type_resolve(ir, file_src)?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_src)?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
-    crate::dim_check::check_dimensions_tir(&tir, file_src)?;
+    graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
 
     let declared_types = tir.build_declared_types(file_src)?;
 
     for (override_name, override_expr) in &file_overrides {
-        crate::dim_check::check_override_dimension(
+        graphcal_compiler::tir::dim_check::check_override_dimension(
             override_expr,
             override_name.as_str(),
             &declared_types,
@@ -129,7 +130,7 @@ pub(super) fn lower_and_finalize(
 /// `imported_values`, so dag bodies that reference dep-file consts via
 /// `import .. { name }` can resolve them at inline-call eval time.
 pub(super) fn merge_dep_dag_tirs(
-    tir: &mut crate::tir::TIR,
+    tir: &mut graphcal_compiler::tir::typed::TIR,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
 ) {
@@ -182,13 +183,14 @@ pub(super) fn process_deferred_instantiated_imports(
             build_dep_imported_values(project, &deferred.dep_dag_id, evaluated_files)?;
 
         // Compile the dependency to IR.
-        let (dep_builder, dep_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
-            &dep_loaded.ast,
-            dep_src,
-            &dep_imported.names,
-            dep_imported.values,
-            &deferred.dep_dag_id,
-        )?;
+        let (dep_builder, dep_unfrozen) =
+            graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+                &dep_loaded.ast,
+                dep_src,
+                &dep_imported.names,
+                dep_imported.values,
+                &deferred.dep_dag_id,
+            )?;
 
         // Merge the dependency's type-system declarations into the importer's registry.
         let dep_registry = dep_builder.build();
@@ -203,15 +205,18 @@ pub(super) fn process_deferred_instantiated_imports(
         // Validate range index dimension matching (Phase B — requires compiled registries).
         for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
             if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name)
-                && let crate::registry::IndexKind::RequiredRange { dimension: dep_dim } =
-                    &dep_idx_def.kind
+                && let graphcal_compiler::registry::types::IndexKind::RequiredRange {
+                    dimension: dep_dim,
+                } = &dep_idx_def.kind
                 && let Some(imp_idx_def) = builder.get_index(importer_idx_name)
-                && let crate::registry::IndexKind::Range(crate::registry::RangeIndexData {
+                && let graphcal_compiler::registry::types::IndexKind::Range(
+                    graphcal_compiler::registry::types::RangeIndexData {
+                        dimension: imp_dim, ..
+                    },
+                )
+                | graphcal_compiler::registry::types::IndexKind::RequiredRange {
                     dimension: imp_dim,
-                    ..
-                })
-                | crate::registry::IndexKind::RequiredRange { dimension: imp_dim } =
-                    &imp_idx_def.kind
+                } = &imp_idx_def.kind
                 && dep_dim != imp_dim
             {
                 return Err(CompileError::Eval(
@@ -300,13 +305,14 @@ pub(super) fn process_deferred_inline_dag_includes(
             std::path::Path::new(file_src.name()),
         )
         .child(deferred.prefix.as_str());
-        let (dag_builder, dag_unfrozen) = crate::ir::lower_to_builder_with_imported_values(
-            &deferred.dag_body,
-            file_src,
-            &deferred.dag_imported_names,
-            HashMap::new(), // No pre-evaluated values for inline DAGs
-            &dag_dag_id,
-        )?;
+        let (dag_builder, dag_unfrozen) =
+            graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+                &deferred.dag_body,
+                file_src,
+                &deferred.dag_imported_names,
+                HashMap::new(), // No pre-evaluated values for inline DAGs
+                &dag_dag_id,
+            )?;
 
         // Register parent scope type-system declarations in the DAG's registry.
         // These come from `import .. { DimName, UnitName }` in the DAG body.
@@ -328,7 +334,7 @@ pub(super) fn process_deferred_inline_dag_includes(
                 let parent_dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
                     std::path::Path::new(file_src.name()),
                 );
-                crate::ir::register_selected_declarations(
+                graphcal_compiler::ir::lower::register_selected_declarations(
                     &parent_ast,
                     &mut dag_builder,
                     file_src,

@@ -21,8 +21,8 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_compiler::syntax::names::VariantName;
-use graphcal_eval::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -632,7 +632,7 @@ fn format_tuple_keyed_entries(
 fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
-    tir: Option<&graphcal_eval::tir::TIR>,
+    tir: Option<&graphcal_compiler::tir::typed::TIR>,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
     let mut result = HashMap::new();
 
@@ -812,6 +812,10 @@ impl LanguageServer for Backend {
         self.change_generations.write().await.remove(&uri);
         // Clear diagnostics for the closed document so stale errors don't linger.
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        // No `inlay_hint_refresh` here — the document is gone; there's
+        // nothing for the client to re-fetch hints for. The refresh call
+        // at `analyze_and_publish` and `spawn_debounced_analysis` sites
+        // covers the only cases where hints could meaningfully change.
     }
 
     async fn document_symbol(

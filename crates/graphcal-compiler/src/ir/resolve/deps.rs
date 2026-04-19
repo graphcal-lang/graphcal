@@ -13,7 +13,6 @@ pub(super) fn extract_const_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<String>, GraphcalError> {
     let mut deps = HashSet::new();
@@ -22,7 +21,6 @@ pub(super) fn extract_const_refs(
         all_const_names,
         builtin_consts,
         builtin_fns,
-        user_fn_names,
         src,
         &mut deps,
     )?;
@@ -38,7 +36,6 @@ fn collect_const_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     deps: &mut HashSet<String>,
 ) -> Result<(), GraphcalError> {
@@ -87,7 +84,6 @@ fn collect_const_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     deps,
                 )?;
@@ -96,10 +92,7 @@ fn collect_const_refs(
         }
         ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();
-            if !builtin_fns.contains_key(name_str)
-                && !user_fn_names.contains(name_str)
-                && classify_special_fn(name_str).is_none()
-            {
+            if !builtin_fns.contains_key(name_str) && classify_special_fn(name_str).is_none() {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
                     src: src.clone(),
@@ -121,44 +114,19 @@ fn collect_const_refs(
                 });
             }
             for arg in args {
-                collect_const_refs(
-                    arg,
-                    all_const_names,
-                    builtin_consts,
-                    builtin_fns,
-                    user_fn_names,
-                    src,
-                    deps,
-                )?;
+                collect_const_refs(arg, all_const_names, builtin_consts, builtin_fns, src, deps)?;
             }
             Ok(())
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_const_refs(
-                lhs,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                deps,
-            )?;
-            collect_const_refs(
-                rhs,
-                all_const_names,
-                builtin_consts,
-                builtin_fns,
-                user_fn_names,
-                src,
-                deps,
-            )
+            collect_const_refs(lhs, all_const_names, builtin_consts, builtin_fns, src, deps)?;
+            collect_const_refs(rhs, all_const_names, builtin_consts, builtin_fns, src, deps)
         }
         ExprKind::UnaryOp { operand, .. } => collect_const_refs(
             operand,
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             deps,
         ),
@@ -172,7 +140,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -181,7 +148,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -190,7 +156,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )
@@ -202,7 +167,6 @@ fn collect_const_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             deps,
         ),
@@ -212,7 +176,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )
@@ -225,7 +188,6 @@ fn collect_const_refs(
                         all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        user_fn_names,
                         src,
                         deps,
                     )?;
@@ -240,7 +202,6 @@ fn collect_const_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     deps,
                 )?;
@@ -252,7 +213,6 @@ fn collect_const_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             deps,
         ),
@@ -264,7 +224,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -273,7 +232,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -282,7 +240,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )
@@ -293,7 +250,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -302,7 +258,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )
@@ -313,7 +268,6 @@ fn collect_const_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 deps,
             )?;
@@ -323,7 +277,6 @@ fn collect_const_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     deps,
                 )?;
@@ -344,17 +297,12 @@ fn collect_const_refs(
 /// is excluded from the returned `graph_refs`. Unfold self-references (e.g.
 /// `@my_node[prev]`) are temporal — they access the previous iteration, not a
 /// true cyclic dependency.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "passes through resolution context; self_name adds one beyond the existing set"
-)]
 pub(super) fn extract_all_refs(
     expr: &Expr,
     all_runtime_names: &HashSet<&str>,
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     self_name: Option<&str>,
 ) -> Result<(HashSet<String>, HashSet<String>), GraphcalError> {
@@ -366,7 +314,6 @@ pub(super) fn extract_all_refs(
         all_const_names,
         builtin_consts,
         builtin_fns,
-        user_fn_names,
         src,
         &mut graph_refs,
         &mut const_refs,
@@ -395,7 +342,6 @@ fn collect_all_refs(
     all_const_names: &HashSet<&str>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    user_fn_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     graph_refs: &mut HashSet<String>,
     const_refs: &mut HashSet<String>,
@@ -448,7 +394,6 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,
@@ -458,10 +403,7 @@ fn collect_all_refs(
         }
         ExprKind::FnCall { name, args, .. } => {
             let name_str = name.value.as_str();
-            if !builtin_fns.contains_key(name_str)
-                && !user_fn_names.contains(name_str)
-                && classify_special_fn(name_str).is_none()
-            {
+            if !builtin_fns.contains_key(name_str) && classify_special_fn(name_str).is_none() {
                 return Err(GraphcalError::UnknownFunction {
                     name: name.value.clone(),
                     src: src.clone(),
@@ -487,7 +429,6 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,
@@ -502,7 +443,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -513,7 +453,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -525,7 +464,6 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -541,7 +479,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -552,7 +489,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -563,7 +499,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -577,7 +512,6 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -589,7 +523,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -604,7 +537,6 @@ fn collect_all_refs(
                         all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        user_fn_names,
                         src,
                         graph_refs,
                         const_refs,
@@ -621,7 +553,6 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,
@@ -635,7 +566,6 @@ fn collect_all_refs(
             all_const_names,
             builtin_consts,
             builtin_fns,
-            user_fn_names,
             src,
             graph_refs,
             const_refs,
@@ -649,7 +579,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -660,7 +589,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -671,7 +599,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -684,7 +611,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -695,7 +621,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -708,7 +633,6 @@ fn collect_all_refs(
                 all_const_names,
                 builtin_consts,
                 builtin_fns,
-                user_fn_names,
                 src,
                 graph_refs,
                 const_refs,
@@ -720,7 +644,6 @@ fn collect_all_refs(
                     all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    user_fn_names,
                     src,
                     graph_refs,
                     const_refs,

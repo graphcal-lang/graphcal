@@ -91,15 +91,11 @@ struct CollectedDeclarations {
     runtime_deps: HashMap<String, HashSet<String>>,
     const_deps: HashMap<String, HashSet<String>>,
     source_order: Vec<(String, DeclCategory)>,
-    user_fn_names: HashSet<String>,
     assert_names: HashSet<String>,
     pub_names: HashSet<String>,
 }
 
 /// Collect all local declarations, check for duplicates and casing violations.
-///
-/// The `imported_user_fns` parameter should contain function names that were imported
-/// and should be recognized as valid user functions during reference checking.
 ///
 /// Returns the collected declarations and the names map for further processing.
 #[expect(
@@ -112,7 +108,6 @@ fn collect_local_declarations(
     names: &mut HashMap<String, (Span, NameCategory)>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    imported_user_fns: &HashSet<String>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
     let mut consts = Vec::new();
     let mut params = Vec::new();
@@ -197,9 +192,6 @@ fn collect_local_declarations(
             None
         })
         .collect();
-
-    // Build combined user function names (imported + local) for reference checking
-    let all_user_fn_names = imported_user_fns.clone();
 
     // First pass: collect all declarations and check for duplicates + casing
     for decl in &file.declarations {
@@ -303,7 +295,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -335,7 +326,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -355,7 +345,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -375,7 +364,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -405,7 +393,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -435,7 +422,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -470,7 +456,6 @@ fn collect_local_declarations(
                         &all_const_names,
                         builtin_consts,
                         builtin_fns,
-                        &all_user_fn_names,
                         src,
                         None,
                     )?;
@@ -492,7 +477,6 @@ fn collect_local_declarations(
                     &all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    &all_user_fn_names,
                     src,
                 )?;
                 let cname = c.name.value.to_string();
@@ -513,7 +497,6 @@ fn collect_local_declarations(
                     &all_const_names,
                     builtin_consts,
                     builtin_fns,
-                    &all_user_fn_names,
                     src,
                     Some(&nname),
                 )?;
@@ -538,7 +521,6 @@ fn collect_local_declarations(
         runtime_deps,
         const_deps,
         source_order,
-        user_fn_names: HashSet::new(),
         assert_names,
         pub_names,
     })
@@ -976,7 +958,6 @@ pub(crate) fn resolve_with_imports(
     let builtin_fns = builtin_functions();
 
     let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
-    let imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
@@ -994,14 +975,7 @@ pub(crate) fn resolve_with_imports(
     }
 
     // Collect local declarations
-    let local = collect_local_declarations(
-        file,
-        src,
-        &mut names,
-        builtin_consts,
-        builtin_fns,
-        &imported_fn_names,
-    )?;
+    let local = collect_local_declarations(file, src, &mut names, builtin_consts, builtin_fns)?;
 
     // Build name sets for dependency extraction
     let (all_const_names, all_runtime_names) = build_name_sets(&names);
@@ -1020,14 +994,7 @@ pub(crate) fn resolve_with_imports(
     let mut const_deps = local.const_deps;
 
     for (name, _, expr, _) in &imported.consts {
-        let deps = extract_const_refs(
-            expr,
-            &all_const_names,
-            builtin_consts,
-            builtin_fns,
-            &local.user_fn_names,
-            src,
-        )?;
+        let deps = extract_const_refs(expr, &all_const_names, builtin_consts, builtin_fns, src)?;
         const_deps.insert(name.clone(), deps);
     }
     for (name, _, expr, _) in &imported.params {
@@ -1037,7 +1004,6 @@ pub(crate) fn resolve_with_imports(
             &all_const_names,
             builtin_consts,
             builtin_fns,
-            &local.user_fn_names,
             src,
             None,
         )?;
@@ -1050,7 +1016,6 @@ pub(crate) fn resolve_with_imports(
             &all_const_names,
             builtin_consts,
             builtin_fns,
-            &local.user_fn_names,
             src,
             Some(name.as_str()),
         )?;
@@ -1166,7 +1131,6 @@ pub(crate) fn resolve_with_imported_values(
     let builtin_fns = builtin_functions();
 
     let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
-    let imported_fn_names: HashSet<String> = HashSet::new();
 
     // Pre-populate with imported names (for scope checking only).
     // ScopedName -> String conversion: the resolver's internal scope uses flat strings
@@ -1185,14 +1149,7 @@ pub(crate) fn resolve_with_imported_values(
     }
 
     // Collect local declarations
-    let local = collect_local_declarations(
-        file,
-        src,
-        &mut names,
-        builtin_consts,
-        builtin_fns,
-        &imported_fn_names,
-    )?;
+    let local = collect_local_declarations(file, src, &mut names, builtin_consts, builtin_fns)?;
 
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names = HashSet::new();

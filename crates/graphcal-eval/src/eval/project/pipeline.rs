@@ -636,7 +636,7 @@ pub(super) fn build_dep_import_spans(
 /// imports. The root file stops at TIR and returns it.
 pub(super) fn compile_to_tir_project_perfile(
     project: &crate::loader::LoadedProject,
-) -> Result<crate::tir::TIR, CompileError> {
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
     let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
@@ -790,13 +790,13 @@ pub(super) fn route_overrides_to_files(
 /// Delegates to the shared [`run_eval_loop`](super::super::runtime::run_eval_loop) and
 /// filters the result to only locally-defined param/node values.
 pub(super) fn extract_runtime_values(
-    tir: &crate::tir::TIR,
+    tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<String, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> HashMap<String, RuntimeValue> {
-    let builtin_consts = crate::builtins::builtin_constants();
-    let builtin_fns = crate::builtins::builtin_functions();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let result = super::super::runtime::run_eval_loop(
         plan,
         tir,

@@ -64,7 +64,7 @@ pub enum Value {
         /// The hifitime epoch (internal representation).
         epoch: hifitime::Epoch,
         /// The time scale for display purposes.
-        time_scale: crate::time_scale::TimeScale,
+        time_scale: graphcal_compiler::registry::time_scale::TimeScale,
         /// Optional IANA timezone for display (e.g. `"America/New_York"`).
         display_tz: Option<String>,
     },
@@ -346,8 +346,10 @@ pub struct EvalResult {
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
-    pub domain_constraints:
-        std::collections::HashMap<DeclName, crate::tir::ResolvedDomainConstraint>,
+    pub domain_constraints: std::collections::HashMap<
+        DeclName,
+        graphcal_compiler::tir::typed::ResolvedDomainConstraint,
+    >,
 }
 
 impl EvalResult {
@@ -522,5 +524,5 @@ pub enum CompileError {
 
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Eval(#[from] crate::error::GraphcalError),
+    Eval(#[from] graphcal_compiler::registry::error::GraphcalError),
 }

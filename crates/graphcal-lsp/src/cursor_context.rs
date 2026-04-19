@@ -38,10 +38,30 @@ fn tokenize(source: &str) -> Vec<(Token, Span)> {
     tokens
 }
 
-/// Find the index of the last token at or before the given byte offset.
-fn token_index_at(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
-    // Tokens are sorted by offset, so partition_point finds the first token past `offset`.
-    let idx = tokens.partition_point(|(_, span)| span.offset() <= offset);
+/// Whether a token starting *at* `offset` counts as "at or before" the cursor
+/// ([`Boundary::Inclusive`]) or should be skipped over ([`Boundary::Exclusive`]).
+///
+/// Used to parameterize [`find_token_before`] — callers that want the token
+/// the cursor is inside (`Inclusive`) differ from callers that want the token
+/// immediately *preceding* the cursor (`Exclusive`) only by this single bit.
+#[derive(Debug, Clone, Copy)]
+enum Boundary {
+    /// Include a token whose span starts exactly at `offset`.
+    Inclusive,
+    /// Skip a token whose span starts exactly at `offset` (pick the one before).
+    Exclusive,
+}
+
+/// Find the index of the last token whose span starts at or before (respectively:
+/// strictly before) the given byte offset.
+fn find_token_before(tokens: &[(Token, Span)], offset: usize, boundary: Boundary) -> Option<usize> {
+    // Tokens are sorted by offset. partition_point finds the split between
+    // "match" and "past" according to the boundary predicate; the preceding
+    // token is the last index that still matches.
+    let idx = tokens.partition_point(|(_, span)| match boundary {
+        Boundary::Inclusive => span.offset() <= offset,
+        Boundary::Exclusive => span.offset() < offset,
+    });
     idx.checked_sub(1)
 }
 
@@ -52,7 +72,7 @@ fn token_index_at(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
 /// Commas at depth 0 are counted to determine the active parameter index.
 pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext> {
     let tokens = tokenize(source);
-    let start_idx = token_index_at(&tokens, offset)?;
+    let start_idx = find_token_before(&tokens, offset, Boundary::Inclusive)?;
 
     // If the cursor is exactly on or past a token, we might be "after" it.
     // Start scanning from start_idx backward.
@@ -128,7 +148,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 
     // Find the last token that ends at or before the cursor.
     // We want the token *before* where the user is typing.
-    let preceding_idx = find_preceding_token(&tokens, offset);
+    let preceding_idx = find_token_before(&tokens, offset, Boundary::Exclusive);
 
     let Some(idx) = preceding_idx else {
         // No token before cursor — start of file.
@@ -153,14 +173,6 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
         Token::Semicolon | Token::RBrace => CompletionContext::TopLevel,
         _ => CompletionContext::Expression,
     }
-}
-
-/// Find the index of the last token whose span ends at or before `offset`.
-/// If the cursor is in the middle of a token, return that token's index.
-fn find_preceding_token(tokens: &[(Token, Span)], offset: usize) -> Option<usize> {
-    // Tokens are sorted by offset. Find the first token at or past `offset`, then step back.
-    let idx = tokens.partition_point(|(_, span)| span.offset() < offset);
-    idx.checked_sub(1)
 }
 
 #[cfg(test)]

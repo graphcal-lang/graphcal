@@ -5,8 +5,8 @@ use miette::NamedSource;
 use graphcal_compiler::syntax::ast::{BinOp, Expr, UnaryOp};
 use graphcal_compiler::syntax::span::Span;
 
-use crate::error::GraphcalError;
-use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::eval_expr;

@@ -11,7 +11,6 @@ use crate::syntax::token::Token;
 mod compound;
 mod decl;
 mod expr;
-mod fn_decl;
 mod table;
 mod type_expr;
 

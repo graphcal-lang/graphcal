@@ -8,10 +8,10 @@ use graphcal_compiler::syntax::names::VariantName;
 use indexmap::IndexMap;
 
 use crate::eval_expr::RuntimeValue;
-use crate::registry::Registry;
+use graphcal_compiler::registry::types::Registry;
 
 use super::types::{DisplayUnit, Value};
-use crate::format::{format_number, format_unit_expr};
+use graphcal_compiler::registry::format::{format_number, format_unit_expr};
 
 pub(super) fn attach_display_units(
     value: &mut Value,
@@ -128,10 +128,10 @@ fn resolve_display_unit_scale(
     registry: &Registry,
     values: &HashMap<String, RuntimeValue>,
 ) -> Option<f64> {
-    let builtin_consts = crate::builtins::builtin_constants();
-    let builtin_fns = crate::builtins::builtin_functions();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let empty_src = miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
-    let empty_dags: HashMap<String, crate::tir::TIR> = HashMap::new();
+    let empty_dags: HashMap<String, graphcal_compiler::tir::typed::TIR> = HashMap::new();
     let ctx = crate::eval_expr::EvalContext {
         builtin_consts,
         builtin_fns,
@@ -145,7 +145,10 @@ fn resolve_display_unit_scale(
 }
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
-pub(super) fn format_range_step(idx_def: &crate::registry::IndexDef, step_index: usize) -> String {
+pub(super) fn format_range_step(
+    idx_def: &graphcal_compiler::registry::types::IndexDef,
+    step_index: usize,
+) -> String {
     idx_def.range_data().map_or_else(
         || format!("#{step_index}"),
         |data| {

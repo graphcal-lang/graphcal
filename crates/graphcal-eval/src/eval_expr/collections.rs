@@ -6,8 +6,8 @@ use graphcal_compiler::syntax::ast::{Expr, MapEntry};
 use graphcal_compiler::syntax::names::VariantName;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::error::GraphcalError;
-use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::eval_expr;
@@ -214,7 +214,9 @@ pub(super) fn eval_unfold(
         )
     })?;
     let index_name = match declared {
-        crate::declared_type::DeclaredType::Indexed { index, .. } => index.clone(),
+        graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
+            index.clone()
+        }
         _ => {
             return Err(ctx.eval_error(
                 format!("node `{self_name}` must have an indexed type for time scan"),
@@ -436,23 +438,25 @@ pub(super) fn eval_for_comp(
     // `#N`-prefixed variant name.
     for (step_index, variant) in variants.iter().enumerate() {
         let binding_value = match &idx_def.kind {
-            crate::registry::IndexKind::Named { .. }
-            | crate::registry::IndexKind::RequiredNamed => RuntimeValue::Label {
+            graphcal_compiler::registry::types::IndexKind::Named { .. }
+            | graphcal_compiler::registry::types::IndexKind::RequiredNamed => RuntimeValue::Label {
                 index_name: idx_name.clone(),
                 variant: variant.clone(),
             },
-            crate::registry::IndexKind::Range(data) => RuntimeValue::RangeLabel {
-                step_index,
-                value: data.step_value(step_index),
-            },
+            graphcal_compiler::registry::types::IndexKind::Range(data) => {
+                RuntimeValue::RangeLabel {
+                    step_index,
+                    value: data.step_value(step_index),
+                }
+            }
             // RequiredRange has 0 variants, so this loop body is never reached.
-            crate::registry::IndexKind::RequiredRange { .. } => {
+            graphcal_compiler::registry::types::IndexKind::RequiredRange { .. } => {
                 return Err(ctx.internal_error(
                     "RequiredRange should have been bound before evaluation".to_string(),
                     error_span,
                 ));
             }
-            crate::registry::IndexKind::NatRange { .. } => {
+            graphcal_compiler::registry::types::IndexKind::NatRange { .. } => {
                 // Nat range loop variable: integer value from the step index.
                 RuntimeValue::Int(i64::try_from(step_index).map_err(|_| {
                     ctx.internal_error(
