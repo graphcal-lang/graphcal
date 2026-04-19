@@ -326,8 +326,20 @@ fn eval_map_literal(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let arity = entries[0].keys.len();
-    let idx_name = entries[0].keys[0].index.value.clone();
+    let first = entries.first().ok_or_else(|| {
+        ctx.internal_error(
+            "eval_map_literal called with no entries".to_string(),
+            graphcal_compiler::syntax::span::Span::new(0, 0),
+        )
+    })?;
+    let first_key = first.keys.first().ok_or_else(|| {
+        ctx.internal_error(
+            "map literal entry has no index keys".to_string(),
+            first.value.span,
+        )
+    })?;
+    let arity = first.keys.len();
+    let idx_name = first_key.index.value.clone();
 
     if arity == 1 {
         // Single-axis: flat Indexed
@@ -348,10 +360,7 @@ fn eval_map_literal(
         .indexes
         .get_index(idx_name.as_str())
         .ok_or_else(|| {
-            ctx.internal_error(
-                format!("unknown index `{idx_name}`"),
-                entries[0].keys[0].index.span,
-            )
+            ctx.internal_error(format!("unknown index `{idx_name}`"), first_key.index.span)
         })?;
     let variants = idx_def.variants();
 
@@ -360,13 +369,29 @@ fn eval_map_literal(
         // Collect entries whose first key matches this variant, stripping the first key
         let sub_entries: Vec<MapEntry> = entries
             .iter()
-            .filter(|e| e.keys[0].variant.value.as_str() == variant.as_str())
+            .filter(|e| {
+                e.keys
+                    .first()
+                    .is_some_and(|k| k.variant.value.as_str() == variant.as_str())
+            })
             .map(|e| MapEntry {
                 keys: e.keys[1..].to_vec(),
                 value: e.value.clone(),
             })
             .collect();
 
+        // A dim-checked program guarantees every variant has at least one
+        // entry. If that invariant is violated (e.g. malformed IR), surface it
+        // as an internal error rather than panicking on `entries[0]` inside
+        // the recursive call.
+        if sub_entries.is_empty() {
+            return Err(ctx.internal_error(
+                format!(
+                    "map literal for index `{idx_name}` is missing entries for variant `{variant}`"
+                ),
+                first_key.index.span,
+            ));
+        }
         let inner = eval_map_literal(&sub_entries, values, local_values, ctx)?;
         outer.insert(variant.clone(), inner);
     }

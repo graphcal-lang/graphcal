@@ -251,16 +251,14 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
     let name = uri.as_str();
     match uri.to_file_path() {
         Ok(path) => {
-            use graphcal_io::FileSystemReader as _;
-            let base_fs = graphcal_io::RealFileSystem;
-            let canonical = base_fs.canonicalize(&path).map_err(|_| {
-                Box::new(CompileError::Eval(
-                    graphcal_eval::error::GraphcalError::FileNotFound {
-                        path: path.display().to_string(),
-                    },
-                ))
-            })?;
-            let fs = graphcal_io::OverlayFileSystem::new(base_fs, canonical, text.to_string());
+            // OverlayFileSystem canonicalizes internally and falls back to the
+            // raw path when the overlay file is not yet on disk — this makes
+            // unsaved LSP buffers work without a preflight `FileNotFound`.
+            let fs = graphcal_io::OverlayFileSystem::new(
+                graphcal_io::RealFileSystem,
+                path.clone(),
+                text.to_string(),
+            );
             graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
         }
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),

@@ -269,7 +269,8 @@ pub(super) fn process_deferred_instantiated_imports(
             &deferred.type_bindings,
             &deferred.dim_bindings,
             &deferred.import_item_attributes,
-        );
+            importer_src,
+        )?;
 
         // For selective instantiated imports, add alias nodes that reference
         // the prefixed declarations. E.g., `delta_v` → `@prefix::delta_v`.
@@ -388,7 +389,8 @@ pub(super) fn process_deferred_inline_dag_includes(
             &deferred.type_bindings,
             &deferred.dim_bindings,
             &deferred.import_item_attributes,
-        );
+            file_src,
+        )?;
 
         // For selective imports, add alias nodes.
         if let Some(selective) = &deferred.selective_names {

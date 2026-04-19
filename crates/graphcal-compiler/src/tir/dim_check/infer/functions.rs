@@ -353,8 +353,15 @@ impl InferCtx<'_> {
                     expect_scalar(&t, self.registry, self.src, a.span)
                 })
                 .collect::<Result<_, _>>()?;
-            return infer_fn_dim(&func.dim_sig, &arg_dims, self.args, self.registry, self.src)
-                .map(InferredType::Scalar);
+            return infer_fn_dim(
+                self.name.value.as_str(),
+                &func.dim_sig,
+                &arg_dims,
+                self.args,
+                self.registry,
+                self.src,
+            )
+            .map(InferredType::Scalar);
         }
 
         Err(GraphcalError::UnknownFunction {

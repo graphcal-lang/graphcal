@@ -148,16 +148,38 @@ pub(super) fn resolve_field_type(
 
     for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
         match param.constraint {
-            TypeGenericConstraint::Dim => {
-                if let InferredType::Scalar(dim) = arg {
+            TypeGenericConstraint::Dim => match arg {
+                InferredType::Scalar(dim) => {
                     dim_sub.insert(param.name.clone(), dim.clone());
                 }
-            }
-            TypeGenericConstraint::Index => {
-                if let InferredType::Struct(name, _) = arg {
+                other => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic parameter `{}` expects a scalar dimension, but got {}",
+                            param.name.as_str(),
+                            format_inferred_type(other, registry),
+                        ),
+                        src: src.clone(),
+                        span: field_type_ann.span.into(),
+                    });
+                }
+            },
+            TypeGenericConstraint::Index => match arg {
+                InferredType::Struct(name, _) => {
                     index_sub.insert(param.name.clone(), IndexName::new(name.as_str()));
                 }
-            }
+                other => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic parameter `{}` expects an index type, but got {}",
+                            param.name.as_str(),
+                            format_inferred_type(other, registry),
+                        ),
+                        src: src.clone(),
+                        span: field_type_ann.span.into(),
+                    });
+                }
+            },
             TypeGenericConstraint::Nat => {
                 // Nat generics on type definitions are not yet used
             }
@@ -246,9 +268,7 @@ pub(super) fn expect_scalar(
         other => Err(GraphcalError::DimensionMismatch {
             expected: "scalar dimension".to_string(),
             found: format_inferred_type(other, registry),
-            help: "expected a scalar value,
-            not an indexed value or struct"
-                .to_string(),
+            help: "expected a scalar value, not an indexed value or struct".to_string(),
             src: src.clone(),
             span: span.into(),
         }),
