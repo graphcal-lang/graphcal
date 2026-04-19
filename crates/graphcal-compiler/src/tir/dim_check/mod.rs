@@ -227,6 +227,7 @@ pub fn check_dimensions_tir(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
+    detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
     let declared_types = tir.build_declared_types(src)?;
 
@@ -491,5 +492,127 @@ pub fn check_override_dimension(
             span: expr.span.into(),
         });
     }
+    Ok(())
+}
+
+/// Detect cycles in the cross-dag inline-call graph.
+///
+/// A dag `A` that transitively inline-calls itself — directly or through a
+/// chain `A → B → … → A` — would recurse unboundedly at evaluation time. We
+/// reject such programs at compile time with
+/// [`GraphcalError::CyclicDependency`] pointing at one dag involved in the
+/// cycle (chosen deterministically by the DFS entry order).
+///
+/// Per the issue thread, a dag — not a file — is the semantic unit of
+/// cycle detection, so the same check applies whether the cycle is within
+/// a single file or spans multiple files.
+enum DagCycleFrame {
+    Enter(String),
+    Leave(String),
+}
+
+struct DagTargetCollector<'a> {
+    out: &'a mut std::collections::BTreeSet<String>,
+}
+
+impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_inline_dag_ref(
+        &mut self,
+        expr: &crate::syntax::ast::Expr,
+        args: &[crate::syntax::ast::ParamBinding],
+    ) -> Result<(), Self::Error> {
+        if let crate::syntax::ast::ExprKind::InlineDagRef { module, dag, .. } = &expr.kind
+            && module.is_none()
+        {
+            self.out.insert(dag.value.to_string());
+        }
+        for b in args {
+            self.visit_expr(&b.value)?;
+        }
+        Ok(())
+    }
+}
+
+fn collect_dag_call_targets(
+    body: &[crate::syntax::ast::Declaration],
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    use crate::syntax::ast::DeclKind;
+    use crate::syntax::visitor::ExprVisitor;
+
+    let mut collector = DagTargetCollector { out };
+    for decl in body {
+        let expr_opt: Option<&crate::syntax::ast::Expr> = match &decl.kind {
+            DeclKind::Node(n) => Some(&n.value),
+            DeclKind::ConstNode(c) => Some(&c.value),
+            DeclKind::Param(p) => p.value.as_ref(),
+            _ => None,
+        };
+        if let Some(expr) = expr_opt {
+            let _ = collector.visit_expr(expr);
+        }
+    }
+}
+
+fn detect_cross_dag_cycles(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
+    for (name, decl) in tir.registry.dags.all_dags() {
+        let mut targets = BTreeSet::new();
+        collect_dag_call_targets(&decl.body, &mut targets);
+        edges.insert(name.clone(), targets);
+        spans.insert(name.clone(), decl.name.span);
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut on_stack: HashSet<String> = HashSet::new();
+
+    for start in edges.keys() {
+        if visited.contains(start) {
+            continue;
+        }
+        let mut work: Vec<DagCycleFrame> = vec![DagCycleFrame::Enter(start.clone())];
+        while let Some(frame) = work.pop() {
+            match frame {
+                DagCycleFrame::Enter(name) => {
+                    if visited.contains(&name) {
+                        continue;
+                    }
+                    if on_stack.contains(&name) {
+                        let span = spans
+                            .get(&name)
+                            .copied()
+                            .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
+                        return Err(GraphcalError::CyclicDependency {
+                            name: crate::syntax::names::DeclName::new(&name),
+                            src: src.clone(),
+                            span: span.into(),
+                        });
+                    }
+                    on_stack.insert(name.clone());
+                    work.push(DagCycleFrame::Leave(name.clone()));
+                    if let Some(targets) = edges.get(&name) {
+                        for t in targets {
+                            if edges.contains_key(t) {
+                                work.push(DagCycleFrame::Enter(t.clone()));
+                            }
+                        }
+                    }
+                }
+                DagCycleFrame::Leave(name) => {
+                    on_stack.remove(&name);
+                    visited.insert(name);
+                }
+            }
+        }
+    }
+
     Ok(())
 }
