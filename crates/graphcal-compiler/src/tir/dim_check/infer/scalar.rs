@@ -28,12 +28,29 @@ pub(super) fn infer_binop(
     rhs: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let lhs_type = infer_type(lhs, declared_types, local_types, registry, builtin_fns, src)?;
-    let rhs_type = infer_type(rhs, declared_types, local_types, registry, builtin_fns, src)?;
+    let lhs_type = infer_type(
+        lhs,
+        declared_types,
+        local_types,
+        dag_tirs,
+        registry,
+        builtin_fns,
+        src,
+    )?;
+    let rhs_type = infer_type(
+        rhs,
+        declared_types,
+        local_types,
+        dag_tirs,
+        registry,
+        builtin_fns,
+        src,
+    )?;
 
     match op {
         // Logical operators: require Bool operands, return Bool
@@ -313,6 +330,7 @@ pub(super) fn infer_unary(
     operand: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -321,6 +339,7 @@ pub(super) fn infer_unary(
         operand,
         declared_types,
         local_types,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -362,6 +381,7 @@ pub(super) fn infer_convert(
     target: &crate::syntax::ast::UnitExpr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -370,6 +390,7 @@ pub(super) fn infer_convert(
         inner,
         declared_types,
         local_types,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -414,6 +435,7 @@ pub(super) fn infer_display_timezone(
     timezone: &str,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -422,6 +444,7 @@ pub(super) fn infer_display_timezone(
         inner,
         declared_types,
         local_types,
+        dag_tirs,
         registry,
         builtin_fns,
         src,
@@ -453,6 +476,7 @@ pub(super) fn infer_as_cast(
     target_type: &crate::syntax::ast::TypeExpr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -461,6 +485,7 @@ pub(super) fn infer_as_cast(
         inner,
         declared_types,
         local_types,
+        dag_tirs,
         registry,
         builtin_fns,
         src,

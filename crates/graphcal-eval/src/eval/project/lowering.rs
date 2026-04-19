@@ -90,8 +90,9 @@ pub(super) fn lower_and_finalize(
         apply_overrides(&mut ir, &file_overrides)?;
     }
 
-    // Type-resolve, check dimensions.
-    let tir = crate::tir::type_resolve(ir, file_src)?;
+    // Type-resolve, merge dep dag TIRs from module imports, then check dimensions.
+    let mut tir = crate::tir::type_resolve(ir, file_src)?;
+    merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     crate::dim_check::check_dimensions_tir(&tir, file_src)?;
 
     let declared_types = tir.build_declared_types(file_src)?;
@@ -101,6 +102,7 @@ pub(super) fn lower_and_finalize(
             override_expr,
             override_name.as_str(),
             &declared_types,
+            &tir.dags,
             &tir.registry,
             file_src,
         )?;
@@ -112,6 +114,49 @@ pub(super) fn lower_and_finalize(
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
     })
+}
+
+/// Merge compiled dag TIRs from module-aliased dependencies into the
+/// importer's `tir.dags`, keyed by `"alias::dag_name"`.
+///
+/// Enables cross-file qualified inline calls `@alias::dag(args)::out` to
+/// resolve via the same `tir.dags` lookup used for same-file calls.
+///
+/// Only `pub` dags are exposed across the import boundary; private dags
+/// in the dep stay local (the dep's `pub_names` already filters them).
+///
+/// Each cloned dag TIR also receives its dep file's `const_values` in
+/// `imported_values`, so dag bodies that reference dep-file consts via
+/// `import .. { name }` can resolve them at inline-call eval time.
+pub(super) fn merge_dep_dag_tirs(
+    tir: &mut crate::tir::TIR,
+    module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+) {
+    for (alias, (dep_dag_id, _)) in module_map {
+        let Some(dep_eval) = evaluated_files.get(dep_dag_id) else {
+            continue;
+        };
+        for (dag_name, dag_tir) in &dep_eval.dag_tirs {
+            if !dep_eval.pub_names.contains(dag_name) {
+                continue;
+            }
+            let mut cloned = dag_tir.clone();
+            // Inject dep-file consts (and any other declared values) so a
+            // dep dag body's `@r_earth` reference resolves even when the
+            // importer has no such name in scope.
+            for (name, value) in &dep_eval.const_values {
+                if let Some(dt) = dep_eval.declared_types.get(name) {
+                    cloned
+                        .imported_values
+                        .entry(ScopedName::local(name.clone()))
+                        .or_insert_with(|| (value.clone(), dt.clone()));
+                }
+            }
+            let key = format!("{alias}::{dag_name}");
+            tir.dags.insert(key, cloned);
+        }
+    }
 }
 
 /// Process deferred instantiated imports by compiling each dependency to IR
