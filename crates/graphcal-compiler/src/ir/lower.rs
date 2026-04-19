@@ -292,8 +292,7 @@ pub fn lower_dag_body_to_ir(
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
-    let (pure_body, dag_imported_names) =
-        split_dag_body_imports(body, parent_const_names, parent_registry);
+    let (pure_body, dag_imported_names) = split_dag_body_imports(body, parent_const_names);
 
     let virtual_file = File {
         declarations: pure_body,
@@ -325,7 +324,6 @@ pub fn lower_dag_body_to_ir(
 fn split_dag_body_imports(
     body: &[crate::syntax::ast::Declaration],
     parent_const_names: &HashSet<String>,
-    parent_registry: &Registry,
 ) -> (Vec<crate::syntax::ast::Declaration>, ImportedValueNames) {
     use crate::syntax::ast::{ImportKind, ImportPath};
 
@@ -344,13 +342,11 @@ fn split_dag_body_imports(
                         imported_names
                             .const_names
                             .push((ScopedName::local(local_name), item.name.span));
-                        continue;
                     }
                     // Type-system items flow in via `merge_from_registry`. For
                     // anything else (unknown names, runtime items), leave it
-                    // alone: the caller's existing include-time validation
+                    // alone — the caller's existing include-time validation
                     // still runs and will surface the error with its own span.
-                    let _ = parent_registry;
                 }
             }
             continue;
