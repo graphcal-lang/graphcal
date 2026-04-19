@@ -10,6 +10,7 @@ use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 
 pub(super) fn infer_fn_dim(
+    fn_name: &str,
     sig: &DimSignature,
     arg_dims: &[Dimension],
     args: &[Expr],
@@ -39,7 +40,7 @@ pub(super) fn infer_fn_dim(
                 bindings.insert(var, &arg_dims[i]);
             }
             ParamDim::Ref(var) => {
-                let bound = bindings[var.as_str()];
+                let bound = lookup_binding(&bindings, var.as_str(), fn_name, src, args[i].span)?;
                 if arg_dims[i] != *bound {
                     let bind_param_name = sig
                         .params
@@ -61,9 +62,39 @@ pub(super) fn infer_fn_dim(
         }
     }
 
+    // For result dims that reference a bind variable, the binding must already
+    // have been populated above. A missing binding here means the signature is
+    // malformed (a `Ref`/`Var`/`VarPow` without a matching `Bind`) — surface
+    // this as an internal error rather than panicking.
+    let result_span = args
+        .first()
+        .map_or(crate::syntax::span::Span::new(0, 0), |a| a.span);
     match &sig.result {
         ResultDim::Fixed(dim) => Ok(dim.clone()),
-        ResultDim::Var(name) => Ok(bindings[name.as_str()].clone()),
-        ResultDim::VarPow(name, power) => Ok(bindings[name.as_str()].pow(*power)),
+        ResultDim::Var(name) => {
+            Ok(lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?.clone())
+        }
+        ResultDim::VarPow(name, power) => {
+            Ok(lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?.pow(*power))
+        }
     }
+}
+
+fn lookup_binding<'a>(
+    bindings: &HashMap<&str, &'a Dimension>,
+    var: &str,
+    fn_name: &str,
+    src: &NamedSource<Arc<String>>,
+    span: crate::syntax::span::Span,
+) -> Result<&'a Dimension, GraphcalError> {
+    bindings
+        .get(var)
+        .copied()
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!(
+                "builtin `{fn_name}` references unbound dim variable `{var}` in its signature"
+            ),
+            src: src.clone(),
+            span: span.into(),
+        })
 }

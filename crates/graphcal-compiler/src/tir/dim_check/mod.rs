@@ -81,7 +81,14 @@ fn check_decl_expr_type(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let name_str = name.to_string();
-    let declared = &declared_types[name_str.as_str()];
+    let declared =
+        declared_types
+            .get(name_str.as_str())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("no declared type recorded for `{name_str}`"),
+                src: src.clone(),
+                span: (*type_ann_span).into(),
+            })?;
     let inferred = infer_type_with_owner(
         expr,
         Some(name_str.as_str()),
@@ -492,7 +499,12 @@ pub fn check_override_dimension(
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
-    let declared = &declared_types[param_name];
+    let declared =
+        declared_types
+            .get(param_name)
+            .ok_or_else(|| GraphcalError::OverrideUnknownParam {
+                name: crate::syntax::names::DeclName::new(param_name.to_string()),
+            })?;
     let inferred = infer_type(
         expr,
         declared_types,

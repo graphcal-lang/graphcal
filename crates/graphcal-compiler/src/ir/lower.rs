@@ -700,7 +700,8 @@ impl UnfrozenIR {
         type_bindings: &HashMap<String, String>,
         dim_bindings: &HashMap<String, String>,
         import_item_attributes: &HashMap<String, Vec<crate::syntax::ast::Attribute>>,
-    ) {
+        importer_src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
         /// Prefix a `ScopedName` dep if its member is in `dep_names`.
         fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<String>) -> ScopedName {
             if dep_names.contains(d.member()) {
@@ -959,66 +960,21 @@ impl UnfrozenIR {
         }
 
         // Apply import-item expected_fail attributes (from the importing file).
+        // Malformed args are surfaced as `ExpectedFailInvalidArg`, matching the
+        // behavior for non-imported `#[expected_fail]` attributes.
         for (orig_name, attrs) in import_item_attributes {
             for attr in attrs {
                 if attr.name.name == "expected_fail" {
                     let prefixed_assert = ScopedName::Local(orig_name.clone()).with_prefix(prefix);
-                    // Parse the attribute args into an ExpectedFail value.
-                    // We use a simplified parsing here since parse_expected_fail_args
-                    // requires a NamedSource — reuse the attribute args directly.
-                    if attr.args.is_empty() {
-                        self.expected_fail
-                            .insert(prefixed_assert, ExpectedFail::All);
-                    } else {
-                        let mut keys = Vec::new();
-                        for arg in &attr.args {
-                            if let Some(key) = expected_fail_key_from_attr_arg(arg) {
-                                keys.push(key);
-                            }
-                        }
-                        if !keys.is_empty() {
-                            self.expected_fail
-                                .insert(prefixed_assert, ExpectedFail::Variants(keys));
-                        }
-                    }
+                    let ef = crate::ir::resolve::names::parse_expected_fail_args(
+                        &attr.args,
+                        importer_src,
+                    )?;
+                    self.expected_fail.insert(prefixed_assert, ef);
                 }
             }
         }
-    }
-}
-
-/// Extract an [`ExpectedFailKey`] from an attribute argument.
-///
-/// Returns `None` if the arg doesn't match the expected `Index::Variant` pattern.
-fn expected_fail_key_from_attr_arg(
-    arg: &crate::syntax::ast::AttributeArg,
-) -> Option<
-    Vec<(
-        crate::syntax::names::IndexName,
-        crate::syntax::names::VariantName,
-    )>,
-> {
-    use crate::syntax::ast::AttributeArg;
-    match arg {
-        AttributeArg::Path { segments, .. } if segments.len() == 2 => Some(vec![(
-            crate::syntax::names::IndexName::new(&segments[0].name),
-            crate::syntax::names::VariantName::new(&segments[1].name),
-        )]),
-        AttributeArg::Group { elements, .. } => {
-            let mut key = Vec::new();
-            for elem in elements {
-                if let AttributeArg::Path { segments, .. } = elem
-                    && segments.len() == 2
-                {
-                    key.push((
-                        crate::syntax::names::IndexName::new(&segments[0].name),
-                        crate::syntax::names::VariantName::new(&segments[1].name),
-                    ));
-                }
-            }
-            if key.is_empty() { None } else { Some(key) }
-        }
-        AttributeArg::Path { .. } => None,
+        Ok(())
     }
 }
 

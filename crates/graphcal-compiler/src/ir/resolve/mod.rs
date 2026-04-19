@@ -1,5 +1,5 @@
 mod deps;
-mod names;
+pub(crate) mod names;
 mod scope;
 #[cfg(test)]
 mod tests;
