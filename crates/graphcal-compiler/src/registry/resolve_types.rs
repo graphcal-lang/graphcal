@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use crate::syntax::names::{IndexName, VariantName};
+use crate::syntax::names::{DeclName, IndexName, VariantName};
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------
@@ -359,6 +359,15 @@ impl From<&ScopedName> for crate::syntax::names::DeclName {
     }
 }
 
+impl From<DeclName> for ScopedName {
+    /// Wrap a `DeclName` as a `ScopedName::Local`. Use this at the resolver →
+    /// IR boundary where resolver keys (local `DeclName`s) become IR keys
+    /// (`ScopedName`s).
+    fn from(name: DeclName) -> Self {
+        Self::Local(name.into_inner())
+    }
+}
+
 /// Pre-evaluated value bindings imported from already-evaluated dependency files.
 ///
 /// Unlike `ImportedNames` which carries AST expressions, this carries
@@ -495,13 +504,13 @@ pub struct ResolvedFile {
     /// Layer declarations in source order.
     pub layers: Vec<ResolvedLayerEntry>,
     /// For each node/param, the set of `@`-references (graph deps).
-    pub runtime_deps: HashMap<String, HashSet<String>>,
+    pub runtime_deps: HashMap<DeclName, HashSet<DeclName>>,
     /// For each const, the set of `CONST_REF` references (const deps).
-    pub const_deps: HashMap<String, HashSet<String>>,
+    pub const_deps: HashMap<DeclName, HashSet<DeclName>>,
     /// All declaration names in source order with their category.
-    pub source_order: Vec<(String, DeclCategory)>,
+    pub source_order: Vec<(DeclName, DeclCategory)>,
     /// Set of all assert names (for checking `@assert_name` errors).
-    pub assert_names: HashSet<String>,
+    pub assert_names: HashSet<DeclName>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
     pub assumes_map: HashMap<String, Vec<String>>,
@@ -509,5 +518,5 @@ pub struct ResolvedFile {
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
     pub expected_fail: HashMap<String, ExpectedFail>,
     /// Names of all declarations marked `pub` in this file (values + type-system).
-    pub pub_names: HashSet<String>,
+    pub pub_names: HashSet<DeclName>,
 }

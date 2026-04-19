@@ -221,9 +221,8 @@ fn eval_consts_from_tir(
         .map(|entry| (entry.name.to_string(), &entry.expr))
         .collect();
 
-    // Use String-keyed map for eval_expr compatibility (it takes HashMap<String, RuntimeValue>).
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    let mut str_values: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut const_values: HashMap<DeclName, RuntimeValue> = HashMap::new();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -237,15 +236,11 @@ fn eval_consts_from_tir(
     for idx in sorted {
         let name = &graph[idx];
         let expr = const_exprs[name];
-        let val = eval_expr(expr, &str_values, &empty_locals, &ctx)?;
-        str_values.insert(name.clone(), val);
+        let val = eval_expr(expr, &const_values, &empty_locals, &ctx)?;
+        const_values.insert(DeclName::new(name), val);
     }
 
-    // Convert to DeclName-keyed map for the ExecPlan.
-    Ok(str_values
-        .into_iter()
-        .map(|(k, v)| (DeclName::new(k), v))
-        .collect())
+    Ok(const_values)
 }
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.
@@ -370,11 +365,6 @@ fn resolve_domain_constraints(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    // Convert to String-keyed map for eval_expr compatibility.
-    let str_const_values: HashMap<String, RuntimeValue> = const_values
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -427,7 +417,7 @@ fn resolve_domain_constraints(
 
         for bound in domain_bounds {
             // Evaluate the bound expression.
-            let rv = eval_expr(&bound.value, &str_const_values, &empty_locals, &ctx)?;
+            let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
 
             let si_value = match &rv {
                 RuntimeValue::Scalar(v) => *v,

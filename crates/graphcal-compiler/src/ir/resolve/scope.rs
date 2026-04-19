@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
+use crate::syntax::names::DeclName;
 use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
@@ -76,7 +77,7 @@ pub(super) fn check_no_runtime_graph_refs(
 /// Assert declarations are leaf nodes — they cannot be referenced by other declarations.
 pub(super) fn check_no_assert_graph_refs(
     expr: &Expr,
-    assert_names: &HashSet<String>,
+    assert_names: &HashSet<DeclName>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut checker = ForbiddenGraphRefChecker {

@@ -144,15 +144,15 @@ pub struct IR {
     pub imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
-/// Convert a `String`-keyed dep map from the resolver to a `ScopedName`-keyed map.
+/// Convert a `DeclName`-keyed dep map from the resolver to a `ScopedName`-keyed map.
 fn wrap_dep_map(
-    map: HashMap<String, HashSet<String>>,
+    map: HashMap<DeclName, HashSet<DeclName>>,
 ) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
     map.into_iter()
         .map(|(k, v)| {
             (
-                ScopedName::local(k),
-                v.into_iter().map(ScopedName::local).collect(),
+                ScopedName::from(k),
+                v.into_iter().map(ScopedName::from).collect(),
             )
         })
         .collect()
@@ -472,7 +472,7 @@ fn build_ir_from_resolved(
             .plots
             .into_iter()
             .map(|entry| {
-                let is_pub = resolved.pub_names.contains(&entry.name);
+                let is_pub = resolved.pub_names.contains(entry.name.as_str());
                 PlotEntry {
                     name: ScopedName::local(entry.name),
                     decl: entry.decl,
@@ -504,12 +504,12 @@ fn build_ir_from_resolved(
         source_order: resolved
             .source_order
             .into_iter()
-            .map(|(name, cat)| (ScopedName::local(name), cat))
+            .map(|(name, cat)| (ScopedName::from(name), cat))
             .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
-            .map(ScopedName::local)
+            .map(ScopedName::from)
             .collect(),
         assumes_map: resolved
             .assumes_map
@@ -1578,38 +1578,13 @@ pub(crate) fn substitute_type_names_in_expr(
     }
 }
 
-/// Visitor that collects graph references from expressions.
-struct GraphRefCollector<'a> {
-    refs: &'a mut BTreeSet<ScopedName>,
-}
-
-impl ExprVisitor for GraphRefCollector<'_> {
-    type Error = std::convert::Infallible;
-
-    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind {
-            self.refs.insert(ScopedName::local(ident.value.as_str()));
-        }
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { module, name } = &expr.kind {
-            self.refs
-                .insert(ScopedName::qualified(&module.name, name.value.as_str()));
-        }
-        Ok(())
-    }
-}
-
 /// Collect all `@`-referenced names from an expression (non-recursive into child scopes).
 ///
 /// This is a simpler version of `resolve::collect_graph_refs` that operates on
 /// arbitrary expressions without requiring a known-names set. Used for building
 /// runtime deps from binding expressions.
 fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut BTreeSet<ScopedName>) {
-    let mut collector = GraphRefCollector { refs };
-    let _ = collector.visit_expr(expr);
+    crate::ir::resolve::collect_scoped_graph_refs(expr, refs);
 }
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
@@ -2022,37 +1997,20 @@ fn resolve_base_unit_static_scale(
 
 /// Check if an expression contains any `@`-references (graph refs).
 fn contains_graph_ref(expr: &Expr) -> bool {
-    struct GraphRefDetector {
-        found: bool,
-    }
-    impl ExprVisitor for GraphRefDetector {
-        type Error = std::convert::Infallible;
-        fn visit_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
-            self.found = true;
-            Ok(())
-        }
-        fn visit_qualified_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
-            self.found = true;
-            Ok(())
-        }
-    }
-    let mut detector = GraphRefDetector { found: false };
-    let _ = detector.visit_expr(expr);
-    detector.found
+    crate::ir::resolve::contains_graph_ref(expr)
 }
 
 /// Build a map of dynamic unit name → set of `@`-reference names from the registry.
 ///
-/// For each dynamic unit, extracts the graph refs from its `scale_expr` using
-/// the `GraphRefCollector` visitor. Returns an empty map if no dynamic units exist.
+/// For each dynamic unit, extracts the graph refs from its `scale_expr`.
+/// Returns an empty map if no dynamic units exist.
 fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<String, HashSet<String>> {
     let mut dynamic_deps: HashMap<String, HashSet<String>> = HashMap::new();
 
     for (name, _dim, scale) in registry.all_units() {
         if let UnitScale::Dynamic { scale_expr, .. } = scale {
             let mut refs = HashSet::new();
-            let mut collector = GraphRefNameCollector { refs: &mut refs };
-            let _ = collector.visit_expr(scale_expr);
+            crate::ir::resolve::collect_graph_ref_names(scale_expr, &mut refs);
             if !refs.is_empty() {
                 dynamic_deps.insert(name.to_string(), refs);
             }
@@ -2060,29 +2018,6 @@ fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<String, HashSe
     }
 
     dynamic_deps
-}
-
-/// Visitor that collects `@`-reference names from an expression.
-struct GraphRefNameCollector<'a> {
-    refs: &'a mut HashSet<String>,
-}
-
-impl ExprVisitor for GraphRefNameCollector<'_> {
-    type Error = std::convert::Infallible;
-
-    fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind {
-            self.refs.insert(ident.value.to_string());
-        }
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind {
-            self.refs.insert(ident.value.to_string());
-        }
-        Ok(())
-    }
 }
 
 /// Visitor that collects all unit names referenced by `UnitLiteral` and `Convert` nodes.
@@ -2122,7 +2057,7 @@ impl ExprVisitor for UnitNameCollector {
 /// the params referenced by dynamic unit scales are evaluated before any
 /// node/param that uses the dynamic unit.
 fn augment_runtime_deps_for_dynamic_units(
-    runtime_deps: &mut HashMap<String, HashSet<String>>,
+    runtime_deps: &mut HashMap<DeclName, HashSet<DeclName>>,
     dynamic_unit_deps: &HashMap<String, HashSet<String>>,
     params: &[crate::registry::resolve_types::ResolvedParamEntry],
     nodes: &[crate::registry::resolve_types::ResolvedNodeEntry],
@@ -2137,9 +2072,9 @@ fn augment_runtime_deps_for_dynamic_units(
             let extra_deps = collect_dynamic_unit_deps_from_expr(expr, dynamic_unit_deps);
             if !extra_deps.is_empty() {
                 runtime_deps
-                    .entry(param.name.clone())
+                    .entry(DeclName::new(param.name.as_str()))
                     .or_default()
-                    .extend(extra_deps);
+                    .extend(extra_deps.into_iter().map(DeclName::new));
             }
         }
     }
@@ -2149,9 +2084,9 @@ fn augment_runtime_deps_for_dynamic_units(
         let extra_deps = collect_dynamic_unit_deps_from_expr(&node.expr, dynamic_unit_deps);
         if !extra_deps.is_empty() {
             runtime_deps
-                .entry(node.name.clone())
+                .entry(DeclName::new(node.name.as_str()))
                 .or_default()
-                .extend(extra_deps);
+                .extend(extra_deps.into_iter().map(DeclName::new));
         }
     }
 }

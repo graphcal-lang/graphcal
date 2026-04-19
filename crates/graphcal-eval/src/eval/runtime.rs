@@ -140,7 +140,7 @@ pub(super) fn runtime_to_value(
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
-    pub values: HashMap<String, RuntimeValue>,
+    pub values: HashMap<DeclName, RuntimeValue>,
     pub errors: HashMap<String, NodeError>,
 }
 
@@ -161,7 +161,7 @@ pub(super) fn run_eval_loop(
 ) -> EvalLoopResult {
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
-    let mut values: HashMap<String, RuntimeValue> = HashMap::new();
+    let mut values: HashMap<DeclName, RuntimeValue> = HashMap::new();
     let mut errors: HashMap<String, NodeError> = HashMap::new();
 
     // Build string-keyed runtime_deps for lookups (TIR uses ScopedName keys).
@@ -172,21 +172,21 @@ pub(super) fn run_eval_loop(
         .collect();
 
     // Insert imported values into the lookup table (pre-evaluated by dependency files).
-    // ScopedName → String: the runtime values map uses flat strings because it
+    // ScopedName → DeclName: the runtime values map uses flat decl names because it
     // merges imported, const, and locally computed values into a single namespace.
     for (name, val) in &plan.imported_values {
-        values.insert(name.to_string(), val.clone());
+        values.insert(DeclName::new(name.to_string()), val.clone());
     }
 
     // Insert const values into the lookup table
     for (name, val) in &plan.const_values {
-        values.insert(name.to_string(), val.clone());
+        values.insert(name.clone(), val.clone());
     }
 
     // Evaluate in topological order (params first, then nodes that depend on them)
     for name in &plan.topo_order {
         let name_str = name.to_string();
-        if values.contains_key(&name_str) {
+        if values.contains_key(name.as_str()) {
             continue;
         }
 
@@ -239,7 +239,7 @@ pub(super) fn run_eval_loop(
                     );
                     continue;
                 }
-                values.insert(name_str, val);
+                values.insert(name.clone(), val);
             }
             Err(e) => {
                 let message = match &e {
@@ -462,7 +462,7 @@ pub(super) fn evaluate_plan(
 fn evaluate_assert_with_expected_fail(
     body: &graphcal_compiler::syntax::ast::AssertBody,
     ef: Option<&ExpectedFail>,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -734,7 +734,7 @@ fn collect_failing_paths(
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
     body: &graphcal_compiler::syntax::ast::AssertBody,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -843,7 +843,7 @@ fn evaluate_plot(
     decl: &graphcal_compiler::syntax::ast::PlotDecl,
     name: &str,
     is_pub: bool,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
@@ -921,7 +921,7 @@ fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::syntax::ast::Expr,
     declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
 ) -> AxisMeta {
     let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
     let unit_label = extract_flat_display_unit(expr, registry, values).map(|du| du.label);
@@ -983,7 +983,7 @@ fn dimension_label_from_declared_type(
 fn eval_composition_fields(
     fields: &[graphcal_compiler::syntax::ast::PlotField],
     plot_name_spans: &[graphcal_compiler::syntax::names::Spanned<DeclName>],
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
     empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> (

@@ -7,6 +7,108 @@
 )]
 use super::*;
 
+/// What kind of "other declaration" a binding name resolves to in the dep file
+/// when it is not a param / type / dim / index.
+#[derive(Clone, Copy)]
+enum OtherDeclKind {
+    ConstNode,
+    Node,
+    Assert,
+}
+
+impl OtherDeclKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConstNode => "const node",
+            Self::Node => "node",
+            Self::Assert => "assert",
+        }
+    }
+}
+
+/// Classification of a name against a dependency's declarations.
+///
+/// Built once per dep file and reused for every binding rather than re-scanning
+/// `declarations` four or five times per binding.
+struct DepDeclIndex<'a> {
+    params: HashSet<&'a str>,
+    types: HashSet<&'a str>,
+    dims: HashSet<&'a str>,
+    units: HashSet<&'a str>,
+    /// Maps index name to its declaration (needed for kind/required checks).
+    indexes: HashMap<&'a str, &'a graphcal_compiler::syntax::ast::IndexDecl>,
+    /// "Other" declarations (const node / node / assert) that are invalid as
+    /// binding targets; used to produce precise "is actually a …" diagnostics.
+    other: HashMap<&'a str, OtherDeclKind>,
+}
+
+impl DepDeclIndex<'_> {
+    fn is_const(&self, name: &str) -> bool {
+        matches!(self.other.get(name), Some(OtherDeclKind::ConstNode))
+    }
+    fn is_runtime(&self, name: &str) -> bool {
+        self.params.contains(name) || matches!(self.other.get(name), Some(OtherDeclKind::Node))
+    }
+    fn is_type_system(&self, name: &str) -> bool {
+        self.dims.contains(name)
+            || self.units.contains(name)
+            || self.indexes.contains_key(name)
+            || self.types.contains(name)
+    }
+}
+
+fn build_dep_decl_index(decls: &[graphcal_compiler::syntax::ast::Declaration]) -> DepDeclIndex<'_> {
+    let mut params = HashSet::new();
+    let mut types = HashSet::new();
+    let mut dims = HashSet::new();
+    let mut units = HashSet::new();
+    let mut indexes: HashMap<&str, &graphcal_compiler::syntax::ast::IndexDecl> = HashMap::new();
+    let mut other: HashMap<&str, OtherDeclKind> = HashMap::new();
+    for d in decls {
+        match &d.kind {
+            DeclKind::Param(p) => {
+                params.insert(p.name.value.as_str());
+            }
+            DeclKind::Type(t) => {
+                types.insert(t.name.value.as_str());
+            }
+            DeclKind::UnionType(t) => {
+                types.insert(t.name.value.as_str());
+            }
+            DeclKind::BaseDimension(dim) => {
+                dims.insert(dim.name.value.as_str());
+            }
+            DeclKind::Dimension(dim) => {
+                dims.insert(dim.name.value.as_str());
+            }
+            DeclKind::Unit(u) => {
+                units.insert(u.name.value.as_str());
+            }
+            DeclKind::Index(idx) => {
+                indexes.insert(idx.name.value.as_str(), idx);
+            }
+            DeclKind::ConstNode(c) => {
+                other.insert(c.name.value.as_str(), OtherDeclKind::ConstNode);
+            }
+            DeclKind::Node(n) => {
+                other.insert(n.name.value.as_str(), OtherDeclKind::Node);
+            }
+            DeclKind::Assert(a) => {
+                other.insert(a.name.value.as_str(), OtherDeclKind::Assert);
+            }
+            _ => {}
+        }
+    }
+    DepDeclIndex {
+        params,
+        types,
+        dims,
+        units,
+        indexes,
+        other,
+    }
+}
+
 /// Process an instantiated include (one with param bindings), deferring it for
 /// post-lowering IR merging.
 #[expect(
@@ -29,6 +131,7 @@ pub(super) fn process_instantiated_include<'a>(
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_dag_id];
     let importer_loaded = &project.files[importer_dag_id];
+    let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
@@ -72,21 +175,13 @@ pub(super) fn process_instantiated_include<'a>(
         let binding_name = &binding.name.name;
 
         // Check if the binding name is a param in the dependency.
-        let is_param = dep_loaded.ast.declarations.iter().any(
-            |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name),
-        );
-        if is_param {
+        if dep_index.params.contains(binding_name.as_str()) {
             bindings.insert(binding_name.clone(), binding.value.clone());
             continue;
         }
 
         // Check if it's a type in the dependency.
-        let is_type = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
-            DeclKind::Type(t) => t.name.value.as_str() == binding_name,
-            DeclKind::UnionType(t) => t.name.value.as_str() == binding_name,
-            _ => false,
-        });
-        if is_type {
+        if dep_index.types.contains(binding_name.as_str()) {
             let rhs_name = lowering::extract_type_name_from_binding_expr(
                 &binding.value,
                 binding_name,
@@ -100,12 +195,7 @@ pub(super) fn process_instantiated_include<'a>(
         }
 
         // Check if it's a dimension in the dependency.
-        let is_dim = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
-            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == binding_name,
-            DeclKind::Dimension(dim) => dim.name.value.as_str() == binding_name,
-            _ => false,
-        });
-        if is_dim {
+        if dep_index.dims.contains(binding_name.as_str()) {
             let rhs_name = lowering::extract_type_name_from_binding_expr(
                 &binding.value,
                 binding_name,
@@ -116,15 +206,7 @@ pub(super) fn process_instantiated_include<'a>(
         }
 
         // Check if it's an index in the dependency.
-        let dep_index = dep_loaded
-            .ast
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                DeclKind::Index(idx) if idx.name.value.as_str() == binding_name => Some(idx),
-                _ => None,
-            });
-        if let Some(dep_idx) = dep_index {
+        if let Some(dep_idx) = dep_index.indexes.get(binding_name.as_str()).copied() {
             // Index binding: extract the RHS index name from the expression.
             let rhs_name = lowering::extract_index_name_from_binding_expr(
                 &binding.value,
@@ -205,22 +287,10 @@ pub(super) fn process_instantiated_include<'a>(
         }
 
         // Check if it's some other kind of declaration.
-        let actual_kind = dep_loaded
-            .ast
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                DeclKind::ConstNode(c) if c.name.value.as_str() == binding_name => {
-                    Some("const node")
-                }
-                DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
-                DeclKind::Assert(a) if a.name.value.as_str() == binding_name => Some("assert"),
-                _ => None,
-            });
-        if let Some(kind) = actual_kind {
+        if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
             return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
                 name: binding_name.clone(),
-                actual_kind: kind.to_string(),
+                actual_kind: kind.as_str().to_string(),
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
@@ -264,33 +334,18 @@ pub(super) fn process_instantiated_include<'a>(
 
                 // Register the local name in scope for the resolver.
                 // Determine the category from the dep's AST.
-                let is_const = dep_loaded.ast.declarations.iter().any(|d| {
-                    matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name)
-                });
-                let is_runtime = dep_loaded.ast.declarations.iter().any(|d| {
-                    matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
-                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
-                });
                 let scoped = ScopedName::Local(local_name.clone());
                 let span = import_item.name.span;
-                if is_const {
+                if dep_index.is_const(orig_name) {
                     ctx.imported_names.const_names.push((scoped, span));
-                } else if is_runtime {
+                } else if dep_index.is_runtime(orig_name) {
                     ctx.imported_names.param_names.push((scoped, span));
                 } else {
                     // Type-system declarations (dim/unit/index/type) are not
                     // registered in imported_names; handled via registry merge.
                 }
                 // Type-system declarations from instantiated imports also need registration.
-                let is_type_system = dep_loaded.ast.declarations.iter().any(|d| match &d.kind {
-                    DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
-                    DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
-                    DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
-                    DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
-                    DeclKind::Type(t) => t.name.value.as_str() == orig_name,
-                    _ => false,
-                });
-                if is_type_system {
+                if dep_index.is_type_system(orig_name) {
                     ctx.imported_type_system_names
                         .entry(import_dag_id.clone())
                         .or_default()

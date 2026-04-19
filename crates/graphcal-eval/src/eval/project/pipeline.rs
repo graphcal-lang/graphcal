@@ -818,5 +818,6 @@ pub(super) fn extract_runtime_values(
         .values
         .into_iter()
         .filter(|(name, _)| local_runtime_names.contains(name.as_str()))
+        .map(|(k, v)| (k.into_inner(), v))
         .collect()
 }

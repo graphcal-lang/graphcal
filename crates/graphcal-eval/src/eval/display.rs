@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::syntax::ast::{ExprKind, MapEntryKey};
-use graphcal_compiler::syntax::names::VariantName;
+use graphcal_compiler::syntax::names::{DeclName, VariantName};
 use indexmap::IndexMap;
 
 use crate::eval_expr::RuntimeValue;
@@ -17,7 +17,7 @@ pub(super) fn attach_display_units(
     value: &mut Value,
     expr: &graphcal_compiler::syntax::ast::Expr,
     registry: &Registry,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
 ) {
     match (&mut *value, &expr.kind) {
         (Value::Scalar { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
@@ -87,7 +87,7 @@ pub(super) fn attach_display_units(
 pub(super) fn resolve_unit_to_display(
     unit: &graphcal_compiler::syntax::ast::UnitExpr,
     registry: &Registry,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<DisplayUnit> {
     let scale = resolve_display_unit_scale(unit, registry, values)?;
     Some(DisplayUnit {
@@ -103,7 +103,7 @@ pub(super) fn resolve_unit_to_display(
 pub(super) fn extract_flat_display_unit(
     expr: &graphcal_compiler::syntax::ast::Expr,
     registry: &Registry,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<DisplayUnit> {
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, registry, values),
@@ -126,7 +126,7 @@ pub(super) fn extract_flat_display_unit(
 fn resolve_display_unit_scale(
     unit: &graphcal_compiler::syntax::ast::UnitExpr,
     registry: &Registry,
-    values: &HashMap<String, RuntimeValue>,
+    values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<f64> {
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
