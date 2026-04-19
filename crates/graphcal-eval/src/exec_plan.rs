@@ -231,6 +231,7 @@ fn eval_consts_from_tir(
         registry: &tir.registry,
         src,
         unfold_context: None,
+        compiled_dags: &tir.dags,
     };
 
     for idx in sorted {
@@ -390,6 +391,7 @@ fn resolve_domain_constraints(
         registry: &tir.registry,
         src,
         unfold_context: None,
+        compiled_dags: &tir.dags,
     };
 
     let mut constraints = HashMap::new();

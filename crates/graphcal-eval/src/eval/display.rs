@@ -131,12 +131,14 @@ fn resolve_display_unit_scale(
     let builtin_consts = crate::builtins::builtin_constants();
     let builtin_fns = crate::builtins::builtin_functions();
     let empty_src = miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
+    let empty_dags: HashMap<String, crate::tir::TIR> = HashMap::new();
     let ctx = crate::eval_expr::EvalContext {
         builtin_consts,
         builtin_fns,
         registry,
         src: &empty_src,
         unfold_context: None,
+        compiled_dags: &empty_dags,
     };
     let empty_locals = HashMap::new();
     crate::eval_expr::resolve_unit_scale(unit, values, &empty_locals, &ctx).ok()

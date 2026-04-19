@@ -19,6 +19,7 @@ use crate::builtins::BuiltinFunction;
 use crate::declared_type::DeclaredType;
 use crate::error::GraphcalError;
 use crate::registry::{Registry, UnitScale};
+use crate::tir::TIR;
 
 pub use crate::runtime_value::RuntimeValue;
 
@@ -35,6 +36,12 @@ pub struct EvalContext<'a> {
     /// When set, enables inline evaluation of `ExprKind::Unfold` expressions.
     /// Contains the name of the node being evaluated and the declared types map.
     pub unfold_context: Option<UnfoldContext<'a>>,
+    /// Per-dag compiled TIRs from the enclosing file.
+    ///
+    /// Used by [`eval_inline_dag_call`] to evaluate `@dag(args)::out` against
+    /// the dag's topologically ordered body. The map is shared across nested
+    /// inline calls so a dag body invoking another dag can still resolve it.
+    pub compiled_dags: &'a HashMap<String, TIR>,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -291,10 +298,17 @@ pub fn eval_expr(
 /// - Arguments are evaluated in the *caller's* scope, so expressions may
 ///   reference loop variables from an enclosing `for`, `scan`, `unfold`, or
 ///   match-binding — a deliberate divergence from top-level `include`.
+/// - The dag body executes in its compiled topological order (not textual
+///   order), so forward references across body nodes resolve correctly.
 /// - The projected output's value is returned.
 ///
-/// Step 3 scope: same-file (non-qualified) calls only; qualified form returns
-/// an explicit "not yet supported" diagnostic.
+/// The dag body is evaluated against the pre-compiled [`TIR`] stored on the
+/// enclosing file's TIR and carried in [`EvalContext::compiled_dags`]. The
+/// dag's own registry is used for all nested lookups so sibling dag calls
+/// from inside the body resolve through the same pipeline.
+///
+/// Qualified form `@module::dag(args)::out` is not yet supported and returns
+/// an explicit diagnostic.
 #[expect(clippy::too_many_arguments, reason = "passes eval context through")]
 fn eval_inline_dag_call(
     call_expr: &Expr,
@@ -306,8 +320,6 @@ fn eval_inline_dag_call(
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::syntax::ast::DeclKind;
-
     if let Some(m) = module {
         return Err(ctx.eval_error(
             format!(
@@ -319,10 +331,10 @@ fn eval_inline_dag_call(
         ));
     }
 
-    let dag_decl = ctx.registry.dags.get(dag.value.as_str()).ok_or_else(|| {
+    let dag_tir = ctx.compiled_dags.get(dag.value.as_str()).ok_or_else(|| {
         ctx.internal_error(
             format!(
-                "dag `{}` not found in registry (should have been caught by dim-check)",
+                "dag `{}` has no compiled TIR (should have been caught by dim-check)",
                 dag.value,
             ),
             dag.span,
@@ -337,24 +349,35 @@ fn eval_inline_dag_call(
         dag_values.insert(binding.name.name.clone(), value);
     }
 
-    // Evaluate every inner declaration (const nodes and nodes) in source order.
-    // The dim-check pass already verified that every declared param has a
-    // binding, so at this point `dag_values` holds every param. Nodes within
-    // the dag body may reference earlier nodes via `@name`, and the source
-    // order reflects the declaration order in the body.
+    // Inside the dag body the visible registry is the dag's own (merged
+    // parent types + sibling dags). `compiled_dags` still points to the
+    // file-level map so nested inline calls resolve.
+    let dag_ctx = EvalContext {
+        builtin_consts: ctx.builtin_consts,
+        builtin_fns: ctx.builtin_fns,
+        registry: &dag_tir.registry,
+        src: ctx.src,
+        unfold_context: None,
+        compiled_dags: ctx.compiled_dags,
+    };
+
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    for body_decl in &dag_decl.body {
-        match &body_decl.kind {
-            DeclKind::Node(n) => {
-                let value = eval_expr(&n.value, &dag_values, &empty_locals, ctx)?;
-                dag_values.insert(n.name.value.to_string(), value);
-            }
-            DeclKind::ConstNode(c) => {
-                let value = eval_expr(&c.value, &dag_values, &empty_locals, ctx)?;
-                dag_values.insert(c.name.value.to_string(), value);
-            }
-            _ => {}
+
+    // Evaluate consts and nodes in topological order derived from
+    // `runtime_deps` ∪ `const_deps`. Params are leaves — they arrive via
+    // `args` and never execute body code.
+    let topo = topo_order_for_dag_body(dag_tir);
+    for name in topo {
+        let key = name.member();
+        if dag_values.contains_key(key) {
+            continue;
         }
+        let expr = lookup_dag_body_expr(dag_tir, &name);
+        let Some(expr) = expr else {
+            continue;
+        };
+        let value = eval_expr(expr, &dag_values, &empty_locals, &dag_ctx)?;
+        dag_values.insert(key.to_string(), value);
     }
 
     dag_values
@@ -362,13 +385,102 @@ fn eval_inline_dag_call(
         .cloned()
         .ok_or_else(|| {
             ctx.internal_error(
-            format!(
-                "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
-                dag.value, output.value,
-            ),
-            output.span,
-        )
+                format!(
+                    "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                    dag.value, output.value,
+                ),
+                output.span,
+            )
         })
+}
+
+/// Kahn-style topological sort over a dag body's combined dep graph.
+///
+/// Produces an order in which each const/param/node appears after every one
+/// of its runtime and const dependencies. Cycles are impossible in a
+/// well-typed dag body because compile-time dep collection rejects them.
+fn topo_order_for_dag_body(
+    dag_tir: &TIR,
+) -> Vec<graphcal_compiler::registry::resolve_types::ScopedName> {
+    use graphcal_compiler::registry::resolve_types::ScopedName;
+    use std::collections::BTreeSet;
+
+    // All declaration names in a stable order.
+    let mut names: Vec<ScopedName> = dag_tir
+        .source_order
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    names.sort();
+
+    // Incoming-edge counts and reverse adjacency keyed by name.
+    let mut incoming: HashMap<ScopedName, usize> = HashMap::new();
+    let mut outgoing: HashMap<ScopedName, Vec<ScopedName>> = HashMap::new();
+    for name in &names {
+        incoming.insert(name.clone(), 0);
+        outgoing.insert(name.clone(), Vec::new());
+    }
+
+    let add_edge = |from: &ScopedName,
+                    to: &ScopedName,
+                    incoming: &mut HashMap<ScopedName, usize>,
+                    outgoing: &mut HashMap<ScopedName, Vec<ScopedName>>| {
+        if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
+            out.push(to.clone());
+            *deg += 1;
+        }
+    };
+
+    for (name, deps) in &dag_tir.runtime_deps {
+        for dep in deps {
+            add_edge(dep, name, &mut incoming, &mut outgoing);
+        }
+    }
+    for (name, deps) in &dag_tir.const_deps {
+        for dep in deps {
+            add_edge(dep, name, &mut incoming, &mut outgoing);
+        }
+    }
+
+    // Kahn with a sorted ready set for deterministic tie-breaking.
+    let mut ready: BTreeSet<ScopedName> = incoming
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(n, _)| n.clone())
+        .collect();
+    let mut order = Vec::with_capacity(names.len());
+    while let Some(n) = ready.iter().next().cloned() {
+        ready.remove(&n);
+        order.push(n.clone());
+        if let Some(succs) = outgoing.remove(&n) {
+            for s in succs {
+                if let Some(deg) = incoming.get_mut(&s) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        ready.insert(s);
+                    }
+                }
+            }
+        }
+    }
+    order
+}
+
+/// Look up the evaluation expression for a declaration in a dag body.
+///
+/// Returns `None` for params (they receive their value from the call-site
+/// argument binding, not from a body-local expression).
+fn lookup_dag_body_expr<'a>(
+    dag_tir: &'a TIR,
+    name: &graphcal_compiler::registry::resolve_types::ScopedName,
+) -> Option<&'a Expr> {
+    if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {
+        return Some(&c.expr);
+    }
+    if let Some(n) = dag_tir.nodes.iter().find(|n| &n.name == name) {
+        return Some(&n.expr);
+    }
+    None
 }
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.

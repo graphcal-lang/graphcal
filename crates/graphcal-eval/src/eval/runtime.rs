@@ -217,6 +217,7 @@ pub(super) fn run_eval_loop(
             registry: &tir.registry,
             src,
             unfold_context: Some(unfold_ctx),
+            compiled_dags: &tir.dags,
         };
 
         let result = eval_expr(expr, &values, &empty_locals, &ctx);
@@ -270,6 +271,7 @@ pub(super) fn evaluate_plan(
         registry: &tir.registry,
         src,
         unfold_context: None,
+        compiled_dags: &tir.dags,
     };
 
     let EvalLoopResult { values, errors } =
