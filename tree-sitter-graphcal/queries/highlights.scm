@@ -195,7 +195,7 @@
 ; Inline DAG invocation: `@dag(args)::out`.
 ; The dag name in call position is highlighted as a function reference; the
 ; projected output name after `::` is highlighted as a variable.
-(graph_ref args: (include_param_bindings) name: (identifier) @function.call)
+(graph_ref name: (identifier) @function.call args: (include_param_bindings))
 (graph_ref output: (identifier) @variable)
 
 ; ---------------------------------------------------------------
