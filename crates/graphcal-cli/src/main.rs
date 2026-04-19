@@ -230,7 +230,10 @@ fn handle_eval(
                 } else {
                     match plot_mode {
                         PlotOutput::Browser => {
-                            let html = plot::render_html(&rendered);
+                            let html = plot::render_html(&rendered).unwrap_or_else(|e| {
+                                eprintln!("error: could not render plots as HTML: {e}");
+                                process::exit(2);
+                            });
                             let mut tmp = tempfile::Builder::new()
                                 .prefix("graphcal_plot_")
                                 .suffix(".html")

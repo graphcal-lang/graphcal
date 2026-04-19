@@ -72,6 +72,18 @@ pub enum ParseError {
         #[label("unknown key")]
         span: SourceSpan,
     },
+
+    #[error("stray character in source")]
+    #[diagnostic(
+        code(graphcal::P006),
+        help("remove or replace this character; it is not part of the graphcal grammar")
+    )]
+    UnknownToken {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("stray character")]
+        span: SourceSpan,
+    },
 }
 
 pub struct Parser<'src> {
@@ -120,6 +132,26 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Consume any remaining tokens and, if the lexer encountered an unrecognized
+    /// character at any point, replace `result` with a `ParseError::UnknownToken`
+    /// pointing at the first such span.
+    ///
+    /// A stray character is a root-cause lex-level failure; it should eclipse any
+    /// downstream parse error that was caused by the character having been
+    /// silently skipped.
+    fn finalize<T>(&mut self, result: Result<T, ParseError>) -> Result<T, ParseError> {
+        while self.lexer.peek().is_some() {
+            self.lexer.next_token();
+        }
+        if let Some(span) = self.lexer.first_error_span() {
+            return Err(ParseError::UnknownToken {
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+        result
+    }
+
     /// Consume the next token, returning an error if the lexer is exhausted.
     ///
     /// Use this after `peek()` has confirmed `Some`.
@@ -139,6 +171,11 @@ impl<'src> Parser<'src> {
     /// Returns a [`ParseError`] if the source is not a valid expression
     /// or if there are unexpected trailing tokens.
     pub fn parse_single_expr(&mut self) -> Result<Expr, ParseError> {
+        let result = self.parse_single_expr_inner();
+        self.finalize(result)
+    }
+
+    fn parse_single_expr_inner(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = tok.clone();
@@ -158,6 +195,13 @@ impl<'src> Parser<'src> {
     pub fn parse_standalone_unit_expr(
         &mut self,
     ) -> Result<crate::syntax::ast::UnitExpr, ParseError> {
+        let result = self.parse_standalone_unit_expr_inner();
+        self.finalize(result)
+    }
+
+    fn parse_standalone_unit_expr_inner(
+        &mut self,
+    ) -> Result<crate::syntax::ast::UnitExpr, ParseError> {
         let expr = self.parse_unit_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = tok.clone();
@@ -175,6 +219,13 @@ impl<'src> Parser<'src> {
     ///
     /// Returns a [`ParseError`] if the source is not a valid dimension expression.
     pub fn parse_standalone_dim_expr(&mut self) -> Result<crate::syntax::ast::DimExpr, ParseError> {
+        let result = self.parse_standalone_dim_expr_inner();
+        self.finalize(result)
+    }
+
+    fn parse_standalone_dim_expr_inner(
+        &mut self,
+    ) -> Result<crate::syntax::ast::DimExpr, ParseError> {
         let expr = self.parse_dim_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = tok.clone();
@@ -189,6 +240,11 @@ impl<'src> Parser<'src> {
     ///
     /// Returns a [`ParseError`] if the source contains invalid syntax.
     pub fn parse_file(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
+        let result = self.parse_file_inner();
+        self.finalize(result)
+    }
+
+    fn parse_file_inner(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
         let mut declarations = Vec::new();
         while self.lexer.peek().is_some() {
             declarations.push(self.parse_declaration()?);
@@ -262,6 +318,7 @@ mod tests {
     )]
 
     use crate::syntax::names::is_pascal_case;
+    use crate::syntax::parser::{ParseError, Parser};
 
     #[test]
     fn is_pascal_case_examples() {
@@ -273,5 +330,34 @@ mod tests {
         assert!(!is_pascal_case("orbit"));
         assert!(!is_pascal_case("lower_snake"));
         assert!(!is_pascal_case(""));
+    }
+
+    #[test]
+    fn stray_character_in_source_surfaces_as_unknown_token() {
+        let input = "param x = 1.0; §";
+        let mut parser = Parser::new(input);
+        let err = parser.parse_file().expect_err("expected parse error");
+        match err {
+            ParseError::UnknownToken { span, .. } => {
+                let byte_start: usize = span.offset();
+                let byte_end = byte_start + span.len();
+                assert_eq!(&input[byte_start..byte_end], "§");
+            }
+            other => panic!("expected UnknownToken, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stray_character_preempts_other_parse_errors() {
+        // Even when the parse would otherwise fail with UnexpectedToken on the
+        // trailing `+`, the stray `§` earlier in the source is the root cause
+        // and should be reported.
+        let input = "param x = §1.0 +";
+        let mut parser = Parser::new(input);
+        let err = parser.parse_file().expect_err("expected parse error");
+        assert!(
+            matches!(err, ParseError::UnknownToken { .. }),
+            "expected UnknownToken, got {err:?}"
+        );
     }
 }

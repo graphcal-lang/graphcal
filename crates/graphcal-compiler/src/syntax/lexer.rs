@@ -21,6 +21,12 @@ use logos::Logos;
 ///       ▼  next_token() takes the peeked value
 ///   peeked = None          (consumed, ready for next peek)
 /// ```
+///
+/// When the underlying `logos::Lexer` encounters an unrecognized character, the
+/// span of the *first* such character is recorded in `first_error_span` and the
+/// character is skipped. The parser surfaces this as a `ParseError::UnknownToken`
+/// when a top-level `parse_*` entry point finishes, regardless of whether the
+/// downstream parse happened to succeed.
 #[expect(
     clippy::option_option,
     reason = "None = not peeked, Some(None) = EOF, Some(Some(_)) = peeked token"
@@ -32,6 +38,8 @@ pub struct Lexer<'src> {
     /// this slot before consuming `peeked`.
     peeked2: Option<(Token, Span)>,
     source: &'src str,
+    /// Span of the first unrecognized character encountered during lexing, if any.
+    first_error_span: Option<Span>,
 }
 
 impl<'src> Lexer<'src> {
@@ -42,6 +50,7 @@ impl<'src> Lexer<'src> {
             peeked: None,
             peeked2: None,
             source,
+            first_error_span: None,
         }
     }
 
@@ -60,14 +69,22 @@ impl<'src> Lexer<'src> {
             if let Some(second) = self.peeked2.take() {
                 self.peeked = Some(Some(second));
             } else {
-                // Advance the inner lexer, skipping unrecognized tokens.
-                // Error reporting for those will be handled by the parser.
+                // Advance the inner lexer, skipping unrecognized characters.
+                // The first bad span is remembered in `first_error_span` so the
+                // parser can surface it as a `ParseError::UnknownToken` rather
+                // than letting a stray character trigger a misleading downstream
+                // diagnostic.
                 self.peeked = Some(loop {
                     let result = self.inner.next()?;
                     let slice_span = self.inner.span();
                     let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-                    if let Ok(token) = result {
-                        break Some((token, span));
+                    match result {
+                        Ok(token) => break Some((token, span)),
+                        Err(()) => {
+                            if self.first_error_span.is_none() {
+                                self.first_error_span = Some(span);
+                            }
+                        }
                     }
                 });
             }
@@ -75,6 +92,17 @@ impl<'src> Lexer<'src> {
         self.peeked
             .as_ref()
             .and_then(|inner| inner.as_ref().map(|(tok, span)| (tok, *span)))
+    }
+
+    /// Return the span of the first unrecognized character encountered during lexing.
+    ///
+    /// Returns `None` if the lexer has not yet seen any invalid input. The value
+    /// is set lazily as tokens are consumed; callers that need an up-to-date
+    /// answer at a specific point should ensure lexing has progressed past the
+    /// region of interest (e.g., by draining the remaining tokens).
+    #[must_use]
+    pub const fn first_error_span(&self) -> Option<Span> {
+        self.first_error_span
     }
 
     /// Consume and return the next token and its span.
@@ -204,6 +232,32 @@ mod tests {
         assert_eq!(lexer.slice_at(span), "x");
 
         assert!(lexer.next_token().is_none());
+    }
+
+    #[test]
+    fn unknown_character_is_recorded() {
+        // `§` is not part of the grammar. The lexer should skip it while
+        // recording the span for the parser to surface as `UnknownToken`.
+        let input = "param §x = 1.0;";
+        let mut lexer = Lexer::new(input);
+        // Drain all tokens so the lexer encounters the stray character.
+        while lexer.next_token().is_some() {}
+        let err_span = lexer.first_error_span().expect("expected an error span");
+        assert_eq!(
+            &input[err_span.offset()..err_span.offset() + err_span.len()],
+            "§"
+        );
+    }
+
+    #[test]
+    fn only_first_unknown_character_is_recorded() {
+        // Multiple stray characters: the lexer reports only the first so that
+        // the diagnostic points at the original culprit.
+        let input = "§§";
+        let mut lexer = Lexer::new(input);
+        assert!(lexer.next_token().is_none());
+        let err_span = lexer.first_error_span().expect("expected an error span");
+        assert_eq!(err_span.offset(), 0);
     }
 
     #[test]

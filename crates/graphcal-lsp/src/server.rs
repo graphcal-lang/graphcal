@@ -140,6 +140,10 @@ impl Backend {
             return;
         }
 
+        // Bump the generation so any in-flight debounced analysis for this URI
+        // becomes stale and refuses to overwrite fresh results.
+        let generation = self.bump_generation(&uri).await;
+
         let uri_clone = uri.clone();
         let Ok(analysis) =
             tokio::task::spawn_blocking(move || run_analysis(&uri_clone, &text)).await
@@ -150,16 +154,7 @@ impl Backend {
             return;
         };
 
-        let diagnostics = analysis.diagnostics.clone();
-        self.documents.write().await.insert(uri.clone(), analysis);
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
-
-        // Ask the client to re-fetch inlay hints now that analysis is complete.
-        // Inlay hints are pull-based (client requests them), so without this
-        // refresh notification the client may show stale or missing hints.
-        let _ = self.client.inlay_hint_refresh().await;
+        self.store_and_publish(uri, analysis, generation).await;
     }
 
     /// Spawn a debounced analysis task for a `did_change` event.
@@ -176,8 +171,7 @@ impl Backend {
             tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
 
             // Check if a newer change has superseded this one.
-            let current = *generations.read().await.get(&uri).unwrap_or(&0);
-            if current != generation {
+            if !is_generation_current(&generations, &uri, generation).await {
                 return;
             }
 
@@ -194,12 +188,57 @@ impl Backend {
                         return;
                     }
                 };
+
+            // A `did_save` or a later `did_change` may have fired while analysis
+            // was running. Re-check before writing so stale results never clobber
+            // fresh ones.
+            if !is_generation_current(&generations, &uri, generation).await {
+                return;
+            }
+
             let diagnostics = analysis.diagnostics.clone();
             documents.write().await.insert(uri.clone(), analysis);
             client.publish_diagnostics(uri, diagnostics, None).await;
+            // Best-effort: the client may not support inlay-hint refresh.
             let _ = client.inlay_hint_refresh().await;
         });
     }
+
+    /// Increment and return the current generation for `uri`.
+    async fn bump_generation(&self, uri: &Url) -> u64 {
+        *self
+            .change_generations
+            .write()
+            .await
+            .entry(uri.clone())
+            .and_modify(|v| *v += 1)
+            .or_insert(1)
+    }
+
+    /// Write `analysis` into `documents` and publish diagnostics, but only if
+    /// `generation` is still the latest for `uri`. Otherwise the write is a
+    /// no-op — a newer change has superseded this analysis.
+    async fn store_and_publish(&self, uri: Url, analysis: AnalysisResult, generation: u64) {
+        if !is_generation_current(&self.change_generations, &uri, generation).await {
+            return;
+        }
+        let diagnostics = analysis.diagnostics.clone();
+        self.documents.write().await.insert(uri.clone(), analysis);
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
+        // Best-effort: the client may not support inlay-hint refresh.
+        let _ = self.client.inlay_hint_refresh().await;
+    }
+}
+
+/// Check whether `generation` is still the current generation stored for `uri`.
+async fn is_generation_current(
+    generations: &Arc<RwLock<HashMap<Url, u64>>>,
+    uri: &Url,
+    generation: u64,
+) -> bool {
+    *generations.read().await.get(uri).unwrap_or(&0) == generation
 }
 
 /// Build a `LoadedProject` from a URI and in-memory text.
@@ -272,7 +311,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let (diagnostics, eval_values) = if tir.is_library() {
                 (Vec::new(), HashMap::new())
             } else {
-                run_eval_from_project(&project, text)
+                run_eval_from_project(&project, text, &symbol_table)
             };
 
             AnalysisResult {
@@ -308,10 +347,11 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 fn run_eval_from_project(
     project: &LoadedProject,
     text: &str,
+    symbol_table: &SymbolTable,
 ) -> (Vec<Diagnostic>, HashMap<String, String>) {
     match compile_and_eval_from_project(project, &HashMap::new(), true) {
         Ok(result) => {
-            let diagnostics = eval_result_to_diagnostics(&result, text);
+            let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
             let values = format_eval_values(&result);
             (diagnostics, values)
         }
@@ -780,15 +820,7 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // Bump the generation counter for this URI.
-        let generation = *self
-            .change_generations
-            .write()
-            .await
-            .entry(uri.clone())
-            .and_modify(|v| *v += 1)
-            .or_insert(1);
-
+        let generation = self.bump_generation(&uri).await;
         self.spawn_debounced_analysis(uri, change.text, generation);
     }
 
