@@ -348,15 +348,6 @@ fn build_runtime_dag(
     Ok((topo_order, expressions))
 }
 
-/// Whether a declaration is a const (compile-time evaluated) or a param/node.
-///
-/// Consts get an immediate value-vs-constraint check at compile time;
-/// params/nodes are checked at runtime by `eval/runtime.rs`.
-enum DomainDeclKind {
-    Const,
-    ParamOrNode,
-}
-
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
 /// Evaluates each constraint bound expression using const values and builtins
@@ -396,24 +387,26 @@ fn resolve_domain_constraints(
 
     let mut constraints = HashMap::new();
 
-    // Iterate over consts, params, and nodes with non-empty constraints in their type annotations.
-    // Consts get an additional value-vs-constraint check below.
+    // Iterate over consts, params, and nodes with non-empty constraints in
+    // their type annotations. The `is_const` flag selects whether an immediate
+    // compile-time value-vs-constraint check runs below; params/nodes defer
+    // that check to `eval/runtime.rs`.
     let decl_iter = tir
         .consts
         .iter()
-        .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::Const))
+        .map(|e| (&e.name, &e.type_ann, e.span, true))
         .chain(
             tir.params
                 .iter()
-                .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::ParamOrNode)),
+                .map(|e| (&e.name, &e.type_ann, e.span, false)),
         )
         .chain(
             tir.nodes
                 .iter()
-                .map(|e| (&e.name, &e.type_ann, e.span, DomainDeclKind::ParamOrNode)),
+                .map(|e| (&e.name, &e.type_ann, e.span, false)),
         );
 
-    for (name, type_ann, decl_span, kind) in decl_iter {
+    for (name, type_ann, decl_span, is_const) in decl_iter {
         // Get constraints from the type annotation (could be on base type if indexed).
         let domain_bounds = extract_domain_bounds(type_ann);
         if domain_bounds.is_empty() {
@@ -494,15 +487,15 @@ fn resolve_domain_constraints(
         };
 
         // For const declarations, validate the (already-known) value at compile time.
-        if matches!(kind, DomainDeclKind::Const)
+        if is_const
             && let Some(value) = const_values.get(&DeclName::from(name))
-            && let Some(violation) =
+            && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
             return Err(GraphcalError::DomainViolation {
                 name: name.to_string(),
                 value: format_runtime_value(value),
-                violation,
+                violation: violation.message,
                 src: src.clone(),
                 span: decl_span.into(),
             });

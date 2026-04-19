@@ -1,6 +1,6 @@
 //! Parsing and validation of `graphcal.toml` manifest files.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -25,8 +25,8 @@ pub enum ManifestError {
 pub struct Manifest {
     /// The package name (required, `lower_snake_case`).
     pub package_name: String,
-    /// The source directory (defaults to `"src"`).
-    pub source_dir: String,
+    /// The source directory relative to the project root (defaults to `"src"`).
+    pub source_dir: PathBuf,
 }
 
 /// Parse a `graphcal.toml` manifest from a file path.
@@ -69,10 +69,7 @@ pub fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
     }
 
     // Extract source_dir (optional, defaults to "src").
-    let source_dir = root["package"]["source_dir"]
-        .as_str()
-        .unwrap_or("src")
-        .to_string();
+    let source_dir = PathBuf::from(root["package"]["source_dir"].as_str().unwrap_or("src"));
 
     Ok(Manifest {
         package_name: name.to_string(),
@@ -100,7 +97,7 @@ mod tests {
     fn parse_minimal_manifest() {
         let manifest = parse_manifest_str("[package]\nname = \"my_package\"\n").unwrap();
         assert_eq!(manifest.package_name, "my_package");
-        assert_eq!(manifest.source_dir, "src");
+        assert_eq!(manifest.source_dir, PathBuf::from("src"));
     }
 
     #[test]
@@ -108,7 +105,7 @@ mod tests {
         let manifest =
             parse_manifest_str("[package]\nname = \"my_package\"\nsource_dir = \"lib\"\n").unwrap();
         assert_eq!(manifest.package_name, "my_package");
-        assert_eq!(manifest.source_dir, "lib");
+        assert_eq!(manifest.source_dir, PathBuf::from("lib"));
     }
 
     #[test]

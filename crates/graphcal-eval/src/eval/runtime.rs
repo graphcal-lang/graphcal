@@ -226,10 +226,15 @@ pub(super) fn run_eval_loop(
             Ok(val) => {
                 // Check domain constraints after successful evaluation.
                 if let Some(constraint) = plan.domain_constraints.get(name.as_str())
-                    && let Some(violation) =
+                    && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
-                    errors.insert(name_str, NodeError::EvalFailed { message: violation });
+                    errors.insert(
+                        name_str,
+                        NodeError::EvalFailed {
+                            message: violation.message,
+                        },
+                    );
                     continue;
                 }
                 values.insert(name_str, val);

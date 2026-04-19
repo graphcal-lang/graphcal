@@ -1675,9 +1675,15 @@ fn format_check_parse_error_skipped() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // The formatter surfaces the specific parse-error message from the
+    // underlying `FormatError::Parse` variant.
     assert!(
-        stderr.contains("parse errors"),
-        "expected parse error warning: {stderr}"
+        stderr.contains("skipping"),
+        "expected skipping warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("unexpected token"),
+        "expected parse-error detail in warning: {stderr}"
     );
 
     std::fs::remove_dir_all(&dir).ok();

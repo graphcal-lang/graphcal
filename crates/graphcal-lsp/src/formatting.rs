@@ -8,10 +8,12 @@ use crate::convert::byte_offset_to_position;
 /// if the formatted output differs from the original.
 ///
 /// Returns `None` if:
-/// - The source fails to parse (the user already sees parse-error diagnostics).
+/// - The source fails to format (user already sees parse-error diagnostics for
+///   the underlying parse failure — the LSP surfaces format failure silently
+///   because there is no `TextEdit` we could offer).
 /// - The formatted output is identical to the original (no changes needed).
 pub fn format_document(source: &str) -> Option<Vec<TextEdit>> {
-    let formatted = graphcal_fmt::format_source(source)?;
+    let formatted = graphcal_fmt::format_source(source).ok()?;
 
     if formatted == source {
         return None;

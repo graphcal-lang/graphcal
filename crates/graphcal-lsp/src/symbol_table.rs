@@ -199,19 +199,15 @@ impl SymbolTable {
 
     /// Look up the key for a definition by its name-span byte offset.
     ///
+    /// Returns `None` if the definition has an empty name-span (builtins,
+    /// fields) or if the definition did not come from this table's
+    /// `insert_definition` path.
+    ///
     /// O(1) via the `name_span_to_key` secondary index — no linear scan needed.
-    pub fn find_definition_key(&self, definition: &DefinitionInfo) -> SymbolKey {
-        if let Some(key) = self.name_span_to_key.get(&definition.name_span.offset()) {
-            return key.clone();
-        }
-        // Fallback: should not happen if the definition came from this table.
-        debug_assert!(
-            false,
-            "find_definition_key: no matching definition for {:?} at offset {}",
-            definition.name,
-            definition.name_span.offset()
-        );
-        SymbolKey::TopLevel(definition.name.clone())
+    pub fn find_definition_key(&self, definition: &DefinitionInfo) -> Option<SymbolKey> {
+        self.name_span_to_key
+            .get(&definition.name_span.offset())
+            .cloned()
     }
 
     /// Insert a definition and update the secondary `name_span_to_key` index.
