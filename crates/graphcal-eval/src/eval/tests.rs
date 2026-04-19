@@ -1807,3 +1807,43 @@ fn eval_inline_dag_call_in_match_fixture() {
     let source = include_str!("../../../../tests/fixtures/inline_dag_call_in_match/main.gcl");
     let _result = compile_and_eval(source).unwrap();
 }
+
+#[test]
+fn eval_inline_dag_call_forward_reference_within_body() {
+    // MVP walked the dag body in source order, which made this fail at eval
+    // because `b` was evaluated before `a` was bound. The compile-pipeline
+    // refactor runs the body in topological order.
+    let source = "\
+dag forward {
+    param v: Length;
+    node b: Length = @a * 2.0;
+    node a: Length = @v + 1.0 m;
+}
+
+param src: Length = 3.0 m;
+node out: Length = @forward(v: @src)::b;
+";
+    let result = compile_and_eval(source).unwrap();
+    let out = find_value(&result, "out");
+    // (3 + 1) * 2 = 8
+    assert!((out - 8.0).abs() < 1e-10, "expected 8.0, got {out}");
+}
+
+#[test]
+fn eval_inline_dag_call_const_node_in_body() {
+    // `const node` inside a dag body should participate in the same
+    // topological evaluation as runtime nodes.
+    let source = "\
+dag with_const {
+    param v: Length;
+    const node multiplier: Dimensionless = 3.0;
+    node result: Length = @v * @multiplier;
+}
+
+param src: Length = 4.0 m;
+node out: Length = @with_const(v: @src)::result;
+";
+    let result = compile_and_eval(source).unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 12.0).abs() < 1e-10, "expected 12.0, got {out}");
+}
