@@ -265,12 +265,110 @@ pub fn eval_expr(
             unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
         }
 
-        // InlineDagRef is desugared to synthetic includes before evaluation.
-        #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
-        ExprKind::InlineDagRef { .. } => {
-            unreachable!("InlineDagRef should be desugared before eval")
+        ExprKind::InlineDagRef {
+            module,
+            dag,
+            args,
+            output,
+        } => eval_inline_dag_call(
+            expr,
+            module.as_ref(),
+            dag,
+            args,
+            output,
+            values,
+            local_values,
+            ctx,
+        ),
+    }
+}
+
+/// Evaluate an inline DAG invocation `@dag(args)::out`.
+///
+/// Semantics (from issue #451):
+/// - Each call site is a fresh DAG instantiation; every evaluation produces a
+///   fresh sub-graph bound to this call's argument values.
+/// - Arguments are evaluated in the *caller's* scope, so expressions may
+///   reference loop variables from an enclosing `for`, `scan`, `unfold`, or
+///   match-binding — a deliberate divergence from top-level `include`.
+/// - The projected output's value is returned.
+///
+/// Step 3 scope: same-file (non-qualified) calls only; qualified form returns
+/// an explicit "not yet supported" diagnostic.
+#[expect(clippy::too_many_arguments, reason = "passes eval context through")]
+fn eval_inline_dag_call(
+    call_expr: &Expr,
+    module: Option<&graphcal_compiler::syntax::ast::Ident>,
+    dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
+    args: &[graphcal_compiler::syntax::ast::ParamBinding],
+    output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
+    caller_values: &HashMap<String, RuntimeValue>,
+    caller_locals: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::syntax::ast::DeclKind;
+
+    if let Some(m) = module {
+        return Err(ctx.eval_error(
+            format!(
+                "qualified inline dag call `@{}::{}(...)` is not yet supported at eval time",
+                m.name,
+                dag.value.as_str(),
+            ),
+            call_expr.span,
+        ));
+    }
+
+    let dag_decl = ctx.registry.dags.get(dag.value.as_str()).ok_or_else(|| {
+        ctx.internal_error(
+            format!(
+                "dag `{}` not found in registry (should have been caught by dim-check)",
+                dag.value,
+            ),
+            dag.span,
+        )
+    })?;
+
+    // Evaluate argument expressions in the caller's scope so loop variables
+    // and other enclosing bindings resolve correctly.
+    let mut dag_values: HashMap<String, RuntimeValue> = HashMap::new();
+    for binding in args {
+        let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
+        dag_values.insert(binding.name.name.clone(), value);
+    }
+
+    // Evaluate every inner declaration (const nodes and nodes) in source order.
+    // The dim-check pass already verified that every declared param has a
+    // binding, so at this point `dag_values` holds every param. Nodes within
+    // the dag body may reference earlier nodes via `@name`, and the source
+    // order reflects the declaration order in the body.
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    for body_decl in &dag_decl.body {
+        match &body_decl.kind {
+            DeclKind::Node(n) => {
+                let value = eval_expr(&n.value, &dag_values, &empty_locals, ctx)?;
+                dag_values.insert(n.name.value.to_string(), value);
+            }
+            DeclKind::ConstNode(c) => {
+                let value = eval_expr(&c.value, &dag_values, &empty_locals, ctx)?;
+                dag_values.insert(c.name.value.to_string(), value);
+            }
+            _ => {}
         }
     }
+
+    dag_values
+        .get(output.value.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            ctx.internal_error(
+            format!(
+                "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                dag.value, output.value,
+            ),
+            output.span,
+        )
+        })
 }
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.

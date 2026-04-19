@@ -1650,3 +1650,139 @@ fn bare_module_dag_ref() {
     let answer = find_value(&result, "answer");
     assert!((answer - 42.0).abs() < 1e-10, "expected 42.0, got {answer}");
 }
+
+// ---- Inline DAG invocation (issue #451) ----
+
+#[test]
+fn eval_inline_dag_call_basic() {
+    let source = "\
+dag scale {
+    param factor: Dimensionless;
+    param v: Length;
+    node result: Length = @v * @factor;
+}
+
+param src: Length = 10.0 m;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+";
+    let result = compile_and_eval(source).unwrap();
+    let doubled = find_value(&result, "doubled");
+    assert!(
+        (doubled - 20.0).abs() < 1e-10,
+        "expected 20.0, got {doubled}"
+    );
+}
+
+#[test]
+fn eval_inline_dag_call_chains_through_body_nodes() {
+    // An inline call where the dag body has an intermediate node; tests that
+    // earlier nodes are evaluated and visible to later ones.
+    let source = "\
+dag two_step {
+    param v: Length;
+    node mid: Length = @v * 2.0;
+    node result: Length = @mid + 1.0 m;
+}
+
+param src: Length = 3.0 m;
+node out: Length = @two_step(v: @src)::result;
+";
+    let result = compile_and_eval(source).unwrap();
+    let out = find_value(&result, "out");
+    // (3 * 2) + 1 = 7
+    assert!((out - 7.0).abs() < 1e-10, "expected 7.0, got {out}");
+}
+
+#[test]
+fn eval_inline_dag_call_in_for_comp_with_loop_var() {
+    // Motivating shape: inline call inside a `for` whose arg references the
+    // loop variable via an indexed graph ref.
+    let source = "\
+pub index Region = { A, B };
+
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
+";
+    let result = compile_and_eval(source).unwrap();
+    // distances is indexed, look it up by cell.
+    let distances_entry = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "distances")
+        .expect("distances node")
+        .1
+        .as_ref()
+        .expect("distances value");
+    match distances_entry {
+        crate::eval::types::Value::Indexed { entries, .. } => {
+            let mut seen: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            for (variant, value) in entries {
+                seen.insert(variant.to_string(), value.si_value().unwrap());
+            }
+            assert!((seen["A"] - 1.0).abs() < 1e-10);
+            assert!((seen["B"] - 2.0).abs() < 1e-10);
+        }
+        other => panic!("expected Indexed, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_inline_dag_call_in_match_arm_fresh_instances_per_syntactic_site() {
+    // Each arm has a distinct syntactic call site; the eval-time selection
+    // picks one arm's value but every call site semantically is a fresh
+    // instantiation. This test exercises the motivating for/match shape.
+    let source = "\
+pub index Source = { Primary, Secondary };
+pub index Region = { A, B };
+
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param dist_primary: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
+param dist_secondary: Length[Region] = { Region::A: 10.0 m, Region::B: 20.0 m };
+
+node effective: Length[Source, Region] = for s: Source, r: Region {
+    match s {
+        Source::Primary   => @id_len(v: @dist_primary[r])::result,
+        Source::Secondary => @id_len(v: @dist_secondary[r])::result,
+    }
+};
+";
+    let result = compile_and_eval(source).unwrap();
+    let entry = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "effective")
+        .expect("effective node")
+        .1
+        .as_ref()
+        .expect("effective value");
+    // Nested Indexed: outer Source, inner Region.
+    let crate::eval::types::Value::Indexed { entries: outer, .. } = entry else {
+        panic!("expected Indexed, got {entry:?}");
+    };
+    let mut cells: std::collections::HashMap<(String, String), f64> =
+        std::collections::HashMap::new();
+    for (svar, sval) in outer {
+        let crate::eval::types::Value::Indexed { entries: inner, .. } = sval else {
+            panic!("expected inner Indexed, got {sval:?}");
+        };
+        for (rvar, rval) in inner {
+            cells.insert(
+                (svar.to_string(), rvar.to_string()),
+                rval.si_value().unwrap(),
+            );
+        }
+    }
+    assert!((cells[&("Primary".into(), "A".into())] - 1.0).abs() < 1e-10);
+    assert!((cells[&("Primary".into(), "B".into())] - 2.0).abs() < 1e-10);
+    assert!((cells[&("Secondary".into(), "A".into())] - 10.0).abs() < 1e-10);
+    assert!((cells[&("Secondary".into(), "B".into())] - 20.0).abs() < 1e-10);
+}
