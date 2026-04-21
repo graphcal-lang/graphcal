@@ -5,4 +5,10 @@
   lockFileMaintenance: {
     enabled: true,
   },
+  packageRules: [
+    {
+      matchUpdateTypes: ["lockFileMaintenance"],
+      minimumReleaseAge: null,
+    },
+  ],
 }
