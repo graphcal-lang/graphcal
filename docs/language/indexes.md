@@ -346,6 +346,10 @@ param      power_mode_active: Bool[Phase, Component, OperationMode]
 ```
 
 Slice labels must qualify each shared axis in the declared order (`Phase::Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
+
+### Editor integration
+
+Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Cell-level inlay hints (projecting slot names into the header row of the source) are planned for a future extension.
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
 
