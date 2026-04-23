@@ -1,4 +1,4 @@
-// multi_decl_nd.gcl -- v3 multi-decl: N-D shared-axis prefix with slices.
+// multi_decl_sliced.gcl -- v3 multi-decl: multi-axis shared prefix with slices.
 //
 // Two shared axes: `Phase` (slice axis) and `Component` (row axis).
 // One 2-D slot (power_mode_active) with extra axis OperationMode.

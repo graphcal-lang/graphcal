@@ -823,7 +823,7 @@ param b: Bool[Component, OperationMode]
     }
 
     #[test]
-    fn multi_decl_v3_nd_shared_axes_with_slices() {
+    fn multi_decl_v3_sliced_shared_axes() {
         let source = r"
 index Phase = { Launch, Cruise };
 index Component = { ComponentA };

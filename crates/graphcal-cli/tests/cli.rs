@@ -1158,10 +1158,10 @@ fn eval_power_budget() {
 }
 
 #[test]
-fn eval_multi_decl_nd() {
-    // Multi-decl v3: N-D shared-axis prefix with slice sections.
+fn eval_multi_decl_sliced() {
+    // Multi-decl v3: multi-axis shared prefix with slice sections.
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi_decl_nd.gcl")])
+        .args(["eval", &fixture("multi_decl_sliced.gcl")])
         .output()
         .expect("failed to run graphcal");
 
