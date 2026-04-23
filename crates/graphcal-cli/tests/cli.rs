@@ -1980,6 +1980,29 @@ fn format_check_multiple_fixtures() {
 }
 
 #[test]
+fn format_check_multi_decl_fixtures_idempotent() {
+    // Multi-decl fixtures (issue #481) round-trip through the formatter —
+    // the surface form is emitted verbatim, not re-desugared into N
+    // single decls.
+    let output = graphcal_bin()
+        .args([
+            "format",
+            "--check",
+            &fixture("multi_decl_1d.gcl"),
+            &fixture("multi_decl_2d.gcl"),
+            &fixture("multi_decl_sliced.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected multi-decl fixtures to be formatted idempotently, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn eval_datetime_timezone() {
     let output = graphcal_bin()
         .args(["eval", &fixture("datetime_timezone.gcl")])

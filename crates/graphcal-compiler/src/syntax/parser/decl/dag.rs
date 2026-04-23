@@ -34,6 +34,7 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::Dag(DagDecl { name, body, span }),
             span,
+            multi_decl_surface_span: None,
         })
     }
 }

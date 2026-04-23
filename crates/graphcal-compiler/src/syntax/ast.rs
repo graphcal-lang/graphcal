@@ -85,6 +85,15 @@ pub struct Declaration {
     pub visibility: Visibility,
     pub kind: DeclKind,
     pub span: Span,
+    /// Provenance: if this declaration was synthesized by desugaring a
+    /// multi-decl surface form (issue #481), this is the span of the
+    /// entire multi-decl surface (from the first slot keyword through
+    /// the closing `;`). All slots from the same multi-decl share the
+    /// same value here.
+    ///
+    /// Used by the formatter to re-emit the multi-decl surface verbatim
+    /// instead of the N desugared single-decls.
+    pub multi_decl_surface_span: Option<Span>,
 }
 
 impl Declaration {
@@ -98,6 +107,13 @@ impl Declaration {
     #[must_use]
     pub const fn is_bindable(&self) -> bool {
         self.visibility.is_bindable()
+    }
+
+    /// Returns `true` if this declaration was synthesized by desugaring a
+    /// multi-decl surface form.
+    #[must_use]
+    pub const fn is_multi_decl_slot(&self) -> bool {
+        self.multi_decl_surface_span.is_some()
     }
 }
 
@@ -1519,6 +1535,7 @@ mod tests {
                     }),
                 }),
                 span: Span::new(0, 31),
+                multi_decl_surface_span: None,
             }],
         };
         assert_eq!(file.declarations.len(), 1);

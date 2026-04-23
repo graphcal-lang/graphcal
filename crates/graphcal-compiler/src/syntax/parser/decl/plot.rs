@@ -65,6 +65,7 @@ impl Parser<'_> {
                 properties,
             }),
             span,
+            multi_decl_surface_span: None,
         })
     }
 

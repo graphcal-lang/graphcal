@@ -1,3 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
 // multi_decl_2d.gcl -- v2 multi-decl: mixed 1-D and 2-D slots.
 //
 // Exercises a heterogeneous multi-decl where one slot has an

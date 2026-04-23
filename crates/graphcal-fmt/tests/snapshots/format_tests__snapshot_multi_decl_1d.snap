@@ -1,3 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
 // multi_decl_1d.gcl -- v1 multi-decl: homogeneous 1-D slots.
 //
 // Exercises the multi-decl surface form (issue #481) with every

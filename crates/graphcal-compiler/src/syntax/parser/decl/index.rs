@@ -26,6 +26,7 @@ impl Parser<'_> {
                     kind: IndexDeclKind::RequiredNamed,
                 }),
                 span,
+                multi_decl_surface_span: None,
             });
         }
 
@@ -43,6 +44,7 @@ impl Parser<'_> {
                     kind: IndexDeclKind::RequiredRange { dimension },
                 }),
                 span,
+                multi_decl_surface_span: None,
             });
         }
 
@@ -79,6 +81,7 @@ impl Parser<'_> {
                         kind: IndexDeclKind::Named { variants },
                     }),
                     span,
+                    multi_decl_surface_span: None,
                 })
             }
             // Range/linspace index: `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
@@ -107,6 +110,7 @@ impl Parser<'_> {
                         },
                     }),
                     span,
+                    multi_decl_surface_span: None,
                 })
             }
             _ => {

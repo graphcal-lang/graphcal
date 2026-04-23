@@ -218,6 +218,12 @@ impl Parser<'_> {
 
         let table_total_span = table_span.merge(rbrace_span);
 
+        // Full multi-decl surface span: from the first slot's kind keyword
+        // through the closing `;`. Stored on each synthesized declaration so
+        // the formatter can re-emit the multi-decl verbatim instead of the
+        // N desugared single-decls.
+        let surface_span = slots[0].kind_span.merge(semi_span);
+
         // Desugar each slot.
         let row_index_name = match &row_index_spec {
             TableIndexSpec::Named(s) => s.clone(),
@@ -330,6 +336,7 @@ impl Parser<'_> {
                 visibility: Visibility::Private,
                 kind,
                 span: decl_span,
+                multi_decl_surface_span: Some(surface_span),
             });
         }
 

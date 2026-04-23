@@ -1,3 +1,7 @@
+---
+source: crates/graphcal-fmt/tests/format_tests.rs
+expression: formatted
+---
 // multi_decl_sliced.gcl -- v3 multi-decl: multi-axis shared prefix with slices.
 //
 // Two shared axes: `Phase` (slice axis) and `Component` (row axis).

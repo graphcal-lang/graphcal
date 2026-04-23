@@ -99,20 +99,56 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     let mut docs: Vec<RcDoc<'static>> = Vec::new();
 
     let mut prev_end: usize = 0;
+    let mut last_emitted_multi_decl_span: Option<Span> = None;
     for (i, decl) in file.declarations.iter().enumerate() {
-        // Emit leading comments before this declaration
-        let leading = fmt.drain_comments_before(decl.span.offset());
+        // Multi-decl slots (issue #481) desugar to N separate `Declaration`
+        // nodes that share a `multi_decl_surface_span`. We emit the surface
+        // slice verbatim once per group and skip subsequent slots.
+        if let Some(surface_span) = decl.multi_decl_surface_span
+            && last_emitted_multi_decl_span == Some(surface_span)
+        {
+            continue;
+        }
+
+        let emit_span = decl.multi_decl_surface_span.unwrap_or(decl.span);
+        let emit_start = emit_span.offset();
+        let emit_end = emit_start + emit_span.len();
+
+        // Emit leading comments before this declaration (or multi-decl surface).
+        let leading = fmt.drain_comments_before(emit_start);
         let has_leading_comments = leading.is_some();
 
         if i > 0 {
             docs.push(RcDoc::hardline());
             // Extra blank line before comments or when original had a blank line
-            if has_leading_comments || fmt.has_blank_line_between(prev_end, decl.span.offset()) {
+            if has_leading_comments || fmt.has_blank_line_between(prev_end, emit_start) {
                 docs.push(RcDoc::hardline());
             }
         }
         if let Some(leading) = leading {
             docs.push(leading);
+        }
+
+        if let Some(surface_span) = decl.multi_decl_surface_span {
+            // Emit the multi-decl surface verbatim. Advance the comment
+            // cursor past any comments that fall inside the surface slice
+            // so they aren't re-emitted later.
+            let slice = fmt.slice(surface_span).to_string();
+            while fmt.next_comment < fmt.metadata.comments.len() {
+                let c = &fmt.metadata.comments[fmt.next_comment];
+                if c.span.offset() < emit_end {
+                    fmt.next_comment += 1;
+                } else {
+                    break;
+                }
+            }
+            let trailing = fmt
+                .drain_trailing_comment(emit_end)
+                .unwrap_or_else(RcDoc::nil);
+            docs.push(RcDoc::text(slice).append(trailing));
+            last_emitted_multi_decl_span = Some(surface_span);
+            prev_end = emit_end;
+            continue;
         }
 
         let decl_doc = format_decl(&mut fmt, decl);
@@ -122,6 +158,7 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
             .unwrap_or_else(RcDoc::nil);
         docs.push(decl_doc.append(trailing));
         prev_end = decl_end;
+        last_emitted_multi_decl_span = None;
     }
 
     // Drain any remaining comments at end of file

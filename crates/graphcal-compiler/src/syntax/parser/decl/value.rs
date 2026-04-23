@@ -76,6 +76,7 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: decl_kind,
             span,
+            multi_decl_surface_span: None,
         })
     }
 
@@ -117,6 +118,7 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::Assert(AssertDecl { name, body }),
             span,
+            multi_decl_surface_span: None,
         })
     }
 }
