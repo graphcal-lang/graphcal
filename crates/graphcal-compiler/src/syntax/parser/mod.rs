@@ -83,6 +83,103 @@ pub enum ParseError {
         #[label("stray character")]
         span: SourceSpan,
     },
+
+    #[error(
+        "multi-decl slot tuple has {tuple_count} entr{}, but the multi-decl declares {slot_count} slot{}",
+        if *tuple_count == 1 { "y" } else { "ies" },
+        if *slot_count == 1 { "" } else { "s" }
+    )]
+    #[diagnostic(
+        code(graphcal::P007),
+        help(
+            "the slot tuple in `table[..., (…)]` must contain exactly one entry per declared slot"
+        )
+    )]
+    MultiDeclTupleArity {
+        slot_count: usize,
+        tuple_count: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("slot tuple here")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "multi-decl header row has {header_count} cell{}, but the multi-decl declares {slot_count} slot{}",
+        if *header_count == 1 { "" } else { "s" },
+        if *slot_count == 1 { "" } else { "s" }
+    )]
+    #[diagnostic(
+        code(graphcal::P008),
+        help("the header row (`: _, _, …;`) must have exactly one cell per slot")
+    )]
+    MultiDeclHeaderArity {
+        slot_count: usize,
+        header_count: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("header row here")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "multi-decl row `{row_label}` has {got} value(s), but the multi-decl declares {slot_count} slot{}",
+        if *slot_count == 1 { "" } else { "s" }
+    )]
+    #[diagnostic(
+        code(graphcal::P009),
+        help("each row must have exactly one value per slot")
+    )]
+    MultiDeclRowArity {
+        slot_count: usize,
+        got: usize,
+        row_label: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this row has {got} value(s)")]
+        span: SourceSpan,
+    },
+
+    #[error("multi-decl requires at least two slots")]
+    #[diagnostic(
+        code(graphcal::P010),
+        help(
+            "for a single declaration, use the regular `param`/`node`/`const node` form without a trailing comma"
+        )
+    )]
+    MultiDeclSingleSlot {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("single slot here")]
+        span: SourceSpan,
+    },
+
+    #[error("multi-decl requires at least one shared axis")]
+    #[diagnostic(
+        code(graphcal::P011),
+        help("declare the row axis in `table[SharedAxis, (…)]`")
+    )]
+    MultiDeclNoSharedAxis {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("missing shared axis")]
+        span: SourceSpan,
+    },
+
+    #[error("{reason}")]
+    #[diagnostic(
+        code(graphcal::P012),
+        help(
+            "this multi-decl shape is scheduled for a later version; see issue #481 for the incremental plan"
+        )
+    )]
+    MultiDeclUnsupportedShape {
+        reason: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("here")]
+        span: SourceSpan,
+    },
 }
 
 pub struct Parser<'src> {
@@ -246,7 +343,7 @@ impl<'src> Parser<'src> {
     fn parse_file_inner(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
         let mut declarations = Vec::new();
         while self.lexer.peek().is_some() {
-            declarations.push(self.parse_declaration()?);
+            declarations.extend(self.parse_declarations()?);
         }
         Ok(crate::syntax::ast::File { declarations })
     }

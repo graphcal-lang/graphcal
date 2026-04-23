@@ -16,13 +16,14 @@ impl Parser<'_> {
 
         self.expect(Token::LBrace)?;
 
-        // Parse declarations inside the block (same as file-level)
+        // Parse declarations inside the block (same as file-level).
+        // Multi-decl surface forms desugar to multiple AST declarations.
         let mut body = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
             if self.lexer.peek().is_none() {
                 return Err(self.unexpected_eof("`}` to close `dag` block"));
             }
-            body.push(self.parse_declaration()?);
+            body.extend(self.parse_declarations()?);
         }
 
         let (_, end_span) = self.expect(Token::RBrace)?;

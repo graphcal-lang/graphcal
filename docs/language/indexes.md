@@ -281,6 +281,29 @@ Slice labels (all but the last two axes) always require an explicit marker -- `[
 
 The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
 
+## Multi-declarations
+
+A **multi-declaration** is a single surface form that introduces N parallel `param` / `node` / `const node` declarations sharing the same row axis. It aligns values that belong together on the same row:
+
+```
+index Component = { ComponentA, ComponentB };
+
+param      power_consumption: Power[Component],
+param      duty_cycle:        Dimensionless[Component],
+const node mass_per_unit:     Mass[Component]
+  = table[Component, (_, _, _)] {
+      :           _,       _,    _;
+      ComponentA: 10.0 W,  0.5,  2.5 kg;
+      ComponentB: 12.0 W,  1.0,  3.1 kg;
+  };
+```
+
+- Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
+- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. In v1 every tuple entry must be `_`, indicating a 1-D slot typed `T[SharedAxis]`.
+- The header row `: _, _, …;` and the slot tuple must each have exactly one entry per slot. In v1 every header cell must also be `_`.
+- Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
+- Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
+
 ## Range Indexes
 
 Range indexes generate labels from numeric stepping:

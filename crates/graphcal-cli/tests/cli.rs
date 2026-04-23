@@ -1158,6 +1158,36 @@ fn eval_power_budget() {
 }
 
 #[test]
+fn eval_multi_decl_1d() {
+    // Multi-decl (issue #481) v1: homogeneous 1-D slots across
+    // param/const-node kinds must evaluate end-to-end.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi_decl_1d.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Every slot in the multi-decl should appear as its own declaration.
+    for name in ["power_consumption", "duty_cycle", "mass_per_unit"] {
+        assert!(
+            stdout.contains(name),
+            "expected `{name}` in eval output: {stdout}",
+        );
+    }
+    // Derived node reading cross-slot values.
+    assert!(
+        stdout.contains("peak_power"),
+        "expected peak_power in output: {stdout}"
+    );
+}
+
+#[test]
 fn eval_power_budget_json() {
     let output = graphcal_bin()
         .args(["eval", &fixture("power_budget.gcl"), "--format", "json"])
