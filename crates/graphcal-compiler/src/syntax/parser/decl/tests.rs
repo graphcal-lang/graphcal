@@ -331,6 +331,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Figure(f) => f.name.value.as_str(),
             DeclKind::Layer(l) => l.name.value.as_str(),
             DeclKind::UnionType(u) => u.name.value.as_str(),
+            DeclKind::Multi(_) => "<multi>",
         })
         .collect();
     assert_eq!(

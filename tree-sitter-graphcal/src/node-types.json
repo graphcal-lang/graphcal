@@ -882,6 +882,10 @@
           "named": true
         },
         {
+          "type": "multi_decl",
+          "named": true
+        },
+        {
           "type": "node_declaration",
           "named": true
         },
@@ -3706,6 +3710,319 @@
     }
   },
   {
+    "type": "multi_data_row",
+    "named": true,
+    "fields": {
+      "row_label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "as_cast_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "convert_expr",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "fn_call",
+            "named": true
+          },
+          {
+            "type": "for_expr",
+            "named": true
+          },
+          {
+            "type": "graph_ref",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "map_literal",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expr",
+            "named": true
+          },
+          {
+            "type": "qualified_fn_call",
+            "named": true
+          },
+          {
+            "type": "qualified_variant",
+            "named": true
+          },
+          {
+            "type": "scan_expr",
+            "named": true
+          },
+          {
+            "type": "struct_construction",
+            "named": true
+          },
+          {
+            "type": "table_expr",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unfold_expr",
+            "named": true
+          },
+          {
+            "type": "unit_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "multi_decl",
+    "named": true,
+    "fields": {
+      "init": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "multi_table_expr",
+            "named": true
+          }
+        ]
+      },
+      "slot": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "multi_decl_slot",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "multi_decl_kind",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "multi_decl_slot",
+    "named": true,
+    "fields": {
+      "kind": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "multi_decl_kind",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "multi_header_cell",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "qualified_variant",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "multi_header_row",
+    "named": true,
+    "fields": {
+      "cell": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "multi_header_cell",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "multi_single",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "multi_data_row",
+          "named": true
+        },
+        {
+          "type": "multi_header_row",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "multi_slice_section",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "multi_single",
+          "named": true
+        },
+        {
+          "type": "qualified_variant",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "multi_table_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "multi_single",
+          "named": true
+        },
+        {
+          "type": "multi_slice_section",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "multi_table_expr",
+    "named": true,
+    "fields": {
+      "shared_axis": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "nat_literal",
+            "named": true
+          }
+        ]
+      },
+      "slot_tuple": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "slot_tuple",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "multi_table_body",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "nat_add_expr",
     "named": true,
     "fields": {
@@ -4870,6 +5187,37 @@
     }
   },
   {
+    "type": "slot_axis_entry",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "slot_tuple",
+    "named": true,
+    "fields": {
+      "entry": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "slot_axis_entry",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "source_file",
     "named": true,
     "root": true,
@@ -4908,6 +5256,10 @@
         },
         {
           "type": "layer_declaration",
+          "named": true
+        },
+        {
+          "type": "multi_decl",
           "named": true
         },
         {

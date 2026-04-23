@@ -2,7 +2,7 @@ mod decl;
 mod expr;
 mod type_expr;
 
-use graphcal_compiler::syntax::ast::File;
+use graphcal_compiler::syntax::ast::{DeclKind, File};
 use graphcal_compiler::syntax::comments::SourceMetadata;
 use graphcal_compiler::syntax::span::Span;
 use pretty::RcDoc;
@@ -100,14 +100,17 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
 
     let mut prev_end: usize = 0;
     for (i, decl) in file.declarations.iter().enumerate() {
+        let emit_start = decl.span.offset();
+        let emit_end = emit_start + decl.span.len();
+
         // Emit leading comments before this declaration
-        let leading = fmt.drain_comments_before(decl.span.offset());
+        let leading = fmt.drain_comments_before(emit_start);
         let has_leading_comments = leading.is_some();
 
         if i > 0 {
             docs.push(RcDoc::hardline());
             // Extra blank line before comments or when original had a blank line
-            if has_leading_comments || fmt.has_blank_line_between(prev_end, decl.span.offset()) {
+            if has_leading_comments || fmt.has_blank_line_between(prev_end, emit_start) {
                 docs.push(RcDoc::hardline());
             }
         }
@@ -115,13 +118,26 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
             docs.push(leading);
         }
 
+        // Multi-decl (issue #481): consume comments that fall inside the
+        // surface span so they aren't re-emitted later; `format_multi_decl`
+        // doesn't interleave source comments inside the body.
+        if matches!(&decl.kind, DeclKind::Multi(_)) {
+            while fmt.next_comment < fmt.metadata.comments.len() {
+                let c = &fmt.metadata.comments[fmt.next_comment];
+                if c.span.offset() < emit_end {
+                    fmt.next_comment += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
         let decl_doc = format_decl(&mut fmt, decl);
-        let decl_end = decl.span.offset() + decl.span.len();
         let trailing = fmt
-            .drain_trailing_comment(decl_end)
+            .drain_trailing_comment(emit_end)
             .unwrap_or_else(RcDoc::nil);
         docs.push(decl_doc.append(trailing));
-        prev_end = decl_end;
+        prev_end = emit_end;
     }
 
     // Drain any remaining comments at end of file

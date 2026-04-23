@@ -31,6 +31,11 @@ module.exports = grammar({
     [$._primary_expr, $.struct_construction],
     // `identifier < type_expr` could be fn_call turbofish or struct_construction type args.
     [$.generic_arg, $.struct_construction],
+    // The first slot of a multi_decl is indistinguishable from a
+    // param/node/const-node declaration up through the end of the type
+    // annotation. The disambiguator is the trailing `,`.
+    [$.multi_decl_kind, $.node_declaration],
+    [$.multi_decl_kind, $.param_declaration],
   ],
 
   rules: {
@@ -45,6 +50,7 @@ module.exports = grammar({
     visibility: $ => seq("pub", optional(seq("(", "bind", ")"))),
 
     _declaration: $ => choice(
+      $.multi_decl,
       $.param_declaration,
       $.node_declaration,
       $.dimension_declaration,
@@ -120,6 +126,100 @@ module.exports = grammar({
       optional(seq(":", field("type", $.type_expr))),
       "=",
       field("value", $._expr),
+      ";",
+    ),
+
+    // Multi-declaration (issue #481): introduce N parallel
+    // param/node/const-node declarations from a single table literal.
+    // Attributes and visibility annotations are forbidden on multi-decls.
+    //
+    //     param a: T[I], const node b: U[I]
+    //       = table[I, (_, _)] {
+    //           : _, _;
+    //           A: 1, 2;
+    //       };
+    multi_decl: $ => seq(
+      field("slot", $.multi_decl_slot),
+      ",",
+      field("slot", $.multi_decl_slot),
+      repeat(seq(",", field("slot", $.multi_decl_slot))),
+      "=",
+      field("init", $.multi_table_expr),
+      ";",
+    ),
+
+    multi_decl_slot: $ => seq(
+      field("kind", $.multi_decl_kind),
+      field("name", $.identifier),
+      ":",
+      field("type", $.type_expr),
+    ),
+
+    multi_decl_kind: $ => choice(
+      "param",
+      "node",
+      seq("const", "node"),
+    ),
+
+    multi_table_expr: $ => seq(
+      "table",
+      "[",
+      field("shared_axis", choice($.identifier, $.nat_literal)),
+      repeat(seq(",", field("shared_axis", choice($.identifier, $.nat_literal)))),
+      ",",
+      field("slot_tuple", $.slot_tuple),
+      "]",
+      "{",
+      $.multi_table_body,
+      "}",
+    ),
+
+    slot_tuple: $ => seq(
+      "(",
+      field("entry", $.slot_axis_entry),
+      repeat(seq(",", field("entry", $.slot_axis_entry))),
+      optional(","),
+      ")",
+    ),
+
+    slot_axis_entry: $ => choice("_", $.identifier),
+
+    multi_table_body: $ => choice(
+      repeat1($.multi_slice_section),
+      $.multi_single,
+    ),
+
+    multi_slice_section: $ => seq(
+      "[",
+      $.qualified_variant,
+      repeat(seq(",", $.qualified_variant)),
+      "]",
+      $.multi_single,
+    ),
+
+    multi_single: $ => seq(
+      $.multi_header_row,
+      repeat1($.multi_data_row),
+    ),
+
+    multi_header_row: $ => seq(
+      ":",
+      field("cell", $.multi_header_cell),
+      repeat(seq(",", field("cell", $.multi_header_cell))),
+      ";",
+    ),
+
+    multi_header_cell: $ => choice(
+      "_",
+      $.identifier,
+      $.qualified_variant,
+    ),
+
+    multi_data_row: $ => seq(
+      field("row_label", $.identifier),
+      ":",
+      field("value", $._expr),
+      repeat(seq(",", field("value", $._expr))),
       ";",
     ),
 

@@ -281,6 +281,78 @@ Slice labels (all but the last two axes) always require an explicit marker -- `[
 
 The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
 
+## Multi-declarations
+
+A **multi-declaration** is a single surface form that introduces N parallel `param` / `node` / `const node` declarations sharing the same row axis. It aligns values that belong together on the same row:
+
+```
+index Component = { ComponentA, ComponentB };
+
+param      power_consumption: Power[Component],
+param      duty_cycle:        Dimensionless[Component],
+const node mass_per_unit:     Mass[Component]
+  = table[Component, (_, _, _)] {
+      :           _,       _,    _;
+      ComponentA: 10.0 W,  0.5,  2.5 kg;
+      ComponentB: 12.0 W,  1.0,  3.1 kg;
+  };
+```
+
+- Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
+- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis (2-D slot typed `T[SharedAxis, ExtraAxis]`).
+- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode::Safe`). Qualification is never required but is accepted for readability.
+
+Mixed 1-D / 2-D slots:
+
+```
+index Component = { ComponentA, ComponentB };
+index OperationMode = { Safe, Nominal };
+
+param      power_consumption:  Power[Component],
+param      n_installed:        Int[Component],
+const node mass_per_unit:      Mass[Component],
+param      power_mode_active:  Bool[Component, OperationMode]
+  = table[Component, (_, _, _, OperationMode)] {
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
+      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+  };
+```
+
+In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
+
+### N-D with slice sections
+
+When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis::Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
+
+```
+index Phase = { Launch, Cruise };
+index Component = { ComponentA, ComponentB };
+index OperationMode = { Safe, Nominal };
+
+param      power_consumption: Power[Phase, Component],
+param      power_mode_active: Bool[Phase, Component, OperationMode]
+  = table[Phase, Component, (_, OperationMode)] {
+      [Phase::Launch]
+      :            _,       Safe,  Nominal;
+      ComponentA:  5.0 W,   true,  false;
+      ComponentB:  6.0 W,   false, false;
+
+      [Phase::Cruise]
+      :            _,       Safe,  Nominal;
+      ComponentA:  10.0 W,  true,  true;
+      ComponentB:  12.0 W,  false, true;
+  };
+```
+
+Slice labels must qualify each shared axis in the declared order (`Phase::Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
+
+### Editor integration
+
+Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. The formatter preserves the multi-decl surface form on round-trip — it emits the original source slice verbatim rather than the N desugared single-decls. Cell-level inlay hints (projecting slot names into the header row of the source) and canonicalization of the multi-decl body remain future work.
+- Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
+- Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
+
 ## Range Indexes
 
 Range indexes generate labels from numeric stepping:

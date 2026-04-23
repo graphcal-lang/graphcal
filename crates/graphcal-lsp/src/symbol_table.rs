@@ -443,6 +443,32 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File, source: &str) 
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
             DeclKind::Dag(d) => collect_dag_decl(d, decl.span, vis, &mut table),
+            DeclKind::Multi(multi) => {
+                // Register each slot as its own symbol (goto-def / rename /
+                // hover work on the slot header). Surface features like
+                // inlay hints on header cells can walk the `multi` AST
+                // directly.
+                for slot_decl in graphcal_compiler::syntax::desugar::expand_multi_decl(multi) {
+                    match &slot_decl.kind {
+                        DeclKind::Param(p) => {
+                            collect_param_decl(p, slot_decl.span, vis, &mut table, &mut scopes);
+                        }
+                        DeclKind::Node(n) => {
+                            collect_node_decl(n, slot_decl.span, vis, &mut table, &mut scopes);
+                        }
+                        DeclKind::ConstNode(c) => {
+                            collect_const_node_decl(
+                                c,
+                                slot_decl.span,
+                                vis,
+                                &mut table,
+                                &mut scopes,
+                            );
+                        }
+                        _ => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+                    }
+                }
+            }
         }
     }
 
@@ -1717,6 +1743,52 @@ mod tests {
             table.references.iter().any(|r| r.target == x_key),
             "expected @x reference"
         );
+    }
+
+    #[test]
+    fn multi_decl_slots_each_produce_separate_symbols() {
+        // Multi-decl (issue #481) desugars to N single declarations. The
+        // symbol table should register each slot with its own name span
+        // so goto-def / rename / hover land on the slot header.
+        let source = "\
+index I = { A, B };
+
+param p: Int[I],
+param q: Int[I]
+  = table[I, (_, _)] {
+      : _, _;
+      A: 1, 3;
+      B: 2, 4;
+  };
+";
+        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let table = build_from_ast(&file, source);
+
+        let p_key = SymbolKey::TopLevel("p".to_string());
+        let q_key = SymbolKey::TopLevel("q".to_string());
+        assert!(
+            table.definitions.contains_key(&p_key),
+            "expected slot `p` in symbol table",
+        );
+        assert!(
+            table.definitions.contains_key(&q_key),
+            "expected slot `q` in symbol table",
+        );
+        assert_eq!(table.definitions[&p_key].category, SymbolCategory::Param);
+        assert_eq!(table.definitions[&q_key].category, SymbolCategory::Param);
+
+        // The slot name spans should cover the slot header's identifier in the
+        // multi-decl surface, not the (synthesized) value expression.
+        let p_def = &table.definitions[&p_key];
+        let p_slice =
+            &source[p_def.name_span.offset()..p_def.name_span.offset() + p_def.name_span.len()];
+        assert_eq!(p_slice, "p");
+        let q_def = &table.definitions[&q_key];
+        let q_slice =
+            &source[q_def.name_span.offset()..q_def.name_span.offset() + q_def.name_span.len()];
+        assert_eq!(q_slice, "q");
     }
 
     #[test]

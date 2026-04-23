@@ -16,7 +16,7 @@ impl Parser<'_> {
 
         self.expect(Token::LBrace)?;
 
-        // Parse declarations inside the block (same as file-level)
+        // Parse declarations inside the block (same as file-level).
         let mut body = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
             if self.lexer.peek().is_none() {

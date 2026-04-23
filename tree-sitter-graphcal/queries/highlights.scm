@@ -95,6 +95,9 @@
 (param_declaration name: (identifier) @variable)
 (node_declaration name: (identifier) @variable)
 
+; multi-decl slot names (issue #481)
+(multi_decl_slot name: (identifier) @variable)
+
 ; dimension Velocity, dimension Length
 (dimension_declaration name: (identifier) @type)
 

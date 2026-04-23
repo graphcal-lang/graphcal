@@ -217,6 +217,7 @@ fn collect_local_declarations(
             | DeclKind::Dag(_) => {
                 continue;
             }
+            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
 
         // Check for duplicates
@@ -259,6 +260,7 @@ fn collect_local_declarations(
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
+            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
         source_order.push((DeclName::new(name.as_str()), category));
     }
@@ -278,6 +280,7 @@ fn collect_local_declarations(
             | DeclKind::Import(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {}
+            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
                 // Collect all expressions from the assert body for validation
                 let body_exprs: Vec<&Expr> = match &a.body {
@@ -599,6 +602,7 @@ fn validate_attributes(
                         DeclKind::Import(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
                         DeclKind::Dag(_) => Some("dag"),
+                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
                     };
                     if let Some(kind) = kind {
                         return Err(GraphcalError::InvalidAssumesTarget {
@@ -672,6 +676,7 @@ fn validate_attributes(
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
                         DeclKind::Dag(_) => "dag",
+                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
                     };
                     return Err(GraphcalError::InvalidExpectedFailTarget {
                         kind: kind.to_string(),
@@ -700,6 +705,7 @@ fn validate_attributes(
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                         DeclKind::Dag(_) => "dag",
+                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
                     };
                     return Err(GraphcalError::InvalidAttributeTarget {
                         attr_name: AttributeName::AllowDefaults.as_str().to_string(),

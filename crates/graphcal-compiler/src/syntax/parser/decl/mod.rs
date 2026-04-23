@@ -1,7 +1,9 @@
 use crate::syntax::ast::{Attribute, AttributeArg, DeclKind, Declaration, Visibility};
+use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
+use multi::SlotKind;
 
 mod dag;
 mod dim_unit;
@@ -9,6 +11,7 @@ mod figure;
 mod import;
 mod index;
 mod layer;
+mod multi;
 mod plot;
 #[cfg(test)]
 mod tests;
@@ -16,6 +19,9 @@ mod type_decl;
 mod value;
 
 impl Parser<'_> {
+    /// Parse one top-level declaration surface form. A multi-decl is
+    /// represented as `DeclKind::Multi(MultiDecl)` and expanded later
+    /// by the desugar pass.
     #[expect(
         clippy::too_many_lines,
         reason = "single entry point dispatches across every declaration kind"
@@ -101,25 +107,75 @@ impl Parser<'_> {
         }
 
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
-        let mut decl = match self.lexer.peek() {
-            Some(Token::Param) => self.parse_param(),
-            Some(Token::Node) => self.parse_node(),
+
+        // Value-declaration paths (`param`, `node`, `const node`) can be
+        // either a single declaration or a multi-decl (issue #481). We
+        // consume the kind keyword(s), parse the slot header, then peek
+        // at the next token to decide.
+        match self.lexer.peek() {
+            Some(Token::Param) => {
+                let (_, kind_span) = self.advance()?;
+                return self.finish_value_decl_or_multi(
+                    SlotKind::Param,
+                    kind_span,
+                    attributes,
+                    visibility,
+                    visibility_span,
+                );
+            }
+            Some(Token::Node) => {
+                let (_, kind_span) = self.advance()?;
+                return self.finish_value_decl_or_multi(
+                    SlotKind::Node,
+                    kind_span,
+                    attributes,
+                    visibility,
+                    visibility_span,
+                );
+            }
             Some(Token::Const) => {
                 let (_, const_span) = self.advance()?;
                 match self.lexer.peek() {
-                    Some(Token::Node) => self.parse_const_node(const_span),
-                    Some(Token::Unit) => self.parse_const_unit(const_span),
+                    Some(Token::Node) => {
+                        let (_, node_span) = self.advance()?;
+                        return self.finish_value_decl_or_multi(
+                            SlotKind::ConstNode,
+                            const_span.merge(node_span),
+                            attributes,
+                            visibility,
+                            visibility_span,
+                        );
+                    }
+                    Some(Token::Unit) => {
+                        // const unit: single decl only (no multi-decl sugar).
+                        let mut decl = self.parse_const_unit(const_span)?;
+                        decl.visibility = visibility;
+                        if let Some(ps) = visibility_span {
+                            decl.span = ps.merge(decl.span);
+                        }
+                        if let Some(first_attr) = attributes.first() {
+                            decl.span = first_attr.span.merge(decl.span);
+                        }
+                        decl.attributes = attributes;
+                        return Ok(decl);
+                    }
                     Some(_) => {
                         let (tok, span) = self.advance()?;
-                        Err(self.unexpected_token(
+                        return Err(self.unexpected_token(
                             "`node` or `unit` after `const`",
                             &tok.to_string(),
                             span,
-                        ))
+                        ));
                     }
-                    None => Err(self.unexpected_eof("`node` or `unit` after `const`")),
+                    None => {
+                        return Err(self.unexpected_eof("`node` or `unit` after `const`"));
+                    }
                 }
             }
+            _ => {}
+        }
+
+        let mut decl = match self.lexer.peek() {
             Some(Token::Base) => {
                 let (_, base_span) = self.advance()?;
                 match self.lexer.peek() {
@@ -198,6 +254,57 @@ impl Parser<'_> {
 
         decl.attributes = attributes;
 
+        Ok(decl)
+    }
+
+    /// Complete parsing of a `param` / `node` / `const node` declaration
+    /// starting from after the kind keyword, dispatching to either the
+    /// single-decl path or the multi-decl path based on the first
+    /// post-type-annotation token.
+    fn finish_value_decl_or_multi(
+        &mut self,
+        kind: SlotKind,
+        kind_span: Span,
+        attributes: Vec<Attribute>,
+        visibility: Visibility,
+        visibility_span: Option<Span>,
+    ) -> Result<Declaration, ParseError> {
+        let header = self.parse_slot_header_tail(kind, kind_span)?;
+
+        if self.lexer.peek() == Some(&Token::Comma) {
+            // Multi-decl. Attributes and visibility are not allowed.
+            if let Some(first_attr) = attributes.first() {
+                return Err(self.unexpected_token(
+                    "no attributes on multi-decl (attributes are forbidden on multi-decl surface forms in v1)",
+                    "`#[...]`",
+                    first_attr.span,
+                ));
+            }
+            if let Some(vis_span) = visibility_span {
+                let found = match visibility {
+                    Visibility::Public => "`pub`",
+                    Visibility::PublicBind => "`pub(bind)`",
+                    Visibility::Private => "visibility annotation",
+                };
+                return Err(self.unexpected_token(
+                    "no visibility annotation on multi-decl (apply visibility to each slot in a future extension)",
+                    found,
+                    vis_span,
+                ));
+            }
+            return self.parse_multi_decl_rest(header);
+        }
+
+        // Single decl. Continue with the existing param/node/const-node path.
+        let mut decl = self.finish_single_value_decl(header)?;
+        decl.visibility = visibility;
+        if let Some(ps) = visibility_span {
+            decl.span = ps.merge(decl.span);
+        }
+        if let Some(first_attr) = attributes.first() {
+            decl.span = first_attr.span.merge(decl.span);
+        }
+        decl.attributes = attributes;
         Ok(decl)
     }
 

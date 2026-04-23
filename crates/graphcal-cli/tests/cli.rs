@@ -1158,6 +1158,92 @@ fn eval_power_budget() {
 }
 
 #[test]
+fn eval_multi_decl_sliced() {
+    // Multi-decl v3: multi-axis shared prefix with slice sections.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi_decl_sliced.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    for phase in ["Launch", "Cruise", "Arrival"] {
+        assert!(
+            stdout.contains(phase),
+            "expected {phase} in output: {stdout}",
+        );
+    }
+    assert!(
+        stdout.contains("total_active_power") && stdout.contains("peak_active_power"),
+        "expected derived nodes in output: {stdout}",
+    );
+}
+
+#[test]
+fn eval_multi_decl_2d() {
+    // Multi-decl v2: mixed 1-D and 2-D slots sharing one row axis.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi_decl_2d.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // The 2-D slot should render as a 2-D table with Safe / Nominal columns.
+    assert!(
+        stdout.contains("power_mode_active")
+            && stdout.contains("Safe")
+            && stdout.contains("Nominal"),
+        "expected 2-D power_mode_active in output: {stdout}",
+    );
+    // Derived node that reads from both 1-D and 2-D slots.
+    assert!(
+        stdout.contains("total_safe_power"),
+        "expected total_safe_power in output: {stdout}",
+    );
+}
+
+#[test]
+fn eval_multi_decl_1d() {
+    // Multi-decl (issue #481) v1: homogeneous 1-D slots across
+    // param/const-node kinds must evaluate end-to-end.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi_decl_1d.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Every slot in the multi-decl should appear as its own declaration.
+    for name in ["power_consumption", "duty_cycle", "mass_per_unit"] {
+        assert!(
+            stdout.contains(name),
+            "expected `{name}` in eval output: {stdout}",
+        );
+    }
+    // Derived node reading cross-slot values.
+    assert!(
+        stdout.contains("peak_power"),
+        "expected peak_power in output: {stdout}"
+    );
+}
+
+#[test]
 fn eval_power_budget_json() {
     let output = graphcal_bin()
         .args(["eval", &fixture("power_budget.gcl"), "--format", "json"])
@@ -1889,6 +1975,29 @@ fn format_check_multiple_fixtures() {
     assert!(
         output.status.success(),
         "expected all fixtures to be formatted, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn format_check_multi_decl_fixtures_idempotent() {
+    // Multi-decl fixtures (issue #481) round-trip through the formatter —
+    // the surface form is emitted verbatim, not re-desugared into N
+    // single decls.
+    let output = graphcal_bin()
+        .args([
+            "format",
+            "--check",
+            &fixture("multi_decl_1d.gcl"),
+            &fixture("multi_decl_2d.gcl"),
+            &fixture("multi_decl_sliced.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "expected multi-decl fixtures to be formatted idempotently, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

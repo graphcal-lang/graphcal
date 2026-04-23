@@ -166,6 +166,7 @@ declaration_kind
    = param_decl
    | node_decl
    | const_decl
+   | multi_decl
    | dimension_decl
    | unit_decl
    | type_decl
@@ -191,6 +192,69 @@ node_decl
 
 const_decl
    = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+
+(* --- multi-decl (dataframe-like) ---                                  *)
+(*                                                                      *)
+(* A single surface form introducing N parallel declarations (of        *)
+(* possibly-mixed kinds) that share the row axis of a table literal.    *)
+(* Attributes and `pub` / `pub(bind)` are forbidden on multi-decls.     *)
+(*                                                                      *)
+(* v1: homogeneous 1-D slots (every slot typed `T[SharedAxis]`),        *)
+(*     tuple entries all `_`, header cells all `_`.                     *)
+(* v2: heterogeneous mix of 1-D and 2-D slots.                          *)
+(* v3: N-D shared-axis prefix with slice sections.                      *)
+multi_decl
+   = multi_decl_slot, ",", multi_decl_slot, { ",", multi_decl_slot },
+     "=", multi_table_expr, ";";
+
+multi_decl_slot
+   = decl_kind, IDENT, ":", type_expr;
+
+decl_kind
+   = "param"
+   | "node"
+   | "const", "node";
+
+multi_table_expr
+   = "table", "[", multi_index_list, "]", "{", multi_table_body, "}";
+
+multi_index_list
+   = axis_ref, { ",", axis_ref }, ",", slot_tuple;
+
+axis_ref
+   = IDENT
+   | NUMBER;
+
+slot_tuple
+   = "(", slot_axes, { ",", slot_axes }, [ "," ], ")";
+
+slot_axes
+   = "_"
+   | IDENT;
+
+multi_table_body
+   = multi_slice_section, { multi_slice_section }
+   | multi_single;
+
+multi_slice_section
+   = "[", multi_slice_label, { ",", multi_slice_label }, "]", multi_single;
+
+multi_slice_label
+   = qualified_variant;
+
+multi_single
+   = multi_header_row, multi_data_row, { multi_data_row };
+
+multi_header_row
+   = ":", header_label, { ",", header_label }, ";";
+
+header_label
+   = "_"
+   | IDENT
+   | qualified_variant;
+
+multi_data_row
+   = IDENT, ":", expr, { ",", expr }, ";";
 
 (* --- dimension --- *)
 (* Three forms:

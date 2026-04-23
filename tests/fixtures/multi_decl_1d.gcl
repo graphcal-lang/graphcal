@@ -1,0 +1,24 @@
+// multi_decl_1d.gcl -- v1 multi-decl: homogeneous 1-D slots.
+//
+// Exercises the multi-decl surface form (issue #481) with every
+// slot kind supported in v1: param, node, const node.
+pub index Component = { ComponentA, ComponentB, ComponentC };
+
+// Mixed-kind multi-decl: one param, one param, one const node.
+// All three slots share the `Component` row axis.
+param      power_consumption: Power[Component],
+param      duty_cycle:        Dimensionless[Component],
+const node mass_per_unit:     Mass[Component]
+    = table[Component, (_, _, _)] {
+                  :      _,    _,      _;
+        ComponentA: 10.0 W,  0.5, 2.5 kg;
+        ComponentB: 12.0 W,  1.0, 3.1 kg;
+        ComponentC:  4.0 W, 0.25, 0.8 kg;
+    };
+
+// Node multi-decl that reads from the slots above — multi-decl is
+// pure sugar, so cross-slot refs are ordinary `@name[Variant]` deps.
+node avg_power: Power[Component] = for c: Component { @power_consumption[c] * @duty_cycle[c] };
+
+node peak_power: Power = max(for c: Component { @avg_power[c] });
+node total_mass: Mass = sum(for c: Component { @mass_per_unit[c] });

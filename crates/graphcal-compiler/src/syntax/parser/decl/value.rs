@@ -5,78 +5,76 @@ use crate::syntax::names::DeclName;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
+use super::multi::{SlotHeader, SlotKind};
 
 impl Parser<'_> {
-    // --- param/node/const node with required type annotation ---
-
-    pub(super) fn parse_param(&mut self) -> Result<Declaration, ParseError> {
-        let (_, start_span) = self.expect(Token::Param)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
-        self.expect(Token::Colon)?;
-        let type_ann = self.parse_type_expr()?;
-        let value = if self.lexer.peek() == Some(&Token::Eq) {
-            self.expect(Token::Eq)?;
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
-        let (_, semi_span) = self.expect(Token::Semicolon)?;
-        let span = start_span.merge(semi_span);
-        Ok(Declaration {
-            attributes: vec![],
-            visibility: Visibility::Private,
-            kind: DeclKind::Param(ParamDecl {
-                name,
-                type_ann,
-                value,
-            }),
-            span,
-        })
-    }
-
-    pub(super) fn parse_node(&mut self) -> Result<Declaration, ParseError> {
-        let (_, start_span) = self.expect(Token::Node)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
-        self.expect(Token::Colon)?;
-        let type_ann = self.parse_type_expr()?;
-        self.expect(Token::Eq)?;
-        let value = self.parse_expr()?;
-        let (_, semi_span) = self.expect(Token::Semicolon)?;
-        let span = start_span.merge(semi_span);
-        Ok(Declaration {
-            attributes: vec![],
-            visibility: Visibility::Private,
-            kind: DeclKind::Node(NodeDecl {
-                name,
-                type_ann,
-                value,
-            }),
-            span,
-        })
-    }
-
-    pub(super) fn parse_const_node(
+    /// Complete a single `param` / `node` / `const node` declaration starting
+    /// from an already-parsed slot header. Parses the optional (`param`) or
+    /// mandatory (`node` / `const node`) initializer and the terminating `;`.
+    pub(super) fn finish_single_value_decl(
         &mut self,
-        const_span: crate::syntax::span::Span,
+        header: SlotHeader,
     ) -> Result<Declaration, ParseError> {
-        // `const` keyword already consumed by the caller.
-        // Next token must be `node`.
-        self.expect(Token::Node)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
-        self.expect(Token::Colon)?;
-        let type_ann = self.parse_type_expr()?;
-        self.expect(Token::Eq)?;
-        let value = self.parse_expr()?;
-        let (_, semi_span) = self.expect(Token::Semicolon)?;
-        let span = const_span.merge(semi_span);
+        let SlotHeader {
+            kind,
+            kind_span,
+            name,
+            type_ann,
+            ..
+        } = header;
+
+        let (decl_kind, semi_span) = match kind {
+            SlotKind::Param => {
+                let value = if self.lexer.peek() == Some(&Token::Eq) {
+                    self.expect(Token::Eq)?;
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                let (_, semi_span) = self.expect(Token::Semicolon)?;
+                (
+                    DeclKind::Param(ParamDecl {
+                        name,
+                        type_ann,
+                        value,
+                    }),
+                    semi_span,
+                )
+            }
+            SlotKind::Node => {
+                self.expect(Token::Eq)?;
+                let value = self.parse_expr()?;
+                let (_, semi_span) = self.expect(Token::Semicolon)?;
+                (
+                    DeclKind::Node(NodeDecl {
+                        name,
+                        type_ann,
+                        value,
+                    }),
+                    semi_span,
+                )
+            }
+            SlotKind::ConstNode => {
+                self.expect(Token::Eq)?;
+                let value = self.parse_expr()?;
+                let (_, semi_span) = self.expect(Token::Semicolon)?;
+                (
+                    DeclKind::ConstNode(ConstNodeDecl {
+                        name,
+                        type_ann,
+                        value,
+                    }),
+                    semi_span,
+                )
+            }
+        };
+
+        let span = kind_span.merge(semi_span);
+
         Ok(Declaration {
             attributes: vec![],
             visibility: Visibility::Private,
-            kind: DeclKind::ConstNode(ConstNodeDecl {
-                name,
-                type_ann,
-                value,
-            }),
+            kind: decl_kind,
             span,
         })
     }

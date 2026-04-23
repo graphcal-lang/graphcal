@@ -1,14 +1,15 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TypeDecl,
-    TypeExpr, UnionTypeDecl, UnitDecl, UnitDef, Visibility,
+    IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
+    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, UnionTypeDecl,
+    UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
 use super::{
     Formatter, INDENT, format_dim_expr_inline, format_expr, format_type_expr_inline,
-    format_unit_expr_inline,
+    format_unit_expr_inline, render_doc_to_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
+        DeclKind::Multi(d) => format_multi_decl(fmt, d),
     };
 
     // Prepend the visibility annotation (if any).
@@ -649,5 +651,216 @@ fn format_assert_decl(fmt: &mut Formatter<'_>, d: &AssertDecl) -> RcDoc<'static>
             }
             doc.append(RcDoc::text(";"))
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-declaration (issue #481)
+// ---------------------------------------------------------------------------
+
+/// Format a multi-decl surface form as a single declaration with
+/// canonicalized column alignment in both the slot header list and the
+/// table body. Output is deterministic and idempotent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single cohesive routine for multi-decl surface rendering"
+)]
+pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'static> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+
+    // Slot headers: `<kind_padded> <name:_padded> <type><sep>`
+    // Where `name:` is padded so all types line up.
+    let kind_strs: Vec<&'static str> = info
+        .slots
+        .iter()
+        .map(|s| match s.kind {
+            MultiSlotKind::Param => "param",
+            MultiSlotKind::Node => "node",
+            MultiSlotKind::ConstNode => "const node",
+        })
+        .collect();
+    let max_kind = kind_strs.iter().map(|s| s.len()).max().unwrap_or(0);
+
+    let name_colon_strs: Vec<String> = info
+        .slots
+        .iter()
+        .map(|s| format!("{}:", s.name.value.as_str()))
+        .collect();
+    let max_name_colon = name_colon_strs.iter().map(String::len).max().unwrap_or(0);
+
+    let type_strs: Vec<String> = info
+        .slots
+        .iter()
+        .map(|s| render_doc_to_string(&format_type_expr_inline(fmt, &s.type_ann)))
+        .collect();
+
+    for idx in 0..info.slots.len() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        let sep = if idx + 1 == info.slots.len() { "" } else { "," };
+        let _ = write!(
+            out,
+            "{:<kw$} {:<nw$} {}{}",
+            kind_strs[idx],
+            name_colon_strs[idx],
+            type_strs[idx],
+            sep,
+            kw = max_kind,
+            nw = max_name_colon,
+        );
+    }
+
+    // Table expression: `= table[shared, (slots)] { ... };`
+    let shared_axes_str = info
+        .shared_axes
+        .iter()
+        .map(|spec| match spec {
+            TableIndexSpec::Named(s) => s.value.as_str().to_string(),
+            TableIndexSpec::NatRange(n, _) => n.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let slot_axes_str = info
+        .slot_axes
+        .iter()
+        .map(|a| match a {
+            MultiSlotAxis::Underscore => "_".to_string(),
+            MultiSlotAxis::Axis(s) => s.value.as_str().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    out.push('\n');
+    out.push_str(&" ".repeat(INDENT as usize));
+    let _ = write!(out, "= table[{shared_axes_str}, ({slot_axes_str})] {{");
+
+    // Body.
+    let body_indent = " ".repeat((INDENT * 2) as usize);
+    let (max_row_label, col_widths, rendered_rows) = compute_multi_decl_layout(fmt, info);
+
+    for (si, slice) in info.slices.iter().enumerate() {
+        if si > 0 {
+            out.push('\n');
+        }
+        // Slice prefix `[A::a, B::b]`.
+        if !slice.prefix_keys.is_empty() {
+            let labels = slice
+                .prefix_keys
+                .iter()
+                .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push('\n');
+            out.push_str(&body_indent);
+            let _ = write!(out, "[{labels}]");
+        }
+        // Header row: `<row-label-padding>: <cells>;`
+        let header_cells: Vec<String> = slice
+            .header_cells
+            .iter()
+            .enumerate()
+            .map(|(ci, cell)| {
+                format!(
+                    "{:>w$}",
+                    header_cell_text(cell),
+                    w = col_widths.get(ci).copied().unwrap_or(0),
+                )
+            })
+            .collect();
+        out.push('\n');
+        out.push_str(&body_indent);
+        let _ = write!(
+            out,
+            "{}: {};",
+            " ".repeat(max_row_label),
+            header_cells.join(", ")
+        );
+        for (ri, row) in slice.rows.iter().enumerate() {
+            let cells: Vec<String> = rendered_rows[si][ri]
+                .iter()
+                .enumerate()
+                .map(|(ci, text)| {
+                    format!("{:>w$}", text, w = col_widths.get(ci).copied().unwrap_or(0))
+                })
+                .collect();
+            out.push('\n');
+            out.push_str(&body_indent);
+            let _ = write!(
+                out,
+                "{:<w$}: {};",
+                row.label.value.as_str(),
+                cells.join(", "),
+                w = max_row_label,
+            );
+        }
+    }
+
+    out.push('\n');
+    out.push_str(&" ".repeat(INDENT as usize));
+    out.push_str("};");
+
+    RcDoc::text(out)
+}
+
+fn compute_multi_decl_layout(
+    fmt: &mut Formatter<'_>,
+    info: &MultiDecl,
+) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
+    let num_cols = info.slices.first().map_or(0, |s| s.header_cells.len());
+    let mut col_widths: Vec<usize> = vec![0; num_cols];
+
+    // Header cell widths.
+    for slice in &info.slices {
+        for (ci, cell) in slice.header_cells.iter().enumerate() {
+            let text = header_cell_text(cell);
+            if ci < col_widths.len() && text.len() > col_widths[ci] {
+                col_widths[ci] = text.len();
+            }
+        }
+    }
+    // Data cell widths (render once; reuse strings below).
+    let rendered_rows: Vec<Vec<Vec<String>>> = info
+        .slices
+        .iter()
+        .map(|slice| {
+            slice
+                .rows
+                .iter()
+                .map(|row| {
+                    row.values
+                        .iter()
+                        .map(|v| render_doc_to_string(&format_expr(fmt, v)))
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+    for slice_rows in &rendered_rows {
+        for row_cells in slice_rows {
+            for (ci, cell) in row_cells.iter().enumerate() {
+                if ci < col_widths.len() && cell.len() > col_widths[ci] {
+                    col_widths[ci] = cell.len();
+                }
+            }
+        }
+    }
+
+    let max_row_label = info
+        .slices
+        .iter()
+        .flat_map(|s| s.rows.iter())
+        .map(|r| r.label.value.as_str().len())
+        .max()
+        .unwrap_or(0);
+
+    (max_row_label, col_widths, rendered_rows)
+}
+
+fn header_cell_text(cell: &MultiHeaderCell) -> String {
+    match cell {
+        MultiHeaderCell::Underscore { .. } => "_".to_string(),
+        MultiHeaderCell::Variant { variant, .. } => variant.value.as_str().to_string(),
     }
 }
