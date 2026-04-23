@@ -1,0 +1,39 @@
+// multi_decl_nd.gcl -- v3 multi-decl: N-D shared-axis prefix with slices.
+//
+// Two shared axes: `Phase` (slice axis) and `Component` (row axis).
+// One 2-D slot (power_mode_active) with extra axis OperationMode.
+pub index Phase = { Launch, Cruise, Arrival };
+pub index Component = { ComponentA, ComponentB };
+pub index OperationMode = { Safe, Nominal };
+
+param      power_consumption: Power[Phase, Component],
+param      n_installed:       Int[Phase, Component],
+const node mass_per_unit:     Mass[Phase, Component],
+param      power_mode_active: Bool[Phase, Component, OperationMode]
+  = table[Phase, Component, (_, _, _, OperationMode)] {
+      [Phase::Launch]
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  5.0 W,   1, 2.5 kg, true,  false;
+      ComponentB:  6.0 W,   1, 3.1 kg, false, false;
+
+      [Phase::Cruise]
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
+      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+
+      [Phase::Arrival]
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  8.0 W,   1, 2.5 kg, true,  true;
+      ComponentB:  15.0 W,  2, 3.1 kg, true,  true;
+  };
+
+// Derived: total active power per phase, summed over components and modes.
+node total_active_power: Power[Phase] = for p: Phase {
+    sum(for c: Component {
+        sum(for m: OperationMode {
+            if @power_mode_active[p, c, m] { @power_consumption[p, c] } else { 0.0 W }
+        })
+    })
+};
+
+node peak_active_power: Power = max(for p: Phase { @total_active_power[p] });

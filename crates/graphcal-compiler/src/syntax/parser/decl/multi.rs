@@ -23,6 +23,7 @@
 //! synthesized `TableLiteral` initializer. Downstream compiler passes
 //! see N ordinary declarations.
 
+use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
     ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, NodeDecl,
     ParamDecl, TableIndexSpec, TypeExpr, Visibility,
@@ -147,15 +148,6 @@ impl Parser<'_> {
                 span: table_span.merge(rbracket_span).into(),
             });
         }
-        if shared_axes.len() > 1 {
-            // v3 territory: N-D shared-axis prefix (with slices) is not yet supported.
-            return Err(ParseError::MultiDeclUnsupportedShape {
-                reason: "multi-decl with multiple shared axes is not yet supported (v3)"
-                    .to_string(),
-                src: self.named_source(),
-                span: table_span.merge(rbracket_span).into(),
-            });
-        }
 
         // v2: at most one extra-axis slot. This covers the mixed 1-D / 2-D
         // motivating example; v3 relaxes to multiple extra-axis slots, with
@@ -181,20 +173,36 @@ impl Parser<'_> {
             });
         }
 
-        // Parse the table body.
+        // Parse the table body. Supports one shared axis (single body,
+        // `{ header; rows }`) or more (slice sections, `{ [slice] header; rows …}`).
         self.expect(Token::LBrace)?;
 
-        let (header_cells, header_span) = self.parse_multi_header_row()?;
-        let column_layout = build_column_layout(&slot_axes, &header_cells, header_span, &slots)
-            .map_err(|e| e.into_parse_error(&self.named_source()))?;
+        let row_index_spec = shared_axes[shared_axes.len() - 1].clone();
+        let slice_axis_specs: Vec<TableIndexSpec> = shared_axes[..shared_axes.len() - 1].to_vec();
 
-        // Data rows.
-        let mut row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)> = Vec::new();
-        while self.lexer.peek() != Some(&Token::RBrace) {
-            if self.lexer.peek() == Some(&Token::LBracket) {
+        // Collect: per slice, (slice_prefix_keys, header_cells, row_values).
+        // For single-shared-axis multi-decls, there is exactly one slice with
+        // empty prefix keys.
+        let mut slices: Vec<MultiSlice> = Vec::new();
+
+        if slice_axis_specs.is_empty() {
+            // v1/v2 shape: one body with no slice labels.
+            let slice = self.parse_multi_slice_body(&[], &slot_axes, &slots)?;
+            slices.push(slice);
+        } else {
+            // v3 shape: one or more `[slice_labels] header; rows;` sections.
+            while self.lexer.peek() == Some(&Token::LBracket) {
+                self.lexer.next_token(); // consume `[`
+                let slice_prefix = self.parse_slice_labels(&slice_axis_specs)?;
+                self.expect(Token::RBracket)?;
+                let slice = self.parse_multi_slice_body(&slice_prefix, &slot_axes, &slots)?;
+                slices.push(slice);
+            }
+            if slices.is_empty() {
                 return Err(ParseError::MultiDeclUnsupportedShape {
-                    reason: "slice sections in multi-decl tables are not yet supported (v3)"
-                        .to_string(),
+                    reason:
+                        "multi-decl with multiple shared axes requires at least one `[slice]` section"
+                            .to_string(),
                     src: self.named_source(),
                     span: self
                         .lexer
@@ -203,34 +211,6 @@ impl Parser<'_> {
                         .into(),
                 });
             }
-            let label = self.parse_any_ident()?;
-            let label_span = label.span;
-            let row_label = label.into_spanned::<VariantName>();
-            self.expect(Token::Colon)?;
-            let mut values = Vec::with_capacity(header_cells.len());
-            loop {
-                let value = self.parse_expr()?;
-                values.push(value);
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                } else {
-                    break;
-                }
-            }
-            let row_end_span = self.lexer.peek_with_span().map_or(label_span, |(_, s)| s);
-            let row_span = label_span.merge(row_end_span);
-            self.expect(Token::Semicolon)?;
-
-            if values.len() != header_cells.len() {
-                return Err(ParseError::MultiDeclRowArity {
-                    slot_count: header_cells.len(),
-                    got: values.len(),
-                    row_label: row_label.value.as_str().to_string(),
-                    src: self.named_source(),
-                    span: row_span.into(),
-                });
-            }
-            row_values.push((row_label, values, row_span));
         }
 
         let (_, rbrace_span) = self.expect(Token::RBrace)?;
@@ -238,80 +218,88 @@ impl Parser<'_> {
 
         let table_total_span = table_span.merge(rbrace_span);
 
-        // Desugar each slot into its own `Declaration` carrying a synthesized
-        // `TableLiteral` initializer with the shared axis and (for extra-axis
-        // slots) the per-column variant.
-        let row_index_spec = shared_axes[0].clone();
+        // Desugar each slot.
         let row_index_name = match &row_index_spec {
             TableIndexSpec::Named(s) => s.clone(),
             TableIndexSpec::NatRange(n, sp) => {
-                use crate::registry::types::nat_range_index_name;
                 Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp)
             }
         };
 
         let mut out: Vec<Declaration> = Vec::with_capacity(slots.len());
         for (slot_idx, slot) in slots.iter().enumerate() {
-            let span = &column_layout[slot_idx];
-            let (slot_indexes, entries): (Vec<TableIndexSpec>, Vec<MapEntry>) = match span {
-                SlotColumnSpan::Single(col_idx) => {
-                    let entries = row_values
-                        .iter()
-                        .map(|(label, values, _)| MapEntry {
-                            keys: vec![MapEntryKey {
+            let mut slot_entries: Vec<MapEntry> = Vec::new();
+            let mut slot_indexes: Vec<TableIndexSpec> = slice_axis_specs.clone();
+            slot_indexes.push(row_index_spec.clone());
+
+            let mut extra_axis_name: Option<Spanned<IndexName>> = None;
+
+            for slice in &slices {
+                let span = &slice.column_layout[slot_idx];
+                match span {
+                    SlotColumnSpan::Single(col_idx) => {
+                        for (label, values, _) in &slice.row_values {
+                            let mut keys = slice.prefix_keys.clone();
+                            keys.push(MapEntryKey {
                                 index: row_index_name.clone(),
                                 variant: label.clone(),
-                            }],
-                            value: values[*col_idx].clone(),
-                        })
-                        .collect();
-                    (vec![row_index_spec.clone()], entries)
-                }
-                SlotColumnSpan::Range {
-                    start,
-                    end,
-                    extra_axis,
-                } => {
-                    let col_variants: Vec<Spanned<VariantName>> = header_cells[*start..*end]
-                        .iter()
-                        .filter_map(|c| match c {
-                            HeaderCell::Variant { variant, .. } => Some(variant.clone()),
-                            HeaderCell::Underscore => None,
-                        })
-                        .collect();
-                    let extra_index_name = Spanned::new(extra_axis.value.clone(), extra_axis.span);
-                    let mut entries = Vec::with_capacity(row_values.len() * col_variants.len());
-                    for (label, values, _) in &row_values {
-                        for (local_col, col_variant) in col_variants.iter().enumerate() {
-                            let global_col = start + local_col;
-                            entries.push(MapEntry {
-                                keys: vec![
-                                    MapEntryKey {
-                                        index: row_index_name.clone(),
-                                        variant: label.clone(),
-                                    },
-                                    MapEntryKey {
-                                        index: extra_index_name.clone(),
-                                        variant: col_variant.clone(),
-                                    },
-                                ],
-                                value: values[global_col].clone(),
+                            });
+                            slot_entries.push(MapEntry {
+                                keys,
+                                value: values[*col_idx].clone(),
                             });
                         }
                     }
-                    (
-                        vec![
-                            row_index_spec.clone(),
-                            TableIndexSpec::Named(extra_axis.clone()),
-                        ],
-                        entries,
-                    )
+                    SlotColumnSpan::Range {
+                        start,
+                        end,
+                        extra_axis,
+                    } => {
+                        let col_variants: Vec<Spanned<VariantName>> = slice.header_cells
+                            [*start..*end]
+                            .iter()
+                            .filter_map(|c| match c {
+                                HeaderCell::Variant { variant, .. } => Some(variant.clone()),
+                                HeaderCell::Underscore => None,
+                            })
+                            .collect();
+                        let extra_index_name =
+                            Spanned::new(extra_axis.value.clone(), extra_axis.span);
+                        if extra_axis_name.is_none() {
+                            extra_axis_name = Some(extra_axis.clone());
+                        }
+                        for (label, values, _) in &slice.row_values {
+                            for (local_col, col_variant) in col_variants.iter().enumerate() {
+                                let global_col = start + local_col;
+                                let mut keys = slice.prefix_keys.clone();
+                                keys.push(MapEntryKey {
+                                    index: row_index_name.clone(),
+                                    variant: label.clone(),
+                                });
+                                keys.push(MapEntryKey {
+                                    index: extra_index_name.clone(),
+                                    variant: col_variant.clone(),
+                                });
+                                slot_entries.push(MapEntry {
+                                    keys,
+                                    value: values[global_col].clone(),
+                                });
+                            }
+                        }
+                    }
                 }
-            };
+            }
+
+            if let Some(extra) = extra_axis_name {
+                slot_indexes.push(TableIndexSpec::Named(extra));
+            }
+
+            let slot_indexes_final = slot_indexes;
+            let entries = slot_entries;
 
             let table_expr = Expr {
                 kind: ExprKind::TableLiteral {
-                    indexes: slot_indexes,
+                    indexes: slot_indexes_final,
                     entries,
                 },
                 span: table_total_span,
@@ -346,6 +334,124 @@ impl Parser<'_> {
         }
 
         Ok(out)
+    }
+
+    /// Parse the slice-section prefix `[A::a1, B::b1, …]` for multi-decls
+    /// with more than one shared axis. The labels cover every shared axis
+    /// except the last (the row axis), in declared order.
+    fn parse_slice_labels(
+        &mut self,
+        slice_axis_specs: &[TableIndexSpec],
+    ) -> Result<Vec<MapEntryKey>, ParseError> {
+        let mut keys: Vec<MapEntryKey> = Vec::with_capacity(slice_axis_specs.len());
+        for (idx, axis_spec) in slice_axis_specs.iter().enumerate() {
+            if idx > 0 {
+                self.expect(Token::Comma)?;
+            }
+            match axis_spec {
+                TableIndexSpec::Named(axis) => {
+                    let axis_ident = self.parse_any_ident()?;
+                    self.expect(Token::ColonColon)?;
+                    let variant_ident = self.parse_any_ident()?;
+                    if axis_ident.name != axis.value.as_str() {
+                        return Err(ParseError::MultiDeclUnsupportedShape {
+                            reason: format!(
+                                "slice label qualifies axis `{}`, but the shared axis at this position is `{}`",
+                                axis_ident.name,
+                                axis.value.as_str(),
+                            ),
+                            src: self.named_source(),
+                            span: axis_ident.span.into(),
+                        });
+                    }
+                    keys.push(MapEntryKey {
+                        index: axis.clone(),
+                        variant: variant_ident.into_spanned::<VariantName>(),
+                    });
+                }
+                TableIndexSpec::NatRange(n, sp) => {
+                    let (_, hash_span) = self.expect(Token::Hash)?;
+                    let (_, num_span) = self.expect(Token::Number)?;
+                    let text = self.lexer.slice_at(num_span).replace('_', "");
+                    let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
+                        reason: "expected non-negative integer in slice label".to_string(),
+                        src: self.named_source(),
+                        span: num_span.into(),
+                    })?;
+                    if value >= *n {
+                        return Err(ParseError::InvalidNumber {
+                            reason: format!(
+                                "slice index #{value} out of range for axis of size {n}"
+                            ),
+                            src: self.named_source(),
+                            span: num_span.into(),
+                        });
+                    }
+                    let variant_span = hash_span.merge(num_span);
+                    keys.push(MapEntryKey {
+                        index: Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp),
+                        variant: Spanned::new(VariantName::new(format!("#{value}")), variant_span),
+                    });
+                }
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Parse one header + data rows block for a single slice of a multi-decl.
+    ///
+    /// For v1/v2 (single shared axis), `prefix_keys` is empty. For v3
+    /// (multi-shared-axis), `prefix_keys` carries the slice labels.
+    fn parse_multi_slice_body(
+        &mut self,
+        prefix_keys: &[MapEntryKey],
+        slot_axes: &[SlotAxis],
+        slots: &[SlotHeader],
+    ) -> Result<MultiSlice, ParseError> {
+        let (header_cells, header_span) = self.parse_multi_header_row()?;
+        let column_layout = build_column_layout(slot_axes, &header_cells, header_span, slots)
+            .map_err(|e| e.into_parse_error(&self.named_source()))?;
+
+        let mut row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)> = Vec::new();
+        while self.lexer.peek() != Some(&Token::RBrace)
+            && self.lexer.peek() != Some(&Token::LBracket)
+        {
+            let label = self.parse_any_ident()?;
+            let label_span = label.span;
+            let row_label = label.into_spanned::<VariantName>();
+            self.expect(Token::Colon)?;
+            let mut values = Vec::with_capacity(header_cells.len());
+            loop {
+                let value = self.parse_expr()?;
+                values.push(value);
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                } else {
+                    break;
+                }
+            }
+            let row_end_span = self.lexer.peek_with_span().map_or(label_span, |(_, s)| s);
+            let row_span = label_span.merge(row_end_span);
+            self.expect(Token::Semicolon)?;
+
+            if values.len() != header_cells.len() {
+                return Err(ParseError::MultiDeclRowArity {
+                    slot_count: header_cells.len(),
+                    got: values.len(),
+                    row_label: row_label.value.as_str().to_string(),
+                    src: self.named_source(),
+                    span: row_span.into(),
+                });
+            }
+            row_values.push((row_label, values, row_span));
+        }
+
+        Ok(MultiSlice {
+            prefix_keys: prefix_keys.to_vec(),
+            header_cells,
+            column_layout,
+            row_values,
+        })
     }
 
     /// Parse a `(param|node|const node)` kind keyword sequence, returning
@@ -717,6 +823,68 @@ param b: Bool[Component, OperationMode]
     }
 
     #[test]
+    fn multi_decl_v3_nd_shared_axes_with_slices() {
+        let source = r"
+index Phase = { Launch, Cruise };
+index Component = { ComponentA };
+
+param p: Int[Phase, Component],
+param q: Int[Phase, Component]
+  = table[Phase, Component, (_, _)] {
+      [Phase::Launch]
+      :           _, _;
+      ComponentA: 1, 2;
+
+      [Phase::Cruise]
+      :           _, _;
+      ComponentA: 3, 4;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        // p and q each desugar to a 2-D TableLiteral with Phase × Component keys.
+        let param_decls: Vec<_> = file
+            .declarations
+            .iter()
+            .filter_map(|d| match &d.kind {
+                DeclKind::Param(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(param_decls.len(), 2);
+        match &param_decls[0].value.as_ref().unwrap().kind {
+            ExprKind::TableLiteral { indexes, entries } => {
+                assert_eq!(indexes.len(), 2);
+                assert_eq!(entries.len(), 2); // 2 phases × 1 component
+                // Every entry has two keys (Phase, Component) in that order.
+                for e in entries {
+                    assert_eq!(e.keys.len(), 2);
+                    assert_eq!(e.keys[0].index.value.as_str(), "Phase");
+                    assert_eq!(e.keys[1].index.value.as_str(), "Component");
+                }
+            }
+            other => panic!("expected TableLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multi_decl_v3_slice_axis_mismatch() {
+        let source = r"
+param p: Int[Phase, Component],
+param q: Int[Phase, Component]
+  = table[Phase, Component, (_, _)] {
+      [Foo::Launch]
+      :           _, _;
+      ComponentA: 1, 2;
+  };
+";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(err, ParseError::MultiDeclUnsupportedShape { .. }),
+            "expected MultiDeclUnsupportedShape for wrong slice axis, got {err:?}",
+        );
+    }
+
+    #[test]
     fn multi_decl_v2_qualified_header_cells_accepted() {
         // Author may qualify header cells for readability. The parser accepts
         // and uses the bare variant name.
@@ -755,6 +923,17 @@ pub(super) enum HeaderCell {
         variant: Spanned<VariantName>,
         span: Span,
     },
+}
+
+/// One parsed slice of a multi-decl body: a prefix of shared-axis keys
+/// (empty for single-shared-axis multi-decls) followed by a header row
+/// and the associated data rows.
+#[derive(Debug)]
+pub(super) struct MultiSlice {
+    pub prefix_keys: Vec<MapEntryKey>,
+    pub header_cells: Vec<HeaderCell>,
+    pub column_layout: Vec<SlotColumnSpan>,
+    pub row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)>,
 }
 
 /// Where each slot's cells live within the parsed header row.

@@ -1158,6 +1158,33 @@ fn eval_power_budget() {
 }
 
 #[test]
+fn eval_multi_decl_nd() {
+    // Multi-decl v3: N-D shared-axis prefix with slice sections.
+    let output = graphcal_bin()
+        .args(["eval", &fixture("multi_decl_nd.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    for phase in ["Launch", "Cruise", "Arrival"] {
+        assert!(
+            stdout.contains(phase),
+            "expected {phase} in output: {stdout}",
+        );
+    }
+    assert!(
+        stdout.contains("total_active_power") && stdout.contains("peak_active_power"),
+        "expected derived nodes in output: {stdout}",
+    );
+}
+
+#[test]
 fn eval_multi_decl_2d() {
     // Multi-decl v2: mixed 1-D and 2-D slots sharing one row axis.
     let output = graphcal_bin()

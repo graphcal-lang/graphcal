@@ -320,6 +320,32 @@ param      power_mode_active:  Bool[Component, OperationMode]
 ```
 
 In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
+
+### N-D with slice sections
+
+When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis::Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
+
+```
+index Phase = { Launch, Cruise };
+index Component = { ComponentA, ComponentB };
+index OperationMode = { Safe, Nominal };
+
+param      power_consumption: Power[Phase, Component],
+param      power_mode_active: Bool[Phase, Component, OperationMode]
+  = table[Phase, Component, (_, OperationMode)] {
+      [Phase::Launch]
+      :            _,       Safe,  Nominal;
+      ComponentA:  5.0 W,   true,  false;
+      ComponentB:  6.0 W,   false, false;
+
+      [Phase::Cruise]
+      :            _,       Safe,  Nominal;
+      ComponentA:  10.0 W,  true,  true;
+      ComponentB:  12.0 W,  false, true;
+  };
+```
+
+Slice labels must qualify each shared axis in the declared order (`Phase::Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
 
