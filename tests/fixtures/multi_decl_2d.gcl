@@ -9,15 +9,15 @@ pub index OperationMode = { Safe, Nominal };
 // Three 1-D slots + one 2-D slot (power_mode_active), all sharing
 // the Component row axis. power_mode_active's extra axis is
 // OperationMode; its columns in the header are Safe, Nominal.
-param      power_consumption:  Power[Component],
-param      n_installed:        Int[Component],
-const node mass_per_unit:      Mass[Component],
-param      power_mode_active:  Bool[Component, OperationMode]
-  = table[Component, (_, _, _, OperationMode)] {
-      :            _,       _, _,      Safe,  Nominal;
-      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
-      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
-  };
+param      power_consumption: Power[Component],
+param      n_installed:       Int[Component],
+const node mass_per_unit:     Mass[Component],
+param      power_mode_active: Bool[Component, OperationMode]
+    = table[Component, (_, _, _, OperationMode)] {
+                  :      _, _,      _,  Safe, Nominal;
+        ComponentA: 10.0 W, 1, 2.5 kg,  true,    true;
+        ComponentB: 12.0 W, 2, 3.1 kg, false,    true;
+    };
 
 // Derived 2-D node: power consumption per mode, gated by activity.
 node power_per_mode: Power[Component, OperationMode] = for c: Component, m: OperationMode {

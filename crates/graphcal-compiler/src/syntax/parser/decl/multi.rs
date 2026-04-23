@@ -25,8 +25,8 @@
 
 use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
-    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, NodeDecl,
-    ParamDecl, TableIndexSpec, TypeExpr, Visibility,
+    self as ast, ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey,
+    NodeDecl, ParamDecl, TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::names::{DeclName, IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
@@ -219,10 +219,95 @@ impl Parser<'_> {
         let table_total_span = table_span.merge(rbrace_span);
 
         // Full multi-decl surface span: from the first slot's kind keyword
-        // through the closing `;`. Stored on each synthesized declaration so
-        // the formatter can re-emit the multi-decl verbatim instead of the
-        // N desugared single-decls.
+        // through the closing `;`.
         let surface_span = slots[0].kind_span.merge(semi_span);
+
+        // Build the structured surface overlay that gets attached to the
+        // first synthesized declaration. Downstream passes ignore this
+        // field; the formatter consumes it to re-emit the multi-decl
+        // surface with canonical formatting.
+        let info_slots: Vec<ast::MultiDeclSlot> = slots
+            .iter()
+            .map(|s| ast::MultiDeclSlot {
+                kind: match s.kind {
+                    SlotKind::Param => ast::MultiSlotKind::Param,
+                    SlotKind::Node => ast::MultiSlotKind::Node,
+                    SlotKind::ConstNode => ast::MultiSlotKind::ConstNode,
+                },
+                kind_span: s.kind_span,
+                name: s.name.clone(),
+                type_ann: s.type_ann.clone(),
+                header_span: s.header_span,
+            })
+            .collect();
+
+        let info_slot_axes: Vec<ast::MultiSlotAxis> = slot_axes
+            .iter()
+            .map(|a| match a {
+                SlotAxis::Underscore => ast::MultiSlotAxis::Underscore,
+                SlotAxis::Axis(spanned) => ast::MultiSlotAxis::Axis(spanned.clone()),
+            })
+            .collect();
+
+        let info_slices: Vec<ast::MultiDeclSlice> = slices
+            .iter()
+            .map(|slice| ast::MultiDeclSlice {
+                prefix_keys: slice.prefix_keys.clone(),
+                header_cells: slice
+                    .header_cells
+                    .iter()
+                    .map(|c| match c {
+                        HeaderCell::Underscore(sp) => {
+                            ast::MultiHeaderCell::Underscore { span: *sp }
+                        }
+                        HeaderCell::Variant {
+                            axis,
+                            variant,
+                            span,
+                        } => ast::MultiHeaderCell::Variant {
+                            axis: axis.clone(),
+                            variant: variant.clone(),
+                            span: *span,
+                        },
+                    })
+                    .collect(),
+                header_span: slice.header_span,
+                column_layout: slice
+                    .column_layout
+                    .iter()
+                    .map(|span| match span {
+                        SlotColumnSpan::Single(idx) => ast::MultiSlotColumnSpan::Single(*idx),
+                        SlotColumnSpan::Range {
+                            start,
+                            end,
+                            extra_axis,
+                        } => ast::MultiSlotColumnSpan::Range {
+                            start: *start,
+                            end: *end,
+                            extra_axis: extra_axis.clone(),
+                        },
+                    })
+                    .collect(),
+                rows: slice
+                    .row_values
+                    .iter()
+                    .map(|(label, values, row_span)| ast::MultiDataRow {
+                        label: label.clone(),
+                        values: values.clone(),
+                        span: *row_span,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        let multi_decl_info = ast::MultiDeclInfo {
+            slots: info_slots,
+            shared_axes: shared_axes.clone(),
+            slot_axes: info_slot_axes,
+            slices: info_slices,
+            span: surface_span,
+            table_expr_span: table_total_span,
+        };
 
         // Desugar each slot.
         let row_index_name = match &row_index_spec {
@@ -266,7 +351,7 @@ impl Parser<'_> {
                             .iter()
                             .filter_map(|c| match c {
                                 HeaderCell::Variant { variant, .. } => Some(variant.clone()),
-                                HeaderCell::Underscore => None,
+                                HeaderCell::Underscore(_) => None,
                             })
                             .collect();
                         let extra_index_name =
@@ -331,14 +416,24 @@ impl Parser<'_> {
                 }),
             };
 
+            let info_for_first = if slot_idx == 0 {
+                Some(Box::new(multi_decl_info.clone()))
+            } else {
+                None
+            };
+
             out.push(Declaration {
                 attributes: vec![],
                 visibility: Visibility::Private,
                 kind,
                 span: decl_span,
-                multi_decl_surface_span: Some(surface_span),
+                multi_decl_info: info_for_first,
             });
         }
+
+        // `multi_decl_info` is cloned into the first slot; the surface_span
+        // is already captured in `multi_decl_info.span`.
+        let _ = surface_span;
 
         Ok(out)
     }
@@ -456,6 +551,7 @@ impl Parser<'_> {
         Ok(MultiSlice {
             prefix_keys: prefix_keys.to_vec(),
             header_cells,
+            header_span,
             column_layout,
             row_values,
         })
@@ -582,8 +678,8 @@ impl Parser<'_> {
     fn parse_header_cell(&mut self) -> Result<HeaderCell, ParseError> {
         match self.lexer.peek() {
             Some(Token::Underscore) => {
-                self.advance()?;
-                Ok(HeaderCell::Underscore)
+                let (_, span) = self.advance()?;
+                Ok(HeaderCell::Underscore(span))
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
@@ -923,7 +1019,7 @@ pub(super) enum SlotAxis {
 /// A parsed header-row cell: `_`, a bare variant, or a qualified variant.
 #[derive(Debug, Clone)]
 pub(super) enum HeaderCell {
-    Underscore,
+    Underscore(Span),
     Variant {
         /// Axis qualifier, if the author wrote `Axis::Variant`.
         axis: Option<Spanned<IndexName>>,
@@ -939,6 +1035,7 @@ pub(super) enum HeaderCell {
 pub(super) struct MultiSlice {
     pub prefix_keys: Vec<MapEntryKey>,
     pub header_cells: Vec<HeaderCell>,
+    pub header_span: Span,
     pub column_layout: Vec<SlotColumnSpan>,
     pub row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)>,
 }
@@ -1064,7 +1161,7 @@ pub(super) fn build_column_layout(
                     });
                 }
                 match &header_cells[cursor] {
-                    HeaderCell::Underscore => {}
+                    HeaderCell::Underscore(_) => {}
                     HeaderCell::Variant { span, .. } => {
                         return Err(LayoutError::HeaderCellKind {
                             span: *span,
@@ -1080,7 +1177,7 @@ pub(super) fn build_column_layout(
                 let start = cursor;
                 while cursor < header_cells.len() {
                     match &header_cells[cursor] {
-                        HeaderCell::Underscore => break,
+                        HeaderCell::Underscore(_) => break,
                         HeaderCell::Variant { axis, span, .. } => {
                             if let Some(axis) = axis
                                 && axis.value != extra_axis.value

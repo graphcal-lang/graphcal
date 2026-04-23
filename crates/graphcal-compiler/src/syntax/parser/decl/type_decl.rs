@@ -44,7 +44,7 @@ impl Parser<'_> {
                         fields: Some(fields),
                     }),
                     span,
-                    multi_decl_surface_span: None,
+                    multi_decl_info: None,
                 })
             }
             Some(&Token::Semicolon) => {
@@ -60,7 +60,7 @@ impl Parser<'_> {
                         fields: None,
                     }),
                     span,
-                    multi_decl_surface_span: None,
+                    multi_decl_info: None,
                 })
             }
             Some(&Token::Eq) => {
@@ -78,7 +78,7 @@ impl Parser<'_> {
                         members,
                     }),
                     span,
-                    multi_decl_surface_span: None,
+                    multi_decl_info: None,
                 })
             }
             _ => {

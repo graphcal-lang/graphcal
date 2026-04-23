@@ -85,15 +85,13 @@ pub struct Declaration {
     pub visibility: Visibility,
     pub kind: DeclKind,
     pub span: Span,
-    /// Provenance: if this declaration was synthesized by desugaring a
-    /// multi-decl surface form (issue #481), this is the span of the
-    /// entire multi-decl surface (from the first slot keyword through
-    /// the closing `;`). All slots from the same multi-decl share the
-    /// same value here.
-    ///
-    /// Used by the formatter to re-emit the multi-decl surface verbatim
-    /// instead of the N desugared single-decls.
-    pub multi_decl_surface_span: Option<Span>,
+    /// Structured surface overlay for the **first** slot of a multi-decl
+    /// group (issue #481). `None` for single declarations and for
+    /// non-first slots of a multi-decl. The formatter uses this to emit
+    /// the canonicalized multi-decl surface instead of the N desugared
+    /// single-decls. Downstream passes (lowering, TIR, resolver, LSP)
+    /// ignore this field — they see only the desugared flat list.
+    pub multi_decl_info: Option<Box<MultiDeclInfo>>,
 }
 
 impl Declaration {
@@ -107,13 +105,6 @@ impl Declaration {
     #[must_use]
     pub const fn is_bindable(&self) -> bool {
         self.visibility.is_bindable()
-    }
-
-    /// Returns `true` if this declaration was synthesized by desugaring a
-    /// multi-decl surface form.
-    #[must_use]
-    pub const fn is_multi_decl_slot(&self) -> bool {
-        self.multi_decl_surface_span.is_some()
     }
 }
 
@@ -489,6 +480,140 @@ pub struct ParamDecl {
     pub type_ann: TypeExpr,
     /// The default value expression. `None` for required params (no default).
     pub value: Option<Expr>,
+}
+
+// ---------------------------------------------------------------------------
+// Multi-declaration surface info (issue #481)
+// ---------------------------------------------------------------------------
+//
+// A multi-decl is a single surface form — e.g.,
+//
+//     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, …; … };
+//
+// — that expands into N parallel single declarations. The desugared
+// declarations live in `File::declarations` so downstream passes see
+// ordinary single-decls. `MultiDeclInfo` is a structured overlay attached
+// to the **first** slot's `Declaration::multi_decl_info` field, giving the
+// formatter enough information to re-emit the surface form with
+// canonical formatting instead of the N desugared decls.
+
+/// Structured surface information for a multi-decl group.
+///
+/// Attached to the first slot's `Declaration` only; subsequent slots in
+/// the same group carry `multi_decl_info = None` and are detected by
+/// the formatter's slot-count skip.
+#[derive(Debug, Clone)]
+pub struct MultiDeclInfo {
+    /// Slot headers in declaration order. Length = number of declarations
+    /// this multi-decl expanded into.
+    pub slots: Vec<MultiDeclSlot>,
+    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`. The
+    /// **last** entry is the row axis; earlier entries become slice axes
+    /// when there is more than one.
+    pub shared_axes: Vec<TableIndexSpec>,
+    /// Per-slot extra-axis annotation from the slot tuple. Same length
+    /// as `slots`.
+    pub slot_axes: Vec<MultiSlotAxis>,
+    /// Body slices. Exactly one slice for single-shared-axis multi-decls;
+    /// multiple slices for N-D shared-axis prefixes (v3).
+    pub slices: Vec<MultiDeclSlice>,
+    /// Full surface span: from the first slot's kind keyword through the
+    /// closing `;`.
+    pub span: Span,
+    /// Span of the `table[…] {…}` sub-expression.
+    pub table_expr_span: Span,
+}
+
+/// One slot in a multi-decl: kind keyword, name, type annotation.
+#[derive(Debug, Clone)]
+pub struct MultiDeclSlot {
+    pub kind: MultiSlotKind,
+    /// Span covering the kind keyword(s) (`param`, `node`, or `const node`).
+    pub kind_span: Span,
+    pub name: Spanned<DeclName>,
+    pub type_ann: TypeExpr,
+    /// Span from kind keyword through end of the type annotation.
+    pub header_span: Span,
+}
+
+/// Value-decl kinds that a multi-decl slot can have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiSlotKind {
+    Param,
+    Node,
+    ConstNode,
+}
+
+/// Per-slot entry in the slot tuple `(…)`.
+#[derive(Debug, Clone)]
+pub enum MultiSlotAxis {
+    /// `_` — 1-D slot, typed `T[SharedAxis]`.
+    Underscore,
+    /// Named axis — 2-D slot, typed `T[SharedAxis, ExtraAxis]`.
+    Axis(Spanned<IndexName>),
+}
+
+/// Where a slot's columns live within each slice's header row.
+#[derive(Debug, Clone)]
+pub enum MultiSlotColumnSpan {
+    /// 1-D slot: one column at `col_idx`.
+    Single(usize),
+    /// 2-D slot: columns `start..end`, one per variant of `extra_axis`.
+    Range {
+        start: usize,
+        end: usize,
+        extra_axis: Spanned<IndexName>,
+    },
+}
+
+/// One slice of a multi-decl body: optional slice-label prefix + header + rows.
+#[derive(Debug, Clone)]
+pub struct MultiDeclSlice {
+    /// Slice labels covering the shared-axis prefix except the row axis.
+    /// Empty for single-shared-axis bodies.
+    pub prefix_keys: Vec<MapEntryKey>,
+    /// Header row cells, in left-to-right order.
+    pub header_cells: Vec<MultiHeaderCell>,
+    /// Span of the entire header row (`:` through `;`).
+    pub header_span: Span,
+    /// Per-slot column span into this slice's `header_cells` and `rows`
+    /// values. Same length as `MultiDeclInfo::slots`. May differ between
+    /// slices if their header rows list variants in different orders.
+    pub column_layout: Vec<MultiSlotColumnSpan>,
+    /// Data rows for this slice.
+    pub rows: Vec<MultiDataRow>,
+}
+
+/// One cell of a multi-decl header row.
+#[derive(Debug, Clone)]
+pub enum MultiHeaderCell {
+    Underscore {
+        span: Span,
+    },
+    Variant {
+        /// Axis qualifier, if the author wrote `Axis::Variant`.
+        axis: Option<Spanned<IndexName>>,
+        variant: Spanned<VariantName>,
+        span: Span,
+    },
+}
+
+impl MultiHeaderCell {
+    /// Returns the span of this cell.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Underscore { span } | Self::Variant { span, .. } => *span,
+        }
+    }
+}
+
+/// One data row of a multi-decl body: label + value per column.
+#[derive(Debug, Clone)]
+pub struct MultiDataRow {
+    pub label: Spanned<VariantName>,
+    pub values: Vec<Expr>,
+    pub span: Span,
 }
 
 /// Runtime node declaration: `node name: Type = expr;`
@@ -1535,7 +1660,7 @@ mod tests {
                     }),
                 }),
                 span: Span::new(0, 31),
-                multi_decl_surface_span: None,
+                multi_decl_info: None,
             }],
         };
         assert_eq!(file.declarations.len(), 1);

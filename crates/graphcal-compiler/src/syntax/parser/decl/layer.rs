@@ -59,7 +59,7 @@ impl Parser<'_> {
                 fields,
             }),
             span,
-            multi_decl_surface_span: None,
+            multi_decl_info: None,
         })
     }
 }
