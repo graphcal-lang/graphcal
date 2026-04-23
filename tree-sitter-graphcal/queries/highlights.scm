@@ -347,3 +347,20 @@
 
 ; Row labels in table data rows: highlighted as index variants
 (table_data_row row_label: (identifier) @constant)
+
+; Multi-decl (issue #481) surface form — mirror single-decl highlights.
+
+; Shared axis names in table[I1, I2, ..., (slots)]: highlighted as types
+(multi_table_expr shared_axis: (identifier) @type)
+
+; Extra-axis names inside the slot tuple `(_, _, ExtraAxis)`: highlighted
+; as types. (`_` placeholders are a literal token, not an identifier.)
+(slot_axis_entry (identifier) @type)
+
+; Header-row cells that are bare variant identifiers: index variants.
+; (`_` placeholders are a literal token; qualified `Axis::Variant` is
+; already covered by the `qualified_variant` rule above.)
+(multi_header_cell (identifier) @constant)
+
+; Row labels in multi-decl data rows.
+(multi_data_row row_label: (identifier) @constant)
