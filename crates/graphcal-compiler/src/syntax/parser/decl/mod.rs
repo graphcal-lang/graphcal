@@ -19,13 +19,14 @@ mod type_decl;
 mod value;
 
 impl Parser<'_> {
-    /// Parse one top-level declaration surface form, which may desugar into
-    /// multiple declarations (multi-decl) or stay as a single declaration.
+    /// Parse one top-level declaration surface form. A multi-decl is
+    /// represented as `DeclKind::Multi(MultiDecl)` and expanded later
+    /// by the desugar pass.
     #[expect(
         clippy::too_many_lines,
         reason = "single entry point dispatches across every declaration kind"
     )]
-    pub(super) fn parse_declarations(&mut self) -> Result<Vec<Declaration>, ParseError> {
+    pub(super) fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
         // Collect any leading attributes: #[name] or #[name(arg1, arg2)]
         let mut attributes = Vec::new();
         while self.lexer.peek() == Some(&Token::Hash) {
@@ -156,7 +157,7 @@ impl Parser<'_> {
                             decl.span = first_attr.span.merge(decl.span);
                         }
                         decl.attributes = attributes;
-                        return Ok(vec![decl]);
+                        return Ok(decl);
                     }
                     Some(_) => {
                         let (tok, span) = self.advance()?;
@@ -253,7 +254,7 @@ impl Parser<'_> {
 
         decl.attributes = attributes;
 
-        Ok(vec![decl])
+        Ok(decl)
     }
 
     /// Complete parsing of a `param` / `node` / `const node` declaration
@@ -267,7 +268,7 @@ impl Parser<'_> {
         attributes: Vec<Attribute>,
         visibility: Visibility,
         visibility_span: Option<Span>,
-    ) -> Result<Vec<Declaration>, ParseError> {
+    ) -> Result<Declaration, ParseError> {
         let header = self.parse_slot_header_tail(kind, kind_span)?;
 
         if self.lexer.peek() == Some(&Token::Comma) {
@@ -295,8 +296,7 @@ impl Parser<'_> {
         }
 
         // Single decl. Continue with the existing param/node/const-node path.
-        let decl = self.finish_single_value_decl(header)?;
-        let mut decl = decl;
+        let mut decl = self.finish_single_value_decl(header)?;
         decl.visibility = visibility;
         if let Some(ps) = visibility_span {
             decl.span = ps.merge(decl.span);
@@ -305,7 +305,7 @@ impl Parser<'_> {
             decl.span = first_attr.span.merge(decl.span);
         }
         decl.attributes = attributes;
-        Ok(vec![decl])
+        Ok(decl)
     }
 
     /// Parse a single attribute: `#[name]` or `#[name(arg1, arg2)]`

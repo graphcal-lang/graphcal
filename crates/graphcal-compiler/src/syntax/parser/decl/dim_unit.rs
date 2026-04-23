@@ -21,7 +21,6 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::BaseDimension(BaseDimDecl { name }),
             span,
-            multi_decl_info: None,
         })
     }
 
@@ -47,7 +46,6 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::Dimension(DimDecl { name, definition }),
             span,
-            multi_decl_info: None,
         })
     }
 
@@ -116,7 +114,6 @@ impl Parser<'_> {
                 definition,
             }),
             span,
-            multi_decl_info: None,
         })
     }
 }

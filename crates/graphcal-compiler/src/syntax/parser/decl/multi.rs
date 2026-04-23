@@ -25,8 +25,7 @@
 
 use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
-    self as ast, ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey,
-    NodeDecl, ParamDecl, TableIndexSpec, TypeExpr, Visibility,
+    self as ast, DeclKind, Declaration, Expr, MapEntryKey, TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::names::{DeclName, IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
@@ -76,17 +75,18 @@ impl Parser<'_> {
     }
 
     /// Parse the remainder of a multi-decl given the first slot header,
-    /// the leading `,` already peeked but not consumed.
-    ///
-    /// Desugars the surface form to N separate [`Declaration`] values.
+    /// the leading `,` already peeked but not consumed. Returns a single
+    /// `Declaration` wrapping a [`ast::MultiDecl`]. Expansion to N flat
+    /// declarations happens later, in
+    /// [`crate::syntax::desugar::desugar_multi_decls_in_file`].
     #[expect(
         clippy::too_many_lines,
-        reason = "single cohesive routine for the multi-decl body parse + desugar"
+        reason = "single cohesive routine for the multi-decl body parse"
     )]
     pub(super) fn parse_multi_decl_rest(
         &mut self,
         first_slot: SlotHeader,
-    ) -> Result<Vec<Declaration>, ParseError> {
+    ) -> Result<Declaration, ParseError> {
         let mut slots: Vec<SlotHeader> = vec![first_slot];
 
         // Parse remaining slots: `, (param|node|const node) IDENT : TypeExpr`.
@@ -222,11 +222,8 @@ impl Parser<'_> {
         // through the closing `;`.
         let surface_span = slots[0].kind_span.merge(semi_span);
 
-        // Build the structured surface overlay that gets attached to the
-        // first synthesized declaration. Downstream passes ignore this
-        // field; the formatter consumes it to re-emit the multi-decl
-        // surface with canonical formatting.
-        let info_slots: Vec<ast::MultiDeclSlot> = slots
+        // Convert the parser's internal structured forms into AST types.
+        let ast_slots: Vec<ast::MultiDeclSlot> = slots
             .iter()
             .map(|s| ast::MultiDeclSlot {
                 kind: match s.kind {
@@ -241,7 +238,7 @@ impl Parser<'_> {
             })
             .collect();
 
-        let info_slot_axes: Vec<ast::MultiSlotAxis> = slot_axes
+        let ast_slot_axes: Vec<ast::MultiSlotAxis> = slot_axes
             .iter()
             .map(|a| match a {
                 SlotAxis::Underscore => ast::MultiSlotAxis::Underscore,
@@ -249,7 +246,7 @@ impl Parser<'_> {
             })
             .collect();
 
-        let info_slices: Vec<ast::MultiDeclSlice> = slices
+        let ast_slices: Vec<ast::MultiDeclSlice> = slices
             .iter()
             .map(|slice| ast::MultiDeclSlice {
                 prefix_keys: slice.prefix_keys.clone(),
@@ -300,142 +297,25 @@ impl Parser<'_> {
             })
             .collect();
 
-        let multi_decl_info = ast::MultiDeclInfo {
-            slots: info_slots,
+        // Silence "used" lints: these locals were needed in the old
+        // expansion loop; they're preserved in the captured AST instead.
+        let _ = (&row_index_spec, &slice_axis_specs, table_total_span);
+
+        let multi = ast::MultiDecl {
+            slots: ast_slots,
             shared_axes: shared_axes.clone(),
-            slot_axes: info_slot_axes,
-            slices: info_slices,
+            slot_axes: ast_slot_axes,
+            slices: ast_slices,
             span: surface_span,
             table_expr_span: table_total_span,
         };
 
-        // Desugar each slot.
-        let row_index_name = match &row_index_spec {
-            TableIndexSpec::Named(s) => s.clone(),
-            TableIndexSpec::NatRange(n, sp) => {
-                Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp)
-            }
-        };
-
-        let mut out: Vec<Declaration> = Vec::with_capacity(slots.len());
-        for (slot_idx, slot) in slots.iter().enumerate() {
-            let mut slot_entries: Vec<MapEntry> = Vec::new();
-            let mut slot_indexes: Vec<TableIndexSpec> = slice_axis_specs.clone();
-            slot_indexes.push(row_index_spec.clone());
-
-            let mut extra_axis_name: Option<Spanned<IndexName>> = None;
-
-            for slice in &slices {
-                let span = &slice.column_layout[slot_idx];
-                match span {
-                    SlotColumnSpan::Single(col_idx) => {
-                        for (label, values, _) in &slice.row_values {
-                            let mut keys = slice.prefix_keys.clone();
-                            keys.push(MapEntryKey {
-                                index: row_index_name.clone(),
-                                variant: label.clone(),
-                            });
-                            slot_entries.push(MapEntry {
-                                keys,
-                                value: values[*col_idx].clone(),
-                            });
-                        }
-                    }
-                    SlotColumnSpan::Range {
-                        start,
-                        end,
-                        extra_axis,
-                    } => {
-                        let col_variants: Vec<Spanned<VariantName>> = slice.header_cells
-                            [*start..*end]
-                            .iter()
-                            .filter_map(|c| match c {
-                                HeaderCell::Variant { variant, .. } => Some(variant.clone()),
-                                HeaderCell::Underscore(_) => None,
-                            })
-                            .collect();
-                        let extra_index_name =
-                            Spanned::new(extra_axis.value.clone(), extra_axis.span);
-                        if extra_axis_name.is_none() {
-                            extra_axis_name = Some(extra_axis.clone());
-                        }
-                        for (label, values, _) in &slice.row_values {
-                            for (local_col, col_variant) in col_variants.iter().enumerate() {
-                                let global_col = start + local_col;
-                                let mut keys = slice.prefix_keys.clone();
-                                keys.push(MapEntryKey {
-                                    index: row_index_name.clone(),
-                                    variant: label.clone(),
-                                });
-                                keys.push(MapEntryKey {
-                                    index: extra_index_name.clone(),
-                                    variant: col_variant.clone(),
-                                });
-                                slot_entries.push(MapEntry {
-                                    keys,
-                                    value: values[global_col].clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Some(extra) = extra_axis_name {
-                slot_indexes.push(TableIndexSpec::Named(extra));
-            }
-
-            let slot_indexes_final = slot_indexes;
-            let entries = slot_entries;
-
-            let table_expr = Expr {
-                kind: ExprKind::TableLiteral {
-                    indexes: slot_indexes_final,
-                    entries,
-                },
-                span: table_total_span,
-            };
-
-            let decl_span = slot.header_span.merge(semi_span);
-
-            let kind = match slot.kind {
-                SlotKind::Param => DeclKind::Param(ParamDecl {
-                    name: slot.name.clone(),
-                    type_ann: slot.type_ann.clone(),
-                    value: Some(table_expr),
-                }),
-                SlotKind::Node => DeclKind::Node(NodeDecl {
-                    name: slot.name.clone(),
-                    type_ann: slot.type_ann.clone(),
-                    value: table_expr,
-                }),
-                SlotKind::ConstNode => DeclKind::ConstNode(ConstNodeDecl {
-                    name: slot.name.clone(),
-                    type_ann: slot.type_ann.clone(),
-                    value: table_expr,
-                }),
-            };
-
-            let info_for_first = if slot_idx == 0 {
-                Some(Box::new(multi_decl_info.clone()))
-            } else {
-                None
-            };
-
-            out.push(Declaration {
-                attributes: vec![],
-                visibility: Visibility::Private,
-                kind,
-                span: decl_span,
-                multi_decl_info: info_for_first,
-            });
-        }
-
-        // `multi_decl_info` is cloned into the first slot; the surface_span
-        // is already captured in `multi_decl_info.span`.
-        let _ = surface_span;
-
-        Ok(out)
+        Ok(Declaration {
+            attributes: vec![],
+            visibility: Visibility::Private,
+            kind: DeclKind::Multi(multi),
+            span: surface_span,
+        })
     }
 
     /// Parse the slice-section prefix `[A::a1, B::b1, …]` for multi-decls
@@ -722,7 +602,21 @@ mod tests {
     )]
 
     use super::*;
+    use crate::syntax::ast::{ExprKind, MultiSlotKind};
+    use crate::syntax::desugar::expand_multi_decl;
     use crate::syntax::parser::Parser;
+
+    /// Extract the `MultiDecl` from a file that contains exactly one
+    /// multi-decl surface form.
+    fn sole_multi_decl(file: &ast::File) -> &ast::MultiDecl {
+        file.declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                DeclKind::Multi(m) => Some(m),
+                _ => None,
+            })
+            .expect("file has one multi-decl")
+    }
 
     #[test]
     fn multi_decl_homogeneous_1d() {
@@ -738,36 +632,32 @@ param n_installed:       Int[Component]
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
-        assert_eq!(file.declarations.len(), 3);
-        // First is the index decl, then two synthesized param decls.
-        match &file.declarations[1].kind {
-            DeclKind::Param(p) => {
-                assert_eq!(p.name.value.as_str(), "power_consumption");
-                match &p.value.as_ref().expect("param has default").kind {
-                    ExprKind::TableLiteral { indexes, entries } => {
-                        assert_eq!(indexes.len(), 1);
-                        assert_eq!(entries.len(), 2);
-                        assert_eq!(entries[0].keys[0].variant.value.as_str(), "ComponentA");
-                    }
-                    other => panic!("expected TableLiteral, got {other:?}"),
-                }
+        // Parser emits: [index, multi-decl] — 2 top-level declarations.
+        assert_eq!(file.declarations.len(), 2);
+
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots.len(), 2);
+        assert_eq!(multi.slots[0].name.value.as_str(), "power_consumption");
+        assert_eq!(multi.slots[1].name.value.as_str(), "n_installed");
+        assert_eq!(multi.slot_axes.len(), 2);
+        assert!(matches!(multi.slot_axes[0], ast::MultiSlotAxis::Underscore));
+        assert!(matches!(multi.slot_axes[1], ast::MultiSlotAxis::Underscore));
+        assert_eq!(multi.slices.len(), 1);
+        assert_eq!(multi.slices[0].rows.len(), 2);
+
+        // The desugar pass expands this to two separate Param decls each
+        // carrying a 1-D TableLiteral.
+        let desugared = expand_multi_decl(multi);
+        assert_eq!(desugared.len(), 2);
+        let DeclKind::Param(first) = &desugared[0].kind else {
+            panic!("expected Param")
+        };
+        match &first.value.as_ref().unwrap().kind {
+            ExprKind::TableLiteral { indexes, entries } => {
+                assert_eq!(indexes.len(), 1);
+                assert_eq!(entries.len(), 2);
             }
-            other => panic!("expected Param, got {other:?}"),
-        }
-        match &file.declarations[2].kind {
-            DeclKind::Param(p) => {
-                assert_eq!(p.name.value.as_str(), "n_installed");
-                match &p.value.as_ref().expect("param has default").kind {
-                    ExprKind::TableLiteral {
-                        indexes: _,
-                        entries,
-                    } => {
-                        assert_eq!(entries.len(), 2);
-                    }
-                    other => panic!("expected TableLiteral, got {other:?}"),
-                }
-            }
-            other => panic!("expected Param, got {other:?}"),
+            other => panic!("expected TableLiteral, got {other:?}"),
         }
     }
 
@@ -786,10 +676,11 @@ const node mass_per_unit:     Mass[Component]
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
-        assert_eq!(file.declarations.len(), 4);
-        assert!(matches!(file.declarations[1].kind, DeclKind::Param(_)));
-        assert!(matches!(file.declarations[2].kind, DeclKind::Node(_)));
-        assert!(matches!(file.declarations[3].kind, DeclKind::ConstNode(_)));
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots.len(), 3);
+        assert_eq!(multi.slots[0].kind, MultiSlotKind::Param);
+        assert_eq!(multi.slots[1].kind, MultiSlotKind::Node);
+        assert_eq!(multi.slots[2].kind, MultiSlotKind::ConstNode);
     }
 
     #[test]
@@ -889,14 +780,19 @@ param      power_mode:        Bool[Component, OperationMode]
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
-        assert_eq!(file.declarations.len(), 6);
-        // power_mode is the 2-D slot — its TableLiteral should have 2 indexes.
-        match &file.declarations[5].kind {
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots.len(), 4);
+        assert!(matches!(multi.slot_axes[3], ast::MultiSlotAxis::Axis(_)));
+
+        // After desugar, the 4th slot (`power_mode`) becomes a Param with a
+        // 2-D TableLiteral over Component × OperationMode.
+        let desugared = expand_multi_decl(multi);
+        assert_eq!(desugared.len(), 4);
+        match &desugared[3].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::TableLiteral { indexes, entries } => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(entries.len(), 4); // 2 components × 2 modes
-                    assert_eq!(entries[0].keys.len(), 2);
                     assert_eq!(entries[0].keys[0].index.value.as_str(), "Component");
                     assert_eq!(entries[0].keys[1].index.value.as_str(), "OperationMode");
                 }
@@ -944,28 +840,30 @@ param q: Int[Phase, Component]
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
-        // p and q each desugar to a 2-D TableLiteral with Phase × Component keys.
-        let param_decls: Vec<_> = file
-            .declarations
-            .iter()
-            .filter_map(|d| match &d.kind {
-                DeclKind::Param(p) => Some(p),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(param_decls.len(), 2);
-        match &param_decls[0].value.as_ref().unwrap().kind {
-            ExprKind::TableLiteral { indexes, entries } => {
-                assert_eq!(indexes.len(), 2);
-                assert_eq!(entries.len(), 2); // 2 phases × 1 component
-                // Every entry has two keys (Phase, Component) in that order.
-                for e in entries {
-                    assert_eq!(e.keys.len(), 2);
-                    assert_eq!(e.keys[0].index.value.as_str(), "Phase");
-                    assert_eq!(e.keys[1].index.value.as_str(), "Component");
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.shared_axes.len(), 2);
+        assert_eq!(multi.slices.len(), 2);
+        assert_eq!(multi.slices[0].prefix_keys.len(), 1);
+        assert_eq!(multi.slices[0].prefix_keys[0].index.value.as_str(), "Phase");
+
+        // Desugared: each slot becomes a Param with a 2-D TableLiteral
+        // keyed by (Phase, Component).
+        let desugared = expand_multi_decl(multi);
+        assert_eq!(desugared.len(), 2);
+        match &desugared[0].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::TableLiteral { indexes, entries } => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(entries.len(), 2); // 2 phases × 1 component
+                    for e in entries {
+                        assert_eq!(e.keys.len(), 2);
+                        assert_eq!(e.keys[0].index.value.as_str(), "Phase");
+                        assert_eq!(e.keys[1].index.value.as_str(), "Component");
+                    }
                 }
-            }
-            other => panic!("expected TableLiteral, got {other:?}"),
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            other => panic!("expected Param, got {other:?}"),
         }
     }
 
@@ -1003,7 +901,10 @@ param m: Bool[Component, OpMode]
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
-        assert_eq!(file.declarations.len(), 4);
+        // 2 index decls + 1 multi-decl.
+        assert_eq!(file.declarations.len(), 3);
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots.len(), 2);
     }
 }
 

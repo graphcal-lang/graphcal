@@ -49,7 +49,6 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
             span,
-            multi_decl_info: None,
         })
     }
 
@@ -91,7 +90,6 @@ impl Parser<'_> {
                 kind,
             }),
             span,
-            multi_decl_info: None,
         })
     }
 

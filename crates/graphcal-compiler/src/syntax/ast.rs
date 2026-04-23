@@ -85,13 +85,6 @@ pub struct Declaration {
     pub visibility: Visibility,
     pub kind: DeclKind,
     pub span: Span,
-    /// Structured surface overlay for the **first** slot of a multi-decl
-    /// group (issue #481). `None` for single declarations and for
-    /// non-first slots of a multi-decl. The formatter uses this to emit
-    /// the canonicalized multi-decl surface instead of the N desugared
-    /// single-decls. Downstream passes (lowering, TIR, resolver, LSP)
-    /// ignore this field — they see only the desugared flat list.
-    pub multi_decl_info: Option<Box<MultiDeclInfo>>,
 }
 
 impl Declaration {
@@ -126,6 +119,12 @@ pub enum DeclKind {
     Plot(PlotDecl),
     Figure(FigureDecl),
     Layer(LayerDecl),
+    /// A multi-declaration (issue #481): N parallel param / node / const-node
+    /// declarations sharing a single `table[…] {…}` initializer. Desugared
+    /// into N separate `DeclKind::{Param,Node,ConstNode}` declarations by
+    /// [`syntax::desugar::desugar_multi_decls_in_file`](super::desugar::desugar_multi_decls_in_file)
+    /// before lowering.
+    Multi(MultiDecl),
 }
 
 impl DeclKind {
@@ -149,7 +148,7 @@ impl DeclKind {
             Self::Plot(p) => Some((p.name.value.as_str(), p.name.span)),
             Self::Figure(f) => Some((f.name.value.as_str(), f.name.span)),
             Self::Layer(l) => Some((l.name.value.as_str(), l.name.span)),
-            Self::Import(_) | Self::Include(_) => None,
+            Self::Import(_) | Self::Include(_) | Self::Multi(_) => None,
         }
     }
 }
@@ -490,20 +489,16 @@ pub struct ParamDecl {
 //
 //     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, …; … };
 //
-// — that expands into N parallel single declarations. The desugared
-// declarations live in `File::declarations` so downstream passes see
-// ordinary single-decls. `MultiDeclInfo` is a structured overlay attached
-// to the **first** slot's `Declaration::multi_decl_info` field, giving the
-// formatter enough information to re-emit the surface form with
-// canonical formatting instead of the N desugared decls.
+// — represented in the AST as `DeclKind::Multi(MultiDecl)`. A dedicated
+// desugar pass (`syntax::desugar::desugar_multi_decls_in_file`) expands
+// each `Multi` into N parallel ordinary declarations before lowering;
+// consumers that want the surface form (formatter, surface-aware LSP
+// features) read the AST variant directly.
 
-/// Structured surface information for a multi-decl group.
-///
-/// Attached to the first slot's `Declaration` only; subsequent slots in
-/// the same group carry `multi_decl_info = None` and are detected by
-/// the formatter's slot-count skip.
+/// The surface form of a multi-decl: parallel declaration slots sharing a
+/// single `table[…] {…}` initializer.
 #[derive(Debug, Clone)]
-pub struct MultiDeclInfo {
+pub struct MultiDecl {
     /// Slot headers in declaration order. Length = number of declarations
     /// this multi-decl expanded into.
     pub slots: Vec<MultiDeclSlot>,
@@ -577,7 +572,7 @@ pub struct MultiDeclSlice {
     /// Span of the entire header row (`:` through `;`).
     pub header_span: Span,
     /// Per-slot column span into this slice's `header_cells` and `rows`
-    /// values. Same length as `MultiDeclInfo::slots`. May differ between
+    /// values. Same length as `MultiDecl::slots`. May differ between
     /// slices if their header rows list variants in different orders.
     pub column_layout: Vec<MultiSlotColumnSpan>,
     /// Data rows for this slice.
@@ -1447,6 +1442,7 @@ pub fn desugar_tuple_matches(file: &mut File) {
             | DeclKind::UnionType(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_) => {}
+            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
         }
     }
 }
@@ -1660,7 +1656,6 @@ mod tests {
                     }),
                 }),
                 span: Span::new(0, 31),
-                multi_decl_info: None,
             }],
         };
         assert_eq!(file.declarations.len(), 1);

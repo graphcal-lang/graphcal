@@ -443,6 +443,32 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File, source: &str) 
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
             DeclKind::Dag(d) => collect_dag_decl(d, decl.span, vis, &mut table),
+            DeclKind::Multi(multi) => {
+                // Register each slot as its own symbol (goto-def / rename /
+                // hover work on the slot header). Surface features like
+                // inlay hints on header cells can walk the `multi` AST
+                // directly.
+                for slot_decl in graphcal_compiler::syntax::desugar::expand_multi_decl(multi) {
+                    match &slot_decl.kind {
+                        DeclKind::Param(p) => {
+                            collect_param_decl(p, slot_decl.span, vis, &mut table, &mut scopes);
+                        }
+                        DeclKind::Node(n) => {
+                            collect_node_decl(n, slot_decl.span, vis, &mut table, &mut scopes);
+                        }
+                        DeclKind::ConstNode(c) => {
+                            collect_const_node_decl(
+                                c,
+                                slot_decl.span,
+                                vis,
+                                &mut table,
+                                &mut scopes,
+                            );
+                        }
+                        _ => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+                    }
+                }
+            }
         }
     }
 

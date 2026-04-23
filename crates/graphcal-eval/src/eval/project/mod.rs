@@ -366,6 +366,7 @@ pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> 
             DeclKind::Layer(l) => l.name.value.to_string(),
             DeclKind::Dag(d) => d.name.value.to_string(),
             DeclKind::Import(_) | DeclKind::Include(_) => continue,
+            DeclKind::Multi(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
         };
         pub_names.insert(name);
     }
@@ -407,6 +408,7 @@ pub(super) fn file_has_declaration(
             graphcal_compiler::syntax::ast::ImportKind::Selective(items)
                 if items.iter().any(|it| it.is_pub && it.local_name() == name)
         ),
+        DeclKind::Multi(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
     })
 }
 

@@ -1,9 +1,9 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, MultiDeclInfo, MultiHeaderCell, MultiSlotAxis,
-    MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr,
-    UnionTypeDecl, UnitDecl, UnitDef, Visibility,
+    IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
+    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, UnionTypeDecl,
+    UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -34,6 +34,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
+        DeclKind::Multi(d) => format_multi_decl(fmt, d),
     };
 
     // Prepend the visibility annotation (if any).
@@ -664,7 +665,7 @@ fn format_assert_decl(fmt: &mut Formatter<'_>, d: &AssertDecl) -> RcDoc<'static>
     clippy::too_many_lines,
     reason = "single cohesive routine for multi-decl surface rendering"
 )]
-pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDeclInfo) -> RcDoc<'static> {
+pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'static> {
     use std::fmt::Write as _;
     let mut out = String::new();
 
@@ -805,7 +806,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDeclInfo) -> RcDoc
 
 fn compute_multi_decl_layout(
     fmt: &mut Formatter<'_>,
-    info: &MultiDeclInfo,
+    info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
     let num_cols = info.slices.first().map_or(0, |s| s.header_cells.len());
     let mut col_widths: Vec<usize> = vec![0; num_cols];

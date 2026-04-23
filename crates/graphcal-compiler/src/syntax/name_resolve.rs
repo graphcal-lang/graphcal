@@ -52,8 +52,15 @@ impl ResolveContext {
 /// Resolve all `NameRef` and `QualifiedNameRef` nodes in a file.
 ///
 /// This modifies the file's AST in place. After this function returns, no
-/// `NameRef` or `QualifiedNameRef` nodes remain.
+/// `NameRef`, `QualifiedNameRef`, or `DeclKind::Multi` nodes remain — the
+/// first step desugars every multi-decl surface form into its constituent
+/// single declarations.
 pub fn resolve_name_refs(file: &mut File) {
+    // Expand syntactic sugar (multi-decls, issue #481) before name
+    // resolution so the rest of the pass — and every downstream stage —
+    // sees only ordinary single declarations.
+    crate::syntax::desugar::desugar_multi_decls_in_file(file);
+
     let builtin_consts = builtin_constants();
 
     // Scan declarations to build context
@@ -215,6 +222,7 @@ fn resolve_decl(decl: &mut crate::syntax::ast::Declaration, ctx: &mut ResolveCon
         | DeclKind::Type(_)
         | DeclKind::UnionType(_)
         | DeclKind::Import(_) => {}
+        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
     }
 }
 

@@ -103,6 +103,7 @@ impl LoadedProject {
         let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
         let mut ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
+        graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(&mut ast);
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
         graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
         let path = PathBuf::from(name);
@@ -223,6 +224,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let named_source = graphcal_compiler::syntax::named_source(&name, Arc::clone(&source));
     let mut ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
+    graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(&mut ast);
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
     graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
 

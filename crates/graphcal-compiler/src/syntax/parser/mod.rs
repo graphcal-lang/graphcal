@@ -343,7 +343,7 @@ impl<'src> Parser<'src> {
     fn parse_file_inner(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
         let mut declarations = Vec::new();
         while self.lexer.peek().is_some() {
-            declarations.extend(self.parse_declarations()?);
+            declarations.push(self.parse_declaration()?);
         }
         Ok(crate::syntax::ast::File { declarations })
     }

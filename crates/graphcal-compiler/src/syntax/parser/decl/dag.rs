@@ -17,13 +17,12 @@ impl Parser<'_> {
         self.expect(Token::LBrace)?;
 
         // Parse declarations inside the block (same as file-level).
-        // Multi-decl surface forms desugar to multiple AST declarations.
         let mut body = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
             if self.lexer.peek().is_none() {
                 return Err(self.unexpected_eof("`}` to close `dag` block"));
             }
-            body.extend(self.parse_declarations()?);
+            body.push(self.parse_declaration()?);
         }
 
         let (_, end_span) = self.expect(Token::RBrace)?;
@@ -34,7 +33,6 @@ impl Parser<'_> {
             visibility: Visibility::Private,
             kind: DeclKind::Dag(DagDecl { name, body, span }),
             span,
-            multi_decl_info: None,
         })
     }
 }
