@@ -1,0 +1,37 @@
+// multi_decl_2d.gcl -- v2 multi-decl: mixed 1-D and 2-D slots.
+//
+// Exercises a heterogeneous multi-decl where one slot has an
+// extra axis (2-D) and the rest are 1-D along the shared row axis.
+pub index Component = {
+    ComponentA,
+    ComponentB,
+};
+
+pub index OperationMode = {
+    Safe,
+    Nominal,
+};
+
+// Three 1-D slots + one 2-D slot (power_mode_active), all sharing
+// the Component row axis. power_mode_active's extra axis is
+// OperationMode; its columns in the header are Safe, Nominal.
+param      power_consumption:  Power[Component],
+param      n_installed:        Int[Component],
+const node mass_per_unit:      Mass[Component],
+param      power_mode_active:  Bool[Component, OperationMode]
+  = table[Component, (_, _, _, OperationMode)] {
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
+      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+  };
+
+// Derived 2-D node: power consumption per mode, gated by activity.
+node power_per_mode: Power[Component, OperationMode] = for c: Component, m: OperationMode {
+    if @power_mode_active[c, m] { @power_consumption[c] } else { 0.0 W }
+};
+
+node total_safe_power: Power = sum(for c: Component {
+    @power_per_mode[c, OperationMode::Safe]
+});
+
+node total_mass: Mass = sum(for c: Component { @mass_per_unit[c] });

@@ -299,8 +299,27 @@ const node mass_per_unit:     Mass[Component]
 ```
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
-- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. In v1 every tuple entry must be `_`, indicating a 1-D slot typed `T[SharedAxis]`.
-- The header row `: _, _, …;` and the slot tuple must each have exactly one entry per slot. In v1 every header cell must also be `_`.
+- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis (2-D slot typed `T[SharedAxis, ExtraAxis]`).
+- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode::Safe`). Qualification is never required but is accepted for readability.
+
+Mixed 1-D / 2-D slots:
+
+```
+index Component = { ComponentA, ComponentB };
+index OperationMode = { Safe, Nominal };
+
+param      power_consumption:  Power[Component],
+param      n_installed:        Int[Component],
+const node mass_per_unit:      Mass[Component],
+param      power_mode_active:  Bool[Component, OperationMode]
+  = table[Component, (_, _, _, OperationMode)] {
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
+      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+  };
+```
+
+In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
 

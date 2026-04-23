@@ -141,8 +141,6 @@ impl Parser<'_> {
 
         let (_, rbracket_span) = self.expect(Token::RBracket)?;
 
-        // v1: at least one shared axis, exactly one shared axis, all slot axes
-        // entries are `_`. v2/v3 relax these constraints.
         if shared_axes.is_empty() {
             return Err(ParseError::MultiDeclNoSharedAxis {
                 src: self.named_source(),
@@ -150,7 +148,7 @@ impl Parser<'_> {
             });
         }
         if shared_axes.len() > 1 {
-            // v3 territory: N-D shared-axis prefix is not yet supported.
+            // v3 territory: N-D shared-axis prefix (with slices) is not yet supported.
             return Err(ParseError::MultiDeclUnsupportedShape {
                 reason: "multi-decl with multiple shared axes is not yet supported (v3)"
                     .to_string(),
@@ -158,45 +156,37 @@ impl Parser<'_> {
                 span: table_span.merge(rbracket_span).into(),
             });
         }
-        for (idx, slot_axis) in slot_axes.iter().enumerate() {
-            if let SlotAxis::Axis(axis_name) = slot_axis {
-                return Err(ParseError::MultiDeclUnsupportedShape {
-                    reason: format!(
-                        "multi-decl slot `{}` has an extra axis `{}`; heterogeneous slots are not yet supported (v2)",
-                        slots[idx].name.value.as_str(),
-                        axis_name.value.as_str(),
-                    ),
-                    src: self.named_source(),
-                    span: axis_name.span.into(),
-                });
-            }
+
+        // v2: at most one extra-axis slot. This covers the mixed 1-D / 2-D
+        // motivating example; v3 relaxes to multiple extra-axis slots, with
+        // grouping disambiguated by axis lookup.
+        let extra_axis_slot_count = slot_axes
+            .iter()
+            .filter(|a| matches!(a, SlotAxis::Axis(_)))
+            .count();
+        if extra_axis_slot_count > 1 {
+            let second_extra_span = slot_axes
+                .iter()
+                .filter_map(|a| match a {
+                    SlotAxis::Axis(spanned) => Some(spanned.span),
+                    SlotAxis::Underscore => None,
+                })
+                .nth(1)
+                .unwrap_or(tuple_span);
+            return Err(ParseError::MultiDeclUnsupportedShape {
+                reason: "multi-decl with more than one extra-axis slot is not yet supported (v3)"
+                    .to_string(),
+                src: self.named_source(),
+                span: second_extra_span.into(),
+            });
         }
 
         // Parse the table body.
         self.expect(Token::LBrace)?;
 
-        // Header row: `: _, _, ..., _;`
         let (header_cells, header_span) = self.parse_multi_header_row()?;
-        if header_cells.len() != slots.len() {
-            return Err(ParseError::MultiDeclHeaderArity {
-                slot_count: slots.len(),
-                header_count: header_cells.len(),
-                src: self.named_source(),
-                span: header_span.into(),
-            });
-        }
-        for (idx, cell) in header_cells.iter().enumerate() {
-            if let HeaderCell::Variant { span, .. } = cell {
-                return Err(ParseError::MultiDeclUnsupportedShape {
-                    reason: format!(
-                        "header cell for slot `{}` must be `_` in v1 (heterogeneous slots arrive in v2)",
-                        slots[idx].name.value.as_str(),
-                    ),
-                    src: self.named_source(),
-                    span: (*span).into(),
-                });
-            }
-        }
+        let column_layout = build_column_layout(&slot_axes, &header_cells, header_span, &slots)
+            .map_err(|e| e.into_parse_error(&self.named_source()))?;
 
         // Data rows.
         let mut row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)> = Vec::new();
@@ -217,7 +207,7 @@ impl Parser<'_> {
             let label_span = label.span;
             let row_label = label.into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
-            let mut values = Vec::with_capacity(slots.len());
+            let mut values = Vec::with_capacity(header_cells.len());
             loop {
                 let value = self.parse_expr()?;
                 values.push(value);
@@ -231,9 +221,9 @@ impl Parser<'_> {
             let row_span = label_span.merge(row_end_span);
             self.expect(Token::Semicolon)?;
 
-            if values.len() != slots.len() {
+            if values.len() != header_cells.len() {
                 return Err(ParseError::MultiDeclRowArity {
-                    slot_count: slots.len(),
+                    slot_count: header_cells.len(),
                     got: values.len(),
                     row_label: row_label.value.as_str().to_string(),
                     src: self.named_source(),
@@ -249,7 +239,8 @@ impl Parser<'_> {
         let table_total_span = table_span.merge(rbrace_span);
 
         // Desugar each slot into its own `Declaration` carrying a synthesized
-        // `TableLiteral` initializer with the shared axis and that slot's column.
+        // `TableLiteral` initializer with the shared axis and (for extra-axis
+        // slots) the per-column variant.
         let row_index_spec = shared_axes[0].clone();
         let row_index_name = match &row_index_spec {
             TableIndexSpec::Named(s) => s.clone(),
@@ -261,27 +252,71 @@ impl Parser<'_> {
 
         let mut out: Vec<Declaration> = Vec::with_capacity(slots.len());
         for (slot_idx, slot) in slots.iter().enumerate() {
-            let entries: Vec<MapEntry> = row_values
-                .iter()
-                .map(|(label, values, _)| MapEntry {
-                    keys: vec![MapEntryKey {
-                        index: row_index_name.clone(),
-                        variant: label.clone(),
-                    }],
-                    value: values[slot_idx].clone(),
-                })
-                .collect();
+            let span = &column_layout[slot_idx];
+            let (slot_indexes, entries): (Vec<TableIndexSpec>, Vec<MapEntry>) = match span {
+                SlotColumnSpan::Single(col_idx) => {
+                    let entries = row_values
+                        .iter()
+                        .map(|(label, values, _)| MapEntry {
+                            keys: vec![MapEntryKey {
+                                index: row_index_name.clone(),
+                                variant: label.clone(),
+                            }],
+                            value: values[*col_idx].clone(),
+                        })
+                        .collect();
+                    (vec![row_index_spec.clone()], entries)
+                }
+                SlotColumnSpan::Range {
+                    start,
+                    end,
+                    extra_axis,
+                } => {
+                    let col_variants: Vec<Spanned<VariantName>> = header_cells[*start..*end]
+                        .iter()
+                        .filter_map(|c| match c {
+                            HeaderCell::Variant { variant, .. } => Some(variant.clone()),
+                            HeaderCell::Underscore => None,
+                        })
+                        .collect();
+                    let extra_index_name = Spanned::new(extra_axis.value.clone(), extra_axis.span);
+                    let mut entries = Vec::with_capacity(row_values.len() * col_variants.len());
+                    for (label, values, _) in &row_values {
+                        for (local_col, col_variant) in col_variants.iter().enumerate() {
+                            let global_col = start + local_col;
+                            entries.push(MapEntry {
+                                keys: vec![
+                                    MapEntryKey {
+                                        index: row_index_name.clone(),
+                                        variant: label.clone(),
+                                    },
+                                    MapEntryKey {
+                                        index: extra_index_name.clone(),
+                                        variant: col_variant.clone(),
+                                    },
+                                ],
+                                value: values[global_col].clone(),
+                            });
+                        }
+                    }
+                    (
+                        vec![
+                            row_index_spec.clone(),
+                            TableIndexSpec::Named(extra_axis.clone()),
+                        ],
+                        entries,
+                    )
+                }
+            };
 
             let table_expr = Expr {
                 kind: ExprKind::TableLiteral {
-                    indexes: vec![row_index_spec.clone()],
+                    indexes: slot_indexes,
                     entries,
                 },
                 span: table_total_span,
             };
 
-            // Extend the declaration span to cover `header .. ; (at multi-decl semicolon)`
-            // so diagnostics pointing at the synthesized decl hit the full surface.
             let decl_span = slot.header_span.merge(semi_span);
 
             let kind = match slot.kind {
@@ -439,15 +474,22 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                // Optional `::Variant` qualification.
-                let span = if self.lexer.peek() == Some(&Token::ColonColon) {
+                if self.lexer.peek() == Some(&Token::ColonColon) {
                     self.lexer.next_token();
                     let variant = self.parse_any_ident()?;
-                    ident.span.merge(variant.span)
-                } else {
-                    ident.span
-                };
-                Ok(HeaderCell::Variant { span })
+                    let span = ident.span.merge(variant.span);
+                    return Ok(HeaderCell::Variant {
+                        axis: Some(Spanned::new(IndexName::new(&ident.name), ident.span)),
+                        variant: variant.into_spanned::<VariantName>(),
+                        span,
+                    });
+                }
+                let span = ident.span;
+                Ok(HeaderCell::Variant {
+                    axis: None,
+                    variant: ident.into_spanned::<VariantName>(),
+                    span,
+                })
             }
             _ => {
                 let (tok, span) = self.advance()?;
@@ -621,39 +663,275 @@ pub param a: Int[Component], param b: Int[Component]
     }
 
     #[test]
-    fn multi_decl_v2_heterogeneous_rejected() {
+    fn multi_decl_v2_heterogeneous_accepted() {
+        // v2: one extra-axis slot alongside multiple 1-D slots.
         let source = r"
-param a: Int[Component], param b: Int[Component, OperationMode]
-  = table[Component, (_, OperationMode)] {
-      : _, Safe, Nominal;
-      X: 1, true, false;
+index Component = { ComponentA, ComponentB };
+index OperationMode = { Safe, Nominal };
+
+param      power_consumption: Power[Component],
+param      n_installed:       Int[Component],
+const node mass_per_unit:     Mass[Component],
+param      power_mode:        Bool[Component, OperationMode]
+  = table[Component, (_, _, _, OperationMode)] {
+      :            _,       _, _,      Safe,  Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
+      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 6);
+        // power_mode is the 2-D slot — its TableLiteral should have 2 indexes.
+        match &file.declarations[5].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::TableLiteral { indexes, entries } => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(entries.len(), 4); // 2 components × 2 modes
+                    assert_eq!(entries[0].keys.len(), 2);
+                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Component");
+                    assert_eq!(entries[0].keys[1].index.value.as_str(), "OperationMode");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            other => panic!("expected Param, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multi_decl_v3_two_extra_axis_slots_rejected() {
+        // v2 supports at most one extra-axis slot; two adjacent extra-axis
+        // slots are v3 territory and must be rejected with a clear error.
+        let source = r"
+param a: Bool[Component, OperationMode],
+param b: Bool[Component, OperationMode]
+  = table[Component, (OperationMode, OperationMode)] {
+      :           Safe, Nominal, OpMode::Safe, OpMode::Nominal;
+      ComponentA: true, false,   false,        true;
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
             matches!(err, ParseError::MultiDeclUnsupportedShape { .. }),
-            "expected MultiDeclUnsupportedShape (heterogeneous is v2), got {err:?}",
+            "expected MultiDeclUnsupportedShape for two extra-axis slots, got {err:?}",
         );
+    }
+
+    #[test]
+    fn multi_decl_v2_qualified_header_cells_accepted() {
+        // Author may qualify header cells for readability. The parser accepts
+        // and uses the bare variant name.
+        let source = r"
+index Component = { ComponentA };
+index OpMode = { Safe, Nominal };
+
+param p: Power[Component],
+param m: Bool[Component, OpMode]
+  = table[Component, (_, OpMode)] {
+      :           _,      OpMode::Safe, OpMode::Nominal;
+      ComponentA: 10.0 W, true,         false;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        assert_eq!(file.declarations.len(), 4);
     }
 }
 
-/// A parsed entry in a slot tuple: either `_` or a named axis.
-///
-/// v1 accepts only `Underscore`; `Axis` is preserved through the parser
-/// so v2 can surface heterogeneous slots. Until then, the parser rejects
-/// any `Axis` entry with a dedicated diagnostic.
+/// A parsed entry in a slot tuple: either `_` or a named extra axis.
 #[derive(Debug, Clone)]
 pub(super) enum SlotAxis {
+    /// `_` — slot has no extra axis (1-D, shares only the row axis).
     Underscore,
+    /// Identifier — slot has a single extra axis (heterogeneous, 2-D).
     Axis(Spanned<IndexName>),
 }
 
-/// A parsed header-row cell: `_` or `[Axis::]Variant`.
-///
-/// Same staging as [`SlotAxis`]: v1 accepts only `Underscore`; bare and
-/// qualified variant labels parse but are rejected until v2.
+/// A parsed header-row cell: `_`, a bare variant, or a qualified variant.
 #[derive(Debug, Clone)]
 pub(super) enum HeaderCell {
     Underscore,
-    Variant { span: Span },
+    Variant {
+        /// Axis qualifier, if the author wrote `Axis::Variant`.
+        axis: Option<Spanned<IndexName>>,
+        variant: Spanned<VariantName>,
+        span: Span,
+    },
+}
+
+/// Where each slot's cells live within the parsed header row.
+#[derive(Debug, Clone)]
+pub(super) enum SlotColumnSpan {
+    /// 1-D slot — a single column at `col_idx`.
+    Single(usize),
+    /// Extra-axis slot — columns `start..end`, with the slot's extra axis.
+    Range {
+        start: usize,
+        end: usize,
+        extra_axis: Spanned<IndexName>,
+    },
+}
+
+/// Internal error from layout validation; converted to `ParseError` by the caller.
+pub(super) enum LayoutError {
+    HeaderCellKind {
+        span: Span,
+        slot_name: String,
+        expected_underscore: bool,
+    },
+    HeaderArity {
+        slot_count: usize,
+        header_count: usize,
+        span: Span,
+    },
+    AxisMismatch {
+        span: Span,
+        slot_name: String,
+        expected_axis: String,
+        got_axis: String,
+    },
+    NotEnoughCells {
+        slot_name: String,
+        span: Span,
+    },
+}
+
+impl LayoutError {
+    pub(super) fn into_parse_error(
+        self,
+        src: &miette::NamedSource<std::sync::Arc<String>>,
+    ) -> ParseError {
+        match self {
+            Self::HeaderCellKind {
+                span,
+                slot_name,
+                expected_underscore,
+            } => ParseError::MultiDeclUnsupportedShape {
+                reason: if expected_underscore {
+                    format!("header cell for 1-D slot `{slot_name}` must be `_`")
+                } else {
+                    format!(
+                        "header cell for extra-axis slot `{slot_name}` must be a variant label, not `_`"
+                    )
+                },
+                src: src.clone(),
+                span: span.into(),
+            },
+            Self::HeaderArity {
+                slot_count,
+                header_count,
+                span,
+            } => ParseError::MultiDeclHeaderArity {
+                slot_count,
+                header_count,
+                src: src.clone(),
+                span: span.into(),
+            },
+            Self::AxisMismatch {
+                span,
+                slot_name,
+                expected_axis,
+                got_axis,
+            } => ParseError::MultiDeclUnsupportedShape {
+                reason: format!(
+                    "header cell for slot `{slot_name}` is qualified with `{got_axis}::…`, but the slot's extra axis is `{expected_axis}`",
+                ),
+                src: src.clone(),
+                span: span.into(),
+            },
+            Self::NotEnoughCells { slot_name, span } => ParseError::MultiDeclUnsupportedShape {
+                reason: format!(
+                    "slot `{slot_name}` is declared with an extra axis but has zero variant cells in the header row",
+                ),
+                src: src.clone(),
+                span: span.into(),
+            },
+        }
+    }
+}
+
+/// Map header cells to slots.
+///
+/// For each tuple entry:
+/// - `Underscore` → consume exactly one header cell, which must be `_`.
+/// - `Axis(name)` → consume all contiguous non-`_` cells until the next `_`
+///   (or end of row). Qualified cells must match the axis name.
+///
+/// The last rule assumes **at most one extra-axis slot** in v2; v3 will
+/// disambiguate adjacent extra-axis slots by axis lookup.
+pub(super) fn build_column_layout(
+    slot_axes: &[SlotAxis],
+    header_cells: &[HeaderCell],
+    header_span: Span,
+    slots: &[SlotHeader],
+) -> Result<Vec<SlotColumnSpan>, LayoutError> {
+    let mut layout = Vec::with_capacity(slot_axes.len());
+    let mut cursor = 0usize;
+
+    for (slot_idx, slot_axis) in slot_axes.iter().enumerate() {
+        let slot_name = slots[slot_idx].name.value.as_str().to_string();
+        match slot_axis {
+            SlotAxis::Underscore => {
+                if cursor >= header_cells.len() {
+                    return Err(LayoutError::HeaderArity {
+                        slot_count: slot_axes.len(),
+                        header_count: header_cells.len(),
+                        span: header_span,
+                    });
+                }
+                match &header_cells[cursor] {
+                    HeaderCell::Underscore => {}
+                    HeaderCell::Variant { span, .. } => {
+                        return Err(LayoutError::HeaderCellKind {
+                            span: *span,
+                            slot_name,
+                            expected_underscore: true,
+                        });
+                    }
+                }
+                layout.push(SlotColumnSpan::Single(cursor));
+                cursor += 1;
+            }
+            SlotAxis::Axis(extra_axis) => {
+                let start = cursor;
+                while cursor < header_cells.len() {
+                    match &header_cells[cursor] {
+                        HeaderCell::Underscore => break,
+                        HeaderCell::Variant { axis, span, .. } => {
+                            if let Some(axis) = axis
+                                && axis.value != extra_axis.value
+                            {
+                                return Err(LayoutError::AxisMismatch {
+                                    span: *span,
+                                    slot_name,
+                                    expected_axis: extra_axis.value.as_str().to_string(),
+                                    got_axis: axis.value.as_str().to_string(),
+                                });
+                            }
+                            cursor += 1;
+                        }
+                    }
+                }
+                if cursor == start {
+                    return Err(LayoutError::NotEnoughCells {
+                        slot_name,
+                        span: extra_axis.span,
+                    });
+                }
+                layout.push(SlotColumnSpan::Range {
+                    start,
+                    end: cursor,
+                    extra_axis: extra_axis.clone(),
+                });
+            }
+        }
+    }
+
+    if cursor != header_cells.len() {
+        return Err(LayoutError::HeaderArity {
+            slot_count: slot_axes.len(),
+            header_count: header_cells.len(),
+            span: header_span,
+        });
+    }
+
+    Ok(layout)
 }
