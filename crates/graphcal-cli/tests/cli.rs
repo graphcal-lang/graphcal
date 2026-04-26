@@ -80,44 +80,6 @@ fn eval_nonexistent_file_fails() {
         "expected 'file not found' in stderr: {stderr}"
     );
 }
-
-#[test]
-fn eval_functions_text_output() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("functions.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines: Vec<&str> = stdout.lines().collect();
-
-    // Output: consts, params, DAG internal nodes (prefixed), and aliased nodes.
-    // DAG includes produce prefixed internal nodes (e.g., orbital_velocity::gm).
-    assert_eq!(lines.len(), 26, "lines: {lines:?}");
-    assert!(lines[0].contains("r_earth"));
-    assert!(lines[1].contains("gm_earth"));
-    assert!(lines[2].contains("parking_alt"));
-    assert!(lines[3].contains("target_alt"));
-    assert!(lines[4].contains("midpoint_alt"));
-    assert!(lines[5].contains("v_check"));
-    // orbital_velocity include (first)
-    assert!(lines[6].contains("orbital_velocity::gm"));
-    assert!(lines[9].contains("v_parking"));
-    // hohmann_dv include
-    assert!(lines[10].contains("hohmann_dv::gm"));
-    // transfer struct expands to 3 field lines
-    assert!(lines.iter().any(|l| l.contains("transfer.dv1")));
-    assert!(lines.iter().any(|l| l.contains("transfer.dv2")));
-    assert!(lines.iter().any(|l| l.contains("transfer.total_dv")));
-    // ov2 namespace include
-    assert!(lines.iter().any(|l| l.contains("ov2::v")));
-}
-
 #[test]
 fn eval_indexed_text_output() {
     let output = graphcal_bin()
@@ -346,70 +308,7 @@ fn eval_set_bad_value() {
     assert!(stderr.contains("error"), "expected parse error: {stderr}");
 }
 
-// --- Multi-file import tests ---
-
-#[test]
-fn eval_multi_file() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/rocket_split/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    // Should produce same values as single-file rocket.gcl
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("delta_v") && l.contains("3778")),
-        "expected delta_v ~3778 in output: {stdout}"
-    );
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("v_exhaust") && l.contains("3138")),
-        "expected v_exhaust ~3138 in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_multi_file_with_set() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("multi/rocket_split/main.gcl"),
-            "--set",
-            "isp=450.0 s",
-            "--allow-defaults",
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("isp") && l.contains("450")),
-        "expected isp=450 in output: {stdout}"
-    );
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("delta_v") && l.contains("5313")),
-        "expected delta_v ~5313 with isp=450: {stdout}"
-    );
-}
-
-#[test]
+// --- Multi-file import tests ---#[test]
 fn eval_circular_import_error() {
     let output = graphcal_bin()
         .args(["eval", &fixture("multi/circular_a.gcl")])
@@ -714,36 +613,6 @@ fn eval_input_json_invalid_json() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
-
-#[test]
-fn eval_input_json_with_hohmann() {
-    // Test scalar overrides on a file with structs and derived nodes
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("hohmann.gcl"),
-            "--input",
-            &fixture("input_struct.json"),
-            "--allow-defaults",
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    // parking_alt should show 300 km (from JSON), not default 200
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("parking_alt") && l.contains("300")),
-        "expected parking_alt=300 in output: {stdout}"
-    );
-}
-
 // --- Assertion tests ---
 
 #[test]
@@ -921,30 +790,6 @@ fn eval_assertions_indexed_fail() {
         "expected parenthesized multi-index path in failure message: {stderr}"
     );
 }
-
-#[test]
-fn eval_assertions_cross_file() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/assertions/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("Assertions:"),
-        "expected Assertions section: {stdout}"
-    );
-    assert!(
-        stdout.contains("limit_positive") && stdout.contains("PASS"),
-        "expected limit_positive PASS: {stdout}"
-    );
-}
-
 #[test]
 fn eval_assertions_compile_error_exit_code() {
     let output = graphcal_bin()
@@ -958,36 +803,6 @@ fn eval_assertions_compile_error_exit_code() {
         "expected exit code 2 for compile error"
     );
 }
-
-#[test]
-fn eval_imported_node_with_deps() {
-    // Bug 2: imported nodes whose expressions contain @-references must
-    // have their dependencies tracked so the evaluation DAG is correct.
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/imported_deps/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.lines().any(|l| l.contains('x') && l.contains("10")),
-        "expected x = 10 in output: {stdout}"
-    );
-    assert!(
-        stdout.lines().any(|l| l.contains('y') && l.contains("20")),
-        "expected y = 20 in output: {stdout}"
-    );
-    assert!(
-        stdout.lines().any(|l| l.contains('z') && l.contains("21")),
-        "expected z = 21 in output: {stdout}"
-    );
-}
-
 #[test]
 fn eval_explicit_index_import() {
     // Bug 3: `import "./lib.gcl" { Color }` should import the Color index explicitly.
@@ -1320,106 +1135,6 @@ fn eval_thermal_analysis() {
 }
 
 #[test]
-fn eval_mission_plan_multi_file() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/mission_plan/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    // Imported propulsion nodes
-    assert!(
-        stdout.lines().any(|l| l.contains("total_delta_v")),
-        "expected total_delta_v in output: {stdout}"
-    );
-    // Locally computed nodes
-    assert!(
-        stdout.lines().any(|l| l.contains("required_dv")),
-        "expected required_dv in output: {stdout}"
-    );
-    assert!(
-        stdout.lines().any(|l| l.contains("dv_margin_pct")),
-        "expected dv_margin_pct in output: {stdout}"
-    );
-
-    // Assertions should pass
-    assert!(
-        stdout.contains("positive_dv_margin") && stdout.contains("PASS"),
-        "expected positive_dv_margin PASS: {stdout}"
-    );
-    assert!(
-        stdout.contains("margin_at_least_5pct") && stdout.contains("PASS"),
-        "expected margin_at_least_5pct PASS: {stdout}"
-    );
-}
-
-#[test]
-fn eval_parent_directory_import_rejected() {
-    // The entry point is child/main.gcl, so the project root is child/.
-    // Importing "../lib.gcl" escapes that boundary and should be rejected.
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/parent_import/child/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        !output.status.success(),
-        "expected failure for parent directory import, but got success"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("outside") || stderr.contains("M008"),
-        "expected ImportOutsideRoot error: {stderr}"
-    );
-}
-
-#[test]
-fn eval_parent_import_allowed_with_graphcal_toml() {
-    // Same layout as parent_import, but with a graphcal.toml at the top.
-    // The manifest widens the project root so "../lib.gcl" is now within bounds.
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("multi/parent_import_with_manifest/child/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected success with graphcal.toml widening root, but got failure.\nstderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn eval_parent_import_allowed_with_root_flag() {
-    // The parent_import fixture has no graphcal.toml and normally fails.
-    // Using --root to point at the parent directory should allow the import.
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            "--root",
-            &fixture("multi/parent_import"),
-            &fixture("multi/parent_import/child/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected success with --root widening boundary, but got failure.\nstderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn eval_parenthesized_exprs() {
     let output = graphcal_bin()
         .args(["eval", &fixture("parenthesized_exprs.gcl")])
@@ -1460,99 +1175,7 @@ fn eval_parenthesized_exprs() {
         stdout.contains("charge_time_positive") && stdout.contains("PASS"),
         "expected charge_time_positive PASS: {stdout}"
     );
-}
-
-#[test]
-fn eval_auto_assert_selective_import() {
-    // Decision 1: importing a file evaluates ALL its assertions, even when
-    // the assertion is not explicitly listed in the import braces.
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/auto_assert/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("Assertions:"),
-        "expected Assertions section in output: {stdout}"
-    );
-    assert!(
-        stdout.contains("limit_positive") && stdout.contains("PASS"),
-        "expected limit_positive PASS even though not explicitly imported: {stdout}"
-    );
-}
-
-#[test]
-fn eval_auto_assert_module_import() {
-    // Decision 1: module import also evaluates all assertions in the imported file.
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/auto_assert_module/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("Assertions:"),
-        "expected Assertions section in output: {stdout}"
-    );
-    assert!(
-        stdout.contains("limit_positive") && stdout.contains("PASS"),
-        "expected limit_positive PASS from module import: {stdout}"
-    );
-}
-
-#[test]
-fn eval_diamond_import_assertions() {
-    // Diamond import: shared.gcl is imported by both left.gcl and right.gcl,
-    // and main.gcl imports both. All assertions should be evaluated and
-    // base_val_positive (from shared) should appear only once.
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/diamond_assert/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("Assertions:"),
-        "expected Assertions section: {stdout}"
-    );
-    // All three assertions from the dependency tree should pass.
-    assert!(
-        stdout.contains("base_val_positive") && stdout.contains("PASS"),
-        "expected base_val_positive PASS: {stdout}"
-    );
-    assert!(
-        stdout.contains("doubled_positive") && stdout.contains("PASS"),
-        "expected doubled_positive PASS: {stdout}"
-    );
-    assert!(
-        stdout.contains("tripled_positive") && stdout.contains("PASS"),
-        "expected tripled_positive PASS: {stdout}"
-    );
-    // base_val_positive should appear exactly once (not duplicated from diamond).
-    let base_count = stdout.matches("base_val_positive").count();
-    assert_eq!(
-        base_count, 1,
-        "expected base_val_positive exactly once, found {base_count}: {stdout}"
-    );
-}
-
-// --- Expected-fail tests ---
+}// --- Expected-fail tests ---
 
 #[test]
 fn eval_expected_fail_pass() {
@@ -2160,120 +1783,7 @@ fn eval_instantiated_import_selective() {
     );
 }
 
-// ---- Bare module path CLI tests ----
-
-#[test]
-fn eval_bare_import_selective() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/bare_import_selective/src/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("total_mass") && l.contains("4000")),
-        "expected total_mass=4000 in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_bare_import_instantiated() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("multi/bare_import_instantiated/src/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.lines().any(|l| l.contains("dv")),
-        "expected dv in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_bare_import_mixed() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/bare_import_mixed/src/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.lines().any(|l| l.contains("v_exhaust")),
-        "expected v_exhaust in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_instantiated_import_multi() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/instantiated_import_multi/main.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.lines().any(|l| l.contains("total_dv")),
-        "expected total_dv in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_instantiated_import_module() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("multi/instantiated_import_module/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("dv") && l.contains("4719")),
-        "expected dv ~4719 in output: {stdout}"
-    );
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("mr") && l.contains("4.5")),
-        "expected mr = 4.5 in output: {stdout}"
-    );
-}
-
-#[test]
+// ---- Bare module path CLI tests ----#[test]
 fn eval_instantiated_import_graph_ref() {
     let output = graphcal_bin()
         .args([

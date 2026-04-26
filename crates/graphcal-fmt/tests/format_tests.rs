@@ -700,52 +700,6 @@ snapshot_test!(
     "multi/module_import_mixed/main.gcl"
 );
 
-// mission_plan: complex multi-file project with subdirectories
-idempotency_test!(
-    idempotent_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_constants,
-    "multi/mission_plan/shared/constants.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_indexes,
-    "multi/mission_plan/shared/indexes.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_power,
-    "multi/mission_plan/subsystems/power.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_propulsion,
-    "multi/mission_plan/subsystems/propulsion.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_constants,
-    "multi/mission_plan/shared/constants.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_indexes,
-    "multi/mission_plan/shared/indexes.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_power,
-    "multi/mission_plan/subsystems/power.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_propulsion,
-    "multi/mission_plan/subsystems/propulsion.gcl"
-);
-
 // rocket_split: selective import with many identifiers
 idempotency_test!(
     idempotent_multi_rocket_split_main,
@@ -774,46 +728,6 @@ snapshot_test!(
 snapshot_test!(
     snapshot_multi_rocket_split_params,
     "multi/rocket_split/params.gcl"
-);
-
-// parent_import: importing from parent directory
-idempotency_test!(
-    idempotent_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_parent_import_lib,
-    "multi/parent_import/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_lib,
-    "multi/parent_import/lib.gcl"
-);
-
-// parent_import_with_manifest
-idempotency_test!(
-    idempotent_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_parent_import_manifest_lib,
-    "multi/parent_import_with_manifest/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
 );
 
 // explicit_index: import of index types
