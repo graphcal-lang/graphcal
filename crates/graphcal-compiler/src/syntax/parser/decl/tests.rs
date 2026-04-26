@@ -637,19 +637,14 @@ fn parse_index_linspace_decl() {
 }
 
 #[test]
-fn parse_import_no_alias() {
-    let file = Parser::new(r#"import "./helper.gcl" { x, Y };"#)
-        .parse_file()
-        .unwrap();
+fn parse_import_brace_list_no_alias() {
+    let file = Parser::new("import helper.{x, Y};").parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Use");
+        panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "./helper.gcl");
-    assert!(matches!(
-        &u.path,
-        crate::syntax::ast::ImportPath::FilePath { .. }
-    ));
+    assert_eq!(u.path.display_path(), "helper");
+    assert_eq!(u.path.segments.len(), 1);
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
@@ -663,12 +658,12 @@ fn parse_import_no_alias() {
 }
 
 #[test]
-fn parse_import_with_alias() {
-    let file = Parser::new(r#"import "./helper.gcl" { x as y };"#)
+fn parse_import_brace_list_with_alias() {
+    let file = Parser::new("import helper.{x as y};")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Use");
+        panic!("expected Import");
     };
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
@@ -680,12 +675,12 @@ fn parse_import_with_alias() {
 }
 
 #[test]
-fn parse_import_mixed_alias() {
-    let file = Parser::new(r#"import "./f.gcl" { x, Y as Z, w };"#)
+fn parse_import_brace_list_mixed_alias() {
+    let file = Parser::new("import f.{x, Y as Z, w};")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Use");
+        panic!("expected Import");
     };
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
@@ -702,20 +697,18 @@ fn parse_import_mixed_alias() {
 
 #[test]
 fn parse_import_alias_missing_name_error() {
-    let result = Parser::new(r#"import "./f.gcl" { x as };"#).parse_file();
+    let result = Parser::new("import f.{x as};").parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_import_module_bare() {
-    let file = Parser::new(r#"import "./constants.gcl";"#)
-        .parse_file()
-        .unwrap();
+fn parse_import_bare_module() {
+    let file = Parser::new("import constants;").parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Use");
+        panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "./constants.gcl");
+    assert_eq!(u.path.display_path(), "constants");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
@@ -723,14 +716,14 @@ fn parse_import_module_bare() {
 }
 
 #[test]
-fn parse_import_module_with_alias() {
-    let file = Parser::new(r#"import "./constants.gcl" as consts;"#)
+fn parse_import_bare_module_with_alias() {
+    let file = Parser::new("import constants as consts;")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
-        panic!("expected Use");
+        panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "./constants.gcl");
+    assert_eq!(u.path.display_path(), "constants");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
@@ -739,28 +732,25 @@ fn parse_import_module_with_alias() {
 
 #[test]
 fn parse_import_module_missing_alias_ident_error() {
-    let result = Parser::new(r#"import "./f.gcl" as;"#).parse_file();
+    let result = Parser::new("import f as;").parse_file();
     assert!(result.is_err());
 }
 
-// ---- Bare module path tests ----
+// ---- Multi-segment module paths ----
 
 #[test]
-fn parse_import_bare_path_selective() {
-    let file = Parser::new("import nasa/rocket { delta_v };")
+fn parse_import_dotted_path_selective() {
+    let file = Parser::new("import nasa.rocket.{delta_v};")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportPath::ModulePath { segments, .. } = &u.path else {
-        panic!("expected ModulePath");
-    };
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].name, "nasa");
-    assert_eq!(segments[1].name, "rocket");
-    assert_eq!(u.path.display_path(), "nasa/rocket");
+    assert_eq!(u.path.segments.len(), 2);
+    assert_eq!(u.path.segments[0].name, "nasa");
+    assert_eq!(u.path.segments[1].name, "rocket");
+    assert_eq!(u.path.display_path(), "nasa.rocket");
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
@@ -769,31 +759,24 @@ fn parse_import_bare_path_selective() {
 }
 
 #[test]
-fn parse_import_bare_path_nested() {
-    let file = Parser::new("import a/b/c/d;").parse_file().unwrap();
+fn parse_import_dotted_path_nested() {
+    let file = Parser::new("import a.b.c.d;").parse_file().unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportPath::ModulePath { segments, .. } = &u.path else {
-        panic!("expected ModulePath");
-    };
-    assert_eq!(segments.len(), 4);
-    assert_eq!(u.path.display_path(), "a/b/c/d");
+    assert_eq!(u.path.segments.len(), 4);
+    assert_eq!(u.path.display_path(), "a.b.c.d");
 }
 
 #[test]
-fn parse_import_bare_path_with_alias() {
-    let file = Parser::new("import nasa/rocket as r;")
+fn parse_import_dotted_path_with_alias() {
+    let file = Parser::new("import nasa.rocket as r;")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert!(matches!(
-        &u.path,
-        crate::syntax::ast::ImportPath::ModulePath { .. }
-    ));
-    assert_eq!(u.path.display_path(), "nasa/rocket");
+    assert_eq!(u.path.display_path(), "nasa.rocket");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
@@ -801,18 +784,14 @@ fn parse_import_bare_path_with_alias() {
 }
 
 #[test]
-fn parse_include_bare_path_with_param_bindings() {
-    let file = Parser::new("include nasa/rocket(dry_mass: 800.0 kg) as stage_1;")
+fn parse_include_dotted_path_with_param_bindings() {
+    let file = Parser::new("include nasa.rocket(dry_mass: 800.0 kg) as stage_1;")
         .parse_file()
         .unwrap();
     let DeclKind::Include(u) = &file.declarations[0].kind else {
         panic!("expected Include");
     };
-    assert!(matches!(
-        &u.path,
-        crate::syntax::ast::ImportPath::ModulePath { .. }
-    ));
-    assert_eq!(u.path.display_path(), "nasa/rocket");
+    assert_eq!(u.path.display_path(), "nasa.rocket");
     assert_eq!(u.param_bindings.len(), 1);
     assert_eq!(u.param_bindings[0].name.name, "dry_mass");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
@@ -824,17 +803,35 @@ fn parse_include_bare_path_with_param_bindings() {
 #[test]
 fn parse_import_with_param_bindings_error() {
     // import with param bindings should fail — use include instead
-    let result =
-        Parser::new(r#"import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };"#).parse_file();
+    let result = Parser::new("import rocket(dry_mass: 800.0 kg).{delta_v};").parse_file();
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_import_legacy_double_colon_error() {
+    // `::` is no longer a valid token.
+    let result = Parser::new("import nasa::rocket;").parse_file();
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_import_legacy_string_path_error() {
+    // File-path imports were removed.
+    let result = Parser::new(r#"import "./helper.gcl";"#).parse_file();
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_import_legacy_parent_path_error() {
+    // Parent-scope imports were removed.
+    let result = Parser::new("import ..;").parse_file();
     assert!(result.is_err());
 }
 
 #[test]
 fn parse_pub_import_whole_module() {
-    // `pub import "X";` re-exports every pub item from X.
-    let file = Parser::new(r#"pub import "./helper.gcl";"#)
-        .parse_file()
-        .unwrap();
+    // `pub import path;` re-exports every pub item from `path`.
+    let file = Parser::new("pub import helper;").parse_file().unwrap();
     let decl = &file.declarations[0];
     assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Public);
     assert!(matches!(&decl.kind, DeclKind::Import(_)));
@@ -842,7 +839,7 @@ fn parse_pub_import_whole_module() {
 
 #[test]
 fn parse_pub_include_whole_module_with_alias() {
-    let file = Parser::new(r#"pub include "./container.gcl" as c;"#)
+    let file = Parser::new("pub include container(x: 1.0) as c;")
         .parse_file()
         .unwrap();
     let decl = &file.declarations[0];
@@ -857,9 +854,9 @@ fn parse_pub_include_whole_module_with_alias() {
 }
 
 #[test]
-fn parse_import_selective_pub_items() {
-    // `import "X" { pub a, b };` — only `a` is re-exported.
-    let file = Parser::new(r#"import "./helper.gcl" { pub x, Y as Z };"#)
+fn parse_import_brace_list_pub_items() {
+    // `import path.{ pub a, b };` — only `a` is re-exported.
+    let file = Parser::new("import helper.{pub x, Y as Z};")
         .parse_file()
         .unwrap();
     let decl = &file.declarations[0];
@@ -879,8 +876,8 @@ fn parse_import_selective_pub_items() {
 
 #[test]
 fn parse_pub_import_mixed_with_selective_pub_error() {
-    // `pub import "X" { pub item };` mixes the two forms — reject (spec §4.1).
-    let result = Parser::new(r#"pub import "./f.gcl" { pub a };"#).parse_file();
+    // `pub import path.{ pub item };` mixes the two forms — reject.
+    let result = Parser::new("pub import f.{pub a};").parse_file();
     assert!(
         result.is_err(),
         "mixing outer `pub` with selective `pub item` should error"
@@ -890,7 +887,7 @@ fn parse_pub_import_mixed_with_selective_pub_error() {
 #[test]
 fn parse_pub_bind_on_import_error() {
     // `pub(bind) import` is illegal — import is a use-site.
-    let result = Parser::new(r#"pub(bind) import "./f.gcl";"#).parse_file();
+    let result = Parser::new("pub(bind) import f;").parse_file();
     assert!(
         result.is_err(),
         "`pub(bind)` on import should error — use-sites are not bindable"
@@ -899,7 +896,7 @@ fn parse_pub_bind_on_import_error() {
 
 #[test]
 fn parse_pub_bind_on_include_error() {
-    let result = Parser::new(r#"pub(bind) include "./f.gcl";"#).parse_file();
+    let result = Parser::new("pub(bind) include f(x: 1.0);").parse_file();
     assert!(
         result.is_err(),
         "`pub(bind)` on include should error — use-sites are not bindable"
@@ -908,19 +905,9 @@ fn parse_pub_bind_on_include_error() {
 
 #[test]
 fn parse_pub_bind_on_import_item_error() {
-    // `pub(bind)` inside the selective list is also rejected.
-    let result = Parser::new(r#"import "./f.gcl" { pub(bind) a };"#).parse_file();
+    // `pub(bind)` inside the brace list is also rejected.
+    let result = Parser::new("import f.{pub(bind) a};").parse_file();
     assert!(result.is_err());
-}
-
-#[test]
-fn parse_import_bare_path_single_segment_error() {
-    // Single-segment bare paths are ambiguous; require at least pkg/module
-    let result = Parser::new("import foo;").parse_file();
-    // This should parse as a module import with a bare identifier... actually
-    // our parser requires at least one `/` for bare paths, so a single bare
-    // identifier after `import` that isn't followed by `/` should error.
-    assert!(result.is_err(), "single-segment bare import should fail");
 }
 
 #[test]
@@ -1122,10 +1109,10 @@ fn parse_required_range_simple() {
 
 #[test]
 fn parse_include_item_with_expected_fail() {
-    let source = r#"include "./lib.gcl"(Phase: MyPhase) {
-    #[expected_fail(MyPhase::X)]
+    let source = "include lib(Phase: MyPhase).{
+    #[expected_fail(MyPhase.X)]
     my_assert,
-};"#;
+};";
     let file = Parser::new(source).parse_file().unwrap();
     let DeclKind::Include(imp) = &file.declarations[0].kind else {
         panic!("expected include");
@@ -1142,10 +1129,10 @@ fn parse_include_item_with_expected_fail() {
 
 #[test]
 fn parse_include_item_with_expected_fail_and_alias() {
-    let source = r#"include "./lib.gcl"(Phase: MyPhase) {
+    let source = "include lib(Phase: MyPhase).{
     #[expected_fail]
     my_assert as local_assert,
-};"#;
+};";
     let file = Parser::new(source).parse_file().unwrap();
     let DeclKind::Include(imp) = &file.declarations[0].kind else {
         panic!("expected include");
@@ -1162,7 +1149,7 @@ fn parse_include_item_with_expected_fail_and_alias() {
 
 #[test]
 fn parse_import_item_no_attributes() {
-    let source = r#"import "./lib.gcl" { x, y };"#;
+    let source = "import lib.{x, y};";
     let file = Parser::new(source).parse_file().unwrap();
     let DeclKind::Import(imp) = &file.declarations[0].kind else {
         panic!("expected import");
@@ -1290,105 +1277,21 @@ fn parse_nested_dag() {
     }
 }
 
-// ---- Phase 5: import .., single-segment include paths ----
-
-#[test]
-fn parse_import_parent_scope() {
-    let file = Parser::new("import .. { GM, R_EARTH };")
-        .parse_file()
-        .unwrap();
-    assert_eq!(file.declarations.len(), 1);
-    match &file.declarations[0].kind {
-        DeclKind::Import(import_decl) => {
-            assert!(import_decl.path.is_parent_scope());
-            match &import_decl.path {
-                crate::syntax::ast::ImportPath::ParentScope { levels, .. } => {
-                    assert_eq!(*levels, 1);
-                }
-                other => panic!("expected ParentScope, got {other:?}"),
-            }
-        }
-        other => panic!("expected Import, got {other:?}"),
-    }
-}
-
-#[test]
-fn parse_import_grandparent_scope() {
-    let file = Parser::new("import ../.. { X };").parse_file().unwrap();
-    assert_eq!(file.declarations.len(), 1);
-    match &file.declarations[0].kind {
-        DeclKind::Import(import_decl) => match &import_decl.path {
-            crate::syntax::ast::ImportPath::ParentScope { levels, .. } => {
-                assert_eq!(*levels, 2);
-            }
-            other => panic!("expected ParentScope, got {other:?}"),
-        },
-        other => panic!("expected Import, got {other:?}"),
-    }
-}
+// ---- Single-segment include paths (inline DAG references) ----
 
 #[test]
 fn parse_include_single_segment_dag_name() {
-    let file = Parser::new("include my_dag(x: 1.0) { result };")
+    let file = Parser::new("include my_dag(x: 1.0).{result};")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
         DeclKind::Include(include_decl) => {
-            match &include_decl.path {
-                crate::syntax::ast::ImportPath::ModulePath { segments, .. } => {
-                    assert_eq!(segments.len(), 1);
-                    assert_eq!(segments[0].name, "my_dag");
-                }
-                other => panic!("expected ModulePath, got {other:?}"),
-            }
+            assert_eq!(include_decl.path.segments.len(), 1);
+            assert_eq!(include_decl.path.segments[0].name, "my_dag");
             assert_eq!(include_decl.param_bindings.len(), 1);
         }
         other => panic!("expected Include, got {other:?}"),
-    }
-}
-
-#[test]
-fn parse_include_parent_scope_not_supported() {
-    // `include ..` is not a valid syntax (you include DAGs, not parent scope)
-    // Actually `..` can be parsed; whether it makes sense is a semantic question.
-    // For now, the parser accepts it — semantic validation happens later.
-    let file = Parser::new("include ..(x: 1.0) { result };")
-        .parse_file()
-        .unwrap();
-    assert_eq!(file.declarations.len(), 1);
-    match &file.declarations[0].kind {
-        DeclKind::Include(include_decl) => {
-            assert!(include_decl.path.is_parent_scope());
-        }
-        other => panic!("expected Include, got {other:?}"),
-    }
-}
-
-#[test]
-fn parse_dag_with_import_parent() {
-    let file = Parser::new(
-        "dag my_dag {
-            import .. { GM };
-            param r: Length;
-            node v: Velocity = sqrt(GM / @r);
-        }",
-    )
-    .parse_file()
-    .unwrap();
-    assert_eq!(file.declarations.len(), 1);
-    match &file.declarations[0].kind {
-        DeclKind::Dag(dag) => {
-            assert_eq!(dag.name.value.as_str(), "my_dag");
-            assert_eq!(dag.body.len(), 3); // import, param, node
-            match &dag.body[0].kind {
-                DeclKind::Import(import_decl) => {
-                    assert!(import_decl.path.is_parent_scope());
-                }
-                other => panic!("expected Import, got {other:?}"),
-            }
-        }
-        other => panic!("expected Dag, got {other:?}"),
     }
 }
 

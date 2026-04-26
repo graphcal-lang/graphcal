@@ -1287,26 +1287,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_qualified_graph_ref() {
-        let file = Parser::new("node x: Dimensionless = @params::dry_mass;")
-            .parse_file()
-            .unwrap();
-        let decl = &file.declarations[0].kind;
-        let DeclKind::Node(node) = decl else {
-            panic!("expected Node");
-        };
-        match &node.value.kind {
-            ExprKind::QualifiedGraphRef { module, name } => {
-                assert_eq!(module.name, "params");
-                assert_eq!(name.value.as_str(), "dry_mass");
-            }
-            other => panic!("expected QualifiedGraphRef, got {other:?}"),
-        }
+    fn parse_qualified_at_rejected() {
+        // Qualified `@module.name` is rejected — the new design requires
+        // bringing the name into scope first via `import pkg.{name};`.
+        let result = Parser::new("node x: Dimensionless = @params.dry_mass;").parse_file();
+        assert!(result.is_err(), "qualified `@module.name` should be rejected");
     }
 
     #[test]
     fn parse_inline_dag_ref_basic() {
-        let file = Parser::new("node y: Length = @clamp(x: @p)::result;")
+        let file = Parser::new("node y: Length = @clamp(x: @p).result;")
             .parse_file()
             .unwrap();
         let decl = &file.declarations[0].kind;
@@ -1314,13 +1304,7 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::InlineDagRef {
-                module,
-                dag,
-                args,
-                output,
-            } => {
-                assert!(module.is_none());
+            ExprKind::InlineDagRef { dag, args, output } => {
                 assert_eq!(dag.value.as_str(), "clamp");
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name, "x");
@@ -1335,7 +1319,7 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_multi_arg() {
-        let file = Parser::new("node y: Velocity = @scale(factor: 2.0, v: @speed)::out;")
+        let file = Parser::new("node y: Velocity = @scale(factor: 2.0, v: @speed).out;")
             .parse_file()
             .unwrap();
         let decl = &file.declarations[0].kind;
@@ -1343,13 +1327,7 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::InlineDagRef {
-                module,
-                dag,
-                args,
-                output,
-            } => {
-                assert!(module.is_none());
+            ExprKind::InlineDagRef { dag, args, output } => {
                 assert_eq!(dag.value.as_str(), "scale");
                 assert_eq!(args.len(), 2);
                 assert_eq!(args[0].name.name, "factor");
@@ -1361,45 +1339,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_inline_dag_ref_qualified() {
-        let file = Parser::new("node y: Length = @geom::clamp(x: @p)::result;")
-            .parse_file()
-            .unwrap();
-        let decl = &file.declarations[0].kind;
-        let DeclKind::Node(node) = decl else {
-            panic!("expected Node");
-        };
-        match &node.value.kind {
-            ExprKind::InlineDagRef {
-                module,
-                dag,
-                args,
-                output,
-            } => {
-                let module = module.as_ref().expect("expected module qualifier");
-                assert_eq!(module.name, "geom");
-                assert_eq!(dag.value.as_str(), "clamp");
-                assert_eq!(args.len(), 1);
-                assert_eq!(output.value.as_str(), "result");
-            }
-            other => panic!("expected InlineDagRef, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_inline_dag_ref_preserves_non_call_qualified_ref() {
-        // `@alias::node` (no parens) still parses as QualifiedGraphRef.
-        let file = Parser::new("node y: Length = @doubled::result;")
-            .parse_file()
-            .unwrap();
-        let decl = &file.declarations[0].kind;
-        let DeclKind::Node(node) = decl else {
-            panic!("expected Node");
-        };
-        assert!(matches!(
-            &node.value.kind,
-            ExprKind::QualifiedGraphRef { .. }
-        ));
+    fn parse_inline_dag_ref_qualified_rejected() {
+        // Qualified `@module.dag(args).out` is rejected (Concept 6); the DAG
+        // must be brought into unqualified scope first.
+        let result = Parser::new("node y: Length = @geom.clamp(x: @p).result;").parse_file();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1422,7 +1366,7 @@ mod tests {
 
     #[test]
     fn parse_qualified_name_ref() {
-        let file = Parser::new("node x: Dimensionless = constants::G0;")
+        let file = Parser::new("node x: Dimensionless = constants.G0;")
             .parse_file()
             .unwrap();
         let decl = &file.declarations[0].kind;
