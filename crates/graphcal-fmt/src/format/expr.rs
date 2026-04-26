@@ -23,26 +23,12 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value.as_str())),
-        ExprKind::QualifiedGraphRef { module, name } => RcDoc::text(format!(
-            "@{}::{}",
-            module.name.as_str(),
-            name.value.as_str()
-        )),
-        ExprKind::InlineDagRef {
-            module,
-            dag,
-            args,
-            output,
-        } => format_inline_dag_ref(
-            fmt,
-            module.as_ref(),
-            dag.value.as_str(),
-            args,
-            output.value.as_str(),
-        ),
+        ExprKind::InlineDagRef { dag, args, output } => {
+            format_inline_dag_ref(fmt, dag.value.as_str(), args, output.value.as_str())
+        }
         ExprKind::ConstRef(name) => RcDoc::text(name.value.as_str().to_string()),
         ExprKind::QualifiedConstRef { module, name } => {
-            RcDoc::text(format!("{}::{}", module.name.as_str(), name.value.as_str()))
+            RcDoc::text(format!("{}.{}", module.name.as_str(), name.value.as_str()))
         }
         ExprKind::LocalRef(ident) | ExprKind::NameRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
@@ -106,7 +92,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                 .iter()
                 .map(|a| match a {
                     IndexArg::Variant { index, variant } => RcDoc::text(format!(
-                        "{}::{}",
+                        "{}.{}",
                         index.value.as_str(),
                         variant.value.as_str()
                     )),
@@ -135,10 +121,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
         ExprKind::TupleMatch { scrutinees, arms } => format_tuple_match(fmt, scrutinees, arms),
         ExprKind::VariantLiteral { index, variant } => {
-            RcDoc::text(format!("{}::{}", index.value, variant.value))
+            RcDoc::text(format!("{}.{}", index.value, variant.value))
         }
         ExprKind::QualifiedNameRef { qualifier, member } => {
-            RcDoc::text(format!("{}::{}", qualifier.name, member.name))
+            RcDoc::text(format!("{}.{}", qualifier.name, member.name))
         }
     }
 }
@@ -352,7 +338,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
 
         let key_doc = if e.keys.len() == 1 {
             RcDoc::text(format!(
-                "{}::{}",
+                "{}.{}",
                 e.keys[0].index.value.as_str(),
                 e.keys[0].variant.value.as_str()
             ))
@@ -360,7 +346,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
             let key_parts: Vec<String> = e
                 .keys
                 .iter()
-                .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .map(|k| format!("{}.{}", k.index.value.as_str(), k.variant.value.as_str()))
                 .collect();
             RcDoc::text(format!("({})", key_parts.join(", ")))
         };
@@ -657,7 +643,7 @@ fn format_table_sliced(
         let slice_key: Vec<String> = (0..slice_dims)
             .map(|i| match &indexes[i] {
                 TableIndexSpec::Named(_) => format!(
-                    "{}::{}",
+                    "{}.{}",
                     e.keys[i].index.value.as_str(),
                     e.keys[i].variant.value.as_str()
                 ),
@@ -848,7 +834,7 @@ pub fn format_match(
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     let name = p.qualified_index.as_ref().map_or_else(
         || RcDoc::text(p.variant_name.value.as_str().to_string()),
-        |index| RcDoc::text(format!("{}::{}", index.value, p.variant_name.value)),
+        |index| RcDoc::text(format!("{}.{}", index.value, p.variant_name.value)),
     );
     if p.bindings.is_empty() {
         return name;
@@ -925,15 +911,10 @@ pub fn format_tuple_match(
 
 fn format_inline_dag_ref(
     fmt: &mut Formatter<'_>,
-    module: Option<&Ident>,
     dag: &str,
     args: &[ParamBinding],
     output: &str,
 ) -> RcDoc<'static> {
-    let head = module.map_or_else(
-        || format!("@{dag}"),
-        |m| format!("@{}::{}", m.name.as_str(), dag),
-    );
     let binding_docs: Vec<RcDoc<'static>> = args
         .iter()
         .map(|b| {
@@ -942,9 +923,9 @@ fn format_inline_dag_ref(
                 .append(format_expr(fmt, &b.value))
         })
         .collect();
-    RcDoc::text(head)
+    RcDoc::text(format!("@{dag}"))
         .append(RcDoc::text("("))
         .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(")::"))
+        .append(RcDoc::text(")."))
         .append(RcDoc::text(output.to_string()))
 }
