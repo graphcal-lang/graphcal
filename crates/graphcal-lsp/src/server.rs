@@ -363,6 +363,11 @@ fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url,
 /// 2. Compile TIR from the project.
 ///
 /// Both stages use the same source text, eliminating data provenance mismatches.
+#[cfg(test)]
+pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
+    run_analysis(uri, text)
+}
+
 fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available — return minimal diagnostics.

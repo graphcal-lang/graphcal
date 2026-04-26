@@ -22,10 +22,15 @@ fn is_valid_identifier(name: &str) -> bool {
 }
 
 /// Check whether a resolved symbol is eligible for rename.
+///
+/// Imported symbols are rejected: a safe cross-file rename would need a
+/// project-wide reference index plus edits to every importer, re-export,
+/// and alias. Until that is implemented, refusing is safer than producing
+/// a partial workspace edit that breaks the defining file or other
+/// importers.
 fn is_renameable(resolved: &ResolvedSymbol<'_>) -> bool {
-    let def = match &resolved.location {
-        SymbolLocation::Local(def) => *def,
-        SymbolLocation::Imported(imported) => &imported.definition,
+    let SymbolLocation::Local(def) = &resolved.location else {
+        return false;
     };
     !def.is_builtin() && def.category != SymbolCategory::Field
 }
@@ -66,10 +71,10 @@ pub fn rename(
     if !is_renameable(&resolved) {
         return None;
     }
+    let SymbolLocation::Local(def) = &resolved.location else {
+        return None;
+    };
 
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-
-    // Collect all reference edits in the current file.
     let mut current_file_edits: Vec<TextEdit> = analysis
         .symbol_table
         .find_all_references(&resolved.key)
@@ -80,37 +85,19 @@ pub fn rename(
         })
         .collect();
 
-    match &resolved.location {
-        SymbolLocation::Local(def) => {
-            // Include the definition's name span.
-            if !def.name_span.is_empty() {
-                current_file_edits.push(TextEdit {
-                    range: span_to_range(&analysis.source, def.name_span),
-                    new_text: new_name.to_string(),
-                });
-            }
-        }
-        SymbolLocation::Imported(imported) => {
-            // Also rename the definition in the source file.
-            if !imported.definition.name_span.is_empty() {
-                changes
-                    .entry(imported.uri.clone())
-                    .or_default()
-                    .push(TextEdit {
-                        range: span_to_range(&imported.source, imported.definition.name_span),
-                        new_text: new_name.to_string(),
-                    });
-            }
-        }
+    if !def.name_span.is_empty() {
+        current_file_edits.push(TextEdit {
+            range: span_to_range(&analysis.source, def.name_span),
+            new_text: new_name.to_string(),
+        });
     }
 
-    if !current_file_edits.is_empty() {
-        changes.insert(uri.clone(), current_file_edits);
-    }
-
-    if changes.is_empty() {
+    if current_file_edits.is_empty() {
         return None;
     }
+
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), current_file_edits);
 
     Some(WorkspaceEdit {
         changes: Some(changes),
@@ -201,6 +188,39 @@ mod tests {
         assert!(rename(&analysis, &uri, offset, "").is_none());
         assert!(rename(&analysis, &uri, offset, "123bad").is_none());
         assert!(rename(&analysis, &uri, offset, "has space").is_none());
+    }
+
+    #[test]
+    fn rename_imported_symbol_rejected() {
+        // Build an analysis where `@y` resolves through an imported alias.
+        // Cross-file rename is not yet implemented; the request must be
+        // refused rather than producing a partial workspace edit.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("helper.gcl"),
+            "pub const node y: Dimensionless = 2.0;",
+        )
+        .unwrap();
+        let main_path = dir.path().join("main.gcl");
+        let main_text = "import helper.{y};\nnode z: Dimensionless = @y + 1.0;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        let cursor = main_text.find("@y").unwrap() + 1;
+        assert!(
+            prepare_rename(&analysis, cursor).is_none(),
+            "imported symbol must not be prepare-renameable"
+        );
+        assert!(
+            rename(&analysis, &main_uri, cursor, "renamed").is_none(),
+            "imported symbol must not be renamed",
+        );
     }
 
     #[test]
