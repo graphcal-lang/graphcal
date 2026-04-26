@@ -215,13 +215,7 @@ mod tests {
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
         let symbol_table = build_symbol_table(source);
-        match compile_and_eval_project(
-            path,
-            &HashMap::new(),
-            None,
-            true,
-            &RealFileSystem::default(),
-        ) {
+        match compile_and_eval_project(path, &HashMap::new(), None, &RealFileSystem::default()) {
             Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
             Err(e) => compile_error_to_diagnostics(&e, source),
         }

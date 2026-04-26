@@ -1,5 +1,0 @@
-// main.gcl -- omits the index binding without #[allow_defaults] (should fail)
-include lib(x: {
-    Phase.Alpha: 10.0,
-    Phase.Beta: 20.0,
-}).{ x };

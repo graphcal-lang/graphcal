@@ -347,7 +347,7 @@ fn run_eval_from_project(
     text: &str,
     symbol_table: &SymbolTable,
 ) -> (Vec<Diagnostic>, HashMap<String, String>) {
-    match compile_and_eval_from_project(project, &HashMap::new(), true) {
+    match compile_and_eval_from_project(project, &HashMap::new()) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
             let values = format_eval_values(&result);

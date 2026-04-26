@@ -536,7 +536,7 @@ fn override_param_changes_result() {
 
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    let overridden = compile_and_eval_with_overrides(source, "test", &overrides, true).unwrap();
+    let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
     let new_dv = find_value(&overridden, "delta_v");
 
     assert!(new_dv > default_dv, "higher isp should give higher delta_v");
@@ -548,7 +548,7 @@ fn override_with_wrong_dimension_errors() {
     // isp expects Time, not Mass
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 kg"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
     assert!(result.is_err());
 }
 
@@ -557,7 +557,7 @@ fn override_node_errors() {
     let source = include_str!("../../../../tests/fixtures/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("delta_v"), parse_expr("100.0 m/s"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "delta_v");
@@ -572,7 +572,7 @@ fn override_const_errors() {
     let source = include_str!("../../../../tests/fixtures/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("g0"), parse_expr("10.0 m/s^2"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "g0");
@@ -587,7 +587,7 @@ fn override_unknown_param_errors() {
     let source = include_str!("../../../../tests/fixtures/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("nonexistent"), parse_expr("100"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
             assert_eq!(name.as_str(), "nonexistent");
@@ -599,7 +599,7 @@ fn override_unknown_param_errors() {
 #[test]
 fn required_param_without_override_errors() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
-    let result = compile_and_eval_with_overrides(source, "test", &HashMap::new(), true);
+    let result = compile_and_eval_with_overrides(source, "test", &HashMap::new());
     match result {
         Err(CompileError::Eval(GraphcalError::RequiredParamNotProvided { name, .. })) => {
             assert_eq!(name, "x");
@@ -613,7 +613,7 @@ fn required_param_with_override_succeeds() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("x"), parse_expr("42.0"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true).unwrap();
+    let result = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -871,7 +871,7 @@ fn eval_int_with_unit_parse_error() {
 fn project_instantiated_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // dry_mass overridden to 800 kg, fuel_mass default 2800 kg, isp default 320 s
     // delta_v = 320 * 9.80665 * ln((800 + 2800) / 800) = 3138.128 * ln(4.5)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -885,7 +885,7 @@ fn project_instantiated_import_selective() {
 fn project_instantiated_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_graph_ref/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // my_mass = 800 kg, passed as dry_mass binding via @my_mass
     // delta_v = 320 * 9.80665 * ln(3600/800)
     let expected_delta_v = 320.0 * 9.80665 * (3600.0_f64 / 800.0).ln();
@@ -953,127 +953,31 @@ mod prop {
     }
 }
 
-// --- Strict param defaults tests ---
+// --- Partial overrides / partial bindings tests ---
 
 #[test]
-fn cli_strict_partial_override_errors() {
-    // When overrides are provided but not all params are overridden, should error
+fn cli_partial_override_uses_defaults() {
+    // When overrides are provided for some params, the rest fall back to defaults.
     let source = include_str!("../../../../tests/fixtures/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    // allow_defaults = false → should error because dry_mass and fuel_mass not overridden
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, false);
-    match result {
-        Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided { name, .. })) => {
-            // Should error on one of the non-overridden params
-            assert!(
-                name == "dry_mass" || name == "fuel_mass",
-                "expected dry_mass or fuel_mass, got {name}"
-            );
-        }
-        other => panic!("expected DefaultParamNotProvided, got {other:?}"),
-    }
-}
-
-#[test]
-fn cli_strict_all_overrides_succeeds() {
-    // When ALL params are overridden, should succeed even with allow_defaults=false
-    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
-    let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("dry_mass"), parse_expr("800.0 kg"));
-    overrides.insert(DeclName::new("fuel_mass"), parse_expr("3200.0 kg"));
-    overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, false);
+    let result = compile_and_eval_with_overrides(source, "test", &overrides);
     assert!(
         result.is_ok(),
-        "all params overridden should succeed: {result:?}"
+        "partial overrides should fall back to defaults: {result:?}"
     );
 }
 
 #[test]
-fn cli_strict_no_overrides_succeeds() {
-    // When NO overrides at all, defaults are used freely (no trigger)
-    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
-    let result = compile_and_eval_with_overrides(source, "test", &HashMap::new(), false);
-    assert!(
-        result.is_ok(),
-        "no overrides should use defaults freely: {result:?}"
-    );
-}
-
-#[test]
-fn cli_strict_allow_defaults_opt_out() {
-    // When allow_defaults=true, partial overrides are fine
-    let source = include_str!("../../../../tests/fixtures/rocket.gcl");
-    let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides, true);
-    assert!(
-        result.is_ok(),
-        "allow_defaults should permit partial overrides: {result:?}"
-    );
-}
-
-#[test]
-fn import_strict_partial_binding_errors() {
-    // Parameterized import without #[allow_defaults] and partial binding → error
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/multi/instantiated_import_strict_error/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
-    match result {
-        Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided { name, .. })) => {
-            // Should error on one of the unbound default params (fuel_mass or isp)
-            assert!(
-                name == "fuel_mass" || name == "isp",
-                "expected fuel_mass or isp, got {name}"
-            );
-        }
-        other => panic!("expected DefaultParamNotProvided, got {other:?}"),
-    }
-}
-
-#[test]
-fn import_with_allow_defaults_succeeds() {
-    // Parameterized import WITH #[allow_defaults] and partial binding → success
+fn import_partial_binding_uses_defaults() {
+    // Parameterized import with partial binding falls back to defaults.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     assert!(
         result.is_ok(),
-        "import with #[allow_defaults] should succeed: {result:?}"
+        "partial import binding should fall back to defaults: {result:?}"
     );
-}
-
-#[test]
-fn allow_defaults_on_non_import_errors() {
-    // #[allow_defaults] on a node declaration → InvalidAttributeTarget
-    let source = "#[allow_defaults]\nnode x: Dimensionless = 1.0;";
-    let result = compile_and_eval(source);
-    match result {
-        Err(CompileError::Eval(GraphcalError::InvalidAttributeTarget {
-            attr_name, kind, ..
-        })) => {
-            assert_eq!(attr_name, "allow_defaults");
-            assert_eq!(kind, "node");
-        }
-        other => panic!("expected InvalidAttributeTarget, got {other:?}"),
-    }
-}
-
-#[test]
-fn allow_defaults_on_param_errors() {
-    // #[allow_defaults] on a param declaration → InvalidAttributeTarget
-    let source = "#[allow_defaults]\nparam x: Dimensionless = 1.0;";
-    let result = compile_and_eval(source);
-    match result {
-        Err(CompileError::Eval(GraphcalError::InvalidAttributeTarget {
-            attr_name, kind, ..
-        })) => {
-            assert_eq!(attr_name, "allow_defaults");
-            assert_eq!(kind, "param");
-        }
-        other => panic!("expected InvalidAttributeTarget, got {other:?}"),
-    }
 }
 
 // --- Required param (no default) import tests ---
@@ -1082,7 +986,7 @@ fn allow_defaults_on_param_errors() {
 fn project_required_param_import() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/required_param_import/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // radius = 6371 km, circumference = 2 * PI * radius
     let expected = 2.0 * std::f64::consts::PI * 6_371_000.0; // in metres (SI)
     let circumference = find_value(&result, "circumference");
@@ -1098,7 +1002,7 @@ fn project_required_param_import() {
 fn project_injectable_index_kind_mismatch() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_kind_mismatch/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
             dep_index,
@@ -1113,23 +1017,10 @@ fn project_injectable_index_kind_mismatch() {
 }
 
 #[test]
-fn project_injectable_index_strict_default_not_provided() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/multi/injectable_index_strict/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
-    match result {
-        Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided { name, .. })) => {
-            assert_eq!(name, "Phase");
-        }
-        other => panic!("expected DefaultIndexNotProvided, got {other:?}"),
-    }
-}
-
-#[test]
 fn project_injectable_index_basic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_basic/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // total = sum(10.0 + 20.0) = 30.0
     let result_val = find_value(&result, "result");
     assert!(
@@ -1142,7 +1033,7 @@ fn project_injectable_index_basic() {
 fn project_instantiated_import_type_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_type_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // origin_size = 1.0 m (the lib's `Widget { size: 1.0 m }` rewritten to
     // `MyWidget { size: 1.0 m }` after type substitution)
     let result_val = find_value(&result, "result");
@@ -1156,7 +1047,7 @@ fn project_instantiated_import_type_binding() {
 fn project_instantiated_import_dim_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/instantiated_import_dim_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // result = 10.0 m/s; the lib's `v: Speed = 10.0 m/s` has its type_ann
     // rewritten Speed -> Velocity so main's Velocity dimension resolves.
     let result_val = find_value(&result, "result");
@@ -1173,7 +1064,7 @@ fn project_pub_import_reexport_selective() {
     // can reach it via the intermediate file.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_import_reexport_selective/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // result = 9.80665 m/s^2 (in the base unit, value 9.80665).
     let result_val = find_value(&result, "result");
     assert!(
@@ -1189,7 +1080,7 @@ fn project_include_overrides_index_no_param_binding_v005() {
     // re-bind `cost` in the same include statement.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/include_overrides_index_no_param_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::IncludeMustReconcileOverride {
             overridden,
@@ -1211,7 +1102,7 @@ fn project_include_overrides_index_with_param_binding_ok() {
     // supplying a fresh `cost` binding satisfies A8.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/include_overrides_index_with_param_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let result_val = find_value(&result, "result");
     // total = 10 + 20 = 30
     assert!(
@@ -1227,7 +1118,7 @@ fn project_pub_include_leaks_private_type_v006() {
     // private-local type at the importer.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_include_leaks_private_type/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::GenericsLeakage {
             reexport_name,
@@ -1249,7 +1140,7 @@ fn project_pub_include_with_public_type_binding_ok() {
     // binding `Element` to a `pub` importer-local type satisfies A9.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/pub_include_with_public_type_binding/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs());
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     assert!(
         result.is_ok(),
         "`pub include` re-exporting a `pub` type binding should compile: {result:?}"
@@ -1260,7 +1151,7 @@ fn project_pub_include_with_public_type_binding_ok() {
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/injectable_index_expected_fail/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // The within_limit assertion should pass overall because Overdrive is marked expected_fail.
     let assert_result = result
         .assertions
@@ -1280,7 +1171,7 @@ fn project_injectable_index_expected_fail() {
 fn inline_dag_basic_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/inline_dag_basic/main.gcl");
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, true, &fs()).unwrap();
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let val = find_value(&result, "final_result");
     assert!((val - 20.0).abs() < 1e-10, "expected 20.0, got {val}");
 }

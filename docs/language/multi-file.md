@@ -695,37 +695,21 @@ index DistStep = linspace(0.0 m, 100.0 m, step: 10.0 m); // dimension is Length
 include lib(Step: DistStep);                              // ERROR: dimension mismatch
 ```
 
-### Strict binding mode
+### Partial bindings
 
-When a parameterized include has **any** bindings (param or index),
-**all** params and indexes with defaults must be explicitly bound. This
-prevents accidentally relying on stale defaults when you intend to
-customize. Required indexes must always be bound, regardless of
-`#[allow_defaults]`.
+Bindings are optional for any param or index that has a default. Bind
+only the ones you want to override; the rest keep their defaults.
+Required indexes (those without a default) must always be bound.
 
 ```graphcal
 // rocket.gcl has params: dry_mass (default), fuel_mass (default), isp (default)
 
-// ERROR: only dry_mass is bound; fuel_mass and isp are not explicitly provided
+// OK: only dry_mass is overridden; fuel_mass and isp keep their defaults
 include lib.rocket(dry_mass: 800.0 kg) as r;
 
 // OK: all params are explicitly bound
 include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 ```
-
-#### Opting out with `#[allow_defaults]`
-
-If you intentionally want to bind only some params and let the rest
-use their defaults, attach `#[allow_defaults]` to the include:
-
-```graphcal
-#[allow_defaults]
-include lib.rocket(dry_mass: 800.0 kg) as r;
-// fuel_mass and isp keep their default values
-```
-
-`#[allow_defaults]` is only valid on `include` declarations with param
-bindings. Using it elsewhere is a compile error.
 
 ### Validation
 
@@ -739,8 +723,6 @@ bindings. Using it elsewhere is a compile error.
   importer's scope.
 - Named indexes can only be bound to named indexes; range indexes can
   only be bound to range indexes. Range index dimensions must match.
-- When any binding is provided, all params and indexes with defaults
-  must be bound, unless `#[allow_defaults]` is present.
 - Dimension mismatches are caught by the dimension checker after
   merging.
 

@@ -43,7 +43,6 @@ enum AttributeName {
     Assumes,
     ExpectedFail,
     Lazy,
-    AllowDefaults,
 }
 
 impl std::str::FromStr for AttributeName {
@@ -54,20 +53,7 @@ impl std::str::FromStr for AttributeName {
             "assumes" => Ok(Self::Assumes),
             "expected_fail" => Ok(Self::ExpectedFail),
             "lazy" => Ok(Self::Lazy),
-            "allow_defaults" => Ok(Self::AllowDefaults),
             _ => Err(()),
-        }
-    }
-}
-
-impl AttributeName {
-    /// Get the string representation of the attribute name.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Assumes => "assumes",
-            Self::ExpectedFail => "expected_fail",
-            Self::Lazy => "lazy",
-            Self::AllowDefaults => "allow_defaults",
         }
     }
 }
@@ -686,33 +672,6 @@ fn validate_attributes(
                 }
                 AttributeName::Lazy => {
                     // Recognized but semantics deferred — no validation needed
-                }
-                AttributeName::AllowDefaults => {
-                    // #[allow_defaults] is only valid on include declarations
-                    let kind = match &decl.kind {
-                        DeclKind::Include(_) => continue,
-                        DeclKind::Param(_) => "param",
-                        DeclKind::ConstNode(_) => "const node",
-                        DeclKind::Node(_) => "node",
-                        DeclKind::Assert(_) => "assert",
-                        DeclKind::Plot(_) => "plot",
-                        DeclKind::Figure(_) => "figure",
-                        DeclKind::Layer(_) => "layer",
-
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
-                        DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
-                        DeclKind::Index(_) => "cat/range",
-                        DeclKind::Import(_) => "import",
-                        DeclKind::Dag(_) => "dag",
-                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
-                    };
-                    return Err(GraphcalError::InvalidAttributeTarget {
-                        attr_name: AttributeName::AllowDefaults.as_str().to_string(),
-                        kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
                 }
             }
         }

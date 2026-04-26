@@ -5,7 +5,6 @@
 // exist in the replacement index `MyPhase`.
 index MyPhase = { Plan, Make };
 
-#[allow_defaults]
 include lib(Phase: MyPhase { }).{ total };
 
 node result: Dimensionless = @total;
