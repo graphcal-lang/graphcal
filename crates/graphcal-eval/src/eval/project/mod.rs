@@ -163,8 +163,6 @@ pub(super) struct DeferredInlineDagInclude {
     pub(super) dag_body: graphcal_compiler::syntax::ast::File,
     /// Imported names collected from `import ..` inside the DAG body.
     pub(super) dag_imported_names: ImportedValueNames,
-    /// Type-system declarations imported from parent scope via `import ..`.
-    pub(super) dag_parent_type_decls: Vec<graphcal_compiler::syntax::ast::Declaration>,
     /// The prefix for all merged declarations (from alias or dag name).
     pub(super) prefix: String,
     /// Param bindings: `param_name` → binding expression.

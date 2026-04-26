@@ -122,10 +122,8 @@ pub(super) fn compile_single_file_in_project(
             dag_name,
             include_decl,
             decl,
-            &loaded_file.ast,
             file_src,
             &mut ctx,
-            false, // same-file DAG
         )?;
     }
 
@@ -174,17 +172,15 @@ pub(super) fn compile_single_file_in_project(
                 })
             })?;
 
-        // Reuse the same inline DAG processing, with the target file's AST
-        // for parent scope resolution.
+        // Inline DAGs are strictly isolated, so same-file and cross-file
+        // share the same processing.
         imports::process_inline_dag_include(
             target_dag_def,
             dag_name,
             include_decl,
             decl,
-            &target_loaded.ast,
             file_src,
             &mut ctx,
-            true, // cross-file DAG
         )?;
     }
 
