@@ -308,109 +308,89 @@ pub struct LayerDecl {
     pub fields: Vec<PlotField>,
 }
 
-/// The kind of an `import` declaration.
+/// The kind of an `import` or `include` declaration.
+///
+/// For `import`:
+///   - `Selective(items)`: brace-list form `import path.{X, Y};` — brings only
+///     the listed names. Does NOT also bring the leaf module.
+///   - `Module { alias: None }`: bare form `import path;` — brings the leaf
+///     module under its own name.
+///   - `Module { alias: Some(a) }`: aliased form `import path as a;`.
+///
+/// For `include`:
+///   - `Selective(items)`: brace-list form `include path(args).{y};` — exposes
+///     the listed outputs as nodes.
+///   - `Module { alias: None }`: bare form `include path(args);` — sugar for
+///     `as <leaf>`.
+///   - `Module { alias: Some(a) }`: aliased form `include path(args) as a;`.
 #[derive(Debug, Clone)]
 pub enum ImportKind {
-    /// Selective import: `import "path" { name1, name2 as alias };`
+    /// Brace-list selector: `path.{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
-    /// Module import: `import "path";` or `use "path" as alias;`
+    /// Bare or aliased form.
     Module { alias: Option<Ident> },
 }
 
-/// The path in an `import` or `include` declaration.
+/// A dot-separated module path: `nasa.rocket.dynamics`.
+///
+/// Always absolute from a package root. The first segment is the package name
+/// (real or virtual); subsequent segments walk the package's module tree
+/// (directories under `source_dir`, files inside the package, and inline `dag`
+/// declarations). There are no file-path strings, no `..` parent navigation,
+/// and no `/` separators in the source language — only `.`.
 #[derive(Debug, Clone)]
-pub enum ImportPath {
-    /// Quoted string path: `"./path/to/file.gcl"`
-    FilePath { path: String, span: Span },
-    /// Bare identifier path: `nasa/rocket` or `dag_name`
-    ModulePath { segments: Vec<Ident>, span: Span },
-    /// Parent scope path: `..` (1 level), `../..` (2 levels), etc.
-    /// Only valid inside `dag` blocks to access the enclosing scope.
-    ParentScope { levels: u32, span: Span },
-    /// Cross-file DAG path: `"./file.gcl"/dag_name`
-    /// References an inline DAG defined in another file.
-    CrossFileDag {
-        file_path: String,
-        dag_name: Ident,
-        span: Span,
-    },
+pub struct ModulePath {
+    pub segments: Vec<Ident>,
+    pub span: Span,
 }
 
-impl ImportPath {
-    /// Returns the span of this import path.
+impl ModulePath {
     #[must_use]
     pub const fn span(&self) -> Span {
-        match self {
-            Self::FilePath { span, .. }
-            | Self::ModulePath { span, .. }
-            | Self::ParentScope { span, .. }
-            | Self::CrossFileDag { span, .. } => *span,
-        }
+        self.span
     }
 
-    /// Human-readable path string for diagnostics.
+    /// Human-readable path string for diagnostics: `"nasa.rocket.dynamics"`.
     #[must_use]
     pub fn display_path(&self) -> String {
-        match self {
-            Self::FilePath { path, .. } => path.clone(),
-            Self::ModulePath { segments, .. } => segments
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect::<Vec<_>>()
-                .join("/"),
-            Self::ParentScope { levels, .. } => {
-                let mut path = "..".to_string();
-                for _ in 1..*levels {
-                    path.push_str("/..");
-                }
-                path
-            }
-            Self::CrossFileDag {
-                file_path,
-                dag_name,
-                ..
-            } => format!("\"{file_path}\"/{}", dag_name.name),
-        }
+        self.segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
     }
 
-    /// Returns `true` if this is a `ParentScope` path (`..`, `../..`, etc.).
+    /// Returns the leaf segment of the path, or `None` if empty.
     #[must_use]
-    pub const fn is_parent_scope(&self) -> bool {
-        matches!(self, Self::ParentScope { .. })
-    }
-
-    /// Returns `true` if this is a `CrossFileDag` path (`"./file.gcl"/dag_name`).
-    #[must_use]
-    pub const fn is_cross_file_dag(&self) -> bool {
-        matches!(self, Self::CrossFileDag { .. })
+    pub fn leaf(&self) -> Option<&Ident> {
+        self.segments.last()
     }
 }
 
-/// Import declaration (compile-time definition import).
+/// Import declaration (compile-time name import).
 ///
-/// Supports file paths (`import "./file.gcl" { ... };`) and bare module paths
-/// (`import nasa/rocket { ... };`). No param bindings — for DAG instantiation
-/// with param bindings, use `include` instead.
+/// `import nasa.rocket;` — brings the leaf module into scope.
+/// `import nasa.rocket as nr;` — brings the leaf module under an alias.
+/// `import nasa.rocket.{Orbit, compute_thrust};` — brings only the listed names.
+///
+/// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
-    /// The import path (file-based or bare module path).
-    pub path: ImportPath,
-    /// The kind of import (selective or module).
+    pub path: ModulePath,
     pub kind: ImportKind,
 }
 
 /// Include declaration (DAG embedding / instantiation).
 ///
-/// Supports file paths and bare module paths with optional param/index bindings:
-/// `include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`
-/// `include "./rocket.gcl"(dry_mass: 800.0 kg) as rocket;`
+/// `include nasa.rocket.compute_thrust(args);` — bare form; instance alias is
+/// the DAG's leaf name.
+/// `include nasa.rocket.compute_thrust(args) as ct;` — explicit instance alias.
+/// `include nasa.rocket.compute_thrust(args).{thrust};` — exposes selected
+/// outputs as nodes in the including DAG.
 #[derive(Debug, Clone)]
 pub struct IncludeDecl {
-    /// The import path (file-based or bare module path).
-    pub path: ImportPath,
-    /// Param/index bindings for DAG instantiation.
+    pub path: ModulePath,
     pub param_bindings: Vec<ParamBinding>,
-    /// The kind of include (selective or module).
     pub kind: ImportKind,
 }
 
@@ -1113,28 +1093,24 @@ pub enum ExprKind {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
     },
-    /// Module-qualified graph reference: `@module::name`
-    QualifiedGraphRef {
-        module: Ident,
-        name: Spanned<DeclName>,
-    },
-    /// Inline DAG invocation: `@dag(args)::out` or `@module::dag(args)::out`.
+    /// Inline DAG invocation: `@dag(args).out`.
     ///
     /// Each syntactic occurrence denotes a fresh DAG instantiation that is
     /// desugared during TIR lowering to the equivalent
-    /// `include dag(args) as <synthetic>; @<synthetic>::out`. Preserved as a
+    /// `include dag(args) as <synthetic>; @<synthetic>.out`. Preserved as a
     /// distinct AST variant so source spans survive for diagnostics.
+    /// The DAG identifier must be a single in-scope name — qualified
+    /// `@module.dag(args).out` is rejected at parse time (bring the DAG into
+    /// scope first via `import <pkg>.{<dag>};`).
     InlineDagRef {
-        /// Optional module qualifier (for cross-file `dag`s).
-        module: Option<Ident>,
-        /// Name of the `dag` being invoked.
+        /// Name of the `dag` being invoked (single in-scope identifier).
         dag: Spanned<DeclName>,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding>,
-        /// Projected output node name (after `::`).
+        /// Projected output node name (after the closing paren `.`).
         output: Spanned<DeclName>,
     },
-    /// Module-qualified built-in constant reference: `module::CONST_NAME`
+    /// Module-qualified built-in constant reference: `module.CONST_NAME`.
     QualifiedConstRef {
         module: Ident,
         name: Spanned<DeclName>,
@@ -1145,11 +1121,11 @@ pub enum ExprKind {
     /// determined from syntax alone. A name-resolution pass rewrites this to
     /// one of `ConstRef`, `LocalRef`, or `StructConstruction` (bare variant).
     NameRef(Ident),
-    /// Unresolved qualified reference: `a::b`
+    /// Unresolved qualified reference: `a.b`.
     ///
-    /// Produced by the parser when `ident::ident` appears without a following
-    /// `(` (which would make it a qualified function call). A name-resolution
-    /// pass rewrites this to `VariantLiteral` or `QualifiedConstRef`.
+    /// Produced by the parser when `ident.ident` appears at atom position
+    /// without a following `(`. A name-resolution pass rewrites this to
+    /// `VariantLiteral` or `QualifiedConstRef` based on what `a` resolves to.
     QualifiedNameRef { qualifier: Ident, member: Ident },
 }
 
@@ -1460,7 +1436,6 @@ fn desugar_expr(expr: &mut Expr) {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::VariantLiteral { .. }
-        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::NameRef(_)
         | ExprKind::QualifiedNameRef { .. }
