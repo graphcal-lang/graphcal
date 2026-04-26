@@ -149,8 +149,8 @@ node safety_factor: Dimensionless = 1.5;
 #[name]                                     // no arguments
 #[name(arg1)]                               // one argument
 #[name(arg1, arg2, arg3)]                   // multiple arguments
-#[name(Index::Variant)]                     // qualified path argument
-#[name((Idx::A, Idx::B), (Idx::C, Idx::D))] // tuple key arguments
+#[name(Index.Variant)]                     // qualified path argument
+#[name((Idx.A, Idx.B), (Idx.C, Idx.D))] // tuple key arguments
 ```
 
 Multiple attributes can be stacked:
@@ -235,12 +235,12 @@ failures while other variants must still pass:
 ```
 index Mode = { Normal, Eco, Boost };
 
-#[expected_fail(Mode::Boost)]
+#[expected_fail(Mode.Boost)]
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
 ```
 
-Here, `Mode::Boost` is expected to fail (and is treated as a pass if it does),
-while `Mode::Normal` and `Mode::Eco` must still pass normally.
+Here, `Mode.Boost` is expected to fail (and is treated as a pass if it does),
+while `Mode.Normal` and `Mode.Eco` must still pass normally.
 
 #### Per-Tuple-Key Form (Multi Index)
 
@@ -250,7 +250,7 @@ For multi-indexed assertions, tuple keys identify specific index combinations:
 index Mode = { Normal, Eco, Boost };
 index Phase = { Launch, Cruise };
 
-#[expected_fail((Mode::Normal, Phase::Cruise), (Mode::Boost, Phase::Launch))]
+#[expected_fail((Mode.Normal, Phase.Cruise), (Mode.Boost, Phase.Launch))]
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
 ```
 
@@ -274,7 +274,7 @@ assert limit_positive = @limit > 0.0;
 
 ```
 // main.gcl
-import "./checks.gcl" { limit };
+import checks.{limit};
 // limit_positive is automatically evaluated and reported,
 // even though it was not listed in the import braces.
 ```
@@ -292,7 +292,7 @@ import it by name:
 
 ```
 // main.gcl
-import "./checks.gcl" { limit, limit_positive };
+import checks.{limit, limit_positive};
 
 #[assumes(limit_positive)]
 node ratio: Dimensionless = @limit / 2.0;

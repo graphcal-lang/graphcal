@@ -66,12 +66,10 @@ include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
 DAG blocks defined in other files are included using a DAG path:
 
 ```
-include "./lib/orbital.gcl"/hohmann_transfer(gm: GM_EARTH, r1: @r1, r2: @r2) {
-    total_dv,
-}
+include lib.orbital.hohmann_transfer(gm: GM_EARTH, r1: @r1, r2: @r2).{total_dv};
 ```
 
-The syntax is `include "path"/dag_name(params) { outputs }`.
+The syntax is `include module.dag_name(params).{outputs};`.
 
 ## Import vs Include
 
@@ -81,7 +79,7 @@ The `import` and `include` keywords serve different purposes:
 - **`include`** instantiates a DAG (inline or from a file) into the current computation graph
 
 ```
-import "./constants.gcl" { GM_EARTH, R_EARTH };
+import constants.{GM_EARTH, R_EARTH};
 
 dag orbital_velocity {
     param gm: GravParam;

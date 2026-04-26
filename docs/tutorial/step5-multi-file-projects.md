@@ -4,7 +4,8 @@ icon: material/numeric-5-circle
 
 # Step 5: Multi-File Projects
 
-In this step, you'll learn to split your project across multiple files using `import` declarations.
+In this step, you'll learn to split your project across multiple files
+using `import` declarations.
 
 ## Why Multiple Files?
 
@@ -14,9 +15,21 @@ As projects grow, it helps to separate concerns:
 - **Parameters** in another (easy to find and tune)
 - **Main calculations** in the entry point
 
+## Files Are Packages
+
+Every `.gcl` file in Graphcal is a **package**. As long as no
+`graphcal.toml` manifest is present, each file is a *virtual* package
+whose name equals the file's stem — `constants.gcl` is the package
+named `constants`. You can `import` from it by that name from any
+sibling file in the same directory.
+
+This is the simplest way to start. Later in this step, we'll
+"promote" the project to a real (manifest-backed) package once the
+file count grows.
+
 ## Project Structure
 
-```
+```text
 rocket_project/
   constants.gcl
   params.gcl
@@ -25,24 +38,24 @@ rocket_project/
 
 ### `constants.gcl`
 
-```
-dim Acceleration = Length / Time^2;
-const node g0: Acceleration = 9.80665 m/s^2;
+```graphcal
+pub dim Acceleration = Length / Time^2;
+pub const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 ### `params.gcl`
 
-```
-param dry_mass: Mass = 1200.0 kg;
-param fuel_mass: Mass = 2800.0 kg;
-param isp: Time = 320.0 s;
+```graphcal
+pub param dry_mass: Mass = 1200.0 kg;
+pub param fuel_mass: Mass = 2800.0 kg;
+pub param isp: Time = 320.0 s;
 ```
 
 ### `main.gcl`
 
-```
-import "./constants.gcl" { g0 };
-import "./params.gcl" { dry_mass, fuel_mass, isp };
+```graphcal
+import constants.{g0};
+import params.{dry_mass, fuel_mass, isp};
 
 dim Velocity = Length / Time;
 
@@ -50,6 +63,9 @@ node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
+
+The path before `.{...}` is the package — here, the file's own stem.
+The brace list lists the names being brought into scope.
 
 ## Running a Multi-File Project
 
@@ -66,66 +82,125 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-Graphcal resolves `import` paths relative to the importing file.
+Graphcal resolves each `import` against the package tree.
 
 ## The `import` Statement
 
-```
-import "./path/to/file.gcl" { name1, name2 };
+There are three forms; pick the one that matches what you want to
+bring into scope:
+
+```graphcal
+import constants;                  // brings module `constants`
+import constants as c;             // brings module under alias `c`
+import constants.{g0, g_mars};     // brings only `g0` and `g_mars`
 ```
 
-- The path is **relative** to the file containing the `import` declaration
-- The braces list the names to import (constants, types, dimensions, units, indexes, DAG blocks)
-- Imported params and nodes are referenced with `@` just like local ones
+The brace form is the most common in practice — it makes every
+imported name explicit.
 
 ## Import Aliasing
 
-If two files export the same name, use `as` to rename:
+If two files export the same name, rename one or both with `as`:
 
+```graphcal
+import file_a.{velocity as velocity_a};
+import file_b.{velocity as velocity_b};
 ```
-import "./file_a.gcl" { velocity as velocity_a };
-import "./file_b.gcl" { velocity as velocity_b };
+
+You can also alias a whole module:
+
+```graphcal
+import very.long.package.path as p;
+node y: Length = p.helper(...);
 ```
 
 ## What Gets Imported
 
-You can import any top-level declaration:
+`import` brings only **compile-time** names. To use a runtime value
+(like a `param` or non-`const` `node`) from another file, *include*
+the producing DAG instead of importing the value (see
+[Multi-File Projects](../language/multi-file.md#the-include-form)).
 
-| Declaration | Import | Reference |
-|-------------|--------|-----------|
-| `const node` | `import "..." { name }` | `@name` |
-| `dim` | `import "..." { DimName }` | `DimName` |
-| `unit` | `import "..." { unit_name }` | `unit_name` |
-| `type` | `import "..." { TypeName }` | `TypeName` |
-| `index` | `import "..." { IndexName }` | `IndexName` |
-| `dag` | `import "..." { dag_name }` | Used with `include dag_name(...)` |
+| Declaration kind | How to import                       | How to reference |
+|------------------|-------------------------------------|------------------|
+| `const node`     | `import file.{name}`                | `@name`          |
+| `dim`            | `import file.{DimName}`             | `DimName`        |
+| `unit`           | `import file.{unit_name}`           | `unit_name`      |
+| `type`           | `import file.{TypeName}`            | `TypeName`       |
+| `index`          | `import file.{IndexName}`           | `IndexName`      |
+| `dag`            | `import file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
+
+## Promoting to a Real Package
+
+Once a project grows beyond a handful of files in one directory, add
+a `graphcal.toml` manifest at the project root. This makes the
+package "real" — its name comes from the manifest instead of from
+each file's stem, and source files live under a dedicated source
+directory.
+
+```text
+rocket_project/
+  graphcal.toml         # [package] name = "rocket_project"
+  src/
+    rocket_project/
+      constants.gcl
+      params.gcl
+      main.gcl
+```
+
+```toml
+# graphcal.toml
+[package]
+name = "rocket_project"
+# source_dir = "src"  # optional, defaults to "src"
+```
+
+After promotion, every import in `main.gcl` is rewritten to the full
+package path:
+
+```graphcal
+import rocket_project.constants.{g0};
+import rocket_project.params.{dry_mass, fuel_mass, isp};
+```
+
+The semantics are identical to the virtual-package version — only
+the prefix changes. The LSP rename refactor handles this rewrite
+mechanically.
 
 ## Circular Import Detection
 
 Graphcal detects circular imports at compile time:
 
-```
+```graphcal
 // a.gcl
-import "./b.gcl" { x };
+import b.{x};
+
 // b.gcl
-import "./a.gcl" { y };  // ERROR: circular import
+import a.{y};   // ERROR: circular import
 ```
 
 ## Assertions Are Always Checked
 
-When you import a file, **all its assertions are automatically evaluated**, even
-if you don't import them by name. This ensures that safety invariants in library
-files are never silently skipped. See [Assertions](../language/assertions.md#assertions-in-multi-file-projects) for details.
+When you import a file, **all of its assertions are automatically
+evaluated**, even if you don't import them by name. This ensures
+that safety invariants in library files are never silently skipped.
+See
+[Assertions](../language/assertions.md#assertions-in-multi-file-projects)
+for details.
 
 ## What You Learned
 
-- **`import`** declarations to import declarations from other files
-- **Relative paths** for file references
-- **Import aliasing** with `as`
-- **Circular import detection** at compile time
-- **Automatic assertion checking** in imported files
-- A practical **project organization** pattern
+- Every `.gcl` file is a **package** — virtual (file stem) or real
+  (manifest-backed).
+- The three `import` forms — bare, aliased, and brace list — bring
+  exactly the names you write into scope.
+- `import` is for compile-time names; runtime values cross file
+  boundaries via `include`.
+- A project graduates from a virtual package to a real package by
+  adding a `graphcal.toml` and rewriting prefixes.
+- Circular imports and assertion checks are handled automatically.
 
 ## Next Step
 
-In [Step 6](step6-indexed-values.md), you'll work with indexed collections for multi-element calculations.
+In [Step 6](step6-indexed-values.md), you'll work with indexed
+collections for multi-element calculations.
