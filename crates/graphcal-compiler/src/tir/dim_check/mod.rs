@@ -558,12 +558,8 @@ impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
         expr: &crate::syntax::ast::Expr,
         args: &[crate::syntax::ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::syntax::ast::ExprKind::InlineDagRef { module, dag, .. } = &expr.kind {
-            let key = module.as_ref().map_or_else(
-                || dag.value.to_string(),
-                |m| format!("{}::{}", m.name, dag.value),
-            );
-            self.out.insert(key);
+        if let crate::syntax::ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
+            self.out.insert(dag.value.to_string());
         }
         for b in args {
             self.visit_expr(&b.value)?;

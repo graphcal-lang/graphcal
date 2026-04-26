@@ -131,7 +131,7 @@ pub(super) fn infer_type_with_owner(
             Ok(InferredType::from(dt))
         }
 
-        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
+        ExprKind::GraphRef(ident) => {
             let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownGraphRef {
                     name: ident.value.clone(),
@@ -387,14 +387,8 @@ pub(super) fn infer_type_with_owner(
             unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
         }
 
-        ExprKind::InlineDagRef {
-            module,
-            dag,
-            args,
-            output,
-        } => infer_inline_dag_ref(
+        ExprKind::InlineDagRef { dag, args, output } => infer_inline_dag_ref(
             expr,
-            module.as_ref(),
             dag,
             args,
             output,
@@ -421,7 +415,6 @@ pub(super) fn infer_type_with_owner(
 )]
 fn infer_inline_dag_ref(
     expr: &Expr,
-    module: Option<&crate::syntax::ast::Ident>,
     dag: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     args: &[crate::syntax::ast::ParamBinding],
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
@@ -432,18 +425,14 @@ fn infer_inline_dag_ref(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let key = module.as_ref().map_or_else(
-        || dag.value.to_string(),
-        |m| format!("{}::{}", m.name, dag.value),
-    );
-    let qualified_span = module.as_ref().map_or_else(|| dag.span, |_| expr.span);
+    let key = dag.value.to_string();
 
     let dag_tir = dag_tirs
         .get(&key)
         .ok_or_else(|| GraphcalError::UnknownDag {
             name: key.clone(),
             src: src.clone(),
-            span: qualified_span.into(),
+            span: dag.span.into(),
         })?;
 
     // Map param/node member names to their pre-resolved declared types.

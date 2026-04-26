@@ -139,13 +139,6 @@ impl ExprVisitor for RefCollector<'_> {
         Ok(())
     }
 
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind {
-            self.handle_graph_ref(ident)?;
-        }
-        Ok(())
-    }
-
     fn visit_const_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::ConstRef(ident) = &expr.kind {
             self.handle_const_ref(ident)?;
@@ -266,13 +259,9 @@ pub(super) fn extract_all_refs(
 /// `GraphRefDetector`). Implementors record the observation however they
 /// like — as a typed `ScopedName`, a raw `String`, or a `bool` flag.
 trait GraphRefSink {
-    /// Called for each local `@name` reference. `name` is the bare identifier.
+    /// Called for each `@name` reference. `name` is the bare identifier.
+    /// (Qualified `@module.name` is no longer accepted by the parser.)
     fn on_local(&mut self, name: &str);
-    /// Called for each `module::name` qualified reference. Default: fall back
-    /// to `on_local(name)` for consumers that don't distinguish the module.
-    fn on_qualified(&mut self, _module: &str, name: &str) {
-        self.on_local(name);
-    }
 }
 
 /// Generic visitor that routes every observed graph reference through a
@@ -301,19 +290,6 @@ impl<S: GraphRefSink> ExprVisitor for GraphRefVisitor<'_, S> {
         Ok(())
     }
 
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef {
-            module,
-            name: ident,
-        } = &expr.kind
-        {
-            let name = ident.value.as_str();
-            if self.should_record(name) {
-                self.sink.on_qualified(&module.name, name);
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Sink that stores every observed ref name as a `String` (qualified refs drop the module).
@@ -395,9 +371,6 @@ pub fn collect_scoped_graph_refs(
     impl GraphRefSink for ScopedSink<'_> {
         fn on_local(&mut self, name: &str) {
             self.refs.insert(ScopedName::local(name));
-        }
-        fn on_qualified(&mut self, module: &str, name: &str) {
-            self.refs.insert(ScopedName::qualified(module, name));
         }
     }
     let mut sink = ScopedSink { refs };

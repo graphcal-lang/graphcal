@@ -323,38 +323,12 @@ pub fn lower_dag_body_to_ir(
 /// visible in the dag's registry.
 fn split_dag_body_imports(
     body: &[crate::syntax::ast::Declaration],
-    parent_const_names: &HashSet<String>,
+    _parent_const_names: &HashSet<String>,
 ) -> (Vec<crate::syntax::ast::Declaration>, ImportedValueNames) {
-    use crate::syntax::ast::{ImportKind, ImportPath};
-
-    let mut pure_body = Vec::with_capacity(body.len());
-    let mut imported_names = ImportedValueNames::default();
-
-    for decl in body {
-        if let DeclKind::Import(import_decl) = &decl.kind
-            && matches!(import_decl.path, ImportPath::ParentScope { .. })
-        {
-            if let ImportKind::Selective(items) = &import_decl.kind {
-                for item in items {
-                    let orig_name = item.name.name.as_str();
-                    let local_name = item.local_name().to_string();
-                    if parent_const_names.contains(orig_name) {
-                        imported_names
-                            .const_names
-                            .push((ScopedName::local(local_name), item.name.span));
-                    }
-                    // Type-system items flow in via `merge_from_registry`. For
-                    // anything else (unknown names, runtime items), leave it
-                    // alone — the caller's existing include-time validation
-                    // still runs and will surface the error with its own span.
-                }
-            }
-            continue;
-        }
-        pure_body.push(decl.clone());
-    }
-
-    (pure_body, imported_names)
+    // Parent-scope imports were removed from the language (Concept 9 — strict
+    // isolation, no lexical inheritance into inline DAGs). All declarations
+    // pass through unchanged.
+    (body.to_vec(), ImportedValueNames::default())
 }
 
 /// Remove and return the type annotation for `name`, or raise an internal error
@@ -1465,7 +1439,6 @@ pub(crate) fn substitute_type_names_in_expr(
         | ExprKind::QualifiedNameRef { .. }
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::QualifiedConstRef { .. }
         | ExprKind::VariantLiteral { .. } => {}
 
