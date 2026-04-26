@@ -271,7 +271,6 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral { .. }
-        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::QualifiedConstRef { .. } => return,
 
         ExprKind::InlineDagRef { args, .. } => {
