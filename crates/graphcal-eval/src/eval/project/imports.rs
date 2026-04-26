@@ -135,17 +135,14 @@ pub(super) fn process_instantiated_include<'a>(
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
-        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
-            if let Some(alias_ident) = alias {
-                alias_ident.name.clone()
-            } else {
-                derive_module_name_from_import_path(&include_decl.path, file_src)?
-            }
-        }
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => alias.as_ref().map_or_else(
+            || derive_module_name_from_import_path(&include_decl.path),
+            |alias_ident| alias_ident.name.clone(),
+        ),
         graphcal_compiler::syntax::ast::ImportKind::Selective(_) => {
-            // For selective instantiated includes, we still need a prefix
-            // for the merged declarations. Derive from filename.
-            derive_module_name_from_import_path(&include_decl.path, file_src)?
+            // For selective instantiated includes, we still need a prefix for
+            // the merged declarations. Derive from the path's leaf segment.
+            derive_module_name_from_import_path(&include_decl.path)
         }
     };
 
@@ -522,43 +519,13 @@ pub(super) fn process_inline_dag_include(
     ctx.module_map
         .insert(prefix.clone(), (sentinel_dag_id, include_decl.path.span()));
 
-    // Create a virtual File from the DAG body, filtering out `import ..` declarations.
-    // Import .. declarations are processed separately to populate the DAG's imported names.
-    let mut dag_body_decls = Vec::new();
-    let mut dag_imported_names = ImportedValueNames::default();
-    let mut dag_parent_type_decls = Vec::new();
-
-    for body_decl in &dag_def.body {
-        match &body_decl.kind {
-            DeclKind::Import(import_decl) if import_decl.path.is_parent_scope() => {
-                if is_cross_file {
-                    // For cross-file DAGs, resolve parent scope items and include
-                    // const declarations directly in the DAG body (since the parent
-                    // file's values are not in the importing file's IR).
-                    process_cross_file_parent_scope_import(
-                        &import_decl.kind,
-                        parent_ast,
-                        file_src,
-                        &mut dag_body_decls,
-                        &mut dag_parent_type_decls,
-                    )?;
-                } else {
-                    // For same-file DAGs, register names for resolution; the actual
-                    // values are available in the parent file's IR.
-                    process_parent_scope_import(
-                        &import_decl.kind,
-                        parent_ast,
-                        file_src,
-                        &mut dag_imported_names,
-                        &mut dag_parent_type_decls,
-                    )?;
-                }
-            }
-            _ => {
-                dag_body_decls.push(body_decl.clone());
-            }
-        }
-    }
+    // Concept 9: inline DAGs are strictly isolated. There are no parent-scope
+    // imports to filter out — every name a DAG uses must come from its own
+    // declarations or its own `import` statements.
+    let dag_body_decls: Vec<_> = dag_def.body.clone();
+    let dag_imported_names = ImportedValueNames::default();
+    let dag_parent_type_decls: Vec<graphcal_compiler::syntax::ast::Declaration> = Vec::new();
+    let _ = (is_cross_file, parent_ast); // unused after removing parent-scope handling
 
     let dag_body = graphcal_compiler::syntax::ast::File {
         declarations: dag_body_decls,
@@ -809,172 +776,23 @@ pub(super) fn process_inline_dag_include(
     Ok(())
 }
 
-/// Process `import .. { ... }` declarations inside a DAG body.
-///
-/// Resolves the imported items to compile-time declarations in the parent scope
-/// and populates the DAG's imported names.
-pub(super) fn process_parent_scope_import(
-    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
-    parent_ast: &graphcal_compiler::syntax::ast::File,
-    file_src: &NamedSource<Arc<String>>,
-    dag_imported_names: &mut ImportedValueNames,
-    dag_parent_type_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
-) -> Result<(), CompileError> {
-    let names = match import_kind {
-        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => names,
-        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
-            // `import .. as alias;` or `import ..;` — not supported (semantics unclear).
-            // Only selective parent scope imports are supported.
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
-                src: file_src.clone(),
-                span: (0..0).into(),
-            }));
-        }
-    };
-
-    for import_item in names {
-        let orig_name = &import_item.name.name;
-        let local_name = import_item.local_name().to_string();
-
-        // Find the declaration in the parent scope.
-        let parent_decl = parent_ast.declarations.iter().find(|d| match &d.kind {
-            DeclKind::ConstNode(c) => c.name.value.as_str() == orig_name,
-            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
-            DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
-            DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
-            DeclKind::Type(t) => t.name.value.as_str() == orig_name,
-            DeclKind::UnionType(t) => t.name.value.as_str() == orig_name,
-            DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
-            DeclKind::Dag(dag) => dag.name.value.as_str() == orig_name,
-            // Runtime items and other declarations are NOT importable via `import ..`.
-            _ => false,
-        });
-
-        let parent_decl = parent_decl.ok_or_else(|| {
-            CompileError::Eval(GraphcalError::ImportNameNotFound {
-                name: orig_name.clone(),
-                file_path: "..".to_string(),
-                src: file_src.clone(),
-                span: import_item.name.span.into(),
-            })
-        })?;
-
-        // Classify the imported item.
-        match &parent_decl.kind {
-            DeclKind::ConstNode(_) => {
-                let scoped = ScopedName::Local(local_name);
-                dag_imported_names
-                    .const_names
-                    .push((scoped, import_item.name.span));
-            }
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
-            | DeclKind::Index(_) => {
-                // Type-system declarations — need to be registered in the DAG's registry.
-                dag_parent_type_decls.push(parent_decl.clone());
-            }
-            // DAG definitions and other items don't need registration in imported_names.
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-/// Process `import .. { ... }` declarations inside a cross-file DAG body.
-///
-/// Unlike same-file DAGs where parent scope const values are available in the
-/// importing file's IR, cross-file DAGs must include the parent const declarations
-/// directly in the DAG body. Type-system declarations are handled via the
-/// `dag_parent_type_decls` mechanism as usual.
-pub(super) fn process_cross_file_parent_scope_import(
-    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
-    parent_ast: &graphcal_compiler::syntax::ast::File,
-    file_src: &NamedSource<Arc<String>>,
-    dag_body_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
-    dag_parent_type_decls: &mut Vec<graphcal_compiler::syntax::ast::Declaration>,
-) -> Result<(), CompileError> {
-    let names = match import_kind {
-        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => names,
-        graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "module-style `import ..` is not supported; use `import .. { name1, name2 }` to import specific items from the parent scope".to_string(),
-                src: file_src.clone(),
-                span: (0..0).into(),
-            }));
-        }
-    };
-
-    for import_item in names {
-        let orig_name = &import_item.name.name;
-
-        // Find the declaration in the parent scope.
-        let parent_decl = parent_ast.declarations.iter().find(|d| match &d.kind {
-            DeclKind::ConstNode(c) => c.name.value.as_str() == orig_name,
-            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == orig_name,
-            DeclKind::Dimension(dim) => dim.name.value.as_str() == orig_name,
-            DeclKind::Unit(u) => u.name.value.as_str() == orig_name,
-            DeclKind::Type(t) => t.name.value.as_str() == orig_name,
-            DeclKind::UnionType(t) => t.name.value.as_str() == orig_name,
-            DeclKind::Index(idx) => idx.name.value.as_str() == orig_name,
-            DeclKind::Dag(dag) => dag.name.value.as_str() == orig_name,
-            _ => false,
-        });
-
-        let parent_decl = parent_decl.ok_or_else(|| {
-            CompileError::Eval(GraphcalError::ImportNameNotFound {
-                name: orig_name.clone(),
-                file_path: "..".to_string(),
-                src: file_src.clone(),
-                span: import_item.name.span.into(),
-            })
-        })?;
-
-        match &parent_decl.kind {
-            DeclKind::ConstNode(_) => {
-                // Include const declarations directly in the DAG body so they
-                // become part of the DAG's IR and get merged with prefixing.
-                dag_body_decls.push(parent_decl.clone());
-            }
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
-            | DeclKind::Index(_) => {
-                dag_parent_type_decls.push(parent_decl.clone());
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
 /// Check whether a multi-segment `ModulePath` include is a bare module path
-/// DAG reference.  This is the case when:
-/// 1. The path is a `ModulePath` with 2+ segments, AND
+/// DAG reference. This is the case when:
+/// 1. The path has 2+ segments, AND
 /// 2. The resolved target file's AST contains a `dag` definition whose name
 ///    matches the last segment of the module path.
 ///
-/// For example, `include pkg/lib/double(...)` where `pkg/lib.gcl` defines
+/// For example, `include pkg.lib.double(...)` where `pkg/lib.gcl` defines
 /// `dag double { ... }`.
 pub(super) fn is_bare_module_dag_ref(
-    import_path: &ImportPath,
+    import_path: &ModulePath,
     resolved_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     project: &crate::loader::LoadedProject,
 ) -> bool {
-    let segments = match import_path {
-        ImportPath::ModulePath { segments, .. } if segments.len() >= 2 => segments,
-        _ => return false,
-    };
-
-    // Safety: the match guard above ensures segments.len() >= 2
-    let Some(last_seg) = segments.last() else {
+    if import_path.segments.len() < 2 {
+        return false;
+    }
+    let Some(last_seg) = import_path.segments.last() else {
         return false;
     };
     let last_segment = &last_seg.name;
@@ -1008,7 +826,7 @@ pub(super) fn is_bare_module_dag_ref(
 pub(super) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    import_path: &graphcal_compiler::syntax::ast::ImportPath,
+    import_path: &graphcal_compiler::syntax::ast::ModulePath,
     import_kind: &graphcal_compiler::syntax::ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
@@ -1102,11 +920,10 @@ pub(super) fn process_non_instantiated_import<'a>(
             }
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
-            let module_name = if let Some(alias_ident) = alias {
-                alias_ident.name.clone()
-            } else {
-                derive_module_name_from_import_path(import_path, file_src)?
-            };
+            let module_name = alias.as_ref().map_or_else(
+                || derive_module_name_from_import_path(import_path),
+                |alias_ident| alias_ident.name.clone(),
+            );
             if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
                 return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                     name: module_name,
@@ -1189,11 +1006,9 @@ pub(super) fn check_dag_recursion(
         let mut includes = Vec::new();
         for decl in &dag.body {
             if let DeclKind::Include(inc) = &decl.kind
-                && let graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. } =
-                    &inc.path
-                && segments.len() == 1
+                && inc.path.segments.len() == 1
             {
-                let target = segments[0].name.as_str();
+                let target = inc.path.segments[0].name.as_str();
                 if dag_definitions.contains_key(target) {
                     includes.push(target);
                 }

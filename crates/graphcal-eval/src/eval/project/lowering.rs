@@ -800,10 +800,10 @@ pub(super) fn build_dep_imported_values(
 ///
 /// When `is_import` is `true`, runtime values are skipped (import semantics).
 pub(super) fn build_dep_import_values_for_kind(
-    import_path: &ImportPath,
+    import_path: &ModulePath,
     import_kind: &graphcal_compiler::syntax::ast::ImportKind,
     trans_dep: &EvaluatedFile,
-    dep_src: &NamedSource<Arc<String>>,
+    _dep_src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     is_import: bool,
@@ -836,10 +836,7 @@ pub(super) fn build_dep_import_values_for_kind(
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
-                || {
-                    derive_module_name_from_import_path(import_path, dep_src)
-                        .unwrap_or_else(|_| "dep".to_string())
-                },
+                || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.name.clone(),
             );
             let import_span = import_path.span();
