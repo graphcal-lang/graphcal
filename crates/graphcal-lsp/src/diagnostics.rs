@@ -407,8 +407,8 @@ mod tests {
         // are OK because `param` is implicitly bindable.
         let source = concat!(
             "pub(bind) index Phase = { Design, Test };\n",
-            "param x: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };\n",
-            "node design: Dimensionless = @x[Phase::Design];\n",
+            "param x: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };\n",
+            "node design: Dimensionless = @x[Phase.Design];\n",
         );
         let diags = produce_diagnostics(source, "test.gcl");
         assert!(!diags.is_empty());

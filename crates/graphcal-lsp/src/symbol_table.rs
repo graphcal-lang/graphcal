@@ -1278,7 +1278,7 @@ fn collect_expr_refs(
             for arm in arms {
                 let variant_name = arm.pattern.variant_name.value.to_string();
 
-                // If the pattern has a qualified index (e.g., Maneuver::Departure),
+                // If the pattern has a qualified index (e.g., Maneuver.Departure),
                 // add a reference for the index name too.
                 if let Some(qi) = &arm.pattern.qualified_index {
                     table.references.push(ReferenceInfo {
@@ -1814,7 +1814,7 @@ param q: Int[I]
                 variant: "Launch".to_string()
             }
             .to_string(),
-            "Phase::Launch"
+            "Phase.Launch"
         );
         assert_eq!(
             SymbolKey::Field("thrust".to_string()).to_string(),

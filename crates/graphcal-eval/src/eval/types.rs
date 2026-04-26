@@ -39,7 +39,7 @@ pub enum Value {
     },
     Bool(bool),
     Int(i64),
-    /// A label value from a named index (e.g., `Maneuver::Departure`).
+    /// A label value from a named index (e.g., `Maneuver.Departure`).
     Label {
         /// The index name (e.g., `Maneuver`).
         index_name: IndexName,

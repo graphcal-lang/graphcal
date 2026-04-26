@@ -786,7 +786,7 @@ fn eval_assertions_indexed_fail() {
         "expected within_limits FAIL: {stderr}"
     );
     assert!(
-        stderr.contains("(Mode::Normal, Phase::Cruise)"),
+        stderr.contains("(Mode.Normal, Phase.Cruise)"),
         "expected parenthesized multi-index path in failure message: {stderr}"
     );
 }
@@ -1267,8 +1267,8 @@ fn eval_expected_fail_indexed_partial() {
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("power_ok") && stderr.contains("FAIL") && stderr.contains("Mode::Eco"),
-        "expected power_ok FAIL with Mode::Eco: {stderr}"
+        stderr.contains("power_ok") && stderr.contains("FAIL") && stderr.contains("Mode.Eco"),
+        "expected power_ok FAIL with Mode.Eco: {stderr}"
     );
 }
 

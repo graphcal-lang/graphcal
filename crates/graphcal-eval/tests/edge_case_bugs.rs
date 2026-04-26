@@ -547,9 +547,9 @@ fn sum_of_indexed_values() {
     let source = r#"
 pub index Maneuver = { Alpha, Beta, Charlie };
 param x: Dimensionless[Maneuver] = {
-    Maneuver::Alpha: 1.0,
-    Maneuver::Beta: 2.0,
-    Maneuver::Charlie: 3.0,
+    Maneuver.Alpha: 1.0,
+    Maneuver.Beta: 2.0,
+    Maneuver.Charlie: 3.0,
 };
 node total: Dimensionless = sum(@x);
 "#;
@@ -566,9 +566,9 @@ fn mean_of_indexed_values() {
     let source = r#"
 pub index Maneuver = { Alpha, Beta, Charlie };
 param x: Dimensionless[Maneuver] = {
-    Maneuver::Alpha: 1.0,
-    Maneuver::Beta: 2.0,
-    Maneuver::Charlie: 3.0,
+    Maneuver.Alpha: 1.0,
+    Maneuver.Beta: 2.0,
+    Maneuver.Charlie: 3.0,
 };
 node avg: Dimensionless = mean(@x);
 "#;

@@ -1008,7 +1008,7 @@ fn parse_attribute_expected_fail_no_args() {
 
 #[test]
 fn parse_attribute_qualified_path() {
-    let file = Parser::new("#[expected_fail(Mode::Boost)]\nassert x = true;")
+    let file = Parser::new("#[expected_fail(Mode.Boost)]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
@@ -1023,7 +1023,7 @@ fn parse_attribute_qualified_path() {
 
 #[test]
 fn parse_attribute_multiple_qualified_paths() {
-    let file = Parser::new("#[expected_fail(Mode::Boost, Mode::Eco)]\nassert x = true;")
+    let file = Parser::new("#[expected_fail(Mode.Boost, Mode.Eco)]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
@@ -1042,7 +1042,7 @@ fn parse_attribute_multiple_qualified_paths() {
 
 #[test]
 fn parse_attribute_group_arg() {
-    let file = Parser::new("#[expected_fail((Mode::Boost, Phase::Launch))]\nassert x = true;")
+    let file = Parser::new("#[expected_fail((Mode.Boost, Phase.Launch))]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
@@ -1065,7 +1065,7 @@ fn parse_attribute_group_arg() {
 
 #[test]
 fn parse_attribute_multiple_groups() {
-    let source = "#[expected_fail((Mode::Boost, Phase::Launch), (Mode::Eco, Phase::Cruise))]\nassert x = true;";
+    let source = "#[expected_fail((Mode.Boost, Phase.Launch), (Mode.Eco, Phase.Cruise))]\nassert x = true;";
     let file = Parser::new(source).parse_file().unwrap();
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.args.len(), 2);

@@ -14,7 +14,7 @@ pub enum DeclaredType {
     Int,
     /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
+    /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
     Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),

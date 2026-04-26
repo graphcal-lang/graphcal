@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn parse_map_literal() {
-        let source = "param dv: Velocity[Maneuver] = { Maneuver::Departure: 2.0 km/s, Maneuver::Correction: 0.05 km/s };";
+        let source = "param dv: Velocity[Maneuver] = { Maneuver.Departure: 2.0 km/s, Maneuver.Correction: 0.05 km/s };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {

@@ -1442,7 +1442,7 @@ fn project_pub_import_reexport_selective() {
 #[test]
 fn project_include_overrides_index_no_param_binding_v005() {
     // V005: overriding `Phase` orphans the `cost` default (which mentions
-    // `Phase::Design` / `Phase::Build`) because the importer forgot to
+    // `Phase.Design` / `Phase.Build`) because the importer forgot to
     // re-bind `cost` in the same include statement.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/multi/include_overrides_index_no_param_binding/main.gcl");

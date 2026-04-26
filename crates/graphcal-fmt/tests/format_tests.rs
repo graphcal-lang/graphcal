@@ -428,8 +428,8 @@ fn format_map_literal_not_converted_to_table() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.46,
-    Maneuver::Correction: 0.12,
+    Maneuver.Departure: 2.46,
+    Maneuver.Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -438,7 +438,7 @@ param dv: Dimensionless[Maneuver] = {
         "Map literal should not be converted to table: {formatted}"
     );
     assert!(
-        formatted.contains("Maneuver::Departure"),
+        formatted.contains("Maneuver.Departure"),
         "Map literal should use qualified syntax: {formatted}"
     );
 }
@@ -961,9 +961,9 @@ index Phase = { Coast, Burn };
 node x: Dimensionless[Phase] = for p: Phase {
     match p {
         // coasting
-        Phase::Coast => 0.0,
+        Phase.Coast => 0.0,
         // burning
-        Phase::Burn => 1.0,
+        Phase.Burn => 1.0,
     }
 };
 ";
@@ -977,7 +977,7 @@ node x: Dimensionless[Phase] = for p: Phase {
         "Comment before match arm lost: {formatted}"
     );
     let coast_comment = formatted.find("// coasting").unwrap();
-    let coast_arm = formatted.find("Phase::Coast =>").unwrap();
+    let coast_arm = formatted.find("Phase.Coast =>").unwrap();
     assert!(
         coast_comment < coast_arm,
         "Comment should appear before its match arm: {formatted}"
@@ -989,8 +989,8 @@ fn preserves_trailing_comment_in_map_literal() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.46, // departure
-    Maneuver::Correction: 0.12, // correction
+    Maneuver.Departure: 2.46, // departure
+    Maneuver.Correction: 0.12, // correction
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1019,9 +1019,9 @@ fn preserves_leading_comment_in_map_literal() {
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
     // departure entry
-    Maneuver::Departure: 2.46,
+    Maneuver.Departure: 2.46,
     // correction entry
-    Maneuver::Correction: 0.12,
+    Maneuver.Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1030,7 +1030,7 @@ param dv: Dimensionless[Maneuver] = {
         "Leading comment on map entry lost: {formatted}"
     );
     let comment_pos = formatted.find("// departure entry").unwrap();
-    let entry_pos = formatted.find("Maneuver::Departure").unwrap();
+    let entry_pos = formatted.find("Maneuver.Departure").unwrap();
     assert!(
         comment_pos < entry_pos,
         "Leading comment should appear before map entry: {formatted}"

@@ -21,7 +21,7 @@ pub struct Attribute {
 /// An argument inside an attribute's parenthesized list.
 ///
 /// Supports plain identifiers (`pressure_safe`), qualified paths
-/// (`Index::Variant`), and parenthesized groups (`(Mode::Boost, Phase::Launch)`).
+/// (`Index::Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
     /// A path of one or more `::` separated segments: `foo`, `Index::Variant`.
@@ -1036,7 +1036,7 @@ pub enum ExprKind {
         type_args: Vec<TypeExpr>,
         fields: Vec<FieldInit>,
     },
-    /// Map literal: `{ Maneuver::Departure: 2.46 km/s, Maneuver::Correction: 0.05 km/s }`
+    /// Map literal: `{ Maneuver.Departure: 2.46 km/s, Maneuver.Correction: 0.05 km/s }`
     MapLiteral { entries: Vec<MapEntry> },
     /// Table literal: `table[Phase, 3] { ... }`
     /// Semantically equivalent to `MapLiteral` but preserves tabular structure for formatting.
@@ -1050,7 +1050,7 @@ pub enum ExprKind {
         bindings: Vec<ForBinding>,
         body: Box<Expr>,
     },
-    /// Index access: `@delta_v[m]`, `@delta_v[Maneuver::Departure]`, `@P[a, b]`
+    /// Index access: `@delta_v[m]`, `@delta_v[Maneuver.Departure]`, `@P[a, b]`
     IndexAccess {
         expr: Box<Expr>,
         args: Vec<IndexArg>,
@@ -1087,8 +1087,8 @@ pub enum ExprKind {
         scrutinees: Vec<Expr>,
         arms: Vec<TupleMatchArm>,
     },
-    /// Standalone index variant reference: `Maneuver::Departure`
-    /// Used in comparisons with loop variables: `m == Maneuver::Departure`
+    /// Standalone index variant reference: `Maneuver.Departure`
+    /// Used in comparisons with loop variables: `m == Maneuver.Departure`
     VariantLiteral {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
@@ -1167,8 +1167,8 @@ pub struct MapEntryKey {
 
 /// An entry in a map literal.
 ///
-/// Single-axis: `Maneuver::Departure: 2.46 km/s` (keys has 1 element)
-/// Multi-axis:  `(Phase::Launch, Maneuver::Departure): 2.46 km/s` (keys has 2+ elements)
+/// Single-axis: `Maneuver.Departure: 2.46 km/s` (keys has 1 element)
+/// Multi-axis:  `(Phase.Launch, Maneuver.Departure): 2.46 km/s` (keys has 2+ elements)
 #[derive(Debug, Clone)]
 pub struct MapEntry {
     pub keys: Vec<MapEntryKey>,
@@ -1259,7 +1259,7 @@ impl GenericArg {
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
 pub enum IndexArg {
-    /// Qualified variant: `Maneuver::Departure`
+    /// Qualified variant: `Maneuver.Departure`
     Variant {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
@@ -1295,10 +1295,10 @@ pub struct TupleMatchArm {
     pub span: Span,
 }
 
-/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Maneuver::Departure`
+/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Maneuver.Departure`
 #[derive(Debug, Clone)]
 pub struct MatchPattern {
-    /// For index variant match: `Maneuver::Departure` → `Some(Spanned<IndexName>)`
+    /// For index variant match: `Maneuver.Departure` → `Some(Spanned<IndexName>)`
     /// For tagged union match: `Nominal { ... }` → `None`
     pub qualified_index: Option<Spanned<IndexName>>,
     pub variant_name: Spanned<VariantName>,

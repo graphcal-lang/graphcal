@@ -49,7 +49,7 @@ pub enum InferredType {
     Fin(NatLinearForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
+    /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
     Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),

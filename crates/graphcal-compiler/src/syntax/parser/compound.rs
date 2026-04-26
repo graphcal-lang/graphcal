@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn parse_index_access_with_variant() {
-        let source = "node x: Velocity = @dv[Maneuver::Departure];";
+        let source = "node x: Velocity = @dv[Maneuver.Departure];";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {

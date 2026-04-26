@@ -830,11 +830,11 @@ index Component = { ComponentA };
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Phase::Launch]
+      [Phase.Launch]
       :           _, _;
       ComponentA: 1, 2;
 
-      [Phase::Cruise]
+      [Phase.Cruise]
       :           _, _;
       ComponentA: 3, 4;
   };
