@@ -2,6 +2,6 @@
 dim Velocity = Length / Time;
 
 #[allow_defaults]
-include "./rocket.gcl"(dry_mass: 800.0 kg) as r;
+include rocket(dry_mass: 800.0 kg) as r;
 
-node result: Velocity = @r::delta_v;
+node result: Velocity = @r.delta_v;

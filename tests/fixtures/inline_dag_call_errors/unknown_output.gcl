@@ -1,9 +1,9 @@
 // Error fixture: inline call projects a name that is not a node of the dag.
-// Expected diagnostic: `graphcal::G005` — unknown output in inline dag call.
+// Expected diagnostic: `graphcal.G005` — unknown output in inline dag call.
 dag id_len {
     param v: Length;
     node result: Length = @v;
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(v: @src)::not_declared;
+node y: Length = @id_len(v: @src).not_declared;

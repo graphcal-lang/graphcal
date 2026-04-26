@@ -1,7 +1,7 @@
 // nested_indexed_map.gcl -- nested map literals with label-indexed elements
 // are rejected. When both axes are label indexes, use tuple keys instead.
 // Note: nesting IS allowed when the inner index is a range index, e.g.,
-//   { Maneuver::Departure: for t: TimeStep { ... }, ... }
+//   { Maneuver.Departure: for t: TimeStep { ... }, ... }
 pub dim Velocity = Length / Time;
 
 pub index Maneuver = { Departure, Correction, Insertion };
@@ -9,18 +9,18 @@ pub index Phase = { Coast, Burn };
 
 // This should be rejected: inner map literal produces an Indexed type
 // with a label (named) index. Use tuple keys instead:
-//   { (Maneuver::Departure, Phase::Coast): 0.0 m/s, ... }
+//   { (Maneuver.Departure, Phase.Coast): 0.0 m/s, ... }
 param bad_nested: Velocity[Maneuver, Phase] = {
-    Maneuver::Departure: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 2.46 km/s,
+    Maneuver.Departure: {
+        Phase.Coast: 0.0 m/s,
+        Phase.Burn: 2.46 km/s,
     },
-    Maneuver::Correction: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 0.12 km/s,
+    Maneuver.Correction: {
+        Phase.Coast: 0.0 m/s,
+        Phase.Burn: 0.12 km/s,
     },
-    Maneuver::Insertion: {
-        Phase::Coast: 0.0 m/s,
-        Phase::Burn: 1.83 km/s,
+    Maneuver.Insertion: {
+        Phase.Coast: 0.0 m/s,
+        Phase.Burn: 1.83 km/s,
     },
 };

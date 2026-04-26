@@ -2,4 +2,4 @@
 // local type → compiles. Positive companion to the V006 fixture.
 pub type Inner { size: Length }
 
-pub include "./container.gcl"(Element: Inner) as c;
+pub include container(Element: Inner) as c;

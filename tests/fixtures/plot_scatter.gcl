@@ -7,15 +7,15 @@ pub index Maneuver = { Departure, MidCourse, Insertion };
 pub dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 3.2 km/s,
-    Maneuver::MidCourse: 0.15 km/s,
-    Maneuver::Insertion: 1.8 km/s,
+    Maneuver.Departure: 3.2 km/s,
+    Maneuver.MidCourse: 0.15 km/s,
+    Maneuver.Insertion: 1.8 km/s,
 };
 
 param spacecraft_mass: Mass[Maneuver] = {
-    Maneuver::Departure: 5000.0 kg,
-    Maneuver::MidCourse: 4200.0 kg,
-    Maneuver::Insertion: 3800.0 kg,
+    Maneuver.Departure: 5000.0 kg,
+    Maneuver.MidCourse: 4200.0 kg,
+    Maneuver.Insertion: 3800.0 kg,
 };
 
 pub plot mass_vs_delta_v = {

@@ -44,7 +44,7 @@ dag hohmann_transfer {
     };
 }
 
-include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt) { result as transfer };
+include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt).{ result as transfer };
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;

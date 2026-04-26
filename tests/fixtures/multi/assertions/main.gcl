@@ -1,6 +1,6 @@
 // main.gcl -- cross-file assumes test
-include "./checks.gcl" { limit };
-import "./checks.gcl" { limit_positive };
+import checks.{ limit };
+import checks.{ limit_positive };
 
 param value: Dimensionless = 42.0;
 

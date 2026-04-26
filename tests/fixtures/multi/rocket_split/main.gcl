@@ -1,6 +1,6 @@
 // main.gcl -- rocket equation using imported constants and included params
-import "./constants.gcl" { g0 };
-include "./params.gcl" { dry_mass, fuel_mass, isp };
+import constants.{ g0 };
+import params.{ dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 

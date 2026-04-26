@@ -2,8 +2,8 @@
 pub(bind) index Phase = { Design, Build };
 
 param cost: Dimensionless[Phase] = {
-    Phase::Design: 100.0,
-    Phase::Build: 200.0,
+    Phase.Design: 100.0,
+    Phase.Build: 200.0,
 };
 
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });

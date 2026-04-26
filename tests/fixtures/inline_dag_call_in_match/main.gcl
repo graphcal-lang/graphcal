@@ -10,18 +10,18 @@ dag id_len {
 }
 
 param dist_primary: Length[Region] = {
-    Region::A: 1.0 m,
-    Region::B: 2.0 m,
+    Region.A: 1.0 m,
+    Region.B: 2.0 m,
 };
 
 param dist_secondary: Length[Region] = {
-    Region::A: 10.0 m,
-    Region::B: 20.0 m,
+    Region.A: 10.0 m,
+    Region.B: 20.0 m,
 };
 
 node effective: Length[Source, Region] = for s: Source, r: Region {
     match s {
-        Source::Primary => @id_len(v: @dist_primary[r])::result,
-        Source::Secondary => @id_len(v: @dist_secondary[r])::result,
+        Source.Primary => @id_len(v: @dist_primary[r]).result,
+        Source.Secondary => @id_len(v: @dist_secondary[r]).result,
     }
 };

@@ -2,6 +2,6 @@
 pub dim Velocity = Length / Time;
 
 param speed: Velocity = 200.0 m/s;
-include "./lib.gcl"/double_speed(v: @speed) { result as doubled, mach as mach_number };
+include lib.double_speed(v: @speed).{ result as doubled, mach as mach_number };
 node final_result: Velocity = @doubled;
 node final_mach: Dimensionless = @mach_number;

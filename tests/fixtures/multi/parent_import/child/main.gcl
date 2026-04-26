@@ -1,9 +1,0 @@
-// child/main.gcl -- Attempts to import from parent directory using "../"
-//
-// This is expected to FAIL because the project root is the entry-point
-// file's directory (child/). The import "../lib.gcl" resolves outside
-// this boundary and is rejected by the path sandboxing check.
-include "../lib.gcl" { base_value };
-import "../lib.gcl" { scale };
-
-node result: Dimensionless = @base_value * @scale;

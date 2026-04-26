@@ -1,2 +1,2 @@
 // Error: importing a private item from another file (V001).
-include "./lib.gcl" { secret };
+import lib.{ secret };

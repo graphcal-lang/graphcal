@@ -1,4 +1,4 @@
-import "./lib.gcl" as lib;
+import lib as lib;
 
 param src: Length = 1.0 m;
-node bad: Length = @lib::scale(v: @src)::missing;
+node bad: Length = @lib.scale(v: @src).missing;

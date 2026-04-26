@@ -1,10 +1,10 @@
 // Mixed: selective import and module include from different files
-import "./constants.gcl" { g0 };
-include "./params.gcl";
+import constants.{ g0 };
+import params;
 
 dim Acceleration = Length / Time^2;
 dim Velocity = Length / Time;
 
-node v_exhaust: Velocity = @params::isp * @g0;
-node mass_ratio: Dimensionless = (@params::dry_mass + @params::fuel_mass) / @params::dry_mass;
+node v_exhaust: Velocity = @params.isp * @g0;
+node mass_ratio: Dimensionless = (@params.dry_mass + @params.fuel_mass) / @params.dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

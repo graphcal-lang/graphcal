@@ -14,5 +14,5 @@ dag circular_velocity {
 }
 
 param altitude: Length = 400000.0 m;
-include circular_velocity(alt: @altitude) { v as orbital_v };
+include circular_velocity(alt: @altitude).{ v as orbital_v };
 node result: Velocity = @orbital_v;

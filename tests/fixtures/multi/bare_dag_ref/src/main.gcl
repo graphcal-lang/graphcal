@@ -1,4 +1,4 @@
 // main.gcl -- uses bare module path to include a DAG from another file
-include bare_dag_ref/lib/double(x: 21.0) { result as y };
+include bare_dag_ref.lib/double(x: 21.0) { result as y };
 
 node answer: Dimensionless = @y;

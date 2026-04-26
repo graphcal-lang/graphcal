@@ -3,4 +3,4 @@ base dim Time;
 index TimeStep = linspace(0.0, 1.0, step: 0.5);
 
 #[allow_defaults]
-include "./lib.gcl"(Phase: TimeStep { }, cost: for t: TimeStep { 1.0 }) { cost };
+include lib(Phase: TimeStep { }, cost: for t: TimeStep { 1.0 }).{ cost };

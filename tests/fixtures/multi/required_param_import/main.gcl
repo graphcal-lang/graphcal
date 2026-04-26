@@ -1,2 +1,2 @@
 // Import a library with a required param, providing the value.
-include "./library.gcl"(radius: 6371.0 km) { circumference };
+include library(radius: 6371.0 km).{ circumference };

@@ -1,3 +1,3 @@
-include nasa/rocket { dry_mass, fuel_mass };
+include nasa.rocket.{ dry_mass, fuel_mass };
 
 node total_mass: Mass = @dry_mass + @fuel_mass;

@@ -1,6 +1,6 @@
 // main.gcl -- rebinds the lib's Speed dimension to Velocity
 dim Velocity = Length / Time;
 
-include "./lib.gcl"(Speed: Velocity { }) { v };
+include lib(Speed: Velocity { }).{ v };
 
 node result: Velocity = @v;
