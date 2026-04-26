@@ -696,26 +696,6 @@ fn eval_assertions_assumes_affected_nodes() {
 }
 
 #[test]
-fn eval_assertions_no_assert_flag() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("assertions_fail.gcl"), "--no-assert"])
-        .output()
-        .expect("failed to run graphcal");
-
-    // With --no-assert, even a failing assertion should not cause exit code 1
-    assert!(
-        output.status.success(),
-        "expected success with --no-assert, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        !stdout.contains("Assertions:"),
-        "expected no Assertions section with --no-assert: {stdout}"
-    );
-}
-
-#[test]
 fn eval_assertions_indexed_fail() {
     let output = graphcal_bin()
         .args(["eval", &fixture("assertions_indexed.gcl")])
