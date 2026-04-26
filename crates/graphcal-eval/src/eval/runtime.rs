@@ -836,6 +836,24 @@ pub(super) fn evaluate_assert_body(
     }
 }
 
+/// Evaluate one plot property expression to a `PlotFieldValue`. String
+/// literals are passed through directly (Graphcal has no runtime String
+/// value); any other expression is evaluated and converted from a
+/// `RuntimeValue`. Returns `None` on evaluation failure — plots are
+/// best-effort, so a single bad encoding/property aborts the plot.
+fn eval_plot_property(
+    expr: &graphcal_compiler::syntax::ast::Expr,
+    values: &HashMap<DeclName, RuntimeValue>,
+    local_values: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Option<PlotFieldValue> {
+    if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &expr.kind {
+        return Some(PlotFieldValue::String(s.clone()));
+    }
+    let rv = eval_expr(expr, values, local_values, ctx).ok()?;
+    Some(runtime_to_plot_field_value(&rv))
+}
+
 /// Evaluate a plot declaration, producing a `PlotSpec`.
 ///
 /// Encoding channel expressions and property expressions are evaluated and
@@ -856,20 +874,14 @@ fn evaluate_plot(
 
     // Evaluate encoding channels
     for encoding in &decl.encodings {
-        let channel = encoding.channel;
-        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &encoding.value.kind {
-            encodings.push((channel, PlotFieldValue::String(s.clone())));
-            continue;
-        }
-        let rv = eval_expr(&encoding.value, values, local_values, ctx).ok()?;
-        let field_value = runtime_to_plot_field_value(&rv);
+        let field_value = eval_plot_property(&encoding.value, values, local_values, ctx)?;
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
         let meta =
             extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry, values);
-        encoding_meta.push((channel, meta));
+        encoding_meta.push((encoding.channel, meta));
 
-        encodings.push((channel, field_value));
+        encodings.push((encoding.channel, field_value));
     }
 
     // Evaluate mark properties (e.g., stroke_width, opacity)
@@ -879,12 +891,7 @@ fn evaluate_plot(
             // Unknown mark property — skip (could be reported as a warning in the future)
             continue;
         };
-        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
-            mark_properties.push((mark_prop, PlotFieldValue::String(s.clone())));
-            continue;
-        }
-        let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
-        let field_value = runtime_to_plot_field_value(&rv);
+        let field_value = eval_plot_property(&prop.value, values, local_values, ctx)?;
         mark_properties.push((mark_prop, field_value));
     }
 
@@ -895,12 +902,7 @@ fn evaluate_plot(
             // Unknown plot property — skip
             continue;
         };
-        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &prop.value.kind {
-            properties.push((plot_prop, PlotFieldValue::String(s.clone())));
-            continue;
-        }
-        let rv = eval_expr(&prop.value, values, local_values, ctx).ok()?;
-        let field_value = runtime_to_plot_field_value(&rv);
+        let field_value = eval_plot_property(&prop.value, values, local_values, ctx)?;
         properties.push((plot_prop, field_value));
     }
 

@@ -1,7 +1,9 @@
 //! Shared symbol resolution for LSP features (hover, go-to-definition, etc.).
 
 use graphcal_compiler::syntax::span::Span;
+use tower_lsp::lsp_types::{Location, Url};
 
+use crate::convert::span_to_range;
 use crate::server::{AnalysisResult, ImportedDefinition};
 use crate::symbol_table::{DefinitionInfo, SymbolKey};
 
@@ -24,6 +26,28 @@ pub struct ResolvedSymbol<'a> {
     pub is_reference: bool,
     /// The span of the token under the cursor.
     pub cursor_span: Span,
+}
+
+/// Build an LSP `Location` (URI + range) for a `DefinitionInfo` whose source
+/// is either the active document or an imported one. Returns `None` for
+/// builtins / synthetic spans (`is_navigable` false).
+pub fn definition_location(
+    location: &SymbolLocation<'_>,
+    active_uri: &Url,
+    active_source: &str,
+) -> Option<Location> {
+    match location {
+        SymbolLocation::Local(def) => def.is_navigable().then(|| Location {
+            uri: active_uri.clone(),
+            range: span_to_range(active_source, def.name_span),
+        }),
+        SymbolLocation::Imported(imported) => {
+            imported.definition.is_navigable().then(|| Location {
+                uri: imported.uri.clone(),
+                range: span_to_range(&imported.source, imported.definition.name_span),
+            })
+        }
+    }
 }
 
 /// Resolve the symbol at the given byte offset.

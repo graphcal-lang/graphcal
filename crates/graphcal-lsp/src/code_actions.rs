@@ -80,68 +80,28 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
     }
 }
 
-/// For V002: insert `pub(bind) ` before the declaration keyword on the line
-/// containing the diagnostic.
-///
-/// The diagnostic span points to the name (e.g., `Phase` in `index Phase;`).
-/// V002 fires on required `index` / `type` / `dim` declarations — which form
-/// the bindable interface of the library — so the fix always lifts them all
-/// the way to `pub(bind)` rather than plain `pub`.
-fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    let insert_pos = find_keyword_position(source, diag.range.start.line)?;
-
-    let edit = TextEdit {
-        range: Range {
-            start: insert_pos,
-            end: insert_pos,
-        },
-        new_text: "pub(bind) ".to_string(),
-    };
-
-    let mut changes = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
-
-    Some(CodeAction {
-        title: "Add `pub(bind)` to this declaration".to_string(),
-        kind: Some(CodeActionKind::QUICKFIX),
-        diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            ..Default::default()
-        }),
-        is_preferred: Some(true),
-        ..Default::default()
-    })
-}
-
-/// For V003: insert `pub ` before the private item's declaration.
-///
-/// The diagnostic message follows the pattern:
-/// "`pub {kind}` `{pub_name}` references private `ref_kind` `{ref_name}` in its type annotation"
-///
-/// We extract `ref_name` from the message and search the source for its declaration,
-/// then insert `pub ` before the keyword.
-fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    // Extract ref_name from the message: "... references private {kind} `{ref_name}` ..."
-    let ref_name = extract_referenced_private_name(&diag.message)?;
-
-    // Find the declaration of ref_name in the source.
-    let decl_line = find_declaration_line(source, &ref_name)?;
+/// Build a quick-fix code action that inserts `prefix` (e.g. `"pub "` or
+/// `"pub(bind) "`) before the declaration keyword on `decl_line`.
+fn make_add_visibility_action(
+    diag: &Diagnostic,
+    source: &str,
+    uri: &Url,
+    decl_line: u32,
+    prefix: &str,
+    title: String,
+) -> Option<CodeAction> {
     let insert_pos = find_keyword_position(source, decl_line)?;
-
     let edit = TextEdit {
         range: Range {
             start: insert_pos,
             end: insert_pos,
         },
-        new_text: "pub ".to_string(),
+        new_text: prefix.to_string(),
     };
-
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
-
     Some(CodeAction {
-        title: format!("Add `pub` to `{ref_name}`"),
+        title,
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {
@@ -153,42 +113,50 @@ fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Optio
     })
 }
 
-/// For V006: insert `pub ` before the leaked item's declaration at the importer.
-///
-/// The diagnostic message follows the pattern:
-/// `` "re-exported <kind> `<name>`'s signature references private <kind> `<leaked_name>`" ``
-///
-/// We extract `leaked_name` and, if it is declared locally in the importer's
-/// file, insert `pub ` in front of its declaration. The alternative fix — drop
-/// the re-export marker — depends on syntactic context that is not available
-/// here, so the quick-fix focuses on the "make the symbol visible" branch.
+/// For V002: insert `pub(bind) ` before the declaration keyword on the line
+/// containing the diagnostic. V002 fires on required `index` / `type` / `dim`
+/// declarations — the bindable interface of the library — so the fix always
+/// lifts them all the way to `pub(bind)`.
+fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
+    make_add_visibility_action(
+        diag,
+        source,
+        uri,
+        diag.range.start.line,
+        "pub(bind) ",
+        "Add `pub(bind)` to this declaration".to_string(),
+    )
+}
+
+/// For V003: extract the private name referenced in the diagnostic message,
+/// find its declaration line, and insert `pub ` before the keyword.
+fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
+    let ref_name = extract_referenced_private_name(&diag.message)?;
+    let decl_line = find_declaration_line(source, &ref_name)?;
+    make_add_visibility_action(
+        diag,
+        source,
+        uri,
+        decl_line,
+        "pub ",
+        format!("Add `pub` to `{ref_name}`"),
+    )
+}
+
+/// For V006: same shape as V003 — the diagnostic exposes a "leaked" private
+/// item that needs `pub ` at its declaration. The alternative fix (drop the
+/// re-export marker) depends on syntactic context not available here.
 fn make_add_pub_action_v006(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
     let leaked_name = extract_referenced_private_name(&diag.message)?;
     let decl_line = find_declaration_line(source, &leaked_name)?;
-    let insert_pos = find_keyword_position(source, decl_line)?;
-
-    let edit = TextEdit {
-        range: Range {
-            start: insert_pos,
-            end: insert_pos,
-        },
-        new_text: "pub ".to_string(),
-    };
-
-    let mut changes = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
-
-    Some(CodeAction {
-        title: format!("Add `pub` to `{leaked_name}`"),
-        kind: Some(CodeActionKind::QUICKFIX),
-        diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            ..Default::default()
-        }),
-        is_preferred: Some(true),
-        ..Default::default()
-    })
+    make_add_visibility_action(
+        diag,
+        source,
+        uri,
+        decl_line,
+        "pub ",
+        format!("Add `pub` to `{leaked_name}`"),
+    )
 }
 
 /// Find the position of the declaration keyword on a given line.

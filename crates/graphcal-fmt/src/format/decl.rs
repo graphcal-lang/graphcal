@@ -8,8 +8,8 @@ use graphcal_compiler::syntax::ast::{
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, format_dim_expr_inline, format_expr, format_type_expr_inline,
-    format_unit_expr_inline, render_doc_to_string,
+    Formatter, INDENT, flat_alt_group, format_dim_expr_inline, format_expr,
+    format_type_expr_inline, format_unit_expr_inline, render_doc_to_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
                 .append(RcDoc::hardline())
                 .append(RcDoc::text("};"));
 
-            multi_line.flat_alt(single_line).group()
+            flat_alt_group(single_line, multi_line)
         }
         IndexDeclKind::Range { start, end, step } => {
             let header =

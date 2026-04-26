@@ -5,8 +5,8 @@ use graphcal_compiler::syntax::ast::{
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, format_type_expr_inline, format_unit_expr_inline, prepend_comments,
-    render_doc_to_string,
+    Formatter, INDENT, flat_alt_group, format_type_expr_inline, format_unit_expr_inline,
+    prepend_comments, render_doc_to_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ pub fn format_if(
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"));
 
-    multi_line.flat_alt(single_line).group()
+    flat_alt_group(single_line, multi_line)
 }
 
 pub fn format_struct_construction(
@@ -747,7 +747,7 @@ pub fn format_for_comp(
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"));
 
-    multi_line.flat_alt(single_line).group()
+    flat_alt_group(single_line, multi_line)
 }
 
 /// Format a call of the shape `head(<args>, |p1, p2| <body>)`.
@@ -801,34 +801,13 @@ pub fn format_match(
     scrutinee: &Expr,
     arms: &[MatchArm],
 ) -> RcDoc<'static> {
-    let mut arm_docs: Vec<RcDoc<'static>> = Vec::new();
-    for arm in arms {
-        // Drain leading comments before this arm
-        let leading = fmt.drain_comments_before(arm.span.offset());
-        let pattern = format_match_pattern(&arm.pattern);
-        let body = format_expr(fmt, &arm.body);
-        let arm_doc = pattern
-            .append(RcDoc::text(" => "))
-            .append(body)
-            .append(RcDoc::text(","));
-        // Drain trailing comment after this arm
-        let arm_end = arm.span.offset() + arm.span.len();
-        let trailing = fmt
-            .drain_trailing_comment(arm_end)
-            .unwrap_or_else(RcDoc::nil);
-        arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
-    }
-
-    RcDoc::text("match ")
-        .append(format_expr(fmt, scrutinee))
-        .append(RcDoc::text(" {"))
-        .append(
-            RcDoc::hardline()
-                .append(RcDoc::intersperse(arm_docs, RcDoc::hardline()))
-                .nest(INDENT),
-        )
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("}"))
+    let arm_docs = collect_arm_docs(fmt, arms.iter().map(|arm| (arm.span, &arm.body)), |i| {
+        format_match_pattern(&arms[i].pattern)
+    });
+    wrap_match_block(
+        RcDoc::text("match ").append(format_expr(fmt, scrutinee)),
+        arm_docs,
+    )
 }
 
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
@@ -867,39 +846,71 @@ pub fn format_tuple_match(
     scrutinees: &[Expr],
     arms: &[TupleMatchArm],
 ) -> RcDoc<'static> {
-    // Format scrutinees: `match (a, b)`
     let scrutinee_docs: Vec<RcDoc<'static>> =
         scrutinees.iter().map(|s| format_expr(fmt, s)).collect();
     let scrutinee_list = RcDoc::intersperse(scrutinee_docs, RcDoc::text(", "));
 
+    // Pattern formatting needs `fmt` (recurses into format_expr), so collect
+    // the pattern docs upfront before handing arm spans to the shared helper.
+    let pattern_docs: Vec<RcDoc<'static>> = arms
+        .iter()
+        .map(|arm| {
+            arm.patterns.as_ref().map_or_else(
+                || RcDoc::text("_"),
+                |patterns| {
+                    let pat_docs: Vec<RcDoc<'static>> =
+                        patterns.iter().map(|p| format_expr(fmt, p)).collect();
+                    RcDoc::text("(")
+                        .append(RcDoc::intersperse(pat_docs, RcDoc::text(", ")))
+                        .append(RcDoc::text(")"))
+                },
+            )
+        })
+        .collect();
+
+    let arm_docs = collect_arm_docs(fmt, arms.iter().map(|arm| (arm.span, &arm.body)), |i| {
+        pattern_docs[i].clone()
+    });
+
+    wrap_match_block(
+        RcDoc::text("match (")
+            .append(scrutinee_list)
+            .append(RcDoc::text(")")),
+        arm_docs,
+    )
+}
+
+/// Build per-arm docs for both `format_match` and `format_tuple_match`. Walks
+/// each arm's span, drains leading and trailing comments, formats the body
+/// expression, and assembles `pattern => body,` with comments preserved.
+///
+/// `pattern_for` returns the pre-formatted pattern doc for arm index `i`.
+fn collect_arm_docs<'a>(
+    fmt: &mut Formatter<'_>,
+    arms: impl Iterator<Item = (graphcal_compiler::syntax::span::Span, &'a Expr)>,
+    pattern_for: impl Fn(usize) -> RcDoc<'static>,
+) -> Vec<RcDoc<'static>> {
     let mut arm_docs: Vec<RcDoc<'static>> = Vec::new();
-    for arm in arms {
-        let leading = fmt.drain_comments_before(arm.span.offset());
-        let pattern_doc = arm.patterns.as_ref().map_or_else(
-            || RcDoc::text("_"),
-            |patterns| {
-                let pat_docs: Vec<RcDoc<'static>> =
-                    patterns.iter().map(|p| format_expr(fmt, p)).collect();
-                RcDoc::text("(")
-                    .append(RcDoc::intersperse(pat_docs, RcDoc::text(", ")))
-                    .append(RcDoc::text(")"))
-            },
-        );
-        let body = format_expr(fmt, &arm.body);
-        let arm_doc = pattern_doc
+    for (i, (span, body)) in arms.enumerate() {
+        let leading = fmt.drain_comments_before(span.offset());
+        let pattern = pattern_for(i);
+        let body_doc = format_expr(fmt, body);
+        let arm_doc = pattern
             .append(RcDoc::text(" => "))
-            .append(body)
+            .append(body_doc)
             .append(RcDoc::text(","));
-        let arm_end = arm.span.offset() + arm.span.len();
+        let arm_end = span.offset() + span.len();
         let trailing = fmt
             .drain_trailing_comment(arm_end)
             .unwrap_or_else(RcDoc::nil);
         arm_docs.push(prepend_comments(leading, arm_doc.append(trailing)));
     }
+    arm_docs
+}
 
-    RcDoc::text("match (")
-        .append(scrutinee_list)
-        .append(RcDoc::text(") {"))
+/// Wrap pre-formatted arm docs in the `<head> {\n  <arms>\n}` block shape.
+fn wrap_match_block(head: RcDoc<'static>, arm_docs: Vec<RcDoc<'static>>) -> RcDoc<'static> {
+    head.append(RcDoc::text(" {"))
         .append(
             RcDoc::hardline()
                 .append(RcDoc::intersperse(arm_docs, RcDoc::hardline()))

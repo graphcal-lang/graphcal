@@ -169,6 +169,13 @@ pub fn prepend_comments(leading: Option<RcDoc<'static>>, doc: RcDoc<'static>) ->
     }
 }
 
+/// Pretty-printer pattern: try `single` on one line, otherwise lay `multi`
+/// out. Both branches are required because `pretty::RcDoc::group` cannot
+/// switch between fundamentally different shapes (e.g., adding hardlines).
+pub fn flat_alt_group(single: RcDoc<'static>, multi: RcDoc<'static>) -> RcDoc<'static> {
+    multi.flat_alt(single).group()
+}
+
 /// Render an `RcDoc` to a string (for measuring column widths).
 pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
     let mut buf = Vec::new();
