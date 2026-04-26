@@ -1,4 +1,4 @@
-include nasa.orbital/transfer { transfer_dv };
+include nasa.orbital.transfer().{ transfer_dv };
 
 dim Velocity = Length / Time;
 
