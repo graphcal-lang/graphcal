@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 482
 expression: formatted
 ---
 // plot_basic.gcl -- Basic plot declaration tests
@@ -9,10 +8,10 @@ pub index Step = { First, Second, Third, Fourth };
 param x0: Dimensionless = 1.0;
 
 param values: Dimensionless[Step] = {
-    Step::First: 1.0,
-    Step::Second: 2.0,
-    Step::Third: 4.0,
-    Step::Fourth: 8.0,
+    Step.First: 1.0,
+    Step.Second: 2.0,
+    Step.Third: 4.0,
+    Step.Fourth: 8.0,
 };
 
 pub plot my_line = {

@@ -164,7 +164,7 @@
     },
 
     "attribute": {
-      "comment": "Attribute: #[name] or #[name(arg1, arg2, Index::Variant, (A::X, B::Y))]",
+      "comment": "Attribute: #[name] or #[name(arg1, arg2, Index.Variant, (A.X, B.Y))]",
       "begin": "(#)(\\[)",
       "end": "(\\])",
       "beginCaptures": {
@@ -180,8 +180,8 @@
           "name": "entity.other.attribute-name.graphcal"
         },
         {
-          "match": "::",
-          "name": "punctuation.separator.namespace.graphcal"
+          "match": "\\.",
+          "name": "punctuation.accessor.dot.graphcal"
         },
         {
           "match": "[(),]",
@@ -242,6 +242,7 @@
     },
 
     "import-declaration": {
+      "comment": "Import: import nasa.rocket; / import nasa.rocket as r; / import nasa.rocket.{X, Y as Z};",
       "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(import)\\b",
       "end": ";",
       "beginCaptures": {
@@ -252,11 +253,9 @@
         "0": { "name": "punctuation.terminator.graphcal" }
       },
       "patterns": [
-        { "include": "#strings" },
-        { "include": "#parent-scope-path" },
-        { "include": "#bare-module-path" },
+        { "include": "#module-path" },
         {
-          "comment": "Module alias: import '...' as alias",
+          "comment": "Module alias: import nasa.rocket as alias",
           "match": "\\b(as)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.operator.as.graphcal" },
@@ -281,6 +280,7 @@
     },
 
     "include-declaration": {
+      "comment": "Include: include nasa.rocket(args); / include nasa.rocket(args) as r; / include nasa.rocket(args).{out};",
       "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(include)\\b",
       "end": ";",
       "beginCaptures": {
@@ -291,11 +291,9 @@
         "0": { "name": "punctuation.terminator.graphcal" }
       },
       "patterns": [
-        { "include": "#strings" },
-        { "include": "#parent-scope-path" },
-        { "include": "#bare-module-path" },
+        { "include": "#module-path" },
         {
-          "comment": "Module alias: include '...' as alias",
+          "comment": "Module alias: include nasa.rocket(args) as alias",
           "match": "\\b(as)\\s+([a-zA-Z][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.operator.as.graphcal" },
@@ -383,16 +381,14 @@
       ]
     },
 
-    "bare-module-path": {
-      "comment": "Bare module path in import: import nasa/rocket, import nasa/orbital/transfer",
-      "match": "\\b([a-z][a-z0-9_]*)(/[a-z][a-z0-9_]*)+\\b",
-      "name": "entity.name.namespace.graphcal"
-    },
-
-    "parent-scope-path": {
-      "comment": "Parent scope path: import .. { X } or import ../.. { X }",
-      "match": "\\.\\.((/\\.\\.)*)",
-      "name": "keyword.operator.scope.graphcal"
+    "module-path": {
+      "comment": "Dot-separated module path: nasa, nasa.rocket, nasa.orbital.transfer. Each segment is highlighted as a namespace.",
+      "match": "\\b([a-z][a-z0-9_]*)(?:\\s*(\\.)\\s*([a-z][a-z0-9_]*))*\\b",
+      "captures": {
+        "1": { "name": "entity.name.namespace.graphcal" },
+        "2": { "name": "punctuation.accessor.dot.graphcal" },
+        "3": { "name": "entity.name.namespace.graphcal" }
+      }
     },
 
     "as-keyword": {
@@ -562,41 +558,40 @@
     },
 
     "graph-ref": {
-      "comment": "Graph references: @name, @module::name, or @name(args)::out (inline DAG invocation).",
-      "match": "(@)(?:([a-z][a-z0-9_]*)(::))?([a-zA-Z][a-zA-Z0-9_]*)",
+      "comment": "Graph reference: @name. Only a single identifier is allowed after `@`; qualified `@module.name` is rejected. Inline DAG calls (`@name(args).out`) get an extra projection segment via the `inline-dag-output-projection` rule.",
+      "match": "(@)([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "punctuation.definition.variable.graphcal" },
-        "2": { "name": "entity.name.namespace.graphcal" },
-        "3": { "name": "punctuation.separator.namespace.graphcal" },
-        "4": { "name": "variable.other.graphcal" }
+        "2": { "name": "variable.other.graphcal" }
       }
     },
 
     "inline-dag-output-projection": {
-      "comment": "Output projection following an inline DAG invocation: `)::output`",
-      "match": "(\\))(::)([a-zA-Z][a-zA-Z0-9_]*)",
+      "comment": "Output projection following an inline DAG invocation: `).output`",
+      "match": "(\\))(\\.)([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "punctuation.brackets.round.graphcal" },
-        "2": { "name": "punctuation.separator.namespace.graphcal" },
+        "2": { "name": "punctuation.accessor.dot.graphcal" },
         "3": { "name": "variable.other.graphcal" }
       }
     },
 
     "qualified-const-ref": {
-      "comment": "Qualified built-in constant reference: module::CONST_NAME",
-      "match": "\\b([a-z][a-z0-9_]*)(::)([A-Z][A-Z0-9_]*)\\b",
+      "comment": "Qualified built-in constant reference: module.CONST_NAME",
+      "match": "\\b([a-z][a-z0-9_]*)(\\.)([A-Z][A-Z0-9_]*)\\b",
       "captures": {
         "1": { "name": "entity.name.namespace.graphcal" },
-        "2": { "name": "punctuation.separator.namespace.graphcal" },
+        "2": { "name": "punctuation.accessor.dot.graphcal" },
         "3": { "name": "variable.other.constant.graphcal" }
       }
     },
 
     "qualified-variant": {
-      "match": "\\b([A-Z][a-zA-Z0-9_]*)(::)([A-Z][a-zA-Z0-9_]*)\\b",
+      "comment": "Qualified variant: Maneuver.Departure",
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)(\\.)([A-Z][a-zA-Z0-9_]*)\\b",
       "captures": {
         "1": { "name": "entity.name.type.graphcal" },
-        "2": { "name": "punctuation.separator.namespace.graphcal" },
+        "2": { "name": "punctuation.accessor.dot.graphcal" },
         "3": { "name": "variable.other.enummember.graphcal" }
       }
     },
@@ -650,10 +645,6 @@
         {
           "match": "\\+/-",
           "name": "keyword.operator.plus-minus.graphcal"
-        },
-        {
-          "match": "::",
-          "name": "punctuation.separator.namespace.graphcal"
         },
         {
           "match": "==|!=|<=|>=|<|>",

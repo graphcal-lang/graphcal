@@ -307,7 +307,7 @@ impl Parser<'_> {
                 match slice_index {
                     TableIndexSpec::Named(_) => {
                         let index_ident = self.parse_any_ident()?;
-                        self.expect(Token::ColonColon)?;
+                        self.expect(Token::Dot)?;
                         let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(IndexName::new(index_ident.name), index_ident.span),
@@ -380,7 +380,7 @@ impl Parser<'_> {
                 break; // trailing comma
             }
             let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-            self.expect(Token::ColonColon)?;
+            self.expect(Token::Dot)?;
             let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
@@ -413,7 +413,7 @@ impl Parser<'_> {
             let mut keys = Vec::new();
             loop {
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-                self.expect(Token::ColonColon)?;
+                self.expect(Token::Dot)?;
                 let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                 keys.push(MapEntryKey { index, variant });
                 if self.lexer.peek() == Some(&Token::Comma) {
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn parse_map_literal() {
-        let source = "param dv: Velocity[Maneuver] = { Maneuver::Departure: 2.0 km/s, Maneuver::Correction: 0.05 km/s };";
+        let source = "param dv: Velocity[Maneuver] = { Maneuver.Departure: 2.0 km/s, Maneuver.Correction: 0.05 km/s };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
@@ -653,12 +653,12 @@ mod tests {
     #[test]
     fn parse_table_3d() {
         let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-        [Time::T1]
+        [Time.T1]
         : Departure, Correction;
         Launch: 5000.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4500.0 kg;
 
-        [Time::T2]
+        [Time.T2]
         : Departure, Correction;
         Launch: 4800.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4300.0 kg;

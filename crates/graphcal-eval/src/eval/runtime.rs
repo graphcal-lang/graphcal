@@ -583,8 +583,8 @@ fn invert_indexed_variants(
 /// Format a list of indexed paths for assertion failure messages.
 ///
 /// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For single-index paths, formats as `Mode::Boost, Mode::Cruise`.
-/// For multi-index paths, formats as `(Phase::Launch, Maneuver::Correction), (Phase::Cruise, Maneuver::Insertion)`.
+/// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
+/// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
 fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index: bool) -> String {
     let formatted: Vec<String> = if is_multi_index {
         paths
@@ -593,7 +593,7 @@ fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index
                 format!(
                     "({})",
                     p.iter()
-                        .map(|(idx, var)| format!("{idx}::{var}"))
+                        .map(|(idx, var)| format!("{idx}.{var}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -602,7 +602,7 @@ fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index
     } else {
         paths
             .iter()
-            .map(|p| format!("{}::{}", p[0].0, p[0].1))
+            .map(|p| format!("{}.{}", p[0].0, p[0].1))
             .collect()
     };
     formatted.join(", ")
@@ -673,9 +673,9 @@ fn check_indexed_assert_with_expected_fail(
 /// For multi-index: `Bool[Phase, Maneuver]` — entries are nested `Indexed` values.
 ///
 /// Single-index failure message example:
-///   `failed at Mode::Boost`
+///   `failed at Mode.Boost`
 /// Multi-index failure message example:
-///   `failed at (Phase::Launch, Maneuver::Correction), (Phase::Cruise, Maneuver::Insertion)`
+///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
 pub(super) fn check_indexed_assert(
     index_name: &IndexName,
     entries: &IndexMap<VariantName, RuntimeValue>,

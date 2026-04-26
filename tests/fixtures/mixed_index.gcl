@@ -8,9 +8,9 @@ pub index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 // Label-indexed acceleration
 param accel: Acceleration[Maneuver] = {
-    Maneuver::Departure: 10.0 m/s^2,
-    Maneuver::Correction: 5.0 m/s^2,
-    Maneuver::Insertion: -3.0 m/s^2,
+    Maneuver.Departure: 10.0 m/s^2,
+    Maneuver.Correction: 5.0 m/s^2,
+    Maneuver.Insertion: -3.0 m/s^2,
 };
 
 // Mixed-index via for comprehension (label x range)
@@ -18,13 +18,13 @@ node v_for: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep { @accel
 
 // Mixed-index via map literal with for-comprehension values
 param v_map: Velocity[Maneuver, TimeStep] = {
-    Maneuver::Departure: for t: TimeStep { @accel[Maneuver::Departure] * t },
-    Maneuver::Correction: for t: TimeStep { @accel[Maneuver::Correction] * t },
-    Maneuver::Insertion: for t: TimeStep { @accel[Maneuver::Insertion] * t },
+    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * t },
+    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * t },
+    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * t },
 };
 
 // Index access with qualified variant and loop variable
-param departure_v: Velocity[TimeStep] = for t: TimeStep { @v_for[Maneuver::Departure, t] };
+param departure_v: Velocity[TimeStep] = for t: TimeStep { @v_for[Maneuver.Departure, t] };
 
 // Aggregation: sum over label axis for each time step
 node total_v: Velocity[TimeStep] = for t: TimeStep { sum(for m: Maneuver { @v_for[m, t] }) };

@@ -4,31 +4,31 @@ pub dim Velocity = Length / Time;
 pub index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 // Pattern 1: variant-specific scaling extracted to params
 param scale_factor: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.0,
-    Maneuver::Correction: 1.0,
-    Maneuver::Insertion: 1.0,
+    Maneuver.Departure: 2.0,
+    Maneuver.Correction: 1.0,
+    Maneuver.Insertion: 1.0,
 };
 node selective: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor[m] };
 
 // Pattern 2: variant-specific scaling (different variant)
 param scale_factor2: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 1.0,
-    Maneuver::Correction: 1.0,
-    Maneuver::Insertion: 3.0,
+    Maneuver.Departure: 1.0,
+    Maneuver.Correction: 1.0,
+    Maneuver.Insertion: 3.0,
 };
 node selective2: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_factor2[m] };
 
 // Pattern 3: zeroing specific variant via param
 param correction_mask: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 1.0,
-    Maneuver::Correction: 0.0,
-    Maneuver::Insertion: 1.0,
+    Maneuver.Departure: 1.0,
+    Maneuver.Correction: 0.0,
+    Maneuver.Insertion: 1.0,
 };
 node not_correction: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @correction_mask[m] };

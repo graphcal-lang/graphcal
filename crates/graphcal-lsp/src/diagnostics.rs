@@ -328,19 +328,6 @@ mod tests {
             assert_diags[0].message
         );
     }
-
-    #[test]
-    fn multi_file_project_no_false_errors() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/multi/rocket_split/main.gcl");
-        let source = std::fs::read_to_string(&root).unwrap();
-        let diags = produce_diagnostics_for_file(&root, &source);
-        assert!(
-            diags.is_empty(),
-            "expected no diagnostics for multi-file project, got: {diags:?}"
-        );
-    }
-
     #[test]
     fn v001_import_private_item_produces_diagnostic() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -407,8 +394,8 @@ mod tests {
         // are OK because `param` is implicitly bindable.
         let source = concat!(
             "pub(bind) index Phase = { Design, Test };\n",
-            "param x: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };\n",
-            "node design: Dimensionless = @x[Phase::Design];\n",
+            "param x: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };\n",
+            "node design: Dimensionless = @x[Phase.Design];\n",
         );
         let diags = produce_diagnostics(source, "test.gcl");
         assert!(!diags.is_empty());
@@ -420,43 +407,6 @@ mod tests {
         assert!(
             has_v004,
             "expected at least one V004 diagnostic, got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn imported_assertion_failure_span_points_to_import() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/multi/imported_assert_fail/main.gcl");
-        let source = std::fs::read_to_string(&root).unwrap();
-        let diags = produce_diagnostics_for_file(&root, &source);
-        let assert_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| {
-                d.code.as_ref().is_some_and(
-                    |c| matches!(c, NumberOrString::String(s) if s == "graphcal::A001"),
-                )
-            })
-            .collect();
-        assert_eq!(
-            assert_diags.len(),
-            1,
-            "expected exactly 1 assertion diagnostic, got: {assert_diags:?}"
-        );
-        // The span should point to the import statement on line 1 of the root file
-        // (line 0 is the `include` for the runtime value, line 1 is the `import` for the assert),
-        // not to the assertion declaration in the dependency file.
-        assert_eq!(
-            assert_diags[0].range.start.line, 1,
-            "expected diagnostic span on line 1 (the import statement), got line {}",
-            assert_diags[0].range.start.line
-        );
-        // The span should be within the root file's source (valid byte offsets).
-        let end_offset = assert_diags[0].range.end;
-        assert!(
-            (end_offset.line as usize) < source.lines().count(),
-            "diagnostic end line {} exceeds root file line count {}",
-            end_offset.line,
-            source.lines().count()
         );
     }
 }

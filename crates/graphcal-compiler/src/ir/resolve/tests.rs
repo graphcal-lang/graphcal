@@ -264,7 +264,7 @@ fn resolve_node_with_convert() {
 #[test]
 fn resolve_import_decl_skipped() {
     // import declarations should not be treated as param/node/const
-    let source = r#"import "./helper.gcl" { something };"#;
+    let source = "import helper.{something};";
     let file = Parser::new(source).parse_file().unwrap();
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert!(resolved.params.is_empty());
@@ -278,9 +278,9 @@ fn resolve_indexed_param() {
         r"
         pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
-            Color::Red: 1.0,
-            Color::Green: 2.0,
-            Color::Blue: 3.0,
+            Color.Red: 1.0,
+            Color.Green: 2.0,
+            Color.Blue: 3.0,
         };
     ",
     )
@@ -294,9 +294,9 @@ fn resolve_for_comprehension() {
         r"
         pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
-            Color::Red: 1.0,
-            Color::Green: 2.0,
-            Color::Blue: 3.0,
+            Color.Red: 1.0,
+            Color.Green: 2.0,
+            Color.Blue: 3.0,
         };
         node doubled: Dimensionless[Color] = for c: Color { @values[c] * 2.0 };
     ",
@@ -313,9 +313,9 @@ fn resolve_scan_expression() {
         r"
         pub index Step = { First, Second, Third };
         param vals: Dimensionless[Step] = {
-            Step::First: 1.0,
-            Step::Second: 2.0,
-            Step::Third: 3.0,
+            Step.First: 1.0,
+            Step.Second: 2.0,
+            Step.Third: 3.0,
         };
         node cumul: Dimensionless[Step] = scan(@vals, 0.0, |acc, val| acc + val);
     ",
@@ -464,7 +464,7 @@ fn resolve_private_in_public_index_in_type() {
     let source = r"
         pub index Phase = { Alpha, Beta };
         index Step = { Xray, Yankee };
-        pub node costs: Dimensionless[Phase, Step] = { Phase::Alpha: { Step::Xray: 1.0, Step::Yankee: 2.0 }, Phase::Beta: { Step::Xray: 3.0, Step::Yankee: 4.0 } };
+        pub node costs: Dimensionless[Phase, Step] = { Phase.Alpha: { Step.Xray: 1.0, Step.Yankee: 2.0 }, Phase.Beta: { Step.Xray: 3.0, Step.Yankee: 4.0 } };
     ";
     let err = parse_and_resolve(source).unwrap_err();
     // May get PubIndexVariantLiteral before PrivateInPublic.
@@ -499,9 +499,9 @@ fn resolve_param_default_with_pub_bind_variant_literal_ok() {
     let source = r"
         pub(bind) index Phase = { Design, Build, Test };
         param cost: Dimensionless[Phase] = {
-            Phase::Design: 100.0,
-            Phase::Build: 200.0,
-            Phase::Test: 50.0,
+            Phase.Design: 100.0,
+            Phase.Build: 200.0,
+            Phase.Test: 50.0,
         };
     ";
     parse_and_resolve(source).unwrap();
@@ -514,11 +514,11 @@ fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build, Test };
         param cost: Dimensionless[Phase] = {
-            Phase::Design: 1.0,
-            Phase::Build: 2.0,
-            Phase::Test: 3.0,
+            Phase.Design: 1.0,
+            Phase.Build: 2.0,
+            Phase.Test: 3.0,
         };
-        node design_cost: Dimensionless = @cost[Phase::Design];
+        node design_cost: Dimensionless = @cost[Phase.Design];
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
@@ -529,8 +529,8 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build };
         pub const node costs: Dimensionless[Phase] = {
-            Phase::Design: 1.0,
-            Phase::Build: 2.0,
+            Phase.Design: 1.0,
+            Phase.Build: 2.0,
         };
     ";
     let err = parse_and_resolve(source).unwrap_err();
@@ -545,10 +545,10 @@ fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
     let source = r"
         pub(bind) index Phase = { Design, Build };
         param cost: Dimensionless[Phase] = {
-            Phase::Design: 1.0,
-            Phase::Build: 2.0,
+            Phase.Design: 1.0,
+            Phase.Build: 2.0,
         };
-        assert design_cheap = @cost[Phase::Design] < 10.0;
+        assert design_cheap = @cost[Phase.Design] < 10.0;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -560,10 +560,10 @@ fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build };
         param cost: Dimensionless[Phase] = {
-            Phase::Design: 1.0,
-            Phase::Build: 2.0,
+            Phase.Design: 1.0,
+            Phase.Build: 2.0,
         };
-        pub assert design_cheap = @cost[Phase::Design] < 10.0;
+        pub assert design_cheap = @cost[Phase.Design] < 10.0;
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
@@ -576,8 +576,8 @@ fn resolve_node_with_plain_pub_variant_literal_ok() {
     let source = r"
         pub index Phase = { Design, Build };
         pub const node costs: Dimensionless[Phase] = {
-            Phase::Design: 1.0,
-            Phase::Build: 2.0,
+            Phase.Design: 1.0,
+            Phase.Build: 2.0,
         };
     ";
     parse_and_resolve(source).unwrap();

@@ -101,8 +101,6 @@ pub enum Token {
     Bang,
     #[token("->")]
     Arrow,
-    #[token("::")]
-    ColonColon,
     #[token("|")]
     Pipe,
     #[token("=>")]
@@ -137,8 +135,6 @@ pub enum Token {
     At,
     #[token(":")]
     Colon,
-    #[token("..")]
-    DotDot,
     #[token(".")]
     Dot,
 
@@ -204,7 +200,6 @@ impl std::fmt::Display for Token {
             Self::PipePipe => write!(f, "||"),
             Self::Bang => write!(f, "!"),
             Self::Arrow => write!(f, "->"),
-            Self::ColonColon => write!(f, "::"),
             Self::Pipe => write!(f, "|"),
             Self::FatArrow => write!(f, "=>"),
             Self::TildeEq => write!(f, "~="),
@@ -220,7 +215,6 @@ impl std::fmt::Display for Token {
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
             Self::Colon => write!(f, ":"),
-            Self::DotDot => write!(f, ".."),
             Self::Dot => write!(f, "."),
             Self::Underscore => write!(f, "_"),
             Self::Ident => write!(f, "identifier"),
@@ -665,12 +659,13 @@ mod tests {
 
     #[test]
     fn lex_import_statement() {
-        let tokens = lex_tokens(r#"import "./helper.gcl" { G0, isp };"#);
+        let tokens = lex_tokens("import helper.{G0, isp};");
         assert_eq!(
             tokens,
             vec![
                 Token::Import,
-                Token::StringLiteral,
+                Token::Ident, // helper
+                Token::Dot,
                 Token::LBrace,
                 Token::Ident, // G0
                 Token::Comma,
@@ -683,19 +678,21 @@ mod tests {
 
     #[test]
     fn lex_string_literal() {
-        let mut lexer = Token::lexer(r#""./orbit/transfer.gcl""#);
+        // String literals survive in non-import contexts (e.g., timezone names).
+        let mut lexer = Token::lexer(r#""UTC""#);
         assert_eq!(lexer.next(), Some(Ok(Token::StringLiteral)));
-        assert_eq!(lexer.slice(), r#""./orbit/transfer.gcl""#);
+        assert_eq!(lexer.slice(), r#""UTC""#);
     }
 
     #[test]
     fn lex_use_statement_with_alias() {
-        let tokens = lex_tokens(r#"import "./f.gcl" { x as y };"#);
+        let tokens = lex_tokens("import f.{x as y};");
         assert_eq!(
             tokens,
             vec![
                 Token::Import,
-                Token::StringLiteral,
+                Token::Ident, // f
+                Token::Dot,
                 Token::LBrace,
                 Token::Ident, // x
                 Token::As,
@@ -729,29 +726,6 @@ mod tests {
         let mut lexer = Token::lexer("dagger");
         assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
         assert_eq!(lexer.slice(), "dagger");
-    }
-
-    #[test]
-    fn lex_dotdot() {
-        let tokens = lex_tokens("import .. { X };");
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Import,
-                Token::DotDot,
-                Token::LBrace,
-                Token::Ident,
-                Token::RBrace,
-                Token::Semicolon,
-            ]
-        );
-    }
-
-    #[test]
-    fn lex_dot_vs_dotdot() {
-        // `..` should lex as DotDot, `.` as Dot
-        let tokens = lex_tokens(".. . ..");
-        assert_eq!(tokens, vec![Token::DotDot, Token::Dot, Token::DotDot]);
     }
 
     #[test]

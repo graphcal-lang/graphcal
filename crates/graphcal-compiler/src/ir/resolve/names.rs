@@ -10,7 +10,7 @@ use miette::NamedSource;
 ///
 /// - No args → `ExpectedFail::All`
 /// - `Path` args (e.g. `Index::Variant`) → `ExpectedFail::Variants` with single-index keys
-/// - `Group` args (e.g. `(Mode::Boost, Phase::Launch)`) → `ExpectedFail::Variants` with multi-index keys
+/// - `Group` args (e.g. `(Mode.Boost, Phase.Launch)`) → `ExpectedFail::Variants` with multi-index keys
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
     src: &NamedSource<Arc<String>>,

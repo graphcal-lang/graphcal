@@ -138,8 +138,8 @@ export function findNextCell(
       return skipToNextValue(text, i + 1, table.bodyEnd);
     }
 
-    if (depth === 0 && ch === ":" && text[i + 1] !== ":") {
-      // Row label separator (single `:`, not `::`) — jump to first cell value
+    if (depth === 0 && ch === ":") {
+      // Row label separator — jump to first cell value
       return skipToNextValue(text, i + 1, table.bodyEnd);
     }
 
@@ -251,8 +251,8 @@ function collectCellStarts(text: string, table: TableRange): number[] {
       continue;
     }
 
-    if (depth === 0 && ch === ":" && text[i + 1] !== ":") {
-      // After row label (single `:`, not `::`) — first cell of this row
+    if (depth === 0 && ch === ":") {
+      // After row label — first cell of this row
       const cellStart = skipToNextValue(text, i + 1, table.bodyEnd);
       if (cellStart !== null) {
         cells.push(cellStart);

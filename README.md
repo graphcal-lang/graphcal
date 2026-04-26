@@ -193,7 +193,7 @@ can reference loop variables):
 
 ```gcl
 node v_at: Velocity[Region] = for r: Region {
-    @orbital_velocity(gm: @gm_earth, r: @altitude[r])::v
+    @orbital_velocity(gm: @gm_earth, r: @altitude[r]).v
 };
 ```
 
@@ -227,9 +227,9 @@ Define named index sets and operate over them with `for` comprehensions and aggr
 index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 node double_dv: Velocity[Maneuver] = for m: Maneuver {
@@ -285,8 +285,8 @@ param m: Dimensionless[2, 3] = table[2, 3] {
 Split calculations across files with `import` declarations. All declaration kinds can be imported, and circular dependencies are detected at compile time.
 
 ```gcl
-import "./constants.gcl" { g0 };
-import "./params.gcl" { dry_mass, fuel_mass, isp };
+import constants.{g0};
+import params.{dry_mass, fuel_mass, isp};
 ```
 
 Visibility uses a two-axis split: `pub` items cross the include boundary,
@@ -306,8 +306,8 @@ publication-quality, interactive visualizations. Specify a **mark** type and
 index Step = { First, Second, Third, Fourth };
 
 node values: Dimensionless[Step] = {
-    Step::First: 1.0, Step::Second: 2.0,
-    Step::Third: 4.0, Step::Fourth: 8.0,
+    Step.First: 1.0, Step.Second: 2.0,
+    Step.Third: 4.0, Step.Fourth: 8.0,
 };
 
 plot my_scatter = {
@@ -508,7 +508,7 @@ param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 dag hohmann_transfer {
-    import .. { TransferResult, r_earth, gm_earth };
+    <!-- TODO(graphcal-migrate): parent import — pick absolute path -->
     param parking_alt: Length;
     param target_alt: Length;
 
@@ -529,7 +529,7 @@ dag hohmann_transfer {
     };
 }
 
-include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt) { result as transfer };
+include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt).{result as transfer};
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;
@@ -607,9 +607,9 @@ dim Velocity = Length / Time;
 index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 node double_dv: Velocity[Maneuver] = for m: Maneuver {
@@ -682,8 +682,8 @@ param isp: Time = 320 s;
 
 ```gcl
 // main.gcl
-import "./constants.gcl" { g0 };
-import "./params.gcl" { dry_mass, fuel_mass, isp };
+import constants.{g0};
+import params.{dry_mass, fuel_mass, isp};
 
 dim Velocity = Length / Time;
 

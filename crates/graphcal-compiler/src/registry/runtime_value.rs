@@ -71,7 +71,7 @@ pub enum RuntimeValue {
     Scalar(f64),
     Bool(bool),
     Int(i64),
-    /// A label of a named index (e.g., `Maneuver::Departure`).
+    /// A label of a named index (e.g., `Maneuver.Departure`).
     Label {
         index_name: IndexName,
         variant: VariantName,

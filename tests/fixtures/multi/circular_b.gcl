@@ -1,2 +1,2 @@
-import "./circular_a.gcl" { x };
+include circular_a().{ x };
 param y: Dimensionless = 2.0;

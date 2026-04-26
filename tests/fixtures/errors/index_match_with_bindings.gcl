@@ -3,8 +3,8 @@ index Maneuver = { Departure, Correction, Insertion };
 
 node result: Dimensionless[Maneuver] = for m: Maneuver {
     match m {
-        Maneuver::Departure { x } => 1.0,
-        Maneuver::Correction => 2.0,
-        Maneuver::Insertion => 3.0,
+        Maneuver.Departure { x } => 1.0,
+        Maneuver.Correction => 2.0,
+        Maneuver.Insertion => 3.0,
     }
 };

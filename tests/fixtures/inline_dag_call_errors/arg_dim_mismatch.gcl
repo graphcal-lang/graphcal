@@ -1,9 +1,9 @@
 // Error fixture: arg expression's dimension does not match the dag param.
-// Expected diagnostic: `graphcal::G006` — binding dimension mismatch.
+// Expected diagnostic: `graphcal.G006` — binding dimension mismatch.
 dag id_len {
     param v: Length;
     node result: Length = @v;
 }
 
 param src: Time = 10.0 s;
-node y: Length = @id_len(v: @src)::result;
+node y: Length = @id_len(v: @src).result;

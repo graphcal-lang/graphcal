@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 972
 expression: formatted
 ---
 // format_edge_cases.gcl -- Edge cases for formatter: long lines, deep nesting, complex expressions
@@ -70,13 +69,13 @@ dag clamp_dag {
 
 // Deeply nested if-else chain in for comprehension
 param phase_priority: Dimensionless[Phase] = for p: Phase {
-    if p == Phase::Launch {
+    if p == Phase.Launch {
         1.0
     } else {
-        if p == Phase::Coast {
+        if p == Phase.Coast {
             2.0
         } else {
-            if p == Phase::Burn { 3.0 } else { if p == Phase::Insertion { 4.0 } else { 5.0 } }
+            if p == Phase.Burn { 3.0 } else { if p == Phase.Insertion { 4.0 } else { 5.0 } }
         }
     }
 };
@@ -84,23 +83,23 @@ param phase_priority: Dimensionless[Phase] = for p: Phase {
 // Match inside for comprehension with complex arm expressions
 param maneuver_dv: Velocity[Phase, Maneuver] = for p: Phase, m: Maneuver {
     match p {
-        Phase::Launch => match m {
-            Maneuver::Departure => 2.46 km/s,
-            Maneuver::Midcourse1 => 0.0 m/s,
-            Maneuver::Midcourse2 => 0.0 m/s,
-            Maneuver::Correction => 0.0 m/s,
-            Maneuver::Insertion => 0.0 m/s,
+        Phase.Launch => match m {
+            Maneuver.Departure => 2.46 km/s,
+            Maneuver.Midcourse1 => 0.0 m/s,
+            Maneuver.Midcourse2 => 0.0 m/s,
+            Maneuver.Correction => 0.0 m/s,
+            Maneuver.Insertion => 0.0 m/s,
         },
-        Phase::Coast => 0.0 m/s,
-        Phase::Burn => match m {
-            Maneuver::Departure => 0.0 m/s,
-            Maneuver::Midcourse1 => 0.05 km/s,
-            Maneuver::Midcourse2 => 0.03 km/s,
-            Maneuver::Correction => 0.12 km/s,
-            Maneuver::Insertion => 0.0 m/s,
+        Phase.Coast => 0.0 m/s,
+        Phase.Burn => match m {
+            Maneuver.Departure => 0.0 m/s,
+            Maneuver.Midcourse1 => 0.05 km/s,
+            Maneuver.Midcourse2 => 0.03 km/s,
+            Maneuver.Correction => 0.12 km/s,
+            Maneuver.Insertion => 0.0 m/s,
         },
-        Phase::Insertion => if m == Maneuver::Insertion { 1.83 km/s } else { 0.0 m/s },
-        Phase::Deorbit => 0.0 m/s,
+        Phase.Insertion => if m == Maneuver.Insertion { 1.83 km/s } else { 0.0 m/s },
+        Phase.Deorbit => 0.0 m/s,
     }
 };
 
@@ -123,7 +122,7 @@ node state_body: StateVec<Length, Velocity, Body> = @initial_state as StateVec<L
 node body_pos_x: Length = @state_body.pos_x;
 
 // Long binary expression chains
-node combined_metric: Dimensionless = (@phase_priority[Phase::Launch] + @phase_priority[Phase::Coast] + @phase_priority[Phase::Burn] + @phase_priority[Phase::Insertion] + @phase_priority[Phase::Deorbit]) / 5.0;
+node combined_metric: Dimensionless = (@phase_priority[Phase.Launch] + @phase_priority[Phase.Coast] + @phase_priority[Phase.Burn] + @phase_priority[Phase.Insertion] + @phase_priority[Phase.Deorbit]) / 5.0;
 
 // Scan with complex body
 node cumulative_priority: Dimensionless[Phase] = scan(@phase_priority, 0.0, |acc, val| acc + val);
@@ -134,7 +133,7 @@ node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.
 
 // DAG for complex result computation
 dag compute_complex_result {
-    import .. { gm_earth, r_earth };
+    import format_edge_cases.{ gm_earth, r_earth };
     
     node r1: Length = @r_earth + 200.0 km;
     
@@ -157,7 +156,7 @@ dag compute_complex_result {
     node result: Velocity = @dv1 + @dv2;
 }
 
-include compute_complex_result { result as complex_result };
+import compute_complex_result.{ result as complex_result };
 
 // Aggregations with complex for expressions
 node total_dv_all_phases: Velocity = sum(for p: Phase, m: Maneuver { @maneuver_dv[p, m] });

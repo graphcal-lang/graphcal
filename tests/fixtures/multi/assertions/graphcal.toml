@@ -1,0 +1,3 @@
+[package]
+name = "checks"
+source_dir = "."

@@ -111,14 +111,12 @@ pub fn eval_expr(
             index_name: index.value.clone(),
             variant: variant.value.clone(),
         }),
-        ExprKind::GraphRef(ident) | ExprKind::QualifiedGraphRef { name: ident, .. } => {
-            values.get(ident.value.as_str()).cloned().ok_or_else(|| {
-                ctx.eval_error(
-                    format!("undefined graph reference `@{}`", ident.value),
-                    expr.span,
-                )
-            })
-        }
+        ExprKind::GraphRef(ident) => values.get(ident.value.as_str()).cloned().ok_or_else(|| {
+            ctx.eval_error(
+                format!("undefined graph reference `@{}`", ident.value),
+                expr.span,
+            )
+        }),
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
             .get(ident.value.as_str())
             .cloned()
@@ -273,21 +271,9 @@ pub fn eval_expr(
             unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
         }
 
-        ExprKind::InlineDagRef {
-            module,
-            dag,
-            args,
-            output,
-        } => eval_inline_dag_call(
-            expr,
-            module.as_ref(),
-            dag,
-            args,
-            output,
-            values,
-            local_values,
-            ctx,
-        ),
+        ExprKind::InlineDagRef { dag, args, output } => {
+            eval_inline_dag_call(expr, dag, args, output, values, local_values, ctx)
+        }
     }
 }
 
@@ -308,13 +294,12 @@ pub fn eval_expr(
 /// dag's own registry is used for all nested lookups so sibling dag calls
 /// from inside the body resolve through the same pipeline.
 ///
-/// Qualified form `@module::dag(args)::out` resolves through
-/// `ctx.compiled_dags` under the `"module::dag"` key, matching the merge
-/// scheme used by the project pipeline.
-#[expect(clippy::too_many_arguments, reason = "passes eval context through")]
+/// Inline DAG calls always name a single in-scope DAG (no `module.dag`
+/// qualification after `@`); `ctx.compiled_dags` is keyed by bare DAG name
+/// for same-file calls and `"alias::dag"` for cross-file calls brought
+/// into scope via `import path as alias`.
 fn eval_inline_dag_call(
     _call_expr: &Expr,
-    module: Option<&graphcal_compiler::syntax::ast::Ident>,
     dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     args: &[graphcal_compiler::syntax::ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
@@ -322,10 +307,7 @@ fn eval_inline_dag_call(
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let key = module.as_ref().map_or_else(
-        || dag.value.to_string(),
-        |m| format!("{}::{}", m.name, dag.value.as_str()),
-    );
+    let key = dag.value.to_string();
 
     let dag_tir = ctx.compiled_dags.get(&key).ok_or_else(|| {
         ctx.internal_error(

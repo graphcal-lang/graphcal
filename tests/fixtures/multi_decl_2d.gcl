@@ -24,6 +24,6 @@ node power_per_mode: Power[Component, OperationMode] = for c: Component, m: Oper
     if @power_mode_active[c, m] { @power_consumption[c] } else { 0.0 W }
 };
 
-node total_safe_power: Power = sum(for c: Component { @power_per_mode[c, OperationMode::Safe] });
+node total_safe_power: Power = sum(for c: Component { @power_per_mode[c, OperationMode.Safe] });
 
 node total_mass: Mass = sum(for c: Component { @mass_per_unit[c] });

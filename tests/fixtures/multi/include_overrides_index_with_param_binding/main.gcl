@@ -4,12 +4,12 @@
 // variants of the replacement index `MyPhase`.
 index MyPhase = { Plan, Make };
 
-include "./lib.gcl"(
+include lib(
     Phase: MyPhase { },
     cost: {
-        MyPhase::Plan: 10.0,
-        MyPhase::Make: 20.0,
+        MyPhase.Plan: 10.0,
+        MyPhase.Make: 20.0,
     },
-) { total };
+).{ total };
 
 node result: Dimensionless = @total;

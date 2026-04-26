@@ -428,8 +428,8 @@ fn format_map_literal_not_converted_to_table() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.46,
-    Maneuver::Correction: 0.12,
+    Maneuver.Departure: 2.46,
+    Maneuver.Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -438,7 +438,7 @@ param dv: Dimensionless[Maneuver] = {
         "Map literal should not be converted to table: {formatted}"
     );
     assert!(
-        formatted.contains("Maneuver::Departure"),
+        formatted.contains("Maneuver.Departure"),
         "Map literal should use qualified syntax: {formatted}"
     );
 }
@@ -551,11 +551,11 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_a,
-    "multi/alias_conflict/a.gcl"
+    "multi/alias_conflict/lib/a.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_b,
-    "multi/alias_conflict/b.gcl"
+    "multi/alias_conflict/lib/b.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_alias_conflict_main,
@@ -700,52 +700,6 @@ snapshot_test!(
     "multi/module_import_mixed/main.gcl"
 );
 
-// mission_plan: complex multi-file project with subdirectories
-idempotency_test!(
-    idempotent_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_constants,
-    "multi/mission_plan/shared/constants.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_indexes,
-    "multi/mission_plan/shared/indexes.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_power,
-    "multi/mission_plan/subsystems/power.gcl"
-);
-idempotency_test!(
-    idempotent_multi_mission_plan_propulsion,
-    "multi/mission_plan/subsystems/propulsion.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_main,
-    "multi/mission_plan/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_constants,
-    "multi/mission_plan/shared/constants.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_indexes,
-    "multi/mission_plan/shared/indexes.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_power,
-    "multi/mission_plan/subsystems/power.gcl"
-);
-snapshot_test!(
-    snapshot_multi_mission_plan_propulsion,
-    "multi/mission_plan/subsystems/propulsion.gcl"
-);
-
 // rocket_split: selective import with many identifiers
 idempotency_test!(
     idempotent_multi_rocket_split_main,
@@ -753,11 +707,11 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_rocket_split_constants,
-    "multi/rocket_split/constants.gcl"
+    "multi/rocket_split/lib/constants.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_params,
-    "multi/rocket_split/params.gcl"
+    "multi/rocket_split/lib/params.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_rocket_split_main,
@@ -769,51 +723,11 @@ snapshot_test!(
 );
 snapshot_test!(
     snapshot_multi_rocket_split_constants,
-    "multi/rocket_split/constants.gcl"
+    "multi/rocket_split/lib/constants.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_params,
-    "multi/rocket_split/params.gcl"
-);
-
-// parent_import: importing from parent directory
-idempotency_test!(
-    idempotent_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_parent_import_lib,
-    "multi/parent_import/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_child_main,
-    "multi/parent_import/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_lib,
-    "multi/parent_import/lib.gcl"
-);
-
-// parent_import_with_manifest
-idempotency_test!(
-    idempotent_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_parent_import_manifest_lib,
-    "multi/parent_import_with_manifest/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
-);
-snapshot_test!(
-    snapshot_multi_parent_import_manifest_child_main,
-    "multi/parent_import_with_manifest/child/main.gcl"
+    "multi/rocket_split/lib/params.gcl"
 );
 
 // explicit_index: import of index types
@@ -841,15 +755,15 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_shared,
-    "multi/diamond_assert/shared.gcl"
+    "multi/diamond_assert/graph/shared.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_left,
-    "multi/diamond_assert/left.gcl"
+    "multi/diamond_assert/graph/left.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_right,
-    "multi/diamond_assert/right.gcl"
+    "multi/diamond_assert/graph/right.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_diamond_assert_main,
@@ -1047,9 +961,9 @@ index Phase = { Coast, Burn };
 node x: Dimensionless[Phase] = for p: Phase {
     match p {
         // coasting
-        Phase::Coast => 0.0,
+        Phase.Coast => 0.0,
         // burning
-        Phase::Burn => 1.0,
+        Phase.Burn => 1.0,
     }
 };
 ";
@@ -1063,7 +977,7 @@ node x: Dimensionless[Phase] = for p: Phase {
         "Comment before match arm lost: {formatted}"
     );
     let coast_comment = formatted.find("// coasting").unwrap();
-    let coast_arm = formatted.find("Phase::Coast =>").unwrap();
+    let coast_arm = formatted.find("Phase.Coast =>").unwrap();
     assert!(
         coast_comment < coast_arm,
         "Comment should appear before its match arm: {formatted}"
@@ -1075,8 +989,8 @@ fn preserves_trailing_comment_in_map_literal() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.46, // departure
-    Maneuver::Correction: 0.12, // correction
+    Maneuver.Departure: 2.46, // departure
+    Maneuver.Correction: 0.12, // correction
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1105,9 +1019,9 @@ fn preserves_leading_comment_in_map_literal() {
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
     // departure entry
-    Maneuver::Departure: 2.46,
+    Maneuver.Departure: 2.46,
     // correction entry
-    Maneuver::Correction: 0.12,
+    Maneuver.Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1116,7 +1030,7 @@ param dv: Dimensionless[Maneuver] = {
         "Leading comment on map entry lost: {formatted}"
     );
     let comment_pos = formatted.find("// departure entry").unwrap();
-    let entry_pos = formatted.find("Maneuver::Departure").unwrap();
+    let entry_pos = formatted.find("Maneuver.Departure").unwrap();
     assert!(
         comment_pos < entry_pos,
         "Leading comment should appear before map entry: {formatted}"
@@ -1130,13 +1044,13 @@ index Scenario = { Nominal, Contingency };
 index Phase = { Launch, Cruise, Arrival };
 index Maneuver = { Departure, Correction, Insertion };
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
-    [Scenario::Nominal] // nominal scenario
+    [Scenario.Nominal] // nominal scenario
            : Departure, Correction, Insertion;
     Launch:  5000.0,        0.0,       0.0;
     Cruise:     0.0,     4500.0,       0.0;
     Arrival:    0.0,        0.0,    4000.0;
 
-    [Scenario::Contingency] // contingency scenario
+    [Scenario.Contingency] // contingency scenario
            : Departure, Correction, Insertion;
     Launch:  4800.0,        0.0,       0.0;
     Cruise:     0.0,     4200.0,       0.0;
@@ -1157,13 +1071,13 @@ param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase,
     for line in formatted.lines() {
         if line.contains("// nominal scenario") {
             assert!(
-                line.contains("[Scenario::Nominal]"),
+                line.contains("[Scenario.Nominal]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }
         if line.contains("// contingency scenario") {
             assert!(
-                line.contains("[Scenario::Contingency]"),
+                line.contains("[Scenario.Contingency]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }

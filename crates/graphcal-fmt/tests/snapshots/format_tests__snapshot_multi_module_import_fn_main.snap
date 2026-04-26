@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // Module import: values from lib
-import "./lib.gcl";
+import lib;
 
 const node two: Dimensionless = 2.0;
 param x: Dimensionless = 21.0;

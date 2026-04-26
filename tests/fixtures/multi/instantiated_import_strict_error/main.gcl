@@ -1,6 +1,6 @@
 // main.gcl -- partial binding WITHOUT #[allow_defaults] → should error
 dim Velocity = Length / Time;
 
-include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };
+include rocket(dry_mass: 800.0 kg).{ delta_v };
 
 node result: Velocity = @delta_v;

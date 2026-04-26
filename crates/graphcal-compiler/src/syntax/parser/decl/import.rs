@@ -1,33 +1,21 @@
 use crate::syntax::ast::DeclKind;
 use crate::syntax::ast::Declaration;
+use crate::syntax::ast::ImportKind;
+use crate::syntax::ast::ModulePath;
 use crate::syntax::ast::Visibility;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
 
 impl Parser<'_> {
-    // --- import declaration ---
-
-    /// Parse an import declaration (compile-time definition import, no param bindings):
-    /// `import "./path/to/file.gcl" { name1, name2 };`
-    /// `import "./path/to/file.gcl" as alias;`
-    /// `import "./path/to/file.gcl";`
+    /// Parse an import declaration:
+    ///   `import nasa.rocket;`
+    ///   `import nasa.rocket as nr;`
+    ///   `import nasa.rocket.{Orbit, compute_thrust as ct};`
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
-        // `import` requires 2-segment module paths (e.g., `package/module`),
-        // but also accepts `..` for parent scope access inside DAGs.
-        // Single-segment paths are only valid for `include` (inline DAG names).
-        let path = self.parse_import_path(2)?;
-
-        // Reject cross-file DAG paths on `import` — use `include` for DAG instantiation.
-        if path.is_cross_file_dag() {
-            return Err(self.unexpected_token(
-                "a file path or module path (`import` cannot reference cross-file DAGs; use `include` for DAG instantiation)",
-                &format!("\"...\"/{}", path.display_path().rsplit('/').next().unwrap_or("")),
-                path.span(),
-            ));
-        }
+        let path = self.parse_module_path()?;
 
         // Reject param bindings on `import` — use `include` for DAG instantiation.
         if self.lexer.peek() == Some(&Token::LParen) {
@@ -39,9 +27,7 @@ impl Parser<'_> {
             ));
         }
 
-        // Determine the kind of import based on the next token.
-        let (kind, end_span) = self.parse_import_or_include_kind("`{`, `as`, or `;` after path")?;
-
+        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after path")?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -52,33 +38,27 @@ impl Parser<'_> {
         })
     }
 
-    // --- include declaration ---
-
-    /// Parse an include declaration (DAG embedding with optional param bindings):
-    /// `include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };`
-    /// `include "./rocket.gcl"(dry_mass: 800.0 kg) as stage;`
-    /// `include "./rocket.gcl" { delta_v };`
+    /// Parse an include declaration:
+    ///   `include nasa.rocket.compute_thrust(args);`
+    ///   `include nasa.rocket.compute_thrust(args) as ct;`
+    ///   `include nasa.rocket.compute_thrust(args).{thrust};`
     pub(super) fn parse_include_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Include)?;
 
-        // `include` allows 1-segment module paths for inline DAG references.
-        let path = self.parse_import_path(1)?;
+        let path = self.parse_module_path()?;
 
-        // Optional param bindings: `(name: expr, ...)`
+        // Param bindings are required for `include`.
         let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
             self.parse_import_param_bindings()?
         } else {
-            Vec::new()
+            let found = self
+                .lexer
+                .peek()
+                .map_or_else(|| "end of file".to_string(), ToString::to_string);
+            return Err(self.unexpected_token("`(` to begin param bindings", &found, path.span));
         };
 
-        // Determine the kind based on the next token.
-        let after_hint = if param_bindings.is_empty() {
-            "`(`, `{`, `as`, or `;` after path"
-        } else {
-            "`{`, `as`, or `;` after param bindings"
-        };
-        let (kind, end_span) = self.parse_import_or_include_kind(after_hint)?;
-
+        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after param bindings")?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -93,137 +73,77 @@ impl Parser<'_> {
         })
     }
 
-    // --- shared helpers ---
-
-    /// Parse an import/include path: string literal, bare module path, or `..` parent scope.
+    /// Parse a dot-separated module path: `IDENT { "." IDENT }`.
     ///
-    /// `min_segments` controls the minimum number of segments for bare module paths.
-    /// `import` requires 2 (e.g., `package/module`), `include` allows 1 (for inline DAG names).
-    fn parse_import_path(
+    /// Stops at any `.` that is *not* immediately followed by an identifier —
+    /// such a `.` belongs to the brace-list tail (`.{ ... }`) and is restored
+    /// for the caller via `put_back`.
+    pub(in crate::syntax::parser) fn parse_module_path(
         &mut self,
-        min_segments: usize,
-    ) -> Result<crate::syntax::ast::ImportPath, ParseError> {
+    ) -> Result<ModulePath, ParseError> {
+        let first = self.parse_any_ident()?;
+        let path_start = first.span;
+        let mut segments = vec![first];
+
+        loop {
+            if self.lexer.peek() != Some(&Token::Dot) {
+                break;
+            }
+            let (_, dot_span) = self.advance()?; // consume `.`
+            if self.lexer.peek() == Some(&Token::Ident) {
+                let seg = self.parse_any_ident()?;
+                segments.push(seg);
+            } else {
+                // Not a path continuation; restore the `.` for the tail parser.
+                self.lexer.put_back(Token::Dot, dot_span);
+                break;
+            }
+        }
+
+        let path_end = segments.last().map_or(path_start, |s| s.span);
+        Ok(ModulePath {
+            segments,
+            span: path_start.merge(path_end),
+        })
+    }
+
+    /// Parse the trailing portion of an import or include declaration:
+    ///   `;`                    → bare module form
+    ///   `as IDENT ;`           → aliased form
+    ///   `.{ items, ... } ;`    → brace-list form
+    fn parse_import_tail(
+        &mut self,
+        hint: &str,
+    ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
-            Some(Token::StringLiteral) => {
-                let (_, span) = self.advance()?;
-                let raw = self.lexer.slice_at(span);
-                let path_str = raw[1..raw.len() - 1].to_string();
-
-                // Check for cross-file DAG path: `"./file.gcl"/dag_name`
-                if self.lexer.peek() == Some(&Token::Slash) {
-                    self.lexer.next_token(); // consume `/`
-                    let dag_ident = self.parse_any_ident()?;
-                    let full_span = span.merge(dag_ident.span);
-                    return Ok(crate::syntax::ast::ImportPath::CrossFileDag {
-                        file_path: path_str,
-                        dag_name: dag_ident,
-                        span: full_span,
-                    });
-                }
-
-                Ok(crate::syntax::ast::ImportPath::FilePath {
-                    path: path_str,
-                    span,
-                })
-            }
-            Some(Token::DotDot) => {
-                // Parent scope path: `..` or `../..` or `../../..`
-                let (_, start_span) = self.advance()?;
-                let mut levels: u32 = 1;
-                let mut end_span = start_span;
-
-                // Parse additional `/..` pairs for deeper traversal.
-                // After `..`, only `/..` is valid for continued parent traversal.
-                while self.lexer.peek() == Some(&Token::Slash) {
-                    self.lexer.next_token(); // consume `/`
-                    if self.lexer.peek() == Some(&Token::DotDot) {
-                        let (_, span) = self.advance()?;
-                        levels += 1;
-                        end_span = span;
-                    } else if let Some(tok) = self.lexer.peek() {
-                        // `/` followed by something other than `..` — parse error
-                        let tok_str = tok.to_string();
-                        let (_, span) = self.advance()?;
-                        return Err(self.unexpected_token("`..` after `/`", &tok_str, span));
-                    } else {
-                        return Err(self.unexpected_eof("`..` after `/`"));
-                    }
-                }
-
-                Ok(crate::syntax::ast::ImportPath::ParentScope {
-                    levels,
-                    span: start_span.merge(end_span),
-                })
-            }
-            Some(Token::Ident) => {
-                // Bare module path: ident / ident / ...
-                let first = self.parse_any_ident()?;
-                let path_start = first.span;
-                let mut segments = vec![first];
-
-                // Parse subsequent `/ident` pairs
-                while self.lexer.peek() == Some(&Token::Slash) {
-                    self.lexer.next_token(); // consume `/`
-                    let seg = self.parse_any_ident()?;
-                    segments.push(seg);
-                }
-
-                // Enforce minimum segment count
-                if segments.len() < min_segments {
+            Some(Token::Dot) => {
+                // Brace-list form: `.{ X, Y as Z }`
+                self.advance()?; // consume `.`
+                if self.lexer.peek() != Some(&Token::LBrace) {
                     let found = self
                         .lexer
                         .peek()
                         .map_or_else(|| "end of file".to_string(), ToString::to_string);
-                    let err_span = segments.last().map_or(path_start, |s| s.span);
+                    let (_, span) = self.advance()?;
                     return Err(self.unexpected_token(
-                        "a `/` followed by a module name (bare import paths require at least two segments, e.g., `package/module`)",
+                        "`{` to begin a brace-list selector after `.`",
                         &found,
-                        err_span,
+                        span,
                     ));
                 }
-
-                let path_end = segments.last().map_or(path_start, |s| s.span);
-                Ok(crate::syntax::ast::ImportPath::ModulePath {
-                    segments,
-                    span: path_start.merge(path_end),
-                })
-            }
-            Some(tok) => {
-                let tok_str = tok.to_string();
-                let (_, span) = self.advance()?;
-                Err(self.unexpected_token("a string literal, module path, or `..`", &tok_str, span))
-            }
-            None => Err(self.unexpected_eof("a string literal, module path, or `..`")),
-        }
-    }
-
-    /// Parse the kind portion of an import/include declaration:
-    /// `{ name1, name2 as alias };` or `as alias;` or `;`
-    fn parse_import_or_include_kind(
-        &mut self,
-        hint: &str,
-    ) -> Result<(crate::syntax::ast::ImportKind, crate::syntax::span::Span), ParseError> {
-        match self.lexer.peek() {
-            Some(Token::LBrace) => {
-                let names = self.parse_import_selective_body()?;
+                let names = self.parse_import_brace_list()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                Ok((crate::syntax::ast::ImportKind::Selective(names), end_span))
+                Ok((ImportKind::Selective(names), end_span))
             }
             Some(Token::As) => {
                 self.lexer.next_token(); // consume `as`
                 let alias = self.parse_any_ident()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                Ok((
-                    crate::syntax::ast::ImportKind::Module { alias: Some(alias) },
-                    end_span,
-                ))
+                Ok((ImportKind::Module { alias: Some(alias) }, end_span))
             }
             Some(Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
-                Ok((
-                    crate::syntax::ast::ImportKind::Module { alias: None },
-                    end_span,
-                ))
+                Ok((ImportKind::Module { alias: None }, end_span))
             }
             Some(tok) => {
                 let tok_str = tok.to_string();
@@ -234,22 +154,21 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse the `{ name1, name2 as alias, ... }` body of a selective import/include.
-    fn parse_import_selective_body(
+    /// Parse the `{ X, Y as Z, ... }` body of a brace-list selector.
+    fn parse_import_brace_list(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
         let names = self.parse_comma_separated(Token::RBrace, |p| {
-            // Collect any leading attributes on this import item
+            // Collect any leading attributes on this import item.
             let mut item_attributes = Vec::new();
             while p.lexer.peek() == Some(&Token::Hash) {
                 item_attributes.push(p.parse_attribute()?);
             }
 
             // Optional `pub` prefix marks the item for re-export (issue #452).
-            // `pub(bind)` is rejected — re-exports are use-sites, not declarations,
-            // and A5 says use-sites are B ≡ fixed.
+            // `pub(bind)` is rejected — re-exports are use-sites, not declarations.
             let is_pub = if p.lexer.peek() == Some(&Token::Pub) {
                 let (_, pub_span) = p.advance()?;
                 if p.lexer.peek() == Some(&Token::LParen) {
@@ -264,7 +183,7 @@ impl Parser<'_> {
                 false
             };
 
-            // Accept any identifier (imports can be any casing)
+            // Accept any identifier (imports can be any casing).
             let (name_str, name_span) = match p.lexer.next_token() {
                 Some((Token::Ident, span)) => (p.lexer.slice_at(span).to_string(), span),
                 Some((tok, span)) => {
@@ -275,7 +194,7 @@ impl Parser<'_> {
                 }
             };
 
-            // Check for optional `as` alias
+            // Optional `as` alias.
             let alias = if p.lexer.peek() == Some(&Token::As) {
                 p.lexer.next_token(); // consume `as`
                 match p.lexer.next_token() {
@@ -334,23 +253,6 @@ impl Parser<'_> {
                 span: binding_span,
             })
         })?;
-
-        if bindings.is_empty() {
-            // Peek at the current token to report its span; `parse_comma_separated`
-            // leaves us positioned at `RParen` when no bindings were parsed, but
-            // we should not consume it — the caller's `expect(RParen)` below
-            // would never fire in that case, so emit the error here using a
-            // non-destructive peek.
-            let (tok, span) = match self.lexer.peek_with_span() {
-                Some((tok, span)) => (tok.clone(), span),
-                None => return Err(self.unexpected_eof("at least one param binding")),
-            };
-            return Err(self.unexpected_token(
-                "at least one param binding",
-                &tok.to_string(),
-                span,
-            ));
-        }
 
         self.expect(Token::RParen)?;
         Ok(bindings)

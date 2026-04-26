@@ -151,9 +151,9 @@ fn check_indexed_param_map_literal() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };";
     let types = check(source).unwrap();
     let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
@@ -172,9 +172,9 @@ fn check_for_comprehension() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node doubled: Velocity[Maneuver] = for m: Maneuver { @dv[m] + @dv[m] };";
     check(source).unwrap();
@@ -185,9 +185,9 @@ fn check_for_comprehension_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
     let err = check(source).unwrap_err();
@@ -202,11 +202,11 @@ fn check_index_access_with_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
-param first: Velocity = @dv[Maneuver::Departure];";
+param first: Velocity = @dv[Maneuver.Departure];";
     check(source).unwrap();
 }
 
@@ -215,8 +215,8 @@ fn check_map_literal_missing_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -230,9 +230,9 @@ fn check_map_literal_extra_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -247,9 +247,9 @@ fn check_index_mismatch_in_for() {
 pub index Phase = { Coast, Burn };
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node bad: Velocity[Phase] = for p: Phase { @dv[p] };";
     let err = check(source).unwrap_err();
@@ -264,9 +264,9 @@ fn check_sum_aggregation() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node total_dv: Velocity = sum(@dv);";
     check(source).unwrap();
@@ -277,9 +277,9 @@ fn check_count_aggregation() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node n: Dimensionless = count(@dv);";
     check(source).unwrap();
@@ -290,9 +290,9 @@ fn check_mean_aggregation() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node avg_dv: Velocity = mean(@dv);";
     check(source).unwrap();
@@ -303,9 +303,9 @@ fn check_scan() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
     check(source).unwrap();
@@ -316,9 +316,9 @@ fn check_scan_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 m, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
@@ -344,9 +344,9 @@ fn check_for_with_sum() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node total: Velocity = sum(for m: Maneuver { @dv[m] });";
     check(source).unwrap();
@@ -559,9 +559,9 @@ fn check_scan_body_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver::Departure: 2.46 km / s,
-Maneuver::Correction: 0.5 km / s,
-Maneuver::Insertion: 1.8 km / s,
+Maneuver.Departure: 2.46 km / s,
+Maneuver.Correction: 0.5 km / s,
+Maneuver.Insertion: 1.8 km / s,
 };
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
     let err = check(source).unwrap_err();
@@ -592,8 +592,8 @@ fn check_map_literal_inconsistent_element_dims() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
-Phase::Coast: 1.0,
-Phase::Burn: 2.0 m,
+Phase.Coast: 1.0,
+Phase.Burn: 2.0 m,
 };";
     let err = check(source).unwrap_err();
     // The map entries have different dimensions: first is Dimensionless, second is Length
@@ -614,10 +614,10 @@ fn check_index_access_unknown_variant() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
-Phase::Coast: 1.0,
-Phase::Burn: 2.0,
+Phase.Coast: 1.0,
+Phase.Burn: 2.0,
 };
-param bad: Dimensionless = @x[Phase::NoSuch];";
+param bad: Dimensionless = @x[Phase.NoSuch];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::UnknownVariant { .. }),
@@ -632,7 +632,7 @@ fn check_index_access_on_scalar() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless = 1.0;
-param bad: Dimensionless = @x[Phase::Coast];";
+param bad: Dimensionless = @x[Phase.Coast];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::EvalError { .. }),
@@ -648,10 +648,10 @@ fn check_index_access_wrong_index() {
 pub index Phase = { Coast, Burn };
 pub index Stage = { First, Second };
 param x: Dimensionless[Phase] = {
-Phase::Coast: 1.0,
-Phase::Burn: 2.0,
+Phase.Coast: 1.0,
+Phase.Burn: 2.0,
 };
-param bad: Dimensionless = @x[Stage::First];";
+param bad: Dimensionless = @x[Stage.First];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::IndexMismatch { .. }),
@@ -792,8 +792,8 @@ fn check_map_literal_error_in_entry() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param bad: Dimensionless[Phase] = {
-Phase::Coast: 1.0 foobar,
-Phase::Burn: 2.0,
+Phase.Coast: 1.0 foobar,
+Phase.Burn: 2.0,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -810,8 +810,8 @@ fn check_map_literal_mixed_index_names() {
 pub index Phase = { Coast, Burn };
 pub index Stage = { First, Second };
 param x: Dimensionless[Phase] = {
-Phase::Coast: 1.0,
-Stage::Second: 2.0,
+Phase.Coast: 1.0,
+Stage.Second: 2.0,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -971,8 +971,8 @@ fn domain_bound_indexed_dimension_checked() {
     let source = "\
 pub index Maneuver = { Departure, Correction };
 param dv: Velocity(min: 1.0 m)[Maneuver] = {
-Maneuver::Departure: 1.0 m / s,
-Maneuver::Correction: 0.5 m / s,
+Maneuver.Departure: 1.0 m / s,
+Maneuver.Correction: 0.5 m / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -1061,7 +1061,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+node doubled: Length = @scale(factor: 2.0, v: @src).result;
 ";
 
 #[test]
@@ -1075,7 +1075,7 @@ fn inline_dag_call_basic_returns_output_type() {
 fn inline_dag_call_unknown_dag() {
     let source = "\
 param src: Length = 10.0 m;
-node y: Length = @nope(v: @src)::result;
+node y: Length = @nope(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1093,7 +1093,7 @@ dag id_len {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(bogus: @src)::result;
+node y: Length = @id_len(bogus: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1112,7 +1112,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @scale(v: @src)::result;
+node y: Length = @scale(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1130,7 +1130,7 @@ dag id_len {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(v: @src)::nope;
+node y: Length = @id_len(v: @src).nope;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1148,7 +1148,7 @@ dag id_len {
 }
 
 param src: Time = 10.0 s;
-node y: Length = @id_len(v: @src)::result;
+node y: Length = @id_len(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1169,8 +1169,8 @@ dag id_len {
     pub node result: Length = @v;
 }
 
-param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
-node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
+param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
 ";
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
@@ -1195,7 +1195,7 @@ dag bogus {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @bogus(v: @src)::result;
+node y: Length = @bogus(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1214,8 +1214,8 @@ dag doubler {
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }
 
-param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 3.0 m };
-node out: Length = @doubler(v: @dist)::result[Region::A];
+param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 3.0 m };
+node out: Length = @doubler(v: @dist).result[Region.A];
 ";
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
@@ -1233,7 +1233,7 @@ dag private_result {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @private_result(v: @src)::hidden;
+node y: Length = @private_result(v: @src).hidden;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1260,11 +1260,11 @@ fn inline_dag_self_recursive_cycle_detected() {
     let source = "\
 dag loop_self {
     param v: Length;
-    pub node result: Length = @loop_self(v: @v)::result;
+    pub node result: Length = @loop_self(v: @v).result;
 }
 
 param src: Length = 1.0 m;
-node y: Length = @loop_self(v: @src)::result;
+node y: Length = @loop_self(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1278,16 +1278,16 @@ fn inline_dag_mutual_recursion_cycle_detected() {
     let source = "\
 dag a {
     param v: Length;
-    pub node out: Length = @b(v: @v)::out;
+    pub node out: Length = @b(v: @v).out;
 }
 
 dag b {
     param v: Length;
-    pub node out: Length = @a(v: @v)::out;
+    pub node out: Length = @a(v: @v).out;
 }
 
 param src: Length = 1.0 m;
-node y: Length = @a(v: @src)::out;
+node y: Length = @a(v: @src).out;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -1309,7 +1309,7 @@ dag forward {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @forward(v: @src)::b;
+node y: Length = @forward(v: @src).b;
 ";
     // Phase B only covers compile; actual runtime topo-sort is Phase C.
     // Still, compile must accept this program (no dim errors).

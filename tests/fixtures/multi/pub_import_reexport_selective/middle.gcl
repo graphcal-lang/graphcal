@@ -3,4 +3,4 @@
 // `pub Acceleration` inside the brace list marks the imported dim for
 // re-export at middle.gcl's visible surface, so a downstream importer
 // can reach it transitively.
-import "./leaf.gcl" { pub Acceleration, g0 };
+import middle.leaf.{ pub Acceleration, g0 };

@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // main.gcl -- rocket equation using imported constants and included params
-import "./constants.gcl" { g0 };
-include "./params.gcl" { dry_mass, fuel_mass, isp };
+import lib.constants.{ g0 };
+include lib.params().{ dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 

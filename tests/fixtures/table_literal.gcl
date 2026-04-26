@@ -14,9 +14,9 @@ param delta_v: Velocity[Maneuver] = table[Maneuver] {
 
 // Equivalent 1D map literal (for comparison)
 param delta_v_map: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 // 2D table literal
@@ -29,28 +29,28 @@ param spacecraft_mass: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
 
 // Equivalent 2D map literal (for comparison)
 param spacecraft_mass_map: Mass[Phase, Maneuver] = {
-    (Phase::Launch, Maneuver::Departure): 5000.0 kg,
-    (Phase::Launch, Maneuver::Correction): 0.0 kg,
-    (Phase::Launch, Maneuver::Insertion): 0.0 kg,
-    (Phase::Cruise, Maneuver::Departure): 0.0 kg,
-    (Phase::Cruise, Maneuver::Correction): 4500.0 kg,
-    (Phase::Cruise, Maneuver::Insertion): 0.0 kg,
-    (Phase::Arrival, Maneuver::Departure): 0.0 kg,
-    (Phase::Arrival, Maneuver::Correction): 0.0 kg,
-    (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
+    (Phase.Launch, Maneuver.Departure): 5000.0 kg,
+    (Phase.Launch, Maneuver.Correction): 0.0 kg,
+    (Phase.Launch, Maneuver.Insertion): 0.0 kg,
+    (Phase.Cruise, Maneuver.Departure): 0.0 kg,
+    (Phase.Cruise, Maneuver.Correction): 4500.0 kg,
+    (Phase.Cruise, Maneuver.Insertion): 0.0 kg,
+    (Phase.Arrival, Maneuver.Departure): 0.0 kg,
+    (Phase.Arrival, Maneuver.Correction): 0.0 kg,
+    (Phase.Arrival, Maneuver.Insertion): 4000.0 kg,
 };
 
 // 3D table literal
 pub index Scenario = { Nominal, Contingency };
 
 param mass_3d: Mass[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
-    [Scenario::Nominal]
+    [Scenario.Nominal]
            : Departure, Correction, Insertion;
     Launch:  5000.0 kg,     0.0 kg,    0.0 kg;
     Cruise:     0.0 kg,  4500.0 kg,    0.0 kg;
     Arrival:    0.0 kg,     0.0 kg, 4000.0 kg;
 
-    [Scenario::Contingency]
+    [Scenario.Contingency]
            : Departure, Correction, Insertion;
     Launch:  4800.0 kg,     0.0 kg,    0.0 kg;
     Cruise:     0.0 kg,  4200.0 kg,    0.0 kg;
@@ -59,35 +59,35 @@ param mass_3d: Mass[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver
 
 // Equivalent 3D map literal (for comparison)
 param mass_3d_map: Mass[Scenario, Phase, Maneuver] = {
-    (Scenario::Nominal, Phase::Launch, Maneuver::Departure): 5000.0 kg,
-    (Scenario::Nominal, Phase::Launch, Maneuver::Correction): 0.0 kg,
-    (Scenario::Nominal, Phase::Launch, Maneuver::Insertion): 0.0 kg,
-    (Scenario::Nominal, Phase::Cruise, Maneuver::Departure): 0.0 kg,
-    (Scenario::Nominal, Phase::Cruise, Maneuver::Correction): 4500.0 kg,
-    (Scenario::Nominal, Phase::Cruise, Maneuver::Insertion): 0.0 kg,
-    (Scenario::Nominal, Phase::Arrival, Maneuver::Departure): 0.0 kg,
-    (Scenario::Nominal, Phase::Arrival, Maneuver::Correction): 0.0 kg,
-    (Scenario::Nominal, Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
-    (Scenario::Contingency, Phase::Launch, Maneuver::Departure): 4800.0 kg,
-    (Scenario::Contingency, Phase::Launch, Maneuver::Correction): 0.0 kg,
-    (Scenario::Contingency, Phase::Launch, Maneuver::Insertion): 0.0 kg,
-    (Scenario::Contingency, Phase::Cruise, Maneuver::Departure): 0.0 kg,
-    (Scenario::Contingency, Phase::Cruise, Maneuver::Correction): 4200.0 kg,
-    (Scenario::Contingency, Phase::Cruise, Maneuver::Insertion): 0.0 kg,
-    (Scenario::Contingency, Phase::Arrival, Maneuver::Departure): 0.0 kg,
-    (Scenario::Contingency, Phase::Arrival, Maneuver::Correction): 0.0 kg,
-    (Scenario::Contingency, Phase::Arrival, Maneuver::Insertion): 3800.0 kg,
+    (Scenario.Nominal, Phase.Launch, Maneuver.Departure): 5000.0 kg,
+    (Scenario.Nominal, Phase.Launch, Maneuver.Correction): 0.0 kg,
+    (Scenario.Nominal, Phase.Launch, Maneuver.Insertion): 0.0 kg,
+    (Scenario.Nominal, Phase.Cruise, Maneuver.Departure): 0.0 kg,
+    (Scenario.Nominal, Phase.Cruise, Maneuver.Correction): 4500.0 kg,
+    (Scenario.Nominal, Phase.Cruise, Maneuver.Insertion): 0.0 kg,
+    (Scenario.Nominal, Phase.Arrival, Maneuver.Departure): 0.0 kg,
+    (Scenario.Nominal, Phase.Arrival, Maneuver.Correction): 0.0 kg,
+    (Scenario.Nominal, Phase.Arrival, Maneuver.Insertion): 4000.0 kg,
+    (Scenario.Contingency, Phase.Launch, Maneuver.Departure): 4800.0 kg,
+    (Scenario.Contingency, Phase.Launch, Maneuver.Correction): 0.0 kg,
+    (Scenario.Contingency, Phase.Launch, Maneuver.Insertion): 0.0 kg,
+    (Scenario.Contingency, Phase.Cruise, Maneuver.Departure): 0.0 kg,
+    (Scenario.Contingency, Phase.Cruise, Maneuver.Correction): 4200.0 kg,
+    (Scenario.Contingency, Phase.Cruise, Maneuver.Insertion): 0.0 kg,
+    (Scenario.Contingency, Phase.Arrival, Maneuver.Departure): 0.0 kg,
+    (Scenario.Contingency, Phase.Arrival, Maneuver.Correction): 0.0 kg,
+    (Scenario.Contingency, Phase.Arrival, Maneuver.Insertion): 3800.0 kg,
 };
 
 // Derived node using table-defined params
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 
 // Access specific 2D entry (extracted to params to avoid variant literals in nodes)
-param launch_departure_mass_val: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+param launch_departure_mass_val: Mass = @spacecraft_mass[Phase.Launch, Maneuver.Departure];
 node launch_departure_mass: Mass = @launch_departure_mass_val;
 
 // Access specific 3D entry (extracted to params to avoid variant literals in nodes)
-param nominal_launch_departure_val: Mass = @mass_3d[Scenario::Nominal, Phase::Launch, Maneuver::Departure];
-param contingency_arrival_insertion_val: Mass = @mass_3d[Scenario::Contingency, Phase::Arrival, Maneuver::Insertion];
+param nominal_launch_departure_val: Mass = @mass_3d[Scenario.Nominal, Phase.Launch, Maneuver.Departure];
+param contingency_arrival_insertion_val: Mass = @mass_3d[Scenario.Contingency, Phase.Arrival, Maneuver.Insertion];
 node nominal_launch_departure: Mass = @nominal_launch_departure_val;
 node contingency_arrival_insertion: Mass = @contingency_arrival_insertion_val;

@@ -848,6 +848,21 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::M015))]
     ManifestError { message: String },
 
+    #[error("cross-file import `{path}` requires a `graphcal.toml` manifest")]
+    #[diagnostic(
+        code(graphcal::M017),
+        help(
+            "a Graphcal file without a `graphcal.toml` manifest is a standalone script and may only reference its own top-level decls (via `import <file_stem>.{{...}};`) or its own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place the files under `source_dir`."
+        )
+    )]
+    CrossFileImportInVirtualPackage {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not reachable in a manifest-less project")]
+        span: SourceSpan,
+    },
+
     #[error("binding target `{name}` is an index, not a param")]
     #[diagnostic(
         code(graphcal::M016),

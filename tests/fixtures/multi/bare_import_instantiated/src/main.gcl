@@ -1,5 +1,5 @@
 #[allow_defaults]
-include nasa/rocket(dry_mass: 800.0 kg, fuel_mass: 3200.0 kg) as stage;
-import nasa/rocket { Velocity };
+include nasa.rocket(dry_mass: 800.0 kg, fuel_mass: 3200.0 kg) as stage;
+import nasa.rocket.{ Velocity };
 
-node dv: Velocity = @stage::delta_v;
+node dv: Velocity = @stage.delta_v;

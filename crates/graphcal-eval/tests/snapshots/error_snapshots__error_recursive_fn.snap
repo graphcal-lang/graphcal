@@ -11,10 +11,10 @@ snippet line 2: dag recurse {
     label starting at line 2, column 1: error here
 snippet line 3:     param x: Dimensionless;
 snippet line 4:     
-snippet line 5:     include recurse(x: 1.0) { result };
+snippet line 5:     include recurse(x: 1.0).{ result };
 snippet line 6:     
 snippet line 7:     node result: Dimensionless = @x;
 snippet line 8: }
     label ending at line 8, column 1: error here
-snippet line 9: include recurse(x: 1.0) { result };
+snippet line 9: include recurse(x: 1.0).{ result };
 diagnostic code: graphcal::E001

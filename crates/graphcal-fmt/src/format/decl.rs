@@ -80,7 +80,7 @@ fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> R
                 .iter()
                 .map(|s| RcDoc::text(s.name.clone()))
                 .collect();
-            RcDoc::intersperse(parts, RcDoc::text("::"))
+            RcDoc::intersperse(parts, RcDoc::text("."))
         }
         graphcal_compiler::syntax::ast::AttributeArg::Group { elements, .. } => {
             let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
@@ -349,10 +349,15 @@ fn format_import_decl(_fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static
     format_import_or_include_kind(path_doc, RcDoc::nil(), &d.kind)
 }
 
-/// `include "path"(x: 1.0 km) { name };` or `include "path" as alias;`
+/// `include path(x: 1.0 km).{ name };` or `include path() as alias;`.
+///
+/// `include` always emits `(...)` — even when the binding list is empty —
+/// because the param-binding parens are part of the include grammar (the
+/// parser requires them). `import` uses the same shared bindings helper but
+/// never has bindings, so it emits nothing.
 fn format_include_decl(fmt: &mut Formatter<'_>, d: &IncludeDecl) -> RcDoc<'static> {
     let path_doc = format_import_or_include_path("include", &d.path);
-    let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
+    let bindings_doc = format_include_param_bindings(fmt, &d.param_bindings);
     format_import_or_include_kind(path_doc, bindings_doc, &d.kind)
 }
 
@@ -374,33 +379,15 @@ fn format_dag_decl(fmt: &mut Formatter<'_>, d: &DagDecl) -> RcDoc<'static> {
 /// Format the path portion of an import/include declaration.
 fn format_import_or_include_path(
     keyword: &str,
-    path: &graphcal_compiler::syntax::ast::ImportPath,
+    path: &graphcal_compiler::syntax::ast::ModulePath,
 ) -> RcDoc<'static> {
-    match path {
-        graphcal_compiler::syntax::ast::ImportPath::FilePath { path, .. } => {
-            RcDoc::text(format!("{keyword} \"{path}\""))
-        }
-        graphcal_compiler::syntax::ast::ImportPath::ModulePath { segments, .. } => {
-            let path_str = segments
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect::<Vec<_>>()
-                .join("/");
-            RcDoc::text(format!("{keyword} {path_str}"))
-        }
-        graphcal_compiler::syntax::ast::ImportPath::ParentScope { levels, .. } => {
-            let mut path_str = "..".to_string();
-            for _ in 1..*levels {
-                path_str.push_str("/..");
-            }
-            RcDoc::text(format!("{keyword} {path_str}"))
-        }
-        graphcal_compiler::syntax::ast::ImportPath::CrossFileDag {
-            file_path,
-            dag_name,
-            ..
-        } => RcDoc::text(format!("{keyword} \"{file_path}\"/{}", dag_name.name)),
-    }
+    let path_str = path
+        .segments
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    RcDoc::text(format!("{keyword} {path_str}"))
 }
 
 /// Format the kind portion (selective/module) of an import/include declaration.
@@ -429,7 +416,7 @@ fn format_import_or_include_kind(
                 .collect();
             path_doc
                 .append(bindings_doc)
-                .append(RcDoc::text(" { "))
+                .append(RcDoc::text(".{ "))
                 .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(" };"))
         }
@@ -442,14 +429,14 @@ fn format_import_or_include_kind(
     }
 }
 
-/// Format param bindings: `(name: expr, ...)` or empty if no bindings.
-fn format_import_param_bindings(
+/// Format `include` param bindings: always `(name: expr, ...)` or `()`.
+///
+/// `include` always carries a param-binding list — empty `()` is valid and
+/// must round-trip through the formatter. (The parser requires the parens.)
+fn format_include_param_bindings(
     fmt: &mut Formatter<'_>,
     bindings: &[ParamBinding],
 ) -> RcDoc<'static> {
-    if bindings.is_empty() {
-        return RcDoc::nil();
-    }
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
         .map(|b| {
@@ -744,12 +731,12 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         if si > 0 {
             out.push('\n');
         }
-        // Slice prefix `[A::a, B::b]`.
+        // Slice prefix `[A.a, B.b]`.
         if !slice.prefix_keys.is_empty() {
             let labels = slice
                 .prefix_keys
                 .iter()
-                .map(|k| format!("{}::{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .map(|k| format!("{}.{}", k.index.value.as_str(), k.variant.value.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push('\n');

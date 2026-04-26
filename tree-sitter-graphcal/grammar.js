@@ -36,6 +36,11 @@ module.exports = grammar({
     // annotation. The disambiguator is the trailing `,`.
     [$.multi_decl_kind, $.node_declaration],
     [$.multi_decl_kind, $.param_declaration],
+    // `IDENT . IDENT` after `import` / `include` could either continue
+    // a module_path or finish the path and stand at the start of a
+    // `. { ... }` brace-list tail. The disambiguator (1-token lookahead
+    // past the `.`) requires GLR — `IDENT` continues, `{` starts a tail.
+    [$.module_path],
   ],
 
   rules: {
@@ -84,7 +89,7 @@ module.exports = grammar({
       "]",
     ),
 
-    // An attribute argument: a path (ident or ident::ident::...) or a group ((arg, arg, ...))
+    // An attribute argument: a path (ident or ident.ident.ident...) or a group ((arg, arg, ...))
     _attribute_arg: $ => choice(
       $.attribute_path,
       $.attribute_group,
@@ -92,7 +97,7 @@ module.exports = grammar({
 
     attribute_path: $ => seq(
       $.identifier,
-      repeat(seq("::", $.identifier)),
+      repeat(seq(".", $.identifier)),
     ),
 
     attribute_group: $ => seq(
@@ -386,71 +391,80 @@ module.exports = grammar({
     generic_constraint: $ => choice("Dim", "Index", "Nat", "Type"),
 
 
-    // import "./path.gcl" { name1, name2 as alias2 };  -- selective import
-    // import "./path.gcl";                               -- module import (name from filename)
-    // import "./path.gcl" as alias;                      -- module import with alias
-    // import nasa/rocket { delta_v };                     -- bare module path
-    // import nasa/rocket as r;                            -- bare module path with alias
+    // import nasa.rocket;                                 -- bare module import
+    // import nasa.rocket as r;                            -- module import with alias
+    // import nasa.rocket.{ Orbit, compute_thrust as ct };  -- brace-list selector
+    //
+    // `pub import ...` re-exports. The brace-list and `as` forms are
+    // mutually exclusive. All paths are dot-separated and absolute from
+    // the package root; no file-path strings, no `..`, no `/`.
     import_declaration: $ => seq(
       repeat($.attribute),
       optional($.visibility),
       "import",
-      field("path", choice($.string_literal, $.bare_module_path, $.parent_scope_path)),
-      choice(
-        // Selective import: { name1, name2 as alias }
-        seq(
-          "{",
-          optional(seq(
-            $.import_item,
-            repeat(seq(",", $.import_item)),
-            optional(","),
-          )),
-          "}",
-          ";",
-        ),
-        // Module import with alias: as name ;
-        seq("as", field("alias", $.identifier), ";"),
-        // Module import (bare): ;
-        ";",
-      ),
+      field("path", $.module_path),
+      optional($._import_tail),
+      ";",
     ),
 
-    // include "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };  -- selective include
-    // include "./rocket.gcl"(dry_mass: 800.0 kg) as stage_1;   -- module include
-    // include "./rocket.gcl" { delta_v };                        -- include without params
-    // include nasa/rocket(dry_mass: 800.0 kg) as stage;          -- bare module path
-    // include my_dag(x: 1.0) { result };                          -- inline DAG reference
+    _import_tail: $ => choice(
+      seq("as", field("alias", $.identifier)),
+      $.brace_import_list,
+    ),
+
+    brace_import_list: $ => seq(
+      ".",
+      "{",
+      optional(seq(
+        $.import_item,
+        repeat(seq(",", $.import_item)),
+        optional(","),
+      )),
+      "}",
+    ),
+
+    // include nasa.rocket.compute_thrust(args);                       -- bare include
+    // include nasa.rocket.compute_thrust(args) as ct;                 -- include with alias
+    // include nasa.rocket.compute_thrust(args).{ thrust };             -- brace-list output selector
+    //
+    // The `(args)` parameter binding list is mandatory (may be empty).
+    // The brace-list and `as` forms are mutually exclusive.
     include_declaration: $ => seq(
       repeat($.attribute),
       optional($.visibility),
       "include",
-      field("path", choice($.string_literal, $.bare_module_path, $.dag_ref_path, $.parent_scope_path)),
-      optional(field("param_bindings", $.include_param_bindings)),
-      choice(
-        // Selective: { name1, name2 as alias }
-        seq(
-          "{",
-          optional(seq(
-            $.import_item,
-            repeat(seq(",", $.import_item)),
-            optional(","),
-          )),
-          "}",
-          ";",
-        ),
-        // Module with alias: as name ;
-        seq("as", field("alias", $.identifier), ";"),
-        // Module (bare): ;
-        ";",
-      ),
+      field("path", $.module_path),
+      field("param_bindings", $.include_param_bindings),
+      optional($._include_tail),
+      ";",
+    ),
+
+    _include_tail: $ => choice(
+      seq("as", field("alias", $.identifier)),
+      $.brace_include_list,
+    ),
+
+    brace_include_list: $ => seq(
+      ".",
+      "{",
+      optional(seq(
+        $.import_item,
+        repeat(seq(",", $.import_item)),
+        optional(","),
+      )),
+      "}",
     ),
 
     // Param bindings for include instantiation: (name: expr, ...)
+    // The list may be empty: `include foo();` is valid (matches the
+    // EBNF `[ include_param_binding, { ",", ... }, [ "," ] ]`).
     include_param_bindings: $ => seq(
       "(",
-      $.include_param_binding,
-      repeat(seq(",", $.include_param_binding)),
-      optional(","),
+      optional(seq(
+        $.include_param_binding,
+        repeat(seq(",", $.include_param_binding)),
+        optional(","),
+      )),
       ")",
     ),
 
@@ -472,22 +486,20 @@ module.exports = grammar({
       "}",
     ),
 
-    // Bare module path: nasa/rocket, nasa/orbital/transfer
-    // Requires at least two segments separated by /
-    bare_module_path: $ => seq(
+    // Module path: dot-separated, absolute from a package root.
+    // The leading segment is the package name (real or virtual); the
+    // remaining segments walk the package's module tree (directories,
+    // files, and inline `dag` declarations).
+    //
+    // The grammar relies on a `[$.module_path]` conflict declaration
+    // (see `conflicts`) so the GLR parser can keep both "continue the
+    // path" and "stop the path here" branches alive when it sees `.`
+    // after an identifier — disambiguating once it sees the next token
+    // (`IDENT` continues the path; `{` starts an import/include
+    // brace-list tail).
+    module_path: $ => seq(
       $.identifier,
-      repeat1(seq("/", $.identifier)),
-    ),
-
-    // Inline DAG reference path: a single identifier (e.g., `my_dag`)
-    // Used in `include` to reference inline DAG definitions.
-    dag_ref_path: $ => $.identifier,
-
-    // Parent scope path: `..` or `../..` etc.
-    // Used in `import` inside DAG blocks to access the enclosing scope.
-    parent_scope_path: $ => seq(
-      "..",
-      repeat(seq("/", "..")),
+      repeat(seq(".", $.identifier)),
     ),
 
     // Import item with optional alias and optional `pub` re-export
@@ -943,10 +955,10 @@ module.exports = grammar({
     ),
 
     match_pattern: $ => choice(
-      // Qualified variant pattern for index match: Maneuver::Departure
+      // Qualified variant pattern for index match: Maneuver.Departure
       seq(
         field("index", $.identifier),
-        "::",
+        ".",
         field("variant", $.identifier),
       ),
       // Bare variant pattern for tagged union match: Variant { bindings }
@@ -1112,7 +1124,6 @@ module.exports = grammar({
       $.field_access,
       $.index_access,
       $.fn_call,
-      $.qualified_fn_call,
       $._primary_expr,
     ),
 
@@ -1132,35 +1143,21 @@ module.exports = grammar({
 
     index_arg: $ => $._expr,
 
-    // Maneuver::Departure
+    // Maneuver.Departure
     qualified_variant: $ => seq(
       field("index", $.identifier),
-      "::",
+      ".",
       field("variant", $.identifier),
     ),
 
+    // Function call. `name` is either a bare identifier (`f(args)`)
+    // or a dot-qualified pair (`module.fn(args)`). The qualified
+    // form lives inside `fn_call` (rather than a separate rule) and
+    // shares a `[$.fn_call, $.field_access]` GLR conflict so that
+    // `module.name` followed by `(` parses as a call while `obj.field`
+    // (no parens) falls through to `field_access`.
     fn_call: $ => prec(PREC.CALL, seq(
-      field("name", $.identifier),
-      optional(seq(
-        "<",
-        field("generic_arg", $.generic_arg),
-        repeat(seq(",", field("generic_arg", $.generic_arg))),
-        optional(","),
-        ">",
-      )),
-      "(",
-      optional(seq(
-        $._expr,
-        repeat(seq(",", $._expr)),
-        optional(","),
-      )),
-      ")",
-    )),
-
-    // module::fn_name(args) — qualified function call
-    qualified_fn_call: $ => prec(PREC.CALL, seq(
-      field("module", $.identifier),
-      "::",
+      optional(seq(field("module", $.identifier), ".")),
       field("name", $.identifier),
       optional(seq(
         "<",
@@ -1184,7 +1181,14 @@ module.exports = grammar({
       $.number,
     ),
 
-    // Primary expressions
+    // Primary expressions.
+    //
+    // `qualified_variant` covers `IDENT.IDENT` in expression position
+    // (variant ref or qualified const ref); the name resolver decides
+    // which. Keeping it here avoids an LR(1) shift-reduce ambiguity
+    // between `field_access` (which would need to reduce the leading
+    // `IDENT` into `_primary_expr` first) and `fn_call` (which would
+    // shift `.` waiting for `(`).
     _primary_expr: $ => choice(
       $.number,
       $.boolean,
@@ -1207,11 +1211,10 @@ module.exports = grammar({
 
     graph_ref: $ => seq(
       "@",
-      optional(seq(field("module", $.identifier), "::")),
       field("name", $.identifier),
       optional(seq(
         field("args", $.include_param_bindings),
-        "::",
+        ".",
         field("output", $.identifier),
       )),
     ),

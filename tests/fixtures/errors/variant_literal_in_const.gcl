@@ -4,7 +4,7 @@
 // index's variant literal would orphan under rebinding.
 pub(bind) index Phase = { Design, Build, Test };
 pub const node design_cost: Dimensionless[Phase] = {
-    Phase::Design: 100.0,
-    Phase::Build: 200.0,
-    Phase::Test: 50.0,
+    Phase.Design: 100.0,
+    Phase.Build: 200.0,
+    Phase.Test: 50.0,
 };

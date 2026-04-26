@@ -547,9 +547,9 @@ fn sum_of_indexed_values() {
     let source = r#"
 pub index Maneuver = { Alpha, Beta, Charlie };
 param x: Dimensionless[Maneuver] = {
-    Maneuver::Alpha: 1.0,
-    Maneuver::Beta: 2.0,
-    Maneuver::Charlie: 3.0,
+    Maneuver.Alpha: 1.0,
+    Maneuver.Beta: 2.0,
+    Maneuver.Charlie: 3.0,
 };
 node total: Dimensionless = sum(@x);
 "#;
@@ -566,9 +566,9 @@ fn mean_of_indexed_values() {
     let source = r#"
 pub index Maneuver = { Alpha, Beta, Charlie };
 param x: Dimensionless[Maneuver] = {
-    Maneuver::Alpha: 1.0,
-    Maneuver::Beta: 2.0,
-    Maneuver::Charlie: 3.0,
+    Maneuver.Alpha: 1.0,
+    Maneuver.Beta: 2.0,
+    Maneuver.Charlie: 3.0,
 };
 node avg: Dimensionless = mean(@x);
 "#;
@@ -802,8 +802,8 @@ pub index Row = { RowA, RowB };
 pub index Col = { ColA, ColB };
 
 param val: Dimensionless[Row, Col] = {
-    (Row::RowA, Col::ColA): 5.0, (Row::RowA, Col::ColB): 3.0,
-    (Row::RowB, Col::ColA): 7.0, (Row::RowB, Col::ColB): 1.0,
+    (Row.RowA, Col.ColA): 5.0, (Row.RowA, Col.ColB): 3.0,
+    (Row.RowB, Col.ColA): 7.0, (Row.RowB, Col.ColB): 1.0,
 };
 
 assert all_positive = for r: Row, c: Col {
@@ -828,10 +828,10 @@ pub index Band = { Band1, Band2 };
 pub index Channel = { Ch1, Ch2 };
 
 param val: Dimensionless[Layer, Band, Channel] = {
-    (Layer::Layer1, Band::Band1, Channel::Ch1): 1.0, (Layer::Layer1, Band::Band1, Channel::Ch2): 2.0,
-    (Layer::Layer1, Band::Band2, Channel::Ch1): 3.0, (Layer::Layer1, Band::Band2, Channel::Ch2): 4.0,
-    (Layer::Layer2, Band::Band1, Channel::Ch1): 5.0, (Layer::Layer2, Band::Band1, Channel::Ch2): 6.0,
-    (Layer::Layer2, Band::Band2, Channel::Ch1): 7.0, (Layer::Layer2, Band::Band2, Channel::Ch2): 8.0,
+    (Layer.Layer1, Band.Band1, Channel.Ch1): 1.0, (Layer.Layer1, Band.Band1, Channel.Ch2): 2.0,
+    (Layer.Layer1, Band.Band2, Channel.Ch1): 3.0, (Layer.Layer1, Band.Band2, Channel.Ch2): 4.0,
+    (Layer.Layer2, Band.Band1, Channel.Ch1): 5.0, (Layer.Layer2, Band.Band1, Channel.Ch2): 6.0,
+    (Layer.Layer2, Band.Band2, Channel.Ch1): 7.0, (Layer.Layer2, Band.Band2, Channel.Ch2): 8.0,
 };
 
 assert all_positive = for l: Layer, b: Band, c: Channel {

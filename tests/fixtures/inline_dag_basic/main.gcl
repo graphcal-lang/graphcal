@@ -8,5 +8,5 @@ dag double_speed {
 }
 
 param speed: Velocity = 10.0 m/s;
-include double_speed(v: @speed) { result as doubled };
+include double_speed(v: @speed).{ result as doubled };
 node final_result: Velocity = @doubled;

@@ -47,7 +47,6 @@
 
 (number) @number
 (boolean) @boolean
-(string_literal) @string
 
 ; ---------------------------------------------------------------
 ; Operators
@@ -71,7 +70,6 @@
   "||"
   "!"
   "->"
-  "::"
   "=>"
   "~="
   "+/-"
@@ -111,24 +109,16 @@
 (index_declaration name: (identifier) @type)
 
 
-; import "./path.gcl" { name1, name2 as alias2 }
-(import_declaration path: (string_literal) @string)
+; import nasa.rocket.{delta_v}
+(import_declaration path: (module_path) @module)
 
-; import nasa/rocket { delta_v }
-(import_declaration path: (bare_module_path) @module)
+; include nasa.rocket(params).{delta_v}
+(include_declaration path: (module_path) @module)
 
-; include "./rocket.gcl"(params) { delta_v }
-(include_declaration path: (string_literal) @string)
-
-; include nasa/rocket(params) { delta_v }
-(include_declaration path: (bare_module_path) @module)
-
-; include my_dag(params) { result }
-(include_declaration path: (dag_ref_path) @function)
-
-; import .. { GM }
-(import_declaration path: (parent_scope_path) @keyword)
-(include_declaration path: (parent_scope_path) @keyword)
+; Highlight individual identifiers in a module path so the
+; per-segment color is preserved (Zed's @module style applies to
+; the whole path; per-segment refinements live in the children).
+(module_path (identifier) @module)
 
 ; dag my_pipeline { ... }
 (dag_declaration name: (identifier) @function)
@@ -185,19 +175,19 @@
 ; fn calls: sqrt(x), ln(x)
 (fn_call name: (identifier) @function.call)
 
-; qualified fn calls: module::fn_name(args)
-(qualified_fn_call module: (identifier) @module name: (identifier) @function.call)
+; qualified fn calls: module.fn_name(args)
+; (handled by `fn_call` with an optional `module` field)
+(fn_call module: (identifier) @module name: (identifier) @function.call)
 
 ; ---------------------------------------------------------------
-; Graph references: @name, @module::name
+; Graph references: @name, @dag(args).out
 ; ---------------------------------------------------------------
 
 (graph_ref "@" @operator name: (identifier) @variable)
-(graph_ref module: (identifier) @module)
 
-; Inline DAG invocation: `@dag(args)::out`.
+; Inline DAG invocation: `@dag(args).out`.
 ; The dag name in call position is highlighted as a function reference; the
-; projected output name after `::` is highlighted as a variable.
+; projected output name after `.` is highlighted as a variable.
 (graph_ref name: (identifier) @function.call args: (include_param_bindings))
 (graph_ref output: (identifier) @variable)
 
@@ -205,10 +195,10 @@
 ; Module imports
 ; ---------------------------------------------------------------
 
-; import "./path.gcl" as alias;
+; import nasa.rocket as alias;
 (import_declaration alias: (identifier) @module)
 
-; include "./path.gcl" as alias;
+; include nasa.rocket(args) as alias;
 (include_declaration alias: (identifier) @module)
 
 ; Param bindings in include declarations: include "path"(name: expr) { ... }
@@ -231,7 +221,7 @@
 ; Field init shorthand/explicit: dv1, dv1: expr
 (field_init name: (identifier) @property)
 
-; Qualified variant: Maneuver::Departure
+; Qualified variant: Maneuver.Departure
 (qualified_variant index: (identifier) @type variant: (identifier) @constant)
 
 ; Union member names: type Foo = A | B;
@@ -280,16 +270,16 @@
 ; Attributes
 ; ---------------------------------------------------------------
 
-; #[assumes(x, y)], #[expected_fail(Mode::Boost)]
+; #[assumes(x, y)], #[expected_fail(Mode.Boost)]
 (attribute "#" @punctuation.special)
 (attribute "[" @punctuation.special)
 (attribute "]" @punctuation.special)
 (attribute name: (identifier) @attribute)
 
-; Attribute path arguments: ident, Index::Variant
+; Attribute path arguments: ident, Index.Variant
 (attribute_path (identifier) @variable)
 
-; Attribute group arguments: (Index::A, Index::B)
+; Attribute group arguments: (Index.A, Index.B)
 (attribute_group "(" @punctuation.bracket)
 (attribute_group ")" @punctuation.bracket)
 

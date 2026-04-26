@@ -1,4 +1,4 @@
-import "./lib.gcl" as lib;
+import lib as lib;
 
 param speed: Velocity = 10.0 m/s;
-node doubled: Velocity = @lib::scale(factor: 2.0, v: @speed)::result;
+node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed).result;

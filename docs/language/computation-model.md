@@ -67,7 +67,7 @@ The `@` prefix is the central scoping mechanism:
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
 | `@name` | Parameter, node, or const node in the graph | `node` expressions, `dag` block bodies |
-| `@module::name` | Qualified graph reference | Same as above |
+| `@dag(args).out` | Inline DAG invocation projecting one output | Same as above |
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
 
@@ -102,7 +102,7 @@ node b: Dimensionless = @a + 1.0;  // ERROR: cycle detected
 ### Call-Site Identity
 
 When a `dag` is instantiated — whether via top-level `include` or via the
-inline `@dag(args)::out` expression form — each **syntactic call site** is a
+inline `@dag(args).out` expression form — each **syntactic call site** is a
 fresh instantiation. Two textually distinct occurrences with identical
 arguments denote two distinct sub-graphs in the underlying DAG, not a shared
 sub-graph. Programs must not rely on sharing across call sites.

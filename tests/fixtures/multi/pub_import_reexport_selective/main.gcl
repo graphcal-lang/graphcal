@@ -3,6 +3,6 @@
 // `middle.gcl` re-exports `Acceleration` via `{ pub Acceleration }`,
 // so `Acceleration` appears in `middle.gcl`'s visible surface and this
 // import succeeds. Issue #452.
-import "./middle.gcl" { Acceleration };
+import middle.{ Acceleration };
 
 const node result: Acceleration = 9.80665 m/s^2;

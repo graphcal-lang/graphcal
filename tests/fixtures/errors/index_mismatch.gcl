@@ -1,8 +1,8 @@
 pub index Phase = { Coast, Burn };
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.5 km/s,
-    Maneuver::Insertion: 1.8 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.5 km/s,
+    Maneuver.Insertion: 1.8 km/s,
 };
 node bad: Velocity[Phase] = for p: Phase { @dv[p] };

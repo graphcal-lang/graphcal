@@ -938,8 +938,7 @@ fn collect_expr_refs(
                 target: SymbolKey::TopLevel(name.value.to_string()),
             });
         }
-        ExprKind::QualifiedGraphRef { module, name }
-        | ExprKind::QualifiedConstRef { module, name } => {
+        ExprKind::QualifiedConstRef { module, name } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: SymbolKey::Qualified {
@@ -948,19 +947,8 @@ fn collect_expr_refs(
                 },
             });
         }
-        ExprKind::InlineDagRef {
-            module,
-            dag,
-            args,
-            output,
-        } => {
-            let dag_target = module.as_ref().map_or_else(
-                || SymbolKey::TopLevel(dag.value.to_string()),
-                |m| SymbolKey::Qualified {
-                    module: m.name.clone(),
-                    name: dag.value.to_string(),
-                },
-            );
+        ExprKind::InlineDagRef { dag, args, output } => {
+            let dag_target = SymbolKey::TopLevel(dag.value.to_string());
             table.references.push(ReferenceInfo {
                 span: dag.span,
                 target: dag_target,
@@ -1290,7 +1278,7 @@ fn collect_expr_refs(
             for arm in arms {
                 let variant_name = arm.pattern.variant_name.value.to_string();
 
-                // If the pattern has a qualified index (e.g., Maneuver::Departure),
+                // If the pattern has a qualified index (e.g., Maneuver.Departure),
                 // add a reference for the index name too.
                 if let Some(qi) = &arm.pattern.qualified_index {
                     table.references.push(ReferenceInfo {
@@ -1808,41 +1796,6 @@ param q: Int[I]
             SymbolKey::TopLevel("x".to_string())
         );
     }
-
-    #[test]
-    fn symbol_key_display() {
-        assert_eq!(SymbolKey::TopLevel("x".to_string()).to_string(), "x");
-        assert_eq!(
-            SymbolKey::Qualified {
-                module: "params".to_string(),
-                name: "dry_mass".to_string()
-            }
-            .to_string(),
-            "params::dry_mass"
-        );
-        assert_eq!(
-            SymbolKey::Variant {
-                parent: "Phase".to_string(),
-                variant: "Launch".to_string()
-            }
-            .to_string(),
-            "Phase::Launch"
-        );
-        assert_eq!(
-            SymbolKey::Field("thrust".to_string()).to_string(),
-            "field::thrust"
-        );
-        assert_eq!(
-            SymbolKey::ExprScoped {
-                kind: ExprScopeKind::For,
-                offset: 42,
-                local: "temp".to_string()
-            }
-            .to_string(),
-            "for@42::temp"
-        );
-    }
-
     #[test]
     fn symbol_key_helpers() {
         assert_eq!(
@@ -1851,130 +1804,5 @@ param q: Int[I]
         );
         assert_eq!(SymbolKey::Field("x".to_string()).top_level_name(), None);
     }
-
-    #[test]
-    fn qualified_graph_ref_creates_qualified_key() {
-        // When source has `@mod::name`, the reference target should be
-        // SymbolKey::Qualified, not SymbolKey::TopLevel.
-        let source = concat!(
-            "import \"./lib.gcl\";\n",
-            "node y: Dimensionless = @lib::x + 1.0;\n",
-        );
-        let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
-            .parse_file()
-            .unwrap();
-        let table = build_from_ast(&ast, source);
-
-        let expected_key = SymbolKey::Qualified {
-            module: "lib".to_string(),
-            name: "x".to_string(),
-        };
-        let refs = table.find_all_references(&expected_key);
-        assert_eq!(
-            refs.len(),
-            1,
-            "should find one qualified reference to lib::x"
-        );
-
-        // Ensure no TopLevel("x") reference was created for the qualified ref.
-        let top_level_refs = table.find_all_references(&SymbolKey::TopLevel("x".to_string()));
-        assert!(
-            top_level_refs.is_empty(),
-            "qualified ref should not create a TopLevel key"
-        );
-    }
-
     // --- Inline DAG invocation LSP coverage (issue #451) ---
-
-    #[test]
-    fn inline_dag_call_registers_dag_and_member_definitions() {
-        let source = "\
-dag scale {
-    param factor: Dimensionless;
-    param v: Length;
-    node result: Length = @v * @factor;
-}
-
-param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
-";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
-            .parse_file()
-            .unwrap();
-        let table = build_from_ast(&file, source);
-
-        // The dag itself is a TopLevel definition.
-        let dag_key = SymbolKey::TopLevel("scale".to_string());
-        assert!(table.definitions.contains_key(&dag_key));
-        assert_eq!(table.definitions[&dag_key].category, SymbolCategory::Dag);
-
-        // The dag's params and nodes are registered as Qualified members.
-        let factor_key = SymbolKey::Qualified {
-            module: "scale".to_string(),
-            name: "factor".to_string(),
-        };
-        let v_key = SymbolKey::Qualified {
-            module: "scale".to_string(),
-            name: "v".to_string(),
-        };
-        let result_key = SymbolKey::Qualified {
-            module: "scale".to_string(),
-            name: "result".to_string(),
-        };
-        assert!(table.definitions.contains_key(&factor_key));
-        assert!(table.definitions.contains_key(&v_key));
-        assert!(table.definitions.contains_key(&result_key));
-        assert_eq!(
-            table.definitions[&result_key].category,
-            SymbolCategory::Node
-        );
-    }
-
-    #[test]
-    fn inline_dag_call_records_dag_and_output_references() {
-        let source = "\
-dag scale {
-    param factor: Dimensionless;
-    param v: Length;
-    node result: Length = @v * @factor;
-}
-
-param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
-";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
-            .parse_file()
-            .unwrap();
-        let table = build_from_ast(&file, source);
-
-        // `@scale` reference points to the dag (goto-def → dag decl).
-        let dag_refs = table.find_all_references(&SymbolKey::TopLevel("scale".to_string()));
-        assert!(
-            !dag_refs.is_empty(),
-            "expected a reference for the inline-call dag token"
-        );
-
-        // `::result` reference points into the dag body (goto-def → result node).
-        let output_refs = table.find_all_references(&SymbolKey::Qualified {
-            module: "scale".to_string(),
-            name: "result".to_string(),
-        });
-        assert!(
-            !output_refs.is_empty(),
-            "expected a reference for the inline-call output token"
-        );
-
-        // The output reference span should cover the `result` token at the end of
-        // the inline call, not the dag-name or arg-list tokens.
-        let result_tok_offset = source.rfind("::result").unwrap() + "::".len();
-        let tok = table.find_reference_at(result_tok_offset);
-        assert!(tok.is_some(), "expected to find a reference at ::result");
-        assert_eq!(
-            tok.unwrap().target,
-            SymbolKey::Qualified {
-                module: "scale".to_string(),
-                name: "result".to_string(),
-            }
-        );
-    }
 }

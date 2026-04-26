@@ -4,66 +4,372 @@ icon: material/file-multiple
 
 # Multi-File Projects
 
-Graphcal supports splitting projects across multiple files using `import` and `include` declarations. Import paths can be either **file paths** (quoted strings) or **module paths** (bare identifiers).
+Graphcal organizes code into **packages**. Every `.gcl` file belongs to
+exactly one package, and every name a DAG uses is reached by an absolute
+path that starts at a package root. The path syntax is the same whether
+the package lives on disk under a manifest or whether it is a single
+file you just created — the only thing that changes between those cases
+is the externally-visible package name.
 
-- **`import`** brings compile-time definitions into scope: `const`, `type`, `dim`, `unit`, `index`, `dag`
-- **`include`** instantiates a DAG (inline or from a file) into the current computation graph
+Two declarations bring outside material into a DAG:
 
-There are two import styles: **selective imports** and **module imports**.
+- **`import`** brings *names* (compile-time references: `type`, `dim`,
+  `unit`, `const node`, `const unit`, `dag`, `index`) into the local
+  scope. Imports never instantiate anything.
+- **`include`** *instantiates* a DAG with parameter bindings and embeds
+  it as a sub-graph, exposing its outputs as nodes.
 
-## Selective Imports
+Both use the same path discipline: dot-separated segments, absolute from
+a package root. There are no relative paths, no `..`, no quoted file
+strings, and no `/` inside Graphcal source.
 
-Selective imports bring specific names into the local scope:
+## Files Are Packages
 
+A package has a name and a tree of modules. The name comes from one of
+two places:
+
+| Flavor       | Name source                          | When                                  |
+|--------------|--------------------------------------|---------------------------------------|
+| **Virtual**  | The file's stem (the `.gcl` filename without extension) | No `graphcal.toml` present          |
+| **Real**     | `package.name` in `graphcal.toml`    | A manifest sits in an ancestor dir    |
+
+A **virtual package is a single file** — a standalone Graphcal script.
+The package consists of exactly one module: the file itself. The only
+import path that resolves in a virtual package is the file's own stem
+(see [Self-Reference](#self-reference-a-file-is-its-own-package)
+below). There are no sibling-file imports without a manifest; if a
+sibling file `helper.gcl` sits next to your script, the loader rejects
+`import helper.{X};` with a structured error pointing you at
+[Promoting to a Real Package](#promoting-to-a-real-package).
+
+A **real package** can span many files arranged in a directory tree
+under `source_dir`. Resolution walks `<source_dir>/<segments>.gcl`
+exactly as the path is written.
+
+A path like `nasa.rocket.dynamics` walks the tree starting at the
+package root: package `nasa` → directory `rocket` → file `dynamics.gcl`
+(or an inline `dag dynamics { ... }` declared inside `rocket.gcl`). The
+path before any `.{...}` or `as` clause **always names a module**, never
+a symbol — the parser knows the module/symbol boundary from syntax
+alone.
+
+### File and directory names
+
+Every `.gcl` filename stem and every directory below the source root
+must be a valid Graphcal identifier (snake_case, no hyphens, no spaces,
+not a keyword). The compiler rejects files like `match.gcl`,
+`my-helpers.gcl`, or `MyModule.gcl` outright; the file name *is* a path
+segment in `import` / `include` declarations and must therefore be
+syntactically usable there.
+
+## The `import` Form
+
+`import` brings names into the current DAG's scope. There are three
+surface forms; each form introduces **exactly the names you write
+down** — no implicit additions.
+
+```graphcal
+import nasa.rocket;                                  // bare: brings `rocket`
+import nasa.rocket as nr;                            // alias: brings `nr`
+import nasa.rocket.{Orbit, compute_thrust as ct};    // brace: brings `Orbit` and `ct` only
 ```
-import "./path/to/file.gcl" { name1, name2 };
+
+The forms differ in what enters scope:
+
+| Form                                                   | Names added                                |
+|--------------------------------------------------------|--------------------------------------------|
+| `import nasa.rocket;`                                  | `rocket` (the module, by its leaf name)    |
+| `import nasa.rocket as nr;`                            | `nr` (the module under alias)              |
+| `import nasa.rocket.{Orbit};`                          | `Orbit` only — **not** `rocket`            |
+| `import nasa.rocket.{Orbit, compute_thrust as ct};`    | `Orbit` and `ct` only                      |
+| `import nasa.rocket as nr.{Orbit};`                    | parse error — alias and brace mutually exclusive |
+
+If you want both the module qualifier *and* an unqualified item, write
+two statements:
+
+```graphcal
+import nasa.rocket;            // brings: rocket
+import nasa.rocket.{Orbit};    // brings: Orbit
+// Now both `rocket.Orbit` and `Orbit` are usable.
 ```
 
-- The path is a **string literal** relative to the importing file
-- Braces list the specific names to import
-- All compile-time declarations can be imported: `const node`, `dim`, `unit`, `type`, `index`, `dag`
+This is a deliberate divergence from Gleam: Graphcal's brace form does
+**not** also bring the module leaf. Each `import` should name exactly
+what enters scope so a reader scanning the import list sees the precise
+set of names introduced.
 
-## Module Imports
+### The brace list mixes any compile-time kind
 
-Module imports bring an entire file in as a namespace, accessed via `::`:
+Within a brace list, every item is just a bare identifier; there are no
+kind markers (no `type`, no `const`). The kind is recovered from the
+declaration in the source module:
 
-```
-import "./constants.gcl";                  // module named "constants"
-import "./constants.gcl" as consts;        // module named "consts"
-```
-
-When no alias is given, the module name is derived from the filename stem (e.g., `constants.gcl` becomes `constants`). The filename stem must be a valid `lower_snake_case` identifier; otherwise, use `as` to provide an explicit alias.
-
-Members are accessed with `::`:
-
-```
-import "./constants.gcl";
-import "./params.gcl";
-import "./lib.gcl";
-
-node g: Acceleration = @constants::g0;           // qualified const node
-node total: Mass = @params::dry_mass;           // qualified graph ref
+```graphcal
+import nasa.rocket.{Orbit, Length, m, MAX_THRUST, Maneuver};
+//                  type   dim     unit  const       index
 ```
 
-Module imports only resolve declarations that are actually referenced via `::` in the importing file. Unreferenced declarations are not imported.
+### Aliasing items
 
-## Path Resolution
+Each item in a brace list may be aliased independently:
 
-Paths are resolved relative to the file containing the `import` declaration:
-
-```
-// In project/main.gcl:
-import "./lib/constants.gcl" { g0 };     // resolves to project/lib/constants.gcl
-import "../shared/units.gcl" { knot };   // resolves to shared/units.gcl
+```graphcal
+import nasa.rocket.{Orbit as O, compute_thrust as ct};
 ```
 
-## Module Paths (Bare Imports)
+### What `import` may bring
 
-For organized projects, you can import modules using bare identifier paths instead of quoted file paths. This requires a `graphcal.toml` manifest file at the project root.
+Only compile-time names cross the `import` boundary:
 
-### Setting up `graphcal.toml`
+| Declaration kind     | Reference after import                 |
+|----------------------|----------------------------------------|
+| `const node`         | `@name`                                |
+| `const unit`         | `name`                                 |
+| `dim`                | `DimName`                              |
+| `unit`               | `unit_name`                            |
+| `type`               | `TypeName`                             |
+| `index`              | `IndexName`                            |
+| `dag`                | Used with `include` or `@name(args).out` |
 
-Create a `graphcal.toml` in your project root with a `[package]` section:
+Runtime values — non-`const` `node` and any `param` — are **not**
+importable. To consume runtime values from another file, instantiate
+the producing DAG via `include` (see [The `include` Form](#the-include-form)).
+
+### `pub import` — re-export
+
+Prefixing an `import` with `pub` re-exports the imported names under
+the importer's namespace:
+
+```graphcal
+pub import nasa.rocket;                              // re-exports `rocket`
+pub import nasa.rocket.{Orbit, compute_thrust};      // re-exports both items
+```
+
+The brace form also supports per-item `pub`, for fine-grained
+re-export:
+
+```graphcal
+import nasa.rocket.{ pub Orbit, compute_thrust };
+//                   ^^^ only `Orbit` is re-exported
+```
+
+Mixing whole-import `pub` with per-item `pub` is rejected:
+
+```graphcal
+pub import nasa.rocket.{ pub Orbit };   // parse error
+```
+
+`pub(bind)` is illegal on `import`. Imports name use-sites, and
+use-sites are not bindable — `pub(bind)` belongs only on declarations.
+
+## The `include` Form
+
+`include` instantiates a DAG, embedding its body as a sub-graph and
+exposing its outputs as nodes in the surrounding DAG. The argument list
+in parentheses is **mandatory** (it may be empty), which makes
+`include` syntactically distinct from `import`.
+
+```graphcal
+// Bare: leaf becomes the alias; outputs accessed as @compute_thrust.<output>
+include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800 kg);
+node t: Force = @compute_thrust.thrust;
+
+// Aliased: outputs accessed as @ct.<output>
+include nasa.rocket.compute_thrust(orbit: @o) as ct;
+node t: Force = @ct.thrust;
+
+// Brace list: selects (and optionally renames) outputs as direct nodes
+include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
+include nasa.rocket.compute_thrust(orbit: @o).{ thrust, isp, mass_flow as mdot };
+node t: Force = @thrust;
+```
+
+| Form                                                            | Result                                                |
+|-----------------------------------------------------------------|-------------------------------------------------------|
+| `include path.dag(args);`                                       | Sugar for `... as dag` — leaf name is the alias       |
+| `include path.dag(args) as a;`                                  | Outputs reached as `@a.<output>`                      |
+| `include path.dag(args).{x};`                                   | `x` itself becomes a node in the current DAG          |
+| `include path.dag(args).{x as y};`                              | Same, renamed                                         |
+| `include path.dag(args) as a.{x};`                              | parse error — alias and brace mutually exclusive      |
+
+### `include` does not require `import` of the DAG
+
+Because the include path is absolute from the package root, no preceding
+`import` is needed for the DAG itself. The DAG's outputs (named in the
+brace list, or by alias) are the only names introduced. **Types** in
+the param interface, however, must still be brought into scope by
+`import`:
+
+```graphcal
+dag mission {
+    import nasa.rocket.{Orbit};               // type for the param
+    param o: Orbit;
+
+    include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800 kg).{ thrust };
+
+    node total: Force = @thrust + 100 N;
+}
+```
+
+### `pub include` — re-export
+
+A leading `pub` on `include` re-exports the included outputs from the
+including DAG:
+
+```graphcal
+pub include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
+```
+
+### Inline-DAG call expression
+
+Inside an expression, `@dag(args).out` is sugar for an anonymous
+`include ... as <synthetic>; @<synthetic>.out`. The thing immediately
+after `@` must be a single in-scope identifier — bring the DAG into
+scope first:
+
+```graphcal
+dag mission {
+    import nasa.rocket.{compute_thrust, Orbit};
+    param o: Orbit;
+    node t: Force = @compute_thrust(orbit: @o, dry_mass: 800 kg).thrust;
+}
+```
+
+Each call site is a fresh instantiation; arguments are evaluated in the
+surrounding expression scope, so they may reference local variables
+from an enclosing `for`, `scan`, `unfold`, or `match` binding:
+
+```graphcal
+node distances: Length[Region] = for r: Region {
+    @scale(factor: 2.0, v: @dist[r]).result
+};
+```
+
+Qualified forms after `@` are rejected — `@module.dag(args).out` is a
+parse error because `module` is not a node, and `@` is reserved for
+node references. To call a DAG in another module, bring it into scope
+unqualified first via `import x.{dag};` (or `as` alias) and then call
+it as `@dag(...)`.
+
+## Inline DAGs as Modules
+
+A `dag` declaration inside another module — whether at file top level
+or nested inside another DAG — is itself a module, addressable by
+extending the path:
+
+```graphcal
+// orbit_analysis.gcl  (virtual package: orbit_analysis)
+dag analyze {
+    type IntermediateResult { value: Length };
+
+    dag deeper {
+        import orbit_analysis.analyze.{IntermediateResult};
+        param r: IntermediateResult;
+        // ...
+    }
+}
+```
+
+The path `orbit_analysis.analyze.deeper` reads: package
+`orbit_analysis`, sub-module `analyze`, sub-module `deeper`. Identical
+addressing rule as cross-package `nasa.rocket.compute_thrust`.
+
+Sibling top-level DAGs are addressed the same way:
+
+```graphcal
+// orbit_analysis.gcl
+dag double {
+    param x: Length;
+    node y: Length = @x * 2.0;
+}
+
+dag analyze {
+    param input_dist: Length;
+    include orbit_analysis.double(x: @input_dist).{ y as doubled };
+    node final: Length = @doubled + 1.0 m;
+}
+```
+
+### Recursive parent-DAG include
+
+An inline DAG may `include` its enclosing DAG by full path. This is
+recursive instantiation: the source-level grammar accepts it, but the
+evaluator currently emits `NotYetImplemented`. A future implementation
+will require recursion to terminate (via diverging param values).
+
+## Self-Reference: A File Is Its Own Package
+
+To reach a top-level declaration of the *current file* from inside an
+inline DAG, use the file's own package address. There is no relative
+shortcut, no `super`, no `..`.
+
+In a virtual package, the file stem is the package name:
+
+```graphcal
+// dynamics.gcl  (virtual package: dynamics)
+type OrbitType { sma: Length, ecc: Dimensionless };
+const earth_mu: GravParam = 3.986e5 km^3/s^2;
+
+dag analyze {
+    dag energy {
+        import dynamics.{OrbitType, earth_mu};   // file's own name
+        param o: OrbitType;
+        node e: SpecificEnergy = -earth_mu / (2.0 * @o.sma);
+    }
+}
+```
+
+In a real package, the same reference uses the full package path:
+
+```graphcal
+// On disk: src/nasa/rocket/dynamics.gcl
+// Source address: nasa.rocket.dynamics
+type OrbitType { sma: Length, ecc: Dimensionless };
+
+dag analyze {
+    dag energy {
+        import nasa.rocket.dynamics.{OrbitType};
+        param o: OrbitType;
+        // ...
+    }
+}
+```
+
+Note: `/` appears in the on-disk filesystem path (a tooling concern),
+never in Graphcal source.
+
+## Strict Isolation
+
+Inline DAG bodies see **only** their own declarations, their own
+`import`s, and the outputs of their own `include`s. There is no
+lexical inheritance from the enclosing file's top-level scope, and no
+inheritance from an enclosing DAG body. Every name a DAG uses must
+either be declared inside it or imported by it explicitly.
+
+```graphcal
+// dynamics.gcl
+type OrbitType { sma: Length, ecc: Dimensionless };
+
+dag analyze {
+    // ERROR: `OrbitType` is not visible here without an import.
+    param o: OrbitType;
+}
+
+dag analyze_ok {
+    import dynamics.{OrbitType};
+    param o: OrbitType;
+}
+```
+
+This rule is uniform across every DAG — top-level or inline. It is the
+same isolation guarantee that makes file-based and inline DAGs
+interchangeable: same name resolution, same scoping, same dependency
+visibility.
+
+## Promoting to a Real Package
+
+A real package is announced by a `graphcal.toml` manifest. Create it at
+the project root:
 
 ```toml
 [package]
@@ -71,27 +377,45 @@ name = "nasa"
 # source_dir = "src"  # optional, defaults to "src"
 ```
 
-### Using module paths
+Lay out source under `<source_dir>/<package_name>/`:
 
-With the manifest above, organize your source files under the `src/` directory and import them by package-qualified paths:
-
+```text
+my_project/
+  graphcal.toml            # [package] name = "nasa"
+  src/
+    nasa/
+      constants.gcl
+      rocket.gcl
+      orbital/
+        transfer.gcl
 ```
-import nasa/rocket { delta_v };
-import nasa/orbital/transfer as transfer;
-import nasa/constants;
+
+The files are now addressed as:
+
+```graphcal
+import nasa.constants.{g0};
+import nasa.rocket.{Orbit, compute_thrust};
+import nasa.orbital.transfer.{dv};
 ```
 
-Module paths require at least two segments separated by `/`. The first segment must match the `package.name` from `graphcal.toml`.
+### Migrating self-references
 
-### Resolution
+When a virtual package is promoted, every file's self-reference must
+be rewritten from the bare file stem to the full package path:
 
-`import nasa/rocket { delta_v }` resolves to `<project_root>/src/nasa/rocket.gcl`.
+```graphcal
+// Before (virtual package `dynamics`):
+import dynamics.{OrbitType};
 
-Nested paths work as expected: `import nasa/orbital/transfer` resolves to `<project_root>/src/nasa/orbital/transfer.gcl`.
+// After (real package `nasa`, file at src/nasa/rocket/dynamics.gcl):
+import nasa.rocket.dynamics.{OrbitType};
+```
+
+The LSP rename refactor handles the mechanical part of this rewrite.
 
 ### Custom source directory
 
-Set `source_dir` in `graphcal.toml` to use a different directory:
+Override `source_dir` to point elsewhere:
 
 ```toml
 [package]
@@ -99,74 +423,46 @@ name = "myproject"
 source_dir = "lib"
 ```
 
-Now `import myproject/helpers` resolves to `<project_root>/lib/myproject/helpers.gcl`.
+Now `import myproject.helpers` resolves to
+`<project_root>/lib/myproject/helpers.gcl`.
 
-### Parameterized module paths
+## Stdlib Reservation: `graphcal` and `std`
 
-Module paths work with all import forms, including parameterized imports:
+The first segments `graphcal` and `std` are reserved for Graphcal's
+standard library. User packages may not be named `graphcal` or `std`,
+and user source may not begin a path with either segment except to
+import from the stdlib:
 
-```
-import nasa/rocket(dry_mass: 800.0 kg) as stage_1;
-import nasa/rocket(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
-
-node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
-```
-
-### Mixing file paths and module paths
-
-File paths and module paths can be used in the same project:
-
-```
-import nasa/constants { g0 };
-import "./local_helpers.gcl" { HelperType };
+```graphcal
+import std.math.{sin, cos};   // (reserved) — stdlib import
 ```
 
-### Project layout example
-
-```
-my_project/
-  graphcal.toml            # [package] name = "nasa"
-  src/
-    main.gcl               # entry point
-    nasa/
-      constants.gcl        # import nasa/constants { g0 };
-      rocket.gcl            # import nasa/rocket { delta_v };
-      orbital/
-        transfer.gcl       # import nasa/orbital/transfer { dv };
-```
-
-## Import Aliasing
-
-Rename imports with `as` to avoid name conflicts:
-
-```
-import "./file_a.gcl" { velocity as velocity_a };
-import "./file_b.gcl" { velocity as velocity_b };
-
-node diff: Velocity = @velocity_a - @velocity_b;
-```
+The standard library itself is still being designed; references in
+user code are rejected with a "stdlib not yet available" diagnostic
+unless the project opts into the experimental stdlib explicitly.
 
 ## Visibility and Bindability
 
 Graphcal's visibility system uses a **two-axis split**:
 
-- **Visibility** (`pub`): whether a declaration is visible across the include / import boundary.
-- **Bindability** (`pub(bind)`): whether importers may *override* it via an include or import binding.
+- **Visibility** (`pub`): whether a declaration is visible across the
+  include / import boundary.
+- **Bindability** (`pub(bind)`): whether importers may *override* it
+  via an include or import binding. Bindability implies visibility.
 
-Bindability implies visibility — every `pub(bind)` item is also `pub`.
-
-| Annotation   | Visible? | Bindable? | Use for                                                           |
-|--------------|:--------:|:---------:|-------------------------------------------------------------------|
-| (none)       | no       | no        | internal helpers, private values                                  |
+| Annotation   | Visible? | Bindable? | Use for                                                                 |
+|--------------|:--------:|:---------:|-------------------------------------------------------------------------|
+| (none)       | no       | no        | internal helpers, private values                                        |
 | `pub`        | yes      | no        | constants, derived dims / units / types consumers read but don't rewire |
-| `pub(bind)`  | yes      | yes       | the library's bindable interface: required indexes / types / dims |
+| `pub(bind)`  | yes      | yes       | the library's bindable interface: required indexes / types / dims       |
 
-`param` is a special case (axiom A5): `param` declarations never carry an
-annotation. Required `param` is implicitly part of the bindable interface,
-and defaulted `param` is implicitly bindable-with-default. Writing `pub param`
-or `pub(bind) param` is a parse error.
+`param` is a special case (axiom A5): `param` declarations never
+carry an annotation. Required `param` is implicitly part of the
+bindable interface, and defaulted `param` is implicitly
+bindable-with-default. Writing `pub param` or `pub(bind) param` is a
+parse error.
 
-```
+```graphcal
 pub param dry_mass: Mass = 1200.0 kg;   // parse error — drop the `pub`
 param dry_mass: Mass = 1200.0 kg;       // OK
 ```
@@ -175,26 +471,27 @@ param dry_mass: Mass = 1200.0 kg;       // OK
 
 Declarations without an annotation are private:
 
-```
+```graphcal
 pub param dry_mass: Mass = 1200.0 kg;   // visible to importers
 param internal: Mass = 500.0 kg;        // private — but bindable because
                                         // `param` is always bindable (A5)
 ```
 
-Attempting to import a private non-`param` item produces error `V001`:
+Importing a private non-`param` item produces error `V001`:
 
-```
-// ERROR: cannot import private item `internal_helper` from `./lib.gcl`
-import "./lib.gcl" { internal_helper };
+```graphcal
+// ERROR: cannot import private item `internal_helper` from `lib`
+import lib.{internal_helper};
 ```
 
 ### Required items must be `pub(bind)`
 
-Required `index` / `type` / `dim` declarations (no body) form the *bindable*
-interface of a library — importers must supply a binding. They must therefore
-be declared `pub(bind)`. Writing bare `pub` on a required item is error `V002`:
+Required `index` / `type` / `dim` declarations (no body) form the
+*bindable* interface of a library — importers must supply a binding.
+They must therefore be declared `pub(bind)`. Writing bare `pub` on a
+required item is error `V002`:
 
-```
+```graphcal
 // ERROR: required index must be declared `pub(bind)`
 pub index Phase;
 
@@ -206,15 +503,17 @@ pub(bind) type Element;
 pub(bind) dim Distance;
 ```
 
-Required `param` is excluded from V002 (annotation-free; implicitly bindable).
+Required `param` is excluded from V002 (annotation-free; implicitly
+bindable).
 
 ### Private-in-public (`V003`)
 
-A visible declaration must not reference private type-system items (`dim`,
-`type`, `index`, `base dim`) in its written signature. This prevents leaking
-names that importers cannot see. Violating this rule is error `V003`:
+A visible declaration must not reference private type-system items
+(`dim`, `type`, `index`, `base dim`) in its written signature. This
+prevents leaking names that importers cannot see. Violating this rule
+is error `V003`:
 
-```
+```graphcal
 dim Velocity = Length / Time;
 // ERROR: `pub node` `speed` references private dim `Velocity`
 pub node speed: Velocity = 10.0 m/s;
@@ -226,58 +525,60 @@ pub node speed: Velocity = 10.0 m/s;
 
 ### `pub(bind)` indexes and variant literals (`V004`)
 
-When an `index` is declared `pub(bind)`, its variant literals cannot appear
-in the defining file's `node` / `const` bodies or in public sinks
-(`plot` / `assert` / `figure` / `layer`). The reason: importers may rebind
-the index to a different variant set, which would orphan the literal.
-Either abstract over the index with `for p: I { ... }` or move the
-variant-specific value into a `param`. Violating the rule is error `V004`:
+When an `index` is declared `pub(bind)`, its variant literals cannot
+appear in the defining file's `node` / `const` bodies or in public
+sinks (`plot` / `assert` / `figure` / `layer`). The reason: importers
+may rebind the index to a different variant set, which would orphan
+the literal. Either abstract over the index with `for p: I { ... }` or
+move the variant-specific value into a `param`. Violating the rule is
+error `V004`:
 
-```
+```graphcal
 pub(bind) index Phase = { Design, Test };
-// ERROR: variant literal `Phase::Design` of `pub(bind) index` cannot be
+// ERROR: variant literal `Phase.Design` of `pub(bind) index` cannot be
 //        used in the defining file
-pub node cost: Dimensionless = if @mode == Phase::Design { 1.0 } else { 2.0 };
+pub node cost: Dimensionless = if @mode == Phase.Design { 1.0 } else { 2.0 };
 ```
 
 ### Include overrides must reconcile (`V005`)
 
-If an include overrides a bindable symbol `s` and some kept declaration in
-the merged IR still mentions a name nominally tied to `s` (e.g. a variant
-literal of an overridden `index`, a field access of an overridden `type`),
-the importer must *also* re-bind that dependent declaration. Otherwise the
-orphan mention has no meaning in the merged graph — error `V005`:
+If an include overrides a bindable symbol `s` and some kept declaration
+in the merged IR still mentions a name nominally tied to `s` (e.g.,
+a variant literal of an overridden `index`, a field access of an
+overridden `type`), the importer must *also* re-bind that dependent
+declaration. Otherwise the orphan mention has no meaning in the merged
+graph — error `V005`:
 
-```
+```graphcal
 // lib.gcl
 pub(bind) index Phase = { Design, Test };
-pub param cost: Dimensionless[Phase] = { Phase::Design: 1.0, Phase::Test: 2.0 };
+pub param cost: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };
 
 // main.gcl
 pub(bind) index NewPhase = { Review, Ship };
 // ERROR: include overrides index `Phase` but does not re-bind `cost`,
-//        whose default mentions `Phase::Design`
-include "./lib.gcl"(Phase: NewPhase);
+//        whose default mentions `Phase.Design`
+include lib(Phase: NewPhase);
 
 // Fix: re-bind `cost` as well.
-include "./lib.gcl"(
+include lib(
     Phase: NewPhase,
-    cost: { NewPhase::Review: 1.0, NewPhase::Ship: 2.0 },
+    cost: { NewPhase.Review: 1.0, NewPhase.Ship: 2.0 },
 );
 ```
 
-`dim` and `param` overrides never trigger V005: their substitution is total
-(algebraic / by value) and leaves no orphan nominal mentions.
+`dim` and `param` overrides never trigger V005: their substitution is
+total (algebraic / by value) and leaves no orphan nominal mentions.
 
 ### Re-exports and generics leakage (`V006`)
 
-A `pub include` / `pub import` re-exports the dependency's `pub` items under
-the importer's namespace. If the include's bindings rename a `pub(bind)`
-symbol to a name that is *private* at the importer, and that private name
-appears in a re-exported signature, downstream consumers would see a
-symbol they cannot name. That's error `V006`:
+A `pub include` / `pub import` re-exports the dependency's `pub` items
+under the importer's namespace. If the include's bindings rename a
+`pub(bind)` symbol to a name that is *private* at the importer, and
+that private name appears in a re-exported signature, downstream
+consumers would see a symbol they cannot name. That's error `V006`:
 
-```
+```graphcal
 // container.gcl
 pub(bind) type Element;
 pub type Widget { item: Element }
@@ -285,194 +586,73 @@ pub type Widget { item: Element }
 // main.gcl
 type Inner {}                         // private at the importer
 // ERROR: re-exported type `Widget`'s signature references private type `Inner`
-pub include "./container.gcl"(Element: Inner) as c;
+pub include container(Element: Inner) as c;
 
 // Fix: make the substituted name visible too.
 pub type Inner {}
-pub include "./container.gcl"(Element: Inner) as c;
+pub include container(Element: Inner) as c;
 ```
 
-### Re-export syntax
+## Parameterized Includes
 
-Prefix an `import` or `include` with `pub` to re-export the dependency's
-`pub` items at the importer:
+A bound `param` or `index` in an `include` instantiates the dependency
+with a specific value. This is how reusable "library" DAGs are
+specialized at the call site.
 
-```
-pub import "./types.gcl";                // whole-module re-export
-pub import "./math.gcl" { sqrt, clamp }; // selective with every item re-exported
+### Param bindings
 
-import "./mixed.gcl" { pub public_helper, private_helper };
-//                     ^^^ only `public_helper` is re-exported
-```
-
-`pub include` behaves the same way for DAG instantiations. The
-re-exported surface is subject to V006.
-
-## What Can Be Imported
-
-### Selective imports
-
-`import` is restricted to compile-time items:
-
-| Declaration | How to Import | How to Reference |
-|-------------|--------------|-----------------|
-| `const node` | `import "..." { name }` | `@name` |
-| `dim` | `import "..." { DimName }` | `DimName` |
-| `unit` | `import "..." { unit_name }` | `unit_name` |
-| `type` | `import "..." { TypeName }` | `TypeName` |
-| `index` | `import "..." { IndexName }` | `IndexName` |
-| `dag` | `import "..." { dag_name }` | Used with `include dag_name(...)` |
-
-Runtime values (`param`, `node`) are not imported directly. To use values from another file's DAG, use `include` with a DAG path (see [Cross-File DAG Inclusion](#cross-file-dag-inclusion)).
-
-### Module imports
-
-| Declaration | How to Reference |
-|-------------|-----------------|
-| `const node` | `@module::name` |
-
-Dimension, unit, type, and index declarations cannot currently be referenced via module-qualified syntax. To use types or dimensions from another file, use selective imports.
-
-### Cross-File DAG Inclusion
-
-To instantiate a DAG from another file, use `include` with a DAG path:
-
-```
-include "./lib/orbital.gcl"/hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2) {
-    total_dv,
-}
+```graphcal
+include nasa.rocket.compute_thrust(dry_mass: 800.0 kg).{ thrust };
 ```
 
-The syntax is `include "path"/dag_name(param: value, ...) { output as alias, ... }`.
+Multiple instantiations with different values produce independent
+sub-graphs:
 
-### Inline DAG Invocation
+```graphcal
+include nasa.rocket.compute_thrust(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;
+include nasa.rocket.compute_thrust(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
 
-A `dag` can also be invoked directly inside an expression:
-
-```
-dag scale {
-    param factor: Dimensionless;
-    param v: Length;
-    node result: Length = @v * @factor;
-}
-
-param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;
 ```
 
-The form is `@dag_name(arg: expr, ...)::output`. Syntactically, it combines the
-call-and-projection pattern of `include`/`@alias::node` into a single
-expression position.
+Binding expressions can reference `@` values from the surrounding scope:
 
-**Semantics.**
-
-- Each syntactic call site is a fresh DAG instantiation. Two textually
-  distinct occurrences with identical arguments still denote two distinct
-  sub-graphs.
-- The projected output after `::` is mandatory and must name a `node` of the
-  called dag — there is no single-output elision.
-- Arguments are evaluated in the **surrounding expression scope**, so they may
-  reference local variables from an enclosing `for` comprehension, `scan`,
-  `unfold`, or `match` binding:
-
-  ```
-  node distances: Length[Region] = for r: Region {
-      @scale(factor: 2.0, v: @dist[r])::result
-  };
-  ```
-
-  This is a deliberate divergence from top-level `include`, whose bindings
-  have no access to enclosing binders.
-- Inline calls may appear anywhere an expression is valid: node bodies,
-  `match` arms, `if`/`else` branches, `for` / `scan` / `unfold` bodies, and as
-  arguments to other inline calls (composition).
-
-**Cross-file inline dag calls.** The qualified form
-`@module::dag(args)::out` resolves through a module-style import, the
-same way qualified const and graph refs do:
-
-```
-import "./geom.gcl" as geom;
-
-param src: Length = 10.0 m;
-node doubled: Length = @geom::scale(factor: 2.0, v: @src)::result;
-```
-
-The dependency's `dag scale { ... }` must be declared `pub` to be
-callable across files; projection of a non-`pub` node raises the same
-`ImportPrivateItem` error as any other cross-file visibility violation,
-and cycles that span files are rejected at compile time with
-`CyclicDependency`.
-
-All other MVP limitations (recursive-cycle detection, topological
-ordering of dag body nodes, `pub` projection enforcement, indexed
-outputs, compile-time `const node` evaluation) are now resolved by the
-compile-pipeline refactor: each `dag { ... }` body is lowered through
-the same `AST → IR → TIR` stages as a Graphcal file, so the regular
-dim-check, cycle detection, topological execution, visibility rules,
-and indexing infrastructure all apply uniformly.
-
-## When to Use Each Style
-
-- **Selective imports** are best when you need only a few names, or when you need to import types and dimensions
-- **Module imports** are best when you import many values from a file and want to keep their origin clear
-
-## Parameterized Imports (Module Instantiation)
-
-You can instantiate a file with different parameter values by supplying **param bindings** in parentheses after the path. This inlines the dependency's computation graph into your file, replacing the specified param defaults with your expressions.
-
-### Selective instantiation
-
-```
-import "./rocket.gcl"(dry_mass: 800.0 kg) { delta_v };
-
-node result: Velocity = @delta_v;
-```
-
-Only `delta_v` is exposed to the importing file. Other declarations from `rocket.gcl` are computed internally but not directly accessible.
-
-### Module instantiation
-
-```
-import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
-
-node dv: Velocity = @r::delta_v;
-node mr: Dimensionless = @r::mass_ratio;
-```
-
-All declarations from `rocket.gcl` are accessible via the `r::` prefix.
-
-### Multiple instantiations
-
-The same file can be instantiated multiple times with different parameters:
-
-```
-import "./rocket.gcl"(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;
-import "./rocket.gcl"(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
-
-node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
-```
-
-Each instantiation creates an independent set of computations under its own namespace.
-
-### Graph references in bindings
-
-Binding expressions can reference `@` values from the importing file's scope:
-
-```
+```graphcal
 param my_mass: Mass = 800.0 kg;
-import "./rocket.gcl"(dry_mass: @my_mass) { delta_v };
+include nasa.rocket.compute_thrust(dry_mass: @my_mass).{ thrust };
 ```
 
-The dependency's computation graph is merged into the importer's DAG, so the topological sort naturally handles evaluation order.
+### Required parameters
 
-### Index Bindings
+A `param` declared without a default value is **required** — the
+importer must supply it via an `include` binding (or, for entry-point
+files, via `--set` / `--input` on the command line):
 
-In addition to `param` bindings, parameterized imports can bind **indexes**. This enables library files that are generic over their label sets.
+```graphcal
+// lib/rocket_engine.gcl
+pub param dry_mass: Mass;                 // required — must be provided
+pub param isp: Velocity = 320.0 s;        // optional — has default
 
-A library declares a [required index](indexes.md#required-indexes):
-
+pub node v_exhaust: Velocity = @isp * @g0;
+pub node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
+
+```graphcal
+// main.gcl
+include lib.rocket_engine(dry_mass: 800.0 kg) as engine;
+node dv: Velocity = @engine.delta_v;
+```
+
+If a required param is not provided, the compiler emits error `O003`.
+
+### Index bindings
+
+Bind a [required index](indexes.md#required-indexes) by name; the
+right-hand side must be the **name of a concrete index**, not an
+expression:
+
+```graphcal
 // lib/budget.gcl
 pub(bind) index Phase;
 
@@ -480,125 +660,100 @@ pub param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
-The importer binds it to a concrete index:
-
-```
+```graphcal
 // main.gcl
 pub index MyPhase = { Design, Build, Test };
 
-import "./lib/budget.gcl"(
+include lib.budget(
     Phase: MyPhase,
-    cost: { MyPhase::Design: 10.0, MyPhase::Build: 20.0, MyPhase::Test: 5.0 },
-) { total };
+    cost: { MyPhase.Design: 10.0, MyPhase.Build: 20.0, MyPhase.Test: 5.0 },
+).{ total };
 
 node result: Dimensionless = @total;  // 35.0
 ```
 
-Index bindings use the same `Name: Value` syntax as param bindings, but the right-hand side must be the **name of a concrete index** (not an expression).
-
 #### Kind matching
 
-Named indexes can only be bound to named indexes, and range indexes can only be bound to range indexes. Binding a named index to a range or vice versa is a compile error.
+Named indexes can only be bound to named indexes, and range indexes can
+only be bound to range indexes. Binding a named index to a range or
+vice versa is a compile error.
 
 #### Dimension matching for range indexes
 
-When binding a required range index, the concrete range index must have the **same dimension**:
+When binding a required range index, the concrete range index must have
+the **same dimension**:
 
-```
+```graphcal
 // lib.gcl
 pub(bind) index Step: Time;   // requires dimension Time
 
 // main.gcl
-index MyStep = linspace(0.0 s, 10.0 s, step: 1.0 s);   // OK: dimension is Time
-import "./lib.gcl"(Step: MyStep) { ... };
+index MyStep = linspace(0.0 s, 10.0 s, step: 1.0 s);     // OK
+include lib(Step: MyStep);
 
-index DistStep = linspace(0.0 m, 100.0 m, step: 10.0 m);  // ERROR: dimension is Length
-import "./lib.gcl"(Step: DistStep) { ... };     // dimension mismatch
+index DistStep = linspace(0.0 m, 100.0 m, step: 10.0 m); // dimension is Length
+include lib(Step: DistStep);                              // ERROR: dimension mismatch
 ```
 
-### Strict Binding Mode
+### Strict binding mode
 
-When a parameterized import has **any** bindings (param or index), **all** params and indexes with defaults must be explicitly bound. This prevents accidentally relying on stale default values when you intend to customize the module. Required indexes must **always** be bound, regardless of `#[allow_defaults]`.
+When a parameterized include has **any** bindings (param or index),
+**all** params and indexes with defaults must be explicitly bound. This
+prevents accidentally relying on stale defaults when you intend to
+customize. Required indexes must always be bound, regardless of
+`#[allow_defaults]`.
 
-```
+```graphcal
 // rocket.gcl has params: dry_mass (default), fuel_mass (default), isp (default)
 
 // ERROR: only dry_mass is bound; fuel_mass and isp are not explicitly provided
-import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
+include lib.rocket(dry_mass: 800.0 kg) as r;
 
 // OK: all params are explicitly bound
-import "./rocket.gcl"(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
+include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 ```
 
 #### Opting out with `#[allow_defaults]`
 
-If you intentionally want to bind only some params and let the rest use their defaults, add the `#[allow_defaults]` attribute to the import:
+If you intentionally want to bind only some params and let the rest
+use their defaults, attach `#[allow_defaults]` to the include:
 
-```
+```graphcal
 #[allow_defaults]
-import "./rocket.gcl"(dry_mass: 800.0 kg) as r;
+include lib.rocket(dry_mass: 800.0 kg) as r;
 // fuel_mass and isp keep their default values
 ```
 
-The `#[allow_defaults]` attribute is only valid on `import` declarations with param bindings. Using it on other declarations (e.g., `param`, `node`) is a compile error.
-
-### Required parameters
-
-A param declared without a default value is **required** — it must be provided by the importer via a parameterized import binding. This is the primary mechanism for creating reusable "library" files:
-
-```
-// library: rocket_engine.gcl
-pub param dry_mass: Mass;                     // required — must be provided
-pub param isp: Velocity = 320.0 s;           // optional — has default
-
-node v_exhaust: Velocity = @isp * @g0;
-node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
-```
-
-```
-// consumer: main.gcl
-import "./rocket_engine.gcl"(dry_mass: 800.0 kg) as engine;
-
-node dv: Velocity = @engine::delta_v;
-```
-
-If a required param is not provided, the compiler emits error `O003`:
-
-```
-error[graphcal::O003]: required param `dry_mass` has no value
-  ┌─ rocket_engine.gcl:2:1
-  │
-2 │ param dry_mass: Mass;
-  │ ^^^^^^^^^^^^^^^^^^^^^ declared here without a default value
-  │
-  = help: provide a value via `--set 'dry_mass=<value>'`, `--input`,
-          or a parameterized import binding
-```
-
-Required params can also be satisfied from the command line with `--set` or `--input`, which is useful for top-level entry-point files.
+`#[allow_defaults]` is only valid on `include` declarations with param
+bindings. Using it elsewhere is a compile error.
 
 ### Validation
 
-- Binding names must be `param` or index (`index`) declarations in the imported file
-- Binding a `node`, `const node`, or unknown name is a compile error
-- All required params (those without defaults) must be provided by bindings, `--set`, or `--input`
-- All required indexes must be provided by bindings
-- Index binding values must be the name of a concrete index in the importer's scope
-- Named indexes can only be bound to named indexes; range indexes can only be bound to range indexes
-- Range index dimensions must match between the required index and the bound index
-- When any binding is provided, all params and indexes with defaults must be bound, unless `#[allow_defaults]` is present
-- Dimension mismatches are caught by the normal dimension checker after merging
+- Binding names must be `param` or `index` declarations in the included
+  module.
+- Binding a `node`, `const node`, or unknown name is a compile error.
+- All required params must be provided by bindings, `--set`, or
+  `--input`.
+- All required indexes must be provided by bindings.
+- Index binding values must be the name of a concrete index in the
+  importer's scope.
+- Named indexes can only be bound to named indexes; range indexes can
+  only be bound to range indexes. Range index dimensions must match.
+- When any binding is provided, all params and indexes with defaults
+  must be bound, unless `#[allow_defaults]` is present.
+- Dimension mismatches are caught by the dimension checker after
+  merging.
 
-## Circular Import Detection
+## Circular Imports
 
 Graphcal detects circular imports at compile time:
 
-```
+```graphcal
 // a.gcl
-import "./b.gcl" { x };
+import b.{x};
 
 // b.gcl
-import "./a.gcl" { y };
+import a.{y};
 // ERROR: circular import detected
 ```
 
@@ -606,40 +761,39 @@ import "./a.gcl" { y };
 
 ### Constants / Parameters / Main
 
-A common pattern separates constants, parameters, and main logic:
+A common pattern separates concerns into separate files inside a single
+package:
 
-```
+```text
 project/
   constants.gcl   -- shared physical constants
   params.gcl      -- tunable input parameters
-  main.gcl        -- computation graph
+  main.gcl        -- computation graph, imports the others by their stems
 ```
 
 ### Library / Application
 
-For reusable DAG blocks:
+For reusable DAGs, group them into a real package and import by full
+path:
 
-```
+```text
 project/
-  lib/
-    orbital.gcl   -- reusable orbital mechanics DAG blocks
-    thermal.gcl   -- thermal analysis DAG blocks
-  main.gcl        -- application-specific graph
+  graphcal.toml   -- [package] name = "project"
+  src/
+    project/
+      lib/
+        orbital.gcl   -- reusable orbital mechanics DAGs
+        thermal.gcl   -- thermal analysis DAGs
+      main.gcl        -- application-specific graph
 ```
 
 ### Reusable Templates with Required Parameters
 
-Use required params to create library files that must be instantiated with specific values:
+Use required params to create library files that must be instantiated
+with specific values:
 
-```
-project/
-  lib/
-    rocket.gcl    -- template with required params (dry_mass, fuel_mass)
-  main.gcl        -- instantiates rocket.gcl with different param values
-```
-
-```
-// lib/rocket.gcl
+```graphcal
+// src/project/lib/rocket.gcl
 pub param dry_mass: Mass;     // required
 pub param fuel_mass: Mass;    // required
 pub param isp: Time = 320 s;  // optional default
@@ -650,109 +804,88 @@ pub node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-```
-// main.gcl
-import "./lib/rocket.gcl"(dry_mass: 800.0 kg, fuel_mass: 2000.0 kg, isp: 320.0 s) as stage_1;
-import "./lib/rocket.gcl"(dry_mass: 500.0 kg, fuel_mass: 1200.0 kg, isp: 450.0 s) as stage_2;
+```graphcal
+// src/project/main.gcl
+include project.lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2000.0 kg, isp: 320.0 s) as stage_1;
+include project.lib.rocket(dry_mass: 500.0 kg, fuel_mass: 1200.0 kg, isp: 450.0 s) as stage_2;
 
-node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
+node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;
 ```
 
 ### Reusable Templates with Required Indexes
 
-Use required indexes to create library files that are generic over their label sets:
-
-```
-project/
-  lib/
-    budget.gcl    -- template with required index (Phase) and required param (cost)
-  main.gcl        -- instantiates budget.gcl with a concrete Phase index
-```
-
-```
-// lib/budget.gcl
+```graphcal
+// src/project/lib/budget.gcl
 pub(bind) index Phase;
 
 pub param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
-```
-// main.gcl
+```graphcal
+// src/project/main.gcl
 pub index ProjectPhase = { Design, Build, Test };
 
-import "./lib/budget.gcl"(
+include project.lib.budget(
     Phase: ProjectPhase,
-    cost: { ProjectPhase::Design: 10.0, ProjectPhase::Build: 20.0, ProjectPhase::Test: 5.0 },
-) { total };
+    cost: { ProjectPhase.Design: 10.0, ProjectPhase.Build: 20.0, ProjectPhase.Test: 5.0 },
+).{ total };
 
 node project_cost: Dimensionless = @total;
 ```
 
 ## Assertions in Imported Files
 
-When a file is imported, **all its assertions are automatically evaluated and
-reported**, regardless of whether they are explicitly listed in the import. This
-ensures that safety checks in library files are never silently skipped.
+When a file is imported (or its declarations included), **all of its
+assertions are automatically evaluated and reported**, regardless of
+whether they are explicitly listed. This ensures that safety checks in
+library files are never silently skipped.
 
-To use an imported assertion in `#[assumes(...)]`, you must import it by name.
-See [Assertions](assertions.md#assertions-in-multi-file-projects) for details.
+To use an imported assertion in `#[assumes(...)]`, you must import it
+by name. See
+[Assertions](assertions.md#assertions-in-multi-file-projects) for
+details.
 
 ## Evaluation Entry Point
 
-When running `graphcal eval`, the entry file is the one you pass on the command line. All `import` dependencies are resolved transitively from that file:
+When running `graphcal eval`, the entry file is the one you pass on the
+command line. All `import` and `include` dependencies are resolved
+transitively from that file:
 
 ```bash
 graphcal eval project/main.gcl
 ```
 
-## Project Root and Import Sandboxing
+If the entry file's directory or any ancestor contains a
+`graphcal.toml`, that manifest defines the package layout. Otherwise,
+the file is treated as a single-file virtual package.
 
-Graphcal restricts imports to files within the **project root** directory tree. This prevents accidental or malicious access to files outside your project.
+## Migration Cheat Sheet
 
-### Default behavior
+For users coming from earlier Graphcal versions, the surface has
+changed. Read this table left-to-right; the right-hand column is the
+only valid syntax going forward.
 
-By default, the project root is the **parent directory of the entry-point file**. A file can import siblings and descendants, but not files above its own directory:
-
-```
-workspace/
-  shared/
-    constants.gcl
-  project/
-    main.gcl        ← entry point; project root = project/
-```
-
-```bash
-# In main.gcl, this import would FAIL:
-# import "../shared/constants.gcl" { g0 };
-# ERROR: import resolves outside the project root
-```
-
-### Widening the root with `graphcal.toml`
-
-Place a `graphcal.toml` file in an ancestor directory to widen the project root to that directory. A `graphcal.toml` with a `[package]` section also enables [module paths](#module-paths-bare-imports). An empty `graphcal.toml` (without `[package]`) only widens the root:
-
-```
-workspace/
-  graphcal.toml     ← project root marker
-  shared/
-    constants.gcl
-  project/
-    main.gcl        ← entry point
-```
-
-Now `main.gcl` can `import` from `../shared/constants.gcl` because the project root is `workspace/` (the directory containing `graphcal.toml`), not `project/`.
-
-Graphcal searches upward from the entry-point file's directory for the nearest `graphcal.toml`. If none is found, the default behavior applies.
-
-### Explicit root with `--root`
-
-You can also set the project root explicitly on the command line:
-
-```bash
-graphcal eval --root ./workspace project/main.gcl
-```
-
-When `--root` is provided, automatic `graphcal.toml` discovery is skipped — the given directory is used directly. This is useful in CI/scripts or when placing a `graphcal.toml` file is inconvenient.
-
-The `--root` flag is available for both `eval` and `check` subcommands.
+| OLD                                                  | NEW                                                                 |
+|------------------------------------------------------|---------------------------------------------------------------------|
+| `import "./foo.gcl";`                                | `import foo;`                                                       |
+| `import "./foo.gcl" { X };`                          | `import foo.{X};`                                                   |
+| `import "./foo.gcl" as f;`                           | `import foo as f;`                                                  |
+| `import nasa/rocket;`                                | `import nasa.rocket;`                                               |
+| `import nasa/rocket { Orbit };`                      | `import nasa.rocket.{Orbit};`                                       |
+| `import nasa/rocket as nr;`                          | `import nasa.rocket as nr;`                                         |
+| `import nasa/rocket.Orbit;` (single-symbol shorthand) | `import nasa.rocket.{Orbit};` (brace list required)                |
+| `include "./rocket.gcl"(args) { y };`                | `include rocket(args).{y};`                                         |
+| `include "./rocket.gcl"(args) as r;`                 | `include rocket(args) as r;`                                        |
+| `include nasa/rocket(args) { thrust };`              | `include nasa.rocket(args).{thrust};`                               |
+| `include my_dag(args) { y };` (bare ident, in-scope) | `include <pkg>.my_dag(args).{y};` (full path required)              |
+| `pub include "./foo.gcl"(args);`                     | `pub include foo(args);`                                            |
+| `Module::fn(args)`                                   | `Module.fn(args)`                                                   |
+| `Module::CONST`                                      | `Module.CONST`                                                      |
+| `Color::Red`                                         | `Color.Red`                                                         |
+| `@lib::scale(...)::result`                           | `import <pkg>.{scale};` then `@scale(...).result`                   |
+| `@module::name`                                      | `import <pkg>.{name};` then `@name`                                 |
+| `#[clippy::allow(...)]`                              | `#[clippy.allow(...)]`                                              |
+| `..` parent navigation                               | Removed — use absolute path from package root                       |
+| `import ../X { Y };` (in inline DAG)                 | `import <pkg>.<enclosing_dag>.{Y};`                                 |
+| `include ..(args) { y };` (parent DAG)               | `include <pkg>.<enclosing_dag>(args).{y};` (recursive instantiation)|

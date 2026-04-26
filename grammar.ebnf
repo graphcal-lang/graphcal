@@ -104,10 +104,6 @@ NUMBER
 (* An integer literal is a NUMBER with no decimal point and no
    exponent. Integer literals cannot be followed by a unit expression;
    use a float literal instead (e.g., "42.0 km" not "42 km"). *)
-(* --- String literals --- *)
-STRING_LITERAL
-   = '"', { ? any character except '"' ? }, '"';
-
 (* --- Operators and punctuation --- *)
 (* Listed here for reference; each is used as a terminal in the
    syntactic grammar below. *)
@@ -117,7 +113,6 @@ STRING_LITERAL
 (* Assignment:  "="                                         *)
 (* Conversion:  "->"                                        *)
 (* Cast:        "as"                                        *)
-(* Path:        "::"                                        *)
 (* Match:       "=>"                                        *)
 (* Tolerance:   "~=" "+/-"                                  *)
 (* Closure:     "|"                                         *)
@@ -126,8 +121,9 @@ STRING_LITERAL
 (* Separators:  ";"  ","  ":"  "."                         *)
 (* Reference:   "@"                                         *)
 (* Wildcard:    "_"                                         *)
-(* Parent:      ".."                                        *)
-(* Slash:       "/"   (bare module paths)                   *)
+(* Path:        "."   (uniform; module paths, member access,
+                       attribute paths, qualified variants,
+                       match patterns, map keys, output projection) *)
 (* ================================================================== *)
 (* 2. Source File                                                     *)
 (* ================================================================== *)
@@ -157,7 +153,7 @@ attribute_arg
    | attribute_group;
 
 attribute_path
-   = IDENT, { "::", IDENT };
+   = IDENT, { ".", IDENT };
 
 attribute_group
    = "(", attribute_arg, { ",", attribute_arg }, [ "," ], ")";
@@ -354,39 +350,44 @@ index_decl
    Required indexes must be bound via parameterized include. *)
 
 (* --- import --- *)
-(* Import brings definitions (types, dimensions, units, constants)
-   from another file into the current scope. No param bindings --
-   for DAG instantiation with param bindings, use `include`.
+(* Import brings names (types, dimensions, units, consts, dags,
+   indexes) into the current scope. No param bindings -- for DAG
+   instantiation with param bindings, use `include`.
 
-   Import paths can be:
-   - Quoted string (file path): "./file.gcl"
-   - Bare module path: nasa/rocket
-   - Parent scope path: .. or ../.. (inside dag blocks)
+   All paths are dot-separated and absolute from a package root.
+   The first segment is the package name (real or virtual); the
+   remaining segments walk the package's module tree (directories
+   under `source_dir`, files inside the package, and inline `dag`
+   declarations). There are no file-path strings, no `..`, no `/`.
 
-   Three forms:
-   1. Selective import:   import "./file.gcl" { name1, name2 as alias };
-   2. Module import:      import "./file.gcl";
-   3. Module with alias:  import "./file.gcl" as alias;
+   Three forms (Gleam-inspired, Graphcal-strict -- each form
+   introduces exactly the names you write down):
+   1. Bare module:        import nasa.rocket;
+                          (brings: rocket -- the module leaf)
+   2. Module with alias:  import nasa.rocket as nr;
+                          (brings: nr)
+   3. Brace list:         import nasa.rocket.{Orbit, compute_thrust as ct};
+                          (brings: only the listed names; the brace
+                           form does NOT also bring the module leaf)
 
-   A leading `pub` re-exports the imported item(s). The whole-module
-   form (`pub import "X";`) re-exports every `pub` item from X; the
-   selective form (`import "X" { pub name }`) re-exports only the
-   marked items. The two forms are mutually exclusive -- `pub import
-   "X" { pub item };` is rejected. `pub(bind)` on import is illegal
-   (use-sites are not bindable per A5). *)
+   Alias and brace list are mutually exclusive:
+   `import nasa.rocket as nr.{Orbit};` is a parse error.
+
+   A leading `pub` re-exports the imported item(s). The bare/alias
+   forms re-export every `pub` item from the leaf module; the brace
+   form (with `pub` on individual items) re-exports only the marked
+   items. The two forms are mutually exclusive -- `pub import
+   nasa.rocket.{ pub item };` is rejected. `pub(bind)` on import is
+   illegal (use-sites are not bindable per A5). *)
 import_decl
-   = [ "pub" ], "import", import_path, import_body;
+   = [ "pub" ], "import", module_path, [ import_tail ], ";";
 
-import_path
-   = STRING_LITERAL
-   | IDENT, "/", IDENT,
-     { "/", IDENT }
-   | "..", { "/", ".." };
+import_tail
+   = "as", IDENT
+   | ".", "{", import_item_list, "}";
 
-import_body
-   = "{", [ import_item_list ], "}", ";"
-   | "as", IDENT, ";"
-   | ";";
+module_path
+   = IDENT, { ".", IDENT };
 
 import_item_list
    = import_item, { ",", import_item }, [ "," ];
@@ -394,41 +395,48 @@ import_item_list
 import_item
    = { attribute }, [ "pub" ], IDENT, [ "as", IDENT ];
 
-(* `pub` inside the selective list marks the item for re-export at the
+(* `pub` inside the brace list marks the item for re-export at the
    importer (issue #452). Mixing whole-module `pub` (on the outer
    import/include) with selective `pub` inside the brace list is
    rejected. *)
 
 (* --- include --- *)
-(* Include instantiates a DAG (inline or from file) with optional
-   param bindings, embedding the computation graph.
+(* Include instantiates a DAG with optional param bindings, embedding
+   the computation graph and exposing its outputs as nodes in the
+   including DAG.
 
-   Include paths can be:
-   - Quoted string (file path): "./rocket.gcl"
-   - Bare module path: nasa/rocket
-   - Inline DAG name: my_dag
-   - Parent scope path: .. or ../.. (inside dag blocks)
+   Paths follow the same discipline as `import`: dot-separated and
+   absolute from the package root. No file-path strings, no `..`,
+   no `/`, no bare in-scope identifiers (the DAG is named by its
+   full path).
 
-   Three forms (same as import, but with optional param bindings):
-   1. Selective:       include "./rocket.gcl"(dry_mass: 800 kg) { delta_v };
-   2. Module:          include "./rocket.gcl"(dry_mass: 800 kg);
-   3. Module w/ alias: include "./rocket.gcl"(dry_mass: 800 kg) as stage_1;
+   Three forms:
+   1. Bare:               include nasa.rocket.compute_thrust(args);
+                          (sugar for `as compute_thrust` -- the
+                           DAG's leaf name becomes the alias)
+   2. Aliased:            include nasa.rocket.compute_thrust(args) as ct;
+   3. Brace list:         include nasa.rocket.compute_thrust(args).{ thrust };
+                          (selects outputs; renaming permitted)
 
-   A leading `pub` re-exports the included item(s); selective items may
-   themselves carry `pub`. Mixing the two forms is rejected, and
-   `pub(bind)` on include is illegal (use-sites are not bindable). *)
+   Alias and brace list are mutually exclusive. A leading `pub`
+   re-exports the included outputs at the include site. *)
 include_decl
-   = [ "pub" ], "include", include_path, [ include_param_bindings ], import_body;
+   = [ "pub" ], "include", module_path, include_param_bindings,
+     [ include_tail ], ";";
 
-include_path
-   = STRING_LITERAL
-   | IDENT, "/", IDENT,
-     { "/", IDENT }
-   | IDENT
-   | "..", { "/", ".." };
+include_tail
+   = "as", IDENT
+   | ".", "{", include_item_list, "}";
+
+include_item_list
+   = include_item, { ",", include_item }, [ "," ];
+
+include_item
+   = { attribute }, [ "pub" ], IDENT, [ "as", IDENT ];
 
 include_param_bindings
-   = "(", include_param_binding, { ",", include_param_binding }, [ "," ], ")";
+   = "(", [ include_param_binding,
+            { ",", include_param_binding }, [ "," ] ], ")";
 
 include_param_binding
    = IDENT, ":", expr;
@@ -688,19 +696,22 @@ bool_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", [ IDENT, "::" ], IDENT, [ inline_dag_call_suffix ];
+   = "@", IDENT, [ inline_dag_call_suffix ];
 
 inline_dag_call_suffix
-   = "(", include_param_binding,
-     { ",", include_param_binding }, [ "," ],
-     ")", "::", IDENT;
+   = "(", [ include_param_binding,
+            { ",", include_param_binding }, [ "," ] ],
+     ")", ".", IDENT;
 
 (* @name -- graph ref (param, node, or const node).
-   @module::name -- qualified graph ref.
-   @name(args)::out -- inline DAG invocation projecting output `out`.
-   @module::name(args)::out -- qualified inline DAG invocation.
+   @name(args).out -- inline DAG invocation projecting output `out`.
+   The thing immediately after `@` must be a single in-scope
+   identifier (a node directly, or a DAG whose output projection
+   yields a node). Qualified forms like `@module.dag(args).out` are
+   rejected because the leftmost identifier is a module, not a node;
+   bring the DAG into scope first via `import <pkg>.{<dag>};`.
    Each inline-call call site denotes a fresh DAG instantiation and
-   desugars to a synthetic `include ... as <id>; @<id>::out` during
+   desugars to a synthetic `include ... as <id>; @<id>.out` during
    TIR lowering. Built-in constants (PI, E, TAU) and user-defined
    const nodes both use their names directly; graph declarations
    require @. *)
@@ -709,15 +720,18 @@ inline_dag_call_suffix
 (* Dispatches based on the token(s) following the identifier:
    - IDENT<T>{ ... } or IDENT{ ... }  → struct construction
      (requires uppercase-starting identifier to avoid ambiguity)
-   - IDENT::IDENT<T>(...) or IDENT::IDENT(...)  → qualified fn call
-   - IDENT::IDENT  → qualified name ref (resolved to variant or const)
+   - IDENT.IDENT<T>(...) or IDENT.IDENT(...)  → qualified fn call
+   - IDENT.IDENT  → qualified name ref (resolved to variant or const)
    - IDENT<T>(...) or IDENT(...)  → function call
-   - IDENT  → name ref (resolved to local, const, or bare struct) *)
+   - IDENT  → name ref (resolved to local, const, or bare struct)
+   The qualified forms can chain into a longer dotted path; the
+   postfix `.IDENT` operator (field access) handles continuations
+   uniformly with module-path traversal. *)
 ident_expr
-   = IDENT, "::", IDENT,
+   = IDENT, ".", IDENT,
      [ "<", generic_arg_list, ">" ],
      "(", [ expr_list ], ")"                      (* qualified fn call *)
-   | IDENT, "::", IDENT                            (* qualified name ref *)
+   | IDENT, ".", IDENT                             (* qualified name ref *)
    | IDENT,
      [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
      "{", [ field_init, { ",", field_init }, [ "," ] ], "}"
@@ -744,9 +758,9 @@ field_init
    as a shorthand reference to a variable of the same name. *)
 (* --- Map literal --- *)
 (* Single-axis map literals use bare variant keys:
-     { Index::Variant1: expr1, Index::Variant2: expr2, ... }
+     { Index.Variant1: expr1, Index.Variant2: expr2, ... }
    Multi-axis map literals use tuple keys:
-     { (I1::V1, I2::V2): expr1, (I1::V1, I2::V3): expr2, ... }
+     { (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
    All labels of the index (or all label tuples) must be present
    (totality requirement). *)
 map_literal
@@ -757,17 +771,17 @@ map_entry
    | tuple_key_entry;
 
 single_key_entry
-   = IDENT, "::", IDENT, ":", expr;
+   = IDENT, ".", IDENT, ":", expr;
 
 tuple_key_entry
-   = "(", IDENT, "::", IDENT,
-     { ",", IDENT, "::", IDENT }, ")", ":", expr;
+   = "(", IDENT, ".", IDENT,
+     { ",", IDENT, ".", IDENT }, ")", ":", expr;
 
 (* --- Table expression (syntax sugar, desugars to map_literal) ---     *)
 (*                                                                      *)
 (* The body grammar is context-sensitive: whether a header row is       *)
 (* expected, whether data rows carry row labels, and whether slice      *)
-(* labels are `Index::Variant` or `#N` all depend on whether the        *)
+(* labels are `Index.Variant` or `#N` all depend on whether the         *)
 (* corresponding axis in `index_list` is named or a Nat range literal.  *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
@@ -805,7 +819,7 @@ table_data_row_1d
    = [ IDENT, ":" ], expr, ";";
 
 qualified_variant
-   = IDENT, "::", IDENT;
+   = IDENT, ".", IDENT;
 
 (* --- Parenthesized expression --- *)
 paren_expr
@@ -827,7 +841,7 @@ tuple_match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = IDENT, "::", IDENT           (* qualified: Index::Variant *)
+   = IDENT, ".", IDENT            (* qualified: Index.Variant *)
    | IDENT,
      [ "{", [ pattern_binding_list ], "}" ];              (* union variant *)
 

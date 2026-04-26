@@ -2,7 +2,7 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-include "./a.gcl" { x as x_a };
-include "./b.gcl" { x as x_b };
+include lib.a().{ x as x_a };
+include lib.b().{ x as x_b };
 
 node sum: Dimensionless = @x_a + @x_b;

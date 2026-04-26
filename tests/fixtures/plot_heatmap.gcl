@@ -12,8 +12,8 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
     Payload: 0.0 W,   0.0 W,  35.0 W;
 };
 
-param comms_power: Power[OpMode] = for m: OpMode { @power_draw[Subsystem::Comms, m] };
-param safe_power: Power[Subsystem] = for s: Subsystem { @power_draw[s, OpMode::Safe] };
+param comms_power: Power[OpMode] = for m: OpMode { @power_draw[Subsystem.Comms, m] };
+param safe_power: Power[Subsystem] = for s: Subsystem { @power_draw[s, OpMode.Safe] };
 
 pub plot power_heatmap = {
     mark: rect,

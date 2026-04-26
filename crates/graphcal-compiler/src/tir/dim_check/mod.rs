@@ -49,7 +49,7 @@ pub enum InferredType {
     Fin(NatLinearForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver::Departure` has type `Label(Maneuver)`).
+    /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
     Label(IndexName),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),
@@ -558,12 +558,8 @@ impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
         expr: &crate::syntax::ast::Expr,
         args: &[crate::syntax::ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::syntax::ast::ExprKind::InlineDagRef { module, dag, .. } = &expr.kind {
-            let key = module.as_ref().map_or_else(
-                || dag.value.to_string(),
-                |m| format!("{}::{}", m.name, dag.value),
-            );
-            self.out.insert(key);
+        if let crate::syntax::ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
+            self.out.insert(dag.value.to_string());
         }
         for b in args {
             self.visit_expr(&b.value)?;

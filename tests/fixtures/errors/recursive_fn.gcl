@@ -2,8 +2,8 @@
 dag recurse {
     param x: Dimensionless;
     
-    include recurse(x: 1.0) { result };
+    include recurse(x: 1.0).{ result };
     
     node result: Dimensionless = @x;
 }
-include recurse(x: 1.0) { result };
+include recurse(x: 1.0).{ result };

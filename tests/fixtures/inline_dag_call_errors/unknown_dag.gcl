@@ -1,4 +1,4 @@
 // Error fixture: inline call references a dag that is not declared.
-// Expected diagnostic: `graphcal::G002` — unknown dag.
+// Expected diagnostic: `graphcal.G002` — unknown dag.
 param src: Length = 10.0 m;
-node y: Length = @not_a_dag(v: @src)::result;
+node y: Length = @not_a_dag(v: @src).result;

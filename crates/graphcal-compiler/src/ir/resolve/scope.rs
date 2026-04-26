@@ -38,15 +38,6 @@ where
         }
         Ok(())
     }
-
-    fn visit_qualified_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedGraphRef { name: ident, .. } = &expr.kind
-            && self.forbidden.contains(ident.value.as_str())
-        {
-            return Err((self.make_error)(ident.value.as_str(), self.src, expr.span));
-        }
-        Ok(())
-    }
 }
 
 /// Check that an expression contains no runtime `@` references (for const expressions).

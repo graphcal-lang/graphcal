@@ -333,7 +333,7 @@ impl Parser<'_> {
             match axis_spec {
                 TableIndexSpec::Named(axis) => {
                     let axis_ident = self.parse_any_ident()?;
-                    self.expect(Token::ColonColon)?;
+                    self.expect(Token::Dot)?;
                     let variant_ident = self.parse_any_ident()?;
                     if axis_ident.name != axis.value.as_str() {
                         return Err(ParseError::MultiDeclUnsupportedShape {
@@ -563,7 +563,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                if self.lexer.peek() == Some(&Token::ColonColon) {
+                if self.lexer.peek() == Some(&Token::Dot) {
                     self.lexer.next_token();
                     let variant = self.parse_any_ident()?;
                     let span = ident.span.merge(variant.span);
@@ -830,11 +830,11 @@ index Component = { ComponentA };
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Phase::Launch]
+      [Phase.Launch]
       :           _, _;
       ComponentA: 1, 2;
 
-      [Phase::Cruise]
+      [Phase.Cruise]
       :           _, _;
       ComponentA: 3, 4;
   };
@@ -873,7 +873,7 @@ param q: Int[Phase, Component]
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Foo::Launch]
+      [Foo.Launch]
       :           _, _;
       ComponentA: 1, 2;
   };
@@ -896,7 +896,7 @@ index OpMode = { Safe, Nominal };
 param p: Power[Component],
 param m: Bool[Component, OpMode]
   = table[Component, (_, OpMode)] {
-      :           _,      OpMode::Safe, OpMode::Nominal;
+      :           _,      OpMode.Safe, OpMode.Nominal;
       ComponentA: 10.0 W, true,         false;
   };
 ";

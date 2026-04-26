@@ -1,6 +1,6 @@
 pub index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
-    Phase::Coast: 1.0,
-    Phase::Burn: 2.0,
+    Phase.Coast: 1.0,
+    Phase.Burn: 2.0,
 };
-param bad: Dimensionless = @x[Phase::NoSuch];
+param bad: Dimensionless = @x[Phase.NoSuch];

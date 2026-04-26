@@ -3,15 +3,15 @@
 index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
-    Mode::Normal: 100.0,
-    Mode::Eco: 50.0,
-    Mode::Boost: 200.0,
+    Mode.Normal: 100.0,
+    Mode.Eco: 50.0,
+    Mode.Boost: 200.0,
 };
 
 param power_use: Dimensionless[Mode] = {
-    Mode::Normal: 80.0,
-    Mode::Eco: 30.0,
-    Mode::Boost: 250.0,
+    Mode.Normal: 80.0,
+    Mode.Eco: 30.0,
+    Mode.Boost: 250.0,
 };
 
 #[expected_fail]

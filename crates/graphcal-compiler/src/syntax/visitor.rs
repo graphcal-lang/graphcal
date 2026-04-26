@@ -39,7 +39,6 @@ pub(crate) trait ExprVisitor {
 
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref(expr),
-            ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref(expr),
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref(expr),
             ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
@@ -107,10 +106,6 @@ pub(crate) trait ExprVisitor {
     }
 
     fn visit_const_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -265,7 +260,6 @@ pub trait ExprVisitorMut {
 
             ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
-            ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
             ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
             ExprKind::InlineDagRef { .. } => self.visit_inline_dag_ref_mut(expr),
 
@@ -341,10 +335,6 @@ pub trait ExprVisitorMut {
     }
 
     fn visit_const_ref_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
         Ok(())
     }
 

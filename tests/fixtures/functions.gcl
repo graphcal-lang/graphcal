@@ -28,7 +28,7 @@ dag hohmann_dv {
     
     param r2: Length;
     
-    import .. { TransferResult };
+    import functions.{ TransferResult };
     
     node v1: Velocity = sqrt(@gm / @r1);
     
@@ -44,12 +44,12 @@ dag hohmann_dv {
 param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
-include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) { v as v_parking };
-include hohmann_dv(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt) { result as transfer };
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt).{ v as v_parking };
+include hohmann_dv(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt).{ result as transfer };
 
 // Inline computation replaces generic lerp (generic functions → built-in in Phase 7)
 node midpoint_alt: Length = @parking_alt + (@target_alt - @parking_alt) * 0.5;
 
 // Second instantiation of same DAG with namespace alias (validates multi-instantiation)
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) as ov2;
-node v_check: Velocity = @ov2::v;
+node v_check: Velocity = @ov2.v;
