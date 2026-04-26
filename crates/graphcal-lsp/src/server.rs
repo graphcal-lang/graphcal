@@ -334,7 +334,7 @@ fn build_source_resolver(project: &LoadedProject) -> impl Fn(&str) -> Option<(Ur
 /// source name as a sibling of the active URI's file. Reads the file off
 /// disk to recover the source text. Returns None if the file can't be read.
 ///
-/// This exists so that an unparseable imported file still routes its
+/// This exists so that an unparsable imported file still routes its
 /// diagnostic to the right URI even when `load_project` itself failed.
 fn sibling_file_resolver(active_uri: &Url) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
     move |name: &str| {
