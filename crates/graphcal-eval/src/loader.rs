@@ -6,7 +6,7 @@ use miette::NamedSource;
 
 use crate::eval::CompileError;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, File, ImportPath};
+use graphcal_compiler::syntax::ast::{DeclKind, File, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::FileSystemReader;
 
@@ -248,16 +248,16 @@ fn load_file_dfs<F: FileSystemReader>(
             _ => continue,
         };
 
-        // Skip parent scope paths (`import .. { ... }`) — resolved at eval time.
-        if path.is_parent_scope() {
+        // Skip single-segment paths that reference an inline DAG declared in
+        // this file, or that name the file's own virtual package (Concept 7).
+        if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
             continue;
         }
-
-        // Skip single-segment module paths that reference inline DAGs.
-        if let ImportPath::ModulePath { segments, .. } = path
-            && segments.len() == 1
-            && dag_names.contains(segments[0].name.as_str())
-        {
+        let file_stem = canonical_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if path.segments.len() == 1 && path.segments[0].name == file_stem {
             continue;
         }
 
@@ -399,56 +399,29 @@ fn resolve_project_root<F: FileSystemReader>(
     )
 }
 
-/// Resolve an `ImportPath` to a canonical file path.
+/// Resolve a `ModulePath` to a canonical file path.
 ///
-/// - `FilePath`: resolved relative to `parent_dir` (the importing file's directory).
-/// - `ModulePath`: resolved via the project manifest (`graphcal.toml`).
+/// All paths are absolute from a package root (real package via
+/// `graphcal.toml` manifest, or virtual package = single-file project).
+/// The first segment names the package; remaining segments walk the
+/// directory tree under `source_dir`. Reserved first segments `graphcal`
+/// and `std` route to the (deferred) stdlib resolver.
 fn resolve_import_path<F: FileSystemReader>(
-    import_path: &ImportPath,
-    parent_dir: &Path,
+    import_path: &ModulePath,
+    _parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
     manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
-    match import_path {
-        ImportPath::FilePath { path, span } => {
-            let file_path = parent_dir.join(path);
-            fs.canonicalize(&file_path).map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: path.clone(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            })
-        }
-        ImportPath::ModulePath { segments, span } => {
-            resolve_module_path(segments, *span, project_root, src, manifest, fs)
-        }
-        ImportPath::ParentScope { span, .. } => {
-            // Parent scope paths (`import .. { ... }`) are resolved at eval time,
-            // not during file loading. They should be skipped by load_file_dfs.
-            Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "`..` parent scope paths cannot be resolved to files".to_string(),
-                src: src.clone(),
-                span: (*span).into(),
-            }))
-        }
-        ImportPath::CrossFileDag {
-            file_path, span, ..
-        } => {
-            // Cross-file DAG paths resolve the file component to a canonical path.
-            // The DAG name is resolved at eval time.
-            let full_path = parent_dir.join(file_path);
-            fs.canonicalize(&full_path).map_err(|_| {
-                CompileError::Eval(GraphcalError::ImportFileNotFound {
-                    path: file_path.clone(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            })
-        }
-    }
+    resolve_module_path(
+        &import_path.segments,
+        import_path.span,
+        project_root,
+        src,
+        manifest,
+        fs,
+    )
 }
 
 /// Resolve a bare module path to a canonical file path.
@@ -466,10 +439,11 @@ fn resolve_module_path<F: FileSystemReader>(
         .iter()
         .map(|s| s.name.as_str())
         .collect::<Vec<_>>()
-        .join("/");
+        .join(".");
 
-    // Check for stdlib imports (deferred).
-    if !segments.is_empty() && segments[0].name == "graphcal" {
+    // Stdlib namespace (deferred). Both `graphcal` and `std` first segments
+    // are reserved for the standard library (per Concept §6.2 of the design).
+    if !segments.is_empty() && (segments[0].name == "graphcal" || segments[0].name == "std") {
         return Err(CompileError::Eval(GraphcalError::StdlibNotImplemented {
             path: display_path,
             src: src.clone(),
@@ -477,68 +451,76 @@ fn resolve_module_path<F: FileSystemReader>(
         }));
     }
 
-    // Load manifest if not already cached.
+    // Try to load a manifest if one is present (real package).
     if manifest.is_none() {
         let manifest_path = project_root.join("graphcal.toml");
-        if !fs.exists(&manifest_path) {
-            return Err(CompileError::Eval(
-                GraphcalError::BareImportWithoutManifest {
-                    path: display_path,
-                    src: src.clone(),
-                    span: span.into(),
-                },
-            ));
+        if fs.exists(&manifest_path) {
+            let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: e.to_string(),
+                })
+            })?;
+            let parsed =
+                graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
+                    .map_err(|e| {
+                        CompileError::Eval(GraphcalError::ManifestError {
+                            message: e.to_string(),
+                        })
+                    })?;
+            *manifest = Some(parsed);
         }
-        let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
-            })
-        })?;
-        let parsed = graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
-            .map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
-            })
-        })?;
-        *manifest = Some(parsed);
     }
 
-    // Unwrap is safe: we just ensured `manifest` is `Some` above.
-    #[expect(clippy::unwrap_used, reason = "manifest was just set to Some above")]
-    let m = manifest.as_ref().unwrap();
+    if let Some(m) = manifest.as_ref() {
+        // Real package: first segment must match the package name.
+        if !segments.is_empty() && segments[0].name != m.package_name {
+            return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
+                path_first: segments[0].name.clone(),
+                package_name: m.package_name.clone(),
+                src: src.clone(),
+                span: span.into(),
+            }));
+        }
 
-    // Validate first segment matches package name.
-    if !segments.is_empty() && segments[0].name != m.package_name {
-        return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
-            path_first: segments[0].name.clone(),
-            package_name: m.package_name.clone(),
+        // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
+        let mut file_path = project_root.join(&m.source_dir);
+        for seg in segments {
+            file_path = file_path.join(&seg.name);
+        }
+        file_path.set_extension("gcl");
+
+        if let Ok(canonical) = fs.canonicalize(&file_path) {
+            return Ok(canonical);
+        }
+
+        // Fallback: 2+ segments — try the parent file. E.g. for
+        // `nasa.rocket.velocity`, try `nasa/rocket.gcl` and expect
+        // `velocity` to be a DAG defined inside it.
+        if segments.len() >= 2 {
+            let mut parent_path = project_root.join(&m.source_dir);
+            for seg in &segments[..segments.len() - 1] {
+                parent_path = parent_path.join(&seg.name);
+            }
+            parent_path.set_extension("gcl");
+            if let Ok(canonical) = fs.canonicalize(&parent_path) {
+                return Ok(canonical);
+            }
+        }
+
+        return Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+            path: display_path,
             src: src.clone(),
             span: span.into(),
         }));
     }
 
-    // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
-    let mut file_path = project_root.join(&m.source_dir);
-    for seg in segments {
-        file_path = file_path.join(&seg.name);
-    }
-    file_path.set_extension("gcl");
-
-    // Try the full path first.
-    if let Ok(canonical) = fs.canonicalize(&file_path) {
-        return Ok(canonical);
-    }
-
-    // Fallback: if there are 2+ segments (beyond the package name), try the
-    // parent file. E.g. for `nasa/rocket/velocity`, try `nasa/rocket.gcl`
-    // and expect `velocity` to be a DAG defined inside it.
-    if segments.len() >= 2 {
-        let mut parent_path = project_root.join(&m.source_dir);
-        for seg in &segments[..segments.len() - 1] {
-            parent_path = parent_path.join(&seg.name);
-        }
-        parent_path.set_extension("gcl");
-        if let Ok(canonical) = fs.canonicalize(&parent_path) {
+    // No manifest — virtual-package mode. Each `.gcl` file is its own
+    // one-file virtual package whose name is the file's stem. Resolve
+    // the first segment to `<project_root>/<segment>.gcl`.
+    if !segments.is_empty() {
+        let mut file_path = project_root.join(&segments[0].name);
+        file_path.set_extension("gcl");
+        if let Ok(canonical) = fs.canonicalize(&file_path) {
             return Ok(canonical);
         }
     }

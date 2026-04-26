@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ImportPath};
+use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
@@ -29,67 +29,28 @@ mod pipeline;
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
 // ---------------------------------------------------------------------------
 
-/// Helper function to derive a module name from an `ImportPath`.
+/// Derive a module name (the leaf segment) from a `ModulePath`.
 ///
-/// For `FilePath`, uses the filename stem.
-/// For `ModulePath`, uses the last segment as the module name.
-pub(super) fn derive_module_name_from_import_path(
-    import_path: &ImportPath,
-    src: &NamedSource<Arc<String>>,
-) -> Result<String, CompileError> {
-    match import_path {
-        ImportPath::FilePath { path, span } => {
-            crate::loader::derive_module_name(path).map_err(|stem| {
-                CompileError::Eval(GraphcalError::InvalidModuleName {
-                    stem,
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            })
-        }
-        ImportPath::ModulePath { segments, .. } => {
-            // For module paths, the last segment is the module name
-            Ok(segments
-                .last()
-                .map_or_else(|| "module".to_string(), |seg| seg.name.clone()))
-        }
-        ImportPath::ParentScope { .. } => {
-            // Parent scope imports don't derive a module name;
-            // they bring items directly into scope.
-            Ok("parent".to_string())
-        }
-        ImportPath::CrossFileDag { dag_name, .. } => {
-            // Cross-file DAG paths use the DAG name as the module name.
-            Ok(dag_name.name.clone())
-        }
-    }
+/// Used as the include-instance alias for the bare `include path(args);`
+/// form and as the module-qualifier name for `import path;`.
+pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> String {
+    import_path
+        .leaf()
+        .map_or_else(|| "module".to_string(), |seg| seg.name.clone())
 }
 
-/// Visitor that rewrites qualified references to flat names.
+/// Visitor that rewrites qualified const references to flat names.
 struct QualifiedRefRewriter;
 
 impl ExprVisitorMut for QualifiedRefRewriter {
     type Error = std::convert::Infallible;
 
-    fn visit_qualified_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
-        expr.kind = match old_kind {
-            ExprKind::QualifiedGraphRef { module, name } => {
-                let flat = DeclName::new(format!("{}::{}", module.name, name.value));
-                ExprKind::GraphRef(Spanned {
-                    value: flat,
-                    span: name.span,
-                })
-            }
-            other => other,
-        };
-        Ok(())
-    }
-
     fn visit_qualified_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
         expr.kind = match old_kind {
             ExprKind::QualifiedConstRef { module, name } => {
+                // The internal HashMap key encoding remains `m::x` to avoid
+                // collisions with user-visible `.`-separated names.
                 let flat = DeclName::new(format!("{}::{}", module.name, name.value));
                 ExprKind::ConstRef(Spanned {
                     value: flat,
@@ -102,10 +63,10 @@ impl ExprVisitorMut for QualifiedRefRewriter {
     }
 }
 
-/// Rewrite qualified references to flat names in-place.
+/// Rewrite qualified const references in-place.
 ///
-/// Replaces `QualifiedGraphRef { module: "m", name: "x" }` with `GraphRef("m::x")`,
-/// and `QualifiedConstRef` with `ConstRef`.
+/// Replaces `QualifiedConstRef { module: "m", name: "x" }` with
+/// `ConstRef("m::x")`.
 pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
     let mut rewriter = QualifiedRefRewriter;
     let _ = rewriter.visit_expr_mut(expr);
