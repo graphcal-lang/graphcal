@@ -164,9 +164,9 @@ impl Parser<'_> {
         let first_ident = self.parse_any_ident()?;
         let start_span = first_ident.span;
 
-        if self.lexer.peek() == Some(&Token::ColonColon) {
-            // Qualified index variant pattern: Index::Variant
-            self.lexer.next_token(); // consume '::'
+        if self.lexer.peek() == Some(&Token::Dot) {
+            // Qualified index variant pattern: Index.Variant
+            self.lexer.next_token(); // consume '.'
             let variant_ident = self.parse_any_ident()?;
             let end_span = variant_ident.span;
             return Ok(MatchPattern {

@@ -307,7 +307,7 @@ impl Parser<'_> {
                 match slice_index {
                     TableIndexSpec::Named(_) => {
                         let index_ident = self.parse_any_ident()?;
-                        self.expect(Token::ColonColon)?;
+                        self.expect(Token::Dot)?;
                         let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(IndexName::new(index_ident.name), index_ident.span),
@@ -380,7 +380,7 @@ impl Parser<'_> {
                 break; // trailing comma
             }
             let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-            self.expect(Token::ColonColon)?;
+            self.expect(Token::Dot)?;
             let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
@@ -413,7 +413,7 @@ impl Parser<'_> {
             let mut keys = Vec::new();
             loop {
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-                self.expect(Token::ColonColon)?;
+                self.expect(Token::Dot)?;
                 let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                 keys.push(MapEntryKey { index, variant });
                 if self.lexer.peek() == Some(&Token::Comma) {

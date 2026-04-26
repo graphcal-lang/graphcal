@@ -333,7 +333,7 @@ impl Parser<'_> {
             match axis_spec {
                 TableIndexSpec::Named(axis) => {
                     let axis_ident = self.parse_any_ident()?;
-                    self.expect(Token::ColonColon)?;
+                    self.expect(Token::Dot)?;
                     let variant_ident = self.parse_any_ident()?;
                     if axis_ident.name != axis.value.as_str() {
                         return Err(ParseError::MultiDeclUnsupportedShape {
@@ -563,7 +563,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                if self.lexer.peek() == Some(&Token::ColonColon) {
+                if self.lexer.peek() == Some(&Token::Dot) {
                     self.lexer.next_token();
                     let variant = self.parse_any_ident()?;
                     let span = ident.span.merge(variant.span);

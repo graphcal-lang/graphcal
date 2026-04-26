@@ -356,12 +356,12 @@ impl Parser<'_> {
                 span: start_span.merge(end_span),
             })
         } else {
-            // Path: ident or ident::ident::...
+            // Path: ident or ident.ident.ident...
             let first = self.parse_any_ident()?;
             let start_span = first.span;
             let mut segments = vec![first];
-            while self.lexer.peek() == Some(&Token::ColonColon) {
-                self.expect(Token::ColonColon)?;
+            while self.lexer.peek() == Some(&Token::Dot) {
+                self.expect(Token::Dot)?;
                 segments.push(self.parse_any_ident()?);
             }
             let end_span = segments.last().map_or(start_span, |s| s.span);

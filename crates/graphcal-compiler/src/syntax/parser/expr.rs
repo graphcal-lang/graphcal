@@ -338,44 +338,29 @@ impl Parser<'_> {
             }
             Some(Token::At) => {
                 let (_, at_span) = self.advance()?;
+                // The thing immediately after `@` must be a single in-scope
+                // identifier (a node, or a DAG whose output projection yields
+                // a node). Qualified `@module.dag(...)` is rejected — bring
+                // the DAG into scope first via `import <pkg>.{<dag>};`.
                 let ident = self.parse_any_ident()?;
-                // Check for module-qualified graph ref: @module::name
-                let (module, dag_or_name) = if self.lexer.peek() == Some(&Token::ColonColon) {
-                    self.lexer.next_token(); // consume '::'
-                    let member = self.parse_any_ident()?;
-                    (Some(ident), member)
-                } else {
-                    (None, ident)
-                };
-                // Check for inline DAG invocation: `@dag(args)::out` or
-                // `@module::dag(args)::out`.
                 if self.lexer.peek() == Some(&Token::LParen) {
+                    // Inline DAG invocation: `@dag(args).out`
                     let args = self.parse_import_param_bindings()?;
-                    self.expect(Token::ColonColon)?;
+                    self.expect(Token::Dot)?;
                     let output = self.parse_any_ident()?;
                     let span = at_span.merge(output.span);
                     Ok(Expr {
                         kind: ExprKind::InlineDagRef {
-                            module,
-                            dag: dag_or_name.into_spanned::<DeclName>(),
+                            dag: ident.into_spanned::<DeclName>(),
                             args,
                             output: output.into_spanned::<DeclName>(),
                         },
                         span,
                     })
-                } else if let Some(module) = module {
-                    let span = at_span.merge(dag_or_name.span);
-                    Ok(Expr {
-                        kind: ExprKind::QualifiedGraphRef {
-                            module,
-                            name: dag_or_name.into_spanned::<DeclName>(),
-                        },
-                        span,
-                    })
                 } else {
-                    let span = at_span.merge(dag_or_name.span);
+                    let span = at_span.merge(ident.span);
                     Ok(Expr {
-                        kind: ExprKind::GraphRef(dag_or_name.into_spanned::<DeclName>()),
+                        kind: ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
                         span,
                     })
                 }
@@ -499,16 +484,22 @@ impl Parser<'_> {
         } else if starts_upper && self.lexer.peek() == Some(&Token::LBrace) {
             // Struct/variant construction with fields: TypeName { field1: expr, field2 }
             self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
-        } else if self.lexer.peek() == Some(&Token::ColonColon) {
-            // Qualified reference: could be variant, const, or function call
-            self.lexer.next_token(); // consume '::'
+        } else if self.peek_dot_then_ident() {
+            // Qualified reference: ident.member could be a variant, qualified
+            // const, or qualified fn call. We greedily consume the first
+            // `.IDENT` here; further `.IDENT` chains are handled by the
+            // postfix loop and resolve as field accesses unless name
+            // resolution promotes them. Internally we still encode qualified
+            // function names as `qualifier::member` to avoid colliding with
+            // user-visible `.` paths in HashMap keys.
+            self.lexer.next_token(); // consume '.'
             let member_ident = self.parse_any_ident()?;
             let member_name = member_ident.name.clone();
 
             if self.lexer.peek() == Some(&Token::LParen)
                 || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
             {
-                // Qualified function call: module::fn(args) or module::fn<T>(args)
+                // Qualified function call: module.fn(args) or module.fn<T>(args)
                 let type_args = if self.lexer.peek() == Some(&Token::Lt) {
                     self.parse_generic_arg_list()?
                 } else {
@@ -527,7 +518,7 @@ impl Parser<'_> {
                     span: call_span,
                 })
             } else {
-                // Unresolved qualified reference: a::b
+                // Unresolved qualified reference: a.b
                 let full_span = span.merge(member_ident.span);
                 Ok(Expr {
                     kind: ExprKind::QualifiedNameRef {
@@ -572,16 +563,16 @@ impl Parser<'_> {
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
         if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
-            // Could be map literal: { Ident::Variant: expr, ... }
+            // Could be map literal: { Ident.Variant: expr, ... }
             let saved_text = self.lexer.slice_at(ident_span).to_string();
             // Consume the ident to peek at what's next
             let (_, saved_span) = self.advance()?;
-            if self.lexer.peek() == Some(&Token::ColonColon) {
-                // Consume `::` and variant, then check next token.
-                self.lexer.next_token(); // consume '::'
+            if self.lexer.peek() == Some(&Token::Dot) {
+                // Consume `.` and variant, then check next token.
+                self.lexer.next_token(); // consume '.'
                 let variant_ident = self.parse_any_ident()?;
                 if self.lexer.peek() == Some(&Token::Colon) {
-                    // Map literal: { Index::Variant: expr, ... }
+                    // Map literal: { Index.Variant: expr, ... }
                     self.parse_map_literal_after_first_entry(
                         start_span,
                         Spanned::new(IndexName::new(saved_text), saved_span),
@@ -599,15 +590,15 @@ impl Parser<'_> {
                     ))
                 }
             } else {
-                // Ident not followed by `::` — not a map literal
+                // Ident not followed by `.` — not a map literal
                 Err(self.unexpected_token(
-                    "map literal (`{ Index::Variant: expr, ... }`)",
+                    "map literal (`{ Index.Variant: expr, ... }`)",
                     &saved_text,
                     start_span,
                 ))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
-            // Could be tuple-key map literal: { (Index::Variant, ...): expr, ... }
+            // Could be tuple-key map literal: { (Index.Variant, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
             let found = self
@@ -615,7 +606,7 @@ impl Parser<'_> {
                 .peek()
                 .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
             Err(self.unexpected_token(
-                "map literal (`{ Index::Variant: expr, ... }`)",
+                "map literal (`{ Index.Variant: expr, ... }`)",
                 &found,
                 start_span,
             ))
@@ -624,22 +615,24 @@ impl Parser<'_> {
 
     // --- Index access ---
 
-    /// Parse an index argument: `Index::Variant`, a loop variable `m`, or an expression `i + 1`.
+    /// Parse an index argument: `Index.Variant`, a loop variable `m`, or an expression `i + 1`.
     ///
     /// Strategy:
-    /// 1. Peek for identifier followed by `::` → parse as qualified variant.
-    /// 2. Otherwise, parse a full expression:
-    ///    - If it's a bare `NameRef(ident)` → convert to `IndexArg::Var` (backward compat).
+    /// 1. Peek for `Ident.Ident` (qualified variant). The leading `.` must be
+    ///    immediately followed by another `Ident` to count as qualified;
+    ///    otherwise we fall through to expression parsing.
+    /// 2. Parse a full expression:
+    ///    - If it's a bare `NameRef(ident)` → convert to `IndexArg::Var`.
     ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
-        // Check for qualified variant: Ident::Ident
+        // Check for qualified variant: Ident.Ident
         if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
             let name = self.lexer.slice_at(span).to_string();
             // Consume the identifier to peek at what follows
             self.lexer.next_token();
-            if self.lexer.peek() == Some(&Token::ColonColon) {
-                // Qualified variant: Index::Variant
-                self.lexer.next_token(); // consume '::'
+            if self.peek_dot_then_ident() {
+                // Qualified variant: Index.Variant
+                self.lexer.next_token(); // consume '.'
                 let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                 return Ok(IndexArg::Variant {
                     index: Spanned::new(IndexName::new(name), span),
@@ -697,6 +690,25 @@ impl Parser<'_> {
     /// from `Foo < bar` (comparison).
     pub(super) fn is_type_args_followed_by_brace(&mut self) -> bool {
         self.is_type_args_followed_by(b'{')
+    }
+
+    /// Look ahead to check if the next token is `.` followed by an identifier.
+    ///
+    /// Used to distinguish `IDENT.IDENT` (a qualified-reference candidate) from
+    /// `IDENT.{...}` (a brace-list selector that doesn't appear in expression
+    /// position) and from a stray `.` followed by a non-identifier token.
+    /// This consumes neither the `.` nor the following token.
+    pub(super) fn peek_dot_then_ident(&mut self) -> bool {
+        if self.lexer.peek() != Some(&Token::Dot) {
+            return false;
+        }
+        // Consume `.` and peek the next token; restore via put_back.
+        let Some((Token::Dot, dot_span)) = self.lexer.next_token() else {
+            return false;
+        };
+        let next_is_ident = self.lexer.peek() == Some(&Token::Ident);
+        self.lexer.put_back(Token::Dot, dot_span);
+        next_is_ident
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
