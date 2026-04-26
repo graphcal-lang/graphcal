@@ -349,10 +349,15 @@ fn format_import_decl(_fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static
     format_import_or_include_kind(path_doc, RcDoc::nil(), &d.kind)
 }
 
-/// `include "path"(x: 1.0 km) { name };` or `include "path" as alias;`
+/// `include path(x: 1.0 km).{ name };` or `include path() as alias;`.
+///
+/// `include` always emits `(...)` — even when the binding list is empty —
+/// because the param-binding parens are part of the include grammar (the
+/// parser requires them). `import` uses the same shared bindings helper but
+/// never has bindings, so it emits nothing.
 fn format_include_decl(fmt: &mut Formatter<'_>, d: &IncludeDecl) -> RcDoc<'static> {
     let path_doc = format_import_or_include_path("include", &d.path);
-    let bindings_doc = format_import_param_bindings(fmt, &d.param_bindings);
+    let bindings_doc = format_include_param_bindings(fmt, &d.param_bindings);
     format_import_or_include_kind(path_doc, bindings_doc, &d.kind)
 }
 
@@ -424,14 +429,14 @@ fn format_import_or_include_kind(
     }
 }
 
-/// Format param bindings: `(name: expr, ...)` or empty if no bindings.
-fn format_import_param_bindings(
+/// Format `include` param bindings: always `(name: expr, ...)` or `()`.
+///
+/// `include` always carries a param-binding list — empty `()` is valid and
+/// must round-trip through the formatter. (The parser requires the parens.)
+fn format_include_param_bindings(
     fmt: &mut Formatter<'_>,
     bindings: &[ParamBinding],
 ) -> RcDoc<'static> {
-    if bindings.is_empty() {
-        return RcDoc::nil();
-    }
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
         .map(|b| {

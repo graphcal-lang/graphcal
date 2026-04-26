@@ -2,5 +2,5 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-import circular_a.{ x };
+include circular_a().{ x };
 param y: Dimensionless = 2.0;

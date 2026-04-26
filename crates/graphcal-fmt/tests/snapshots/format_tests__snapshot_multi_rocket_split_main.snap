@@ -4,7 +4,7 @@ expression: formatted
 ---
 // main.gcl -- rocket equation using imported constants and included params
 import constants.{ g0 };
-import params.{ dry_mass, fuel_mass, isp };
+include params().{ dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 

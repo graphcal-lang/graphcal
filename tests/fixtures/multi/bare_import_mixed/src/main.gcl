@@ -1,6 +1,6 @@
 // Mix of bare module path and file-based import/include
 import nasa.constants.{ g0 };
-import local_params.{ isp };
+include local_params().{ isp };
 
 dim Velocity = Length / Time;
 dim Acceleration = Length / Time^2;

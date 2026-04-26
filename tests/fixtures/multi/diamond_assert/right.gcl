@@ -1,4 +1,4 @@
 // right.gcl -- right branch of diamond, includes shared
-import shared.{ base_val };
+include shared().{ base_val };
 pub node tripled: Dimensionless = @base_val * 3.0;
 assert tripled_positive = @tripled > 0.0;
