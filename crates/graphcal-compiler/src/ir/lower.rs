@@ -280,26 +280,22 @@ pub fn lower_to_builder_with_imported_values(
 ///
 /// Returns a [`GraphcalError`] if name resolution or type-system construction
 /// fails for the dag body.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
 pub fn lower_dag_body_to_ir(
     dag_name: &str,
     body: &[crate::syntax::ast::Declaration],
     parent_registry: &Registry,
-    parent_const_names: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
-    let (pure_body, dag_imported_names) = split_dag_body_imports(body, parent_const_names);
-
+    // Per Concept 9, inline DAGs are strictly isolated — no parent-scope
+    // imports leak in. The body is treated as a self-contained virtual file.
     let virtual_file = File {
-        declarations: pure_body,
+        declarations: body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
 
-    let resolved = resolve_with_imported_values(&virtual_file, src, &dag_imported_names)?;
+    let resolved =
+        resolve_with_imported_values(&virtual_file, src, &ImportedValueNames::default())?;
     let type_anns = extract_type_annotations(&virtual_file);
 
     let (builder, unfrozen) = build_ir_from_resolved(
@@ -312,23 +308,6 @@ pub fn lower_dag_body_to_ir(
         Some(parent_registry),
     )?;
     Ok(unfrozen.freeze(builder.build()))
-}
-
-/// Separate `import .. { ... }` declarations from the rest of a dag body.
-///
-/// Returns the pure body declarations (suitable for treatment as a virtual
-/// [`File`]) alongside an [`ImportedValueNames`] that names any const items
-/// imported from the parent scope. Type-system items need no entry here
-/// because [`RegistryBuilder::merge_from_registry`] already makes them
-/// visible in the dag's registry.
-fn split_dag_body_imports(
-    body: &[crate::syntax::ast::Declaration],
-    _parent_const_names: &HashSet<String>,
-) -> (Vec<crate::syntax::ast::Declaration>, ImportedValueNames) {
-    // Parent-scope imports were removed from the language (Concept 9 — strict
-    // isolation, no lexical inheritance into inline DAGs). All declarations
-    // pass through unchanged.
-    (body.to_vec(), ImportedValueNames::default())
 }
 
 /// Remove and return the type annotation for `name`, or raise an internal error

@@ -722,11 +722,6 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         .all_dags()
         .map(|(name, _)| name.clone())
         .collect();
-    let parent_const_names: std::collections::HashSet<String> = tir
-        .consts
-        .iter()
-        .map(|c| c.name.member().to_string())
-        .collect();
     for name in dag_names {
         let body = tir
             .registry
@@ -738,7 +733,6 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             &name,
             &body,
             &tir.registry,
-            &parent_const_names,
             src,
             &parent_dag_id,
         )?;

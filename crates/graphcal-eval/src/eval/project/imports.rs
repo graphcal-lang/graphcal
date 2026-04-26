@@ -109,6 +109,91 @@ fn build_dep_decl_index(decls: &[graphcal_compiler::syntax::ast::Declaration]) -
     }
 }
 
+/// Classified param bindings: each entry routes to one of the four binding
+/// maps based on what the dependency declares the binding name as.
+pub(super) struct ClassifiedBindings {
+    pub(super) params: HashMap<String, graphcal_compiler::syntax::ast::Expr>,
+    pub(super) indexes: HashMap<IndexName, IndexName>,
+    pub(super) types: HashMap<StructTypeName, StructTypeName>,
+    pub(super) dims: HashMap<DimName, DimName>,
+}
+
+/// Classify each param binding against the dep's declaration index, returning
+/// per-kind binding maps. Rejects bindings whose name targets a non-bindable
+/// dep declaration (const/node/assert) or no dep declaration at all.
+///
+/// Caller-specific validation (e.g. index-kind matching, registry lookups for
+/// already-evaluated dependencies) layers on top of this — this helper only
+/// answers "is `binding_name` a param/type/dim/index of the dep, or invalid?".
+fn classify_param_bindings(
+    param_bindings: &[graphcal_compiler::syntax::ast::ParamBinding],
+    dep_index: &DepDeclIndex<'_>,
+    file_src: &NamedSource<Arc<String>>,
+    dep_path_for_error: &str,
+) -> Result<ClassifiedBindings, CompileError> {
+    let mut out = ClassifiedBindings {
+        params: HashMap::new(),
+        indexes: HashMap::new(),
+        types: HashMap::new(),
+        dims: HashMap::new(),
+    };
+    for binding in param_bindings {
+        let binding_name = &binding.name.name;
+        if dep_index.params.contains(binding_name.as_str()) {
+            out.params
+                .insert(binding_name.clone(), binding.value.clone());
+            continue;
+        }
+        if dep_index.types.contains(binding_name.as_str()) {
+            let rhs_name = lowering::extract_type_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
+            out.types.insert(
+                StructTypeName::new(binding_name),
+                StructTypeName::new(rhs_name),
+            );
+            continue;
+        }
+        if dep_index.dims.contains(binding_name.as_str()) {
+            let rhs_name = lowering::extract_type_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
+            out.dims
+                .insert(DimName::new(binding_name), DimName::new(rhs_name));
+            continue;
+        }
+        if dep_index.indexes.contains_key(binding_name.as_str()) {
+            let rhs_name = lowering::extract_index_name_from_binding_expr(
+                &binding.value,
+                binding_name,
+                file_src,
+            )?;
+            out.indexes
+                .insert(IndexName::new(binding_name), IndexName::new(rhs_name));
+            continue;
+        }
+        if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
+            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
+                name: binding_name.clone(),
+                actual_kind: kind.as_str().to_string(),
+                src: file_src.clone(),
+                span: binding.name.span.into(),
+            }));
+        }
+        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+            name: binding_name.clone(),
+            file_path: dep_path_for_error.to_string(),
+            src: file_src.clone(),
+            span: binding.name.span.into(),
+        }));
+    }
+    Ok(out)
+}
+
 /// Process an instantiated include (one with param bindings), deferring it for
 /// post-lowering IR merging.
 #[expect(
@@ -431,27 +516,21 @@ pub(super) fn process_instantiated_include<'a>(
 /// Creates a virtual File from the DAG body, validates bindings against it,
 /// and defers for IR merging.
 ///
-/// When `is_cross_file` is `true`, const node declarations from the parent scope
-/// (`import ..`) are included directly in the DAG body rather than being registered
-/// as external imported names. This is necessary because the parent file's const
-/// values are not available in the importing file's IR.
+/// Per Concept 9, inline DAGs are strictly isolated: every name a DAG uses
+/// must come from its own declarations or its own `import` statements. There
+/// is no parent-scope inheritance — same-file and cross-file inline DAGs are
+/// handled identically.
 #[expect(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "needs access to DAG def, include decl, parent AST, and cross-file flag"
 )]
 pub(super) fn process_inline_dag_include(
     dag_def: &graphcal_compiler::syntax::ast::DagDecl,
     dag_name: &str,
     include_decl: &graphcal_compiler::syntax::ast::IncludeDecl,
     decl: &graphcal_compiler::syntax::ast::Declaration,
-    parent_ast: &graphcal_compiler::syntax::ast::File,
     file_src: &NamedSource<Arc<String>>,
     ctx: &mut ImportContext<'_>,
-    is_cross_file: bool,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::ast::ImportKind;
 
@@ -479,106 +558,22 @@ pub(super) fn process_inline_dag_include(
     ctx.module_map
         .insert(prefix.clone(), (sentinel_dag_id, include_decl.path.span()));
 
-    // Concept 9: inline DAGs are strictly isolated. There are no parent-scope
-    // imports to filter out — every name a DAG uses must come from its own
-    // declarations or its own `import` statements.
-    let dag_body_decls: Vec<_> = dag_def.body.clone();
-    let dag_imported_names = ImportedValueNames::default();
-    let dag_parent_type_decls: Vec<graphcal_compiler::syntax::ast::Declaration> = Vec::new();
-    let _ = (is_cross_file, parent_ast); // unused after removing parent-scope handling
-
     let dag_body = graphcal_compiler::syntax::ast::File {
-        declarations: dag_body_decls,
+        declarations: dag_def.body.clone(),
     };
+    let dag_imported_names = ImportedValueNames::default();
 
     // Classify and validate bindings against the DAG body's declarations.
-    let mut bindings = HashMap::new();
-    let mut index_bindings: HashMap<IndexName, IndexName> = HashMap::new();
-    let mut type_bindings: HashMap<StructTypeName, StructTypeName> = HashMap::new();
-    let mut dim_bindings: HashMap<DimName, DimName> = HashMap::new();
-    for binding in &include_decl.param_bindings {
-        let binding_name = &binding.name.name;
-
-        // Check if the binding name is a param in the DAG body.
-        let is_param = dag_body.declarations.iter().any(
-            |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == binding_name),
-        );
-        if is_param {
-            bindings.insert(binding_name.clone(), binding.value.clone());
-            continue;
-        }
-
-        // Check if it's a type in the DAG body.
-        let is_type = dag_body.declarations.iter().any(|d| match &d.kind {
-            DeclKind::Type(t) => t.name.value.as_str() == binding_name,
-            DeclKind::UnionType(t) => t.name.value.as_str() == binding_name,
-            _ => false,
-        });
-        if is_type {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            type_bindings.insert(
-                StructTypeName::new(binding_name),
-                StructTypeName::new(rhs_name),
-            );
-            continue;
-        }
-
-        // Check if it's a dimension in the DAG body.
-        let is_dim = dag_body.declarations.iter().any(|d| match &d.kind {
-            DeclKind::BaseDimension(dim) => dim.name.value.as_str() == binding_name,
-            DeclKind::Dimension(dim) => dim.name.value.as_str() == binding_name,
-            _ => false,
-        });
-        if is_dim {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            dim_bindings.insert(DimName::new(binding_name), DimName::new(rhs_name));
-            continue;
-        }
-
-        // Check if it's an index in the DAG body.
-        let dep_index = dag_body.declarations.iter().find_map(|d| match &d.kind {
-            DeclKind::Index(idx) if idx.name.value.as_str() == binding_name => Some(idx),
-            _ => None,
-        });
-        if let Some(_dep_idx) = dep_index {
-            let rhs_name = lowering::extract_index_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            index_bindings.insert(IndexName::new(binding_name), IndexName::new(rhs_name));
-            continue;
-        }
-
-        // Unknown binding target.
-        let actual_kind = dag_body.declarations.iter().find_map(|d| match &d.kind {
-            DeclKind::ConstNode(c) if c.name.value.as_str() == binding_name => Some("const node"),
-            DeclKind::Node(n) if n.name.value.as_str() == binding_name => Some("node"),
-            _ => None,
-        });
-        if let Some(kind) = actual_kind {
-            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                name: binding_name.clone(),
-                actual_kind: kind.to_string(),
-                src: file_src.clone(),
-                span: binding.name.span.into(),
-            }));
-        }
-        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-            name: binding_name.clone(),
-            file_path: dag_name.to_string(),
-            src: file_src.clone(),
-            span: binding.name.span.into(),
-        }));
-    }
+    // Inline DAGs reuse the same DepDeclIndex as file-based instantiated
+    // includes, but do not do additional cross-registry index-kind validation
+    // (which file includes need to handle re-exported indexes).
+    let dep_index = build_dep_decl_index(&dag_body.declarations);
+    let ClassifiedBindings {
+        params: bindings,
+        indexes: index_bindings,
+        types: type_bindings,
+        dims: dim_bindings,
+    } = classify_param_bindings(&include_decl.param_bindings, &dep_index, file_src, dag_name)?;
 
     // Register imported names in the importer's scope.
     let mut import_item_attributes: HashMap<
@@ -684,7 +679,6 @@ pub(super) fn process_inline_dag_include(
     ctx.deferred_inline_dags.push(DeferredInlineDagInclude {
         dag_body,
         dag_imported_names,
-        dag_parent_type_decls,
         prefix,
         bindings,
         index_bindings,

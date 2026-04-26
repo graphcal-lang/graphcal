@@ -314,36 +314,10 @@ pub(super) fn process_deferred_inline_dag_includes(
                 &dag_dag_id,
             )?;
 
-        // Register parent scope type-system declarations in the DAG's registry.
-        // These come from `import .. { DimName, UnitName }` in the DAG body.
-        let mut dag_builder = dag_builder;
-        for parent_decl in &deferred.dag_parent_type_decls {
-            let parent_ast = graphcal_compiler::syntax::ast::File {
-                declarations: vec![parent_decl.clone()],
-            };
-            let all_names: HashSet<String> = match &parent_decl.kind {
-                DeclKind::BaseDimension(d) => std::iter::once(d.name.value.to_string()).collect(),
-                DeclKind::Dimension(d) => std::iter::once(d.name.value.to_string()).collect(),
-                DeclKind::Unit(u) => std::iter::once(u.name.value.to_string()).collect(),
-                DeclKind::Type(t) => std::iter::once(t.name.value.to_string()).collect(),
-                DeclKind::UnionType(t) => std::iter::once(t.name.value.to_string()).collect(),
-                DeclKind::Index(idx) => std::iter::once(idx.name.value.to_string()).collect(),
-                _ => HashSet::new(),
-            };
-            if !all_names.is_empty() {
-                let parent_dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
-                    std::path::Path::new(file_src.name()),
-                );
-                graphcal_compiler::ir::lower::register_selected_declarations(
-                    &parent_ast,
-                    &mut dag_builder,
-                    file_src,
-                    &all_names,
-                    &parent_dag_id,
-                )?;
-            }
-        }
-
+        // Per Concept 9, inline DAGs are strictly isolated: there are no
+        // parent-scope type-system declarations to register in the DAG's
+        // registry. Drop straight to merging the DAG's own registry into the
+        // importer's.
         // Merge the DAG's type-system declarations into the importer's registry.
         let dag_registry = dag_builder.build();
         merge_registry_into_builder(
