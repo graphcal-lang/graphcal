@@ -3,7 +3,7 @@
 use tower_lsp::lsp_types::{Location, Url};
 
 use crate::convert::span_to_range;
-use crate::resolve::{SymbolLocation, resolve_symbol_at};
+use crate::resolve::{SymbolLocation, definition_location, resolve_symbol_at};
 use crate::server::AnalysisResult;
 
 /// Find all references to the symbol at the given byte offset.
@@ -35,31 +35,10 @@ pub fn references(
         })
         .collect();
 
-    // Include the definition location if requested.
-    if include_declaration {
-        let declaration_location = analysis
-            .symbol_table
-            .definitions
-            .get(target_key)
-            .filter(|def| def.is_navigable())
-            .map(|def| Location {
-                uri: uri.clone(),
-                range: span_to_range(&analysis.source, def.name_span),
-            })
-            .or_else(|| {
-                analysis
-                    .imported_definitions
-                    .get(target_key)
-                    .filter(|imported| !imported.definition.name_span.is_empty())
-                    .map(|imported| Location {
-                        uri: imported.uri.clone(),
-                        range: span_to_range(&imported.source, imported.definition.name_span),
-                    })
-            });
-
-        if let Some(loc) = declaration_location {
-            locations.push(loc);
-        }
+    if include_declaration
+        && let Some(loc) = definition_location(&resolved.location, uri, &analysis.source)
+    {
+        locations.push(loc);
     }
 
     if locations.is_empty() {

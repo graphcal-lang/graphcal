@@ -42,102 +42,74 @@ pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<Comple
     if items.is_empty() { None } else { Some(items) }
 }
 
-/// Complete param, node, and const node names (after `@`).
-fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
+/// Build completion items for definitions whose category maps to a kind
+/// via `category_to_kind`. Definitions without a `name_span` are skipped
+/// (they are synthetic / not user-visible).
+fn build_definition_items(
+    analysis: &AnalysisResult,
+    category_to_kind: impl Fn(SymbolCategory) -> Option<CompletionItemKind>,
+) -> Vec<CompletionItem> {
     all_definitions(analysis)
-        .filter(|def| {
-            matches!(
-                def.category,
-                SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
-            )
-        })
         .filter(|def| !def.name_span.is_empty())
-        .map(|def| CompletionItem {
-            label: def.name.clone(),
-            kind: Some(CompletionItemKind::VARIABLE),
-            detail: def.type_description.clone(),
-            ..Default::default()
+        .filter_map(|def| {
+            let kind = category_to_kind(def.category)?;
+            Some(CompletionItem {
+                label: def.name.clone(),
+                kind: Some(kind),
+                detail: def.type_description.clone(),
+                ..Default::default()
+            })
         })
         .collect()
 }
 
-/// Complete type names (after `:`).
-fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    // Built-in type keywords.
-    let mut items: Vec<CompletionItem> = TYPE_KEYWORDS
+/// Build completion items for static keyword lists (always `KEYWORD` kind).
+fn keyword_items(keywords: &[&str]) -> Vec<CompletionItem> {
+    keywords
         .iter()
         .map(|kw| CompletionItem {
             label: (*kw).to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
         })
-        .collect();
+        .collect()
+}
 
-    items.extend(
-        all_definitions(analysis)
-            .filter(|def| !def.name_span.is_empty())
-            .filter_map(|def| {
-                let kind = match def.category {
-                    SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
-                    SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
-                    SymbolCategory::Index => Some(CompletionItemKind::ENUM),
-                    _ => None,
-                }?;
-                Some(CompletionItem {
-                    label: def.name.clone(),
-                    kind: Some(kind),
-                    detail: def.type_description.clone(),
-                    ..Default::default()
-                })
-            }),
-    );
+/// Complete param, node, and const node names (after `@`).
+fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
+    build_definition_items(analysis, |cat| match cat {
+        SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const => {
+            Some(CompletionItemKind::VARIABLE)
+        }
+        _ => None,
+    })
+}
 
+/// Complete type names (after `:`).
+fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
+    let mut items = keyword_items(TYPE_KEYWORDS);
+    items.extend(build_definition_items(analysis, |cat| match cat {
+        SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
+        SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),
+        SymbolCategory::Index => Some(CompletionItemKind::ENUM),
+        _ => None,
+    }));
     items
 }
 
 /// Complete top-level keywords.
 fn complete_top_level() -> Vec<CompletionItem> {
-    TOP_LEVEL_KEYWORDS
-        .iter()
-        .map(|kw| CompletionItem {
-            label: (*kw).to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
-        })
-        .collect()
+    keyword_items(TOP_LEVEL_KEYWORDS)
 }
 
 /// Complete expression-level items: constants, functions, boolean keywords.
 fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    // Boolean keywords.
-    let mut items: Vec<CompletionItem> = ["true", "false"]
-        .iter()
-        .map(|kw| CompletionItem {
-            label: (*kw).to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
-        })
-        .collect();
-
-    // Constants and functions from both local and imported definitions.
-    // Imported definitions never have BuiltinConst/BuiltinFn categories,
-    // so the filter is safe to apply uniformly.
-    items.extend(all_definitions(analysis).filter_map(|def| {
-        let kind = match def.category {
-            SymbolCategory::Const | SymbolCategory::BuiltinConst => {
-                Some(CompletionItemKind::CONSTANT)
-            }
-            SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
-            _ => None,
-        }?;
-        Some(CompletionItem {
-            label: def.name.clone(),
-            kind: Some(kind),
-            detail: def.type_description.clone(),
-            ..Default::default()
-        })
+    let mut items = keyword_items(&["true", "false"]);
+    items.extend(build_definition_items(analysis, |cat| match cat {
+        SymbolCategory::Const | SymbolCategory::BuiltinConst => Some(CompletionItemKind::CONSTANT),
+        SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
+        _ => None,
     }));
-
     items
 }
 

@@ -921,6 +921,38 @@ fn collect_import_or_include_names(
     }
 }
 
+/// Register an expression-scoped local variable: build the `SymbolKey`,
+/// insert a `LocalVar` definition into the table, and bind the name in the
+/// current scope. Used by `Scan` and `Unfold`, which both bind two locals
+/// the same way and only differ in `kind` and the cosmetic `detail` text.
+fn register_local_var(
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+    kind: ExprScopeKind,
+    offset: usize,
+    name: &graphcal_compiler::syntax::ast::Ident,
+    detail: &str,
+) {
+    let key = SymbolKey::ExprScoped {
+        kind,
+        offset,
+        local: name.name.clone(),
+    };
+    table.insert_definition(
+        key.clone(),
+        DefinitionInfo {
+            name: name.name.clone(),
+            category: SymbolCategory::LocalVar,
+            name_span: name.span,
+            decl_span: name.span,
+            type_description: None,
+            detail: Some(detail.to_string()),
+            visibility: None,
+        },
+    );
+    scopes.insert(name.name.clone(), key);
+}
+
 /// Collect references from an expression, tracking local scopes.
 #[expect(
     clippy::too_many_lines,
@@ -1171,42 +1203,22 @@ fn collect_expr_refs(
             collect_expr_refs(init, table, scopes);
             scopes.push();
             let scan_offset = expr.span.offset();
-            let acc_key = SymbolKey::ExprScoped {
-                kind: ExprScopeKind::Scan,
-                offset: scan_offset,
-                local: acc_name.name.clone(),
-            };
-            let val_key = SymbolKey::ExprScoped {
-                kind: ExprScopeKind::Scan,
-                offset: scan_offset,
-                local: val_name.name.clone(),
-            };
-            table.insert_definition(
-                acc_key.clone(),
-                DefinitionInfo {
-                    name: acc_name.name.clone(),
-                    category: SymbolCategory::LocalVar,
-                    name_span: acc_name.span,
-                    decl_span: acc_name.span,
-                    type_description: None,
-                    detail: Some("scan accumulator".to_string()),
-                    visibility: None,
-                },
+            register_local_var(
+                table,
+                scopes,
+                ExprScopeKind::Scan,
+                scan_offset,
+                acc_name,
+                "scan accumulator",
             );
-            table.insert_definition(
-                val_key.clone(),
-                DefinitionInfo {
-                    name: val_name.name.clone(),
-                    category: SymbolCategory::LocalVar,
-                    name_span: val_name.span,
-                    decl_span: val_name.span,
-                    type_description: None,
-                    detail: Some("scan value".to_string()),
-                    visibility: None,
-                },
+            register_local_var(
+                table,
+                scopes,
+                ExprScopeKind::Scan,
+                scan_offset,
+                val_name,
+                "scan value",
             );
-            scopes.insert(acc_name.name.clone(), acc_key);
-            scopes.insert(val_name.name.clone(), val_key);
             collect_expr_refs(body, table, scopes);
             scopes.pop();
         }
@@ -1219,42 +1231,22 @@ fn collect_expr_refs(
             collect_expr_refs(init, table, scopes);
             scopes.push();
             let unfold_offset = expr.span.offset();
-            let prev_key = SymbolKey::ExprScoped {
-                kind: ExprScopeKind::Unfold,
-                offset: unfold_offset,
-                local: prev_name.name.clone(),
-            };
-            let curr_key = SymbolKey::ExprScoped {
-                kind: ExprScopeKind::Unfold,
-                offset: unfold_offset,
-                local: curr_name.name.clone(),
-            };
-            table.insert_definition(
-                prev_key.clone(),
-                DefinitionInfo {
-                    name: prev_name.name.clone(),
-                    category: SymbolCategory::LocalVar,
-                    name_span: prev_name.span,
-                    decl_span: prev_name.span,
-                    type_description: None,
-                    detail: Some("unfold previous step".to_string()),
-                    visibility: None,
-                },
+            register_local_var(
+                table,
+                scopes,
+                ExprScopeKind::Unfold,
+                unfold_offset,
+                prev_name,
+                "unfold previous step",
             );
-            table.insert_definition(
-                curr_key.clone(),
-                DefinitionInfo {
-                    name: curr_name.name.clone(),
-                    category: SymbolCategory::LocalVar,
-                    name_span: curr_name.span,
-                    decl_span: curr_name.span,
-                    type_description: None,
-                    detail: Some("unfold current step".to_string()),
-                    visibility: None,
-                },
+            register_local_var(
+                table,
+                scopes,
+                ExprScopeKind::Unfold,
+                unfold_offset,
+                curr_name,
+                "unfold current step",
             );
-            scopes.insert(prev_name.name.clone(), prev_key);
-            scopes.insert(curr_name.name.clone(), curr_key);
             collect_expr_refs(body, table, scopes);
             scopes.pop();
         }
