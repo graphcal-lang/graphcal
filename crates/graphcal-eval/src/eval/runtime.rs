@@ -582,10 +582,10 @@ fn invert_indexed_variants(
 
 /// Format a list of indexed paths for assertion failure messages.
 ///
-/// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
+/// Each path is a slice of `(IndexName, VariantName)` index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
-fn format_indexed_paths(paths: &[&Vec<(IndexName, VariantName)>], is_multi_index: bool) -> String {
+fn format_indexed_paths(paths: &[&[(IndexName, VariantName)]], is_multi_index: bool) -> String {
     let formatted: Vec<String> = if is_multi_index {
         paths
             .iter()
@@ -636,9 +636,9 @@ fn check_indexed_assert_with_expected_fail(
                 if is_expected_fail_key {
                     // This was an expected-fail key but the value is false after inversion,
                     // meaning the original was true → unexpected pass
-                    unexpected_passes.push(path);
+                    unexpected_passes.push(path.as_slice());
                 } else {
-                    unexpected_fails.push(path);
+                    unexpected_fails.push(path.as_slice());
                 }
             }
 
@@ -687,7 +687,10 @@ pub(super) fn check_indexed_assert(
             AssertResult::Fail {
                 message: format!(
                     "failed at {}",
-                    format_indexed_paths(&paths.iter().collect::<Vec<_>>(), is_multi_index)
+                    format_indexed_paths(
+                        &paths.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                        is_multi_index,
+                    )
                 ),
             }
         }
