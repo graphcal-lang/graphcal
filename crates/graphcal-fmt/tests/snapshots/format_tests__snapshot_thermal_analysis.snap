@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 486
 expression: formatted
 ---
 // thermal_analysis.gcl -- Spacecraft thermal node network
@@ -161,8 +160,8 @@ node total_dissipation: Power[OrbitCondition] = for oc: OrbitCondition {
 node total_heater_power: Power = sum(for n: ThermalNode { @heater_power_budget[n] });
 
 // --- Temperature range per node ---
-param temp_max: Temperature[ThermalNode] = for n: ThermalNode { @temp_limits[n, Limit::Max] };
-param temp_min: Temperature[ThermalNode] = for n: ThermalNode { @temp_limits[n, Limit::Min] };
+param temp_max: Temperature[ThermalNode] = for n: ThermalNode { @temp_limits[n, Limit.Max] };
+param temp_min: Temperature[ThermalNode] = for n: ThermalNode { @temp_limits[n, Limit.Min] };
 node temp_range: Temperature[ThermalNode] = for n: ThermalNode { @temp_max[n] - @temp_min[n] };
 
 // --- Per-node radiative capacity (simplified) ---

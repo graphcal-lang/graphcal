@@ -289,7 +289,6 @@ impl<S: GraphRefSink> ExprVisitor for GraphRefVisitor<'_, S> {
         }
         Ok(())
     }
-
 }
 
 /// Sink that stores every observed ref name as a `String` (qualified refs drop the module).

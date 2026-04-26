@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 485
 expression: formatted
 ---
 // power_budget.gcl -- Spacecraft power subsystem budget
@@ -99,7 +98,7 @@ node peak_power: Power = max(for m: OpMode { @wall_plug_power[m] });
 node sa_margin: Power = @solar_array_power - @peak_power;
 
 // --- Eclipse energy requirement (worst-case eclipse mode) ---
-param eclipse_mode_power: Power = @wall_plug_power[OpMode::NominalEclipse];
+param eclipse_mode_power: Power = @wall_plug_power[OpMode.NominalEclipse];
 node eclipse_energy: Energy = @eclipse_mode_power * @eclipse_duration;
 
 // --- Battery depth-of-discharge ---

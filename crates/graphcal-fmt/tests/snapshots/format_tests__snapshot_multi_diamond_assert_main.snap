@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // main.gcl -- diamond include: both left and right include shared
-include "./left.gcl" { doubled };
-include "./right.gcl" { tripled };
+import left.{ doubled };
+import right.{ tripled };
 
 node total: Dimensionless = @doubled + @tripled;

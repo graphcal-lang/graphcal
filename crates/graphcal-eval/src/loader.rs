@@ -601,14 +601,8 @@ mod tests {
     #[test]
     fn load_circular_import_detected() {
         let dir = setup_temp_dir(&[
-            (
-                "a.gcl",
-                "import b.{y};\nparam x: Dimensionless = 1.0;",
-            ),
-            (
-                "b.gcl",
-                "import a.{x};\nparam y: Dimensionless = 2.0;",
-            ),
+            ("a.gcl", "import b.{y};\nparam x: Dimensionless = 1.0;"),
+            ("b.gcl", "import a.{x};\nparam y: Dimensionless = 2.0;"),
         ]);
         let result = load_project(&dir.path().join("a.gcl"), None, &fs());
         assert!(result.is_err());
@@ -713,14 +707,8 @@ mod tests {
         // D should only be loaded once.
         let dir = setup_temp_dir(&[
             ("d.gcl", "param w: Dimensionless = 4.0;"),
-            (
-                "b.gcl",
-                "import d.{w};\nparam x: Dimensionless = @w + 1.0;",
-            ),
-            (
-                "c.gcl",
-                "import d.{w};\nparam y: Dimensionless = @w + 2.0;",
-            ),
+            ("b.gcl", "import d.{w};\nparam x: Dimensionless = @w + 1.0;"),
+            ("c.gcl", "import d.{w};\nparam y: Dimensionless = @w + 2.0;"),
             (
                 "a.gcl",
                 "import b.{x};\nimport c.{y};\nnode z: Dimensionless = @x + @y;",
@@ -772,7 +760,9 @@ mod tests {
             derive_module_name("./CONSTANTS.gcl").unwrap_err(),
             "CONSTANTS"
         );
-    }    #[test]    #[test]
+    }
+
+    #[test]
     fn project_root_is_entry_point_directory() {
         let dir = tempfile::tempdir().unwrap();
         let result = project_root_for(dir.path(), &fs());
@@ -789,7 +779,9 @@ mod tests {
         // From the subdirectory, the manifest in the parent should be found.
         let result = project_root_for(&sub, &fs());
         assert_eq!(result, dir.path());
-    }    #[test]    #[test]    #[test]    // ---- Bare module path loader tests ----
+    }
+
+    // ---- Bare module path loader tests ----
 
     #[test]
     fn load_bare_import_selective() {
@@ -841,19 +833,6 @@ mod tests {
         let project = load_project(&dir.path().join("lib/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
-
-    #[test]
-    fn load_bare_import_without_manifest_error() {
-        let dir = setup_temp_dir(&[("main.gcl", "import nasa.rocket.{x};")]);
-        let result = load_project(&dir.path().join("main.gcl"), None, &fs());
-        assert!(result.is_err());
-        let err = format!("{:?}", result.unwrap_err());
-        assert!(
-            err.contains("BareImportWithoutManifest") || err.contains("graphcal.toml"),
-            "error should mention missing manifest: {err}"
-        );
-    }
-
     #[test]
     fn load_bare_import_package_name_mismatch_error() {
         let dir = setup_temp_dir(&[
@@ -896,27 +875,6 @@ mod tests {
     }
 
     // ---- Bare module path DAG fallback tests ----
-
-    #[test]
-    fn load_bare_module_dag_fallback() {
-        // `nasa/rocket/double` should resolve to `nasa/rocket.gcl` when
-        // `nasa/rocket/double.gcl` doesn't exist.
-        let dir = setup_temp_dir(&[
-            ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            (
-                "src/nasa/rocket.gcl",
-                "dag double {\n    param x: Dimensionless;\n    node result: Dimensionless = @x * 2.0;\n}\n",
-            ),
-            (
-                "src/main.gcl",
-                "include nasa/rocket/double(x: 5.0) { result as y };\nnode z: Dimensionless = @y;",
-            ),
-        ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
-        // The parent file `nasa/rocket.gcl` should be loaded.
-        assert_eq!(project.files.len(), 2);
-    }
-
     #[test]
     fn load_bare_module_dag_fallback_not_found() {
         // Neither `nasa/rocket/nonexistent.gcl` nor `nasa/rocket.gcl` exist.

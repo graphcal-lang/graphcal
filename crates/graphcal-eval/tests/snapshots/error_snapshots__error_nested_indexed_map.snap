@@ -7,11 +7,11 @@ map literal element type must be a value type, not an indexed type; use tuple ke
 Begin snippet for nested_indexed_map.gcl starting at line 13, column 1
 
 snippet line 13: param bad_nested: Velocity[Maneuver, Phase] = {
-snippet line 14:     Maneuver::Departure: {
-    label starting at line 14, column 26: error here
-snippet line 15:         Phase::Coast: 0.0 m/s,
-snippet line 16:         Phase::Burn: 2.46 km/s,
+snippet line 14:     Maneuver.Departure: {
+    label starting at line 14, column 25: error here
+snippet line 15:         Phase.Coast: 0.0 m/s,
+snippet line 16:         Phase.Burn: 2.46 km/s,
 snippet line 17:     },
     label ending at line 17, column 5: error here
-snippet line 18:     Maneuver::Correction: {
+snippet line 18:     Maneuver.Correction: {
 diagnostic code: graphcal::E001

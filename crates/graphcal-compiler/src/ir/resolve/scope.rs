@@ -38,7 +38,6 @@ where
         }
         Ok(())
     }
-
 }
 
 /// Check that an expression contains no runtime `@` references (for const expressions).

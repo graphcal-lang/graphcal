@@ -61,26 +61,26 @@ dag compute {
 // Variant-specific scaling extracted to param (variant literals not allowed in nodes)
 param scale: Dimensionless[Maneuver] = {
     // main engine burn
-    Maneuver::Departure: 2.0,
+    Maneuver.Departure: 2.0,
     // small thruster
-    Maneuver::Correction: 0.5,
+    Maneuver.Correction: 0.5,
     // insertion burn
-    Maneuver::Insertion: 1.5,
+    Maneuver.Insertion: 1.5,
 };
 
 // Map literal with trailing comments
 param dv_map: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s, // departure
-    Maneuver::Correction: 0.12 km/s, // correction
-    Maneuver::Insertion: 1.83 km/s, // insertion
+    Maneuver.Departure: 2.46 km/s, // departure
+    Maneuver.Correction: 0.12 km/s, // correction
+    Maneuver.Insertion: 1.83 km/s, // insertion
 };
 
 // Map literal with leading comments
 param dv_map2: Velocity[Maneuver] = {
     // departure burn
-    Maneuver::Departure: 2.46 km/s,
+    Maneuver.Departure: 2.46 km/s,
     // correction burn
-    Maneuver::Correction: 0.12 km/s,
+    Maneuver.Correction: 0.12 km/s,
     // insertion burn
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };

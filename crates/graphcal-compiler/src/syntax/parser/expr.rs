@@ -1302,7 +1302,9 @@ mod tests {
         // not a qualified-graph-ref construct.
         match &node.value.kind {
             ExprKind::FieldAccess { expr: inner, field } => {
-                assert!(matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.as_str() == "stage"));
+                assert!(
+                    matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.as_str() == "stage")
+                );
                 assert_eq!(field.value.as_str(), "delta_v");
             }
             other => panic!("expected FieldAccess on GraphRef, got {other:?}"),

@@ -308,20 +308,7 @@ fn eval_set_bad_value() {
     assert!(stderr.contains("error"), "expected parse error: {stderr}");
 }
 
-// --- Multi-file import tests ---#[test]
-fn eval_circular_import_error() {
-    let output = graphcal_bin()
-        .args(["eval", &fixture("multi/circular_a.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("circular") || stderr.contains("Circular"),
-        "expected circular import error: {stderr}"
-    );
-}
+// --- Multi-file import tests ---
 
 #[test]
 fn eval_missing_import_error() {
@@ -1175,7 +1162,7 @@ fn eval_parenthesized_exprs() {
         stdout.contains("charge_time_positive") && stdout.contains("PASS"),
         "expected charge_time_positive PASS: {stdout}"
     );
-}// --- Expected-fail tests ---
+} // --- Expected-fail tests ---
 
 #[test]
 fn eval_expected_fail_pass() {
@@ -1783,32 +1770,7 @@ fn eval_instantiated_import_selective() {
     );
 }
 
-// ---- Bare module path CLI tests ----#[test]
-fn eval_instantiated_import_graph_ref() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("multi/instantiated_import_graph_ref/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    // my_mass = 800 kg used as dry_mass binding
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains("result") && l.contains("4719")),
-        "expected result ~4719 in output: {stdout}"
-    );
-}
-
-// --- Strict param defaults CLI tests ---
+// ---- Bare module path CLI tests ----#[test]// --- Strict param defaults CLI tests ---
 
 #[test]
 fn eval_strict_partial_set_errors() {

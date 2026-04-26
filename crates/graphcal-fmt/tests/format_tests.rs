@@ -1044,13 +1044,13 @@ index Scenario = { Nominal, Contingency };
 index Phase = { Launch, Cruise, Arrival };
 index Maneuver = { Departure, Correction, Insertion };
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
-    [Scenario::Nominal] // nominal scenario
+    [Scenario.Nominal] // nominal scenario
            : Departure, Correction, Insertion;
     Launch:  5000.0,        0.0,       0.0;
     Cruise:     0.0,     4500.0,       0.0;
     Arrival:    0.0,        0.0,    4000.0;
 
-    [Scenario::Contingency] // contingency scenario
+    [Scenario.Contingency] // contingency scenario
            : Departure, Correction, Insertion;
     Launch:  4800.0,        0.0,       0.0;
     Cruise:     0.0,     4200.0,       0.0;
@@ -1071,13 +1071,13 @@ param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase,
     for line in formatted.lines() {
         if line.contains("// nominal scenario") {
             assert!(
-                line.contains("[Scenario::Nominal]"),
+                line.contains("[Scenario.Nominal]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }
         if line.contains("// contingency scenario") {
             assert!(
-                line.contains("[Scenario::Contingency]"),
+                line.contains("[Scenario.Contingency]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }

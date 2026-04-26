@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 484
 expression: formatted
 ---
 // variant_match.gcl -- Match expressions on loop variables (index variants)
@@ -9,16 +8,16 @@ pub dim Velocity = Length / Time;
 pub index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 // Variant-specific scaling extracted to param (match not allowed in nodes)
 param scale_factor: Dimensionless[Maneuver] = {
-    Maneuver::Departure: 2.0,
-    Maneuver::Correction: 0.5,
-    Maneuver::Insertion: 1.5,
+    Maneuver.Departure: 2.0,
+    Maneuver.Correction: 0.5,
+    Maneuver.Insertion: 1.5,
 };
 
 // Use param result in computation
@@ -28,18 +27,18 @@ node scaled_dv: Velocity[Maneuver] = for m: Maneuver { @delta_v[m] * @scale_fact
 pub index Phase = { Coast, Burn };
 
 param base_cost: Velocity[Maneuver, Phase] = {
-    (Maneuver::Departure, Phase::Coast): 0.0 m/s,
-    (Maneuver::Departure, Phase::Burn): 2.46 km/s,
-    (Maneuver::Correction, Phase::Coast): 0.0 m/s,
-    (Maneuver::Correction, Phase::Burn): 0.12 km/s,
-    (Maneuver::Insertion, Phase::Coast): 0.0 m/s,
-    (Maneuver::Insertion, Phase::Burn): 1.83 km/s,
+    (Maneuver.Departure, Phase.Coast): 0.0 m/s,
+    (Maneuver.Departure, Phase.Burn): 2.46 km/s,
+    (Maneuver.Correction, Phase.Coast): 0.0 m/s,
+    (Maneuver.Correction, Phase.Burn): 0.12 km/s,
+    (Maneuver.Insertion, Phase.Coast): 0.0 m/s,
+    (Maneuver.Insertion, Phase.Burn): 1.83 km/s,
 };
 
 // Phase-specific multiplier extracted to param (match not allowed in nodes)
 param phase_multiplier: Dimensionless[Phase] = {
-    Phase::Coast: 0.0,
-    Phase::Burn: 1.1,
+    Phase.Coast: 0.0,
+    Phase.Burn: 1.1,
 };
 node adjusted_cost: Velocity[Maneuver, Phase] = for m: Maneuver, p: Phase {
     @base_cost[m, p] * @phase_multiplier[p]

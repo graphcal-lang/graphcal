@@ -1,21 +1,20 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 481
 expression: formatted
 ---
 // assertions_indexed.gcl -- Indexed Bool assertion test
 pub index Mode = { Normal, Eco, Boost };
 
 param power_gen: Dimensionless[Mode] = {
-    Mode::Normal: 100.0,
-    Mode::Eco: 50.0,
-    Mode::Boost: 200.0,
+    Mode.Normal: 100.0,
+    Mode.Eco: 50.0,
+    Mode.Boost: 200.0,
 };
 
 param power_use: Dimensionless[Mode] = {
-    Mode::Normal: 80.0,
-    Mode::Eco: 30.0,
-    Mode::Boost: 250.0,
+    Mode.Normal: 80.0,
+    Mode.Eco: 30.0,
+    Mode.Boost: 250.0,
 };
 
 // Per-variant check: Boost will fail because 250 > 200
@@ -25,27 +24,27 @@ assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
 pub index Phase = { Launch, Cruise, Arrival };
 
 param threshold: Dimensionless[Mode, Phase] = {
-    (Mode::Normal, Phase::Launch): 10.0,
-    (Mode::Normal, Phase::Cruise): 20.0,
-    (Mode::Normal, Phase::Arrival): 30.0,
-    (Mode::Eco, Phase::Launch): 5.0,
-    (Mode::Eco, Phase::Cruise): 15.0,
-    (Mode::Eco, Phase::Arrival): 25.0,
-    (Mode::Boost, Phase::Launch): 50.0,
-    (Mode::Boost, Phase::Cruise): 60.0,
-    (Mode::Boost, Phase::Arrival): 70.0,
+    (Mode.Normal, Phase.Launch): 10.0,
+    (Mode.Normal, Phase.Cruise): 20.0,
+    (Mode.Normal, Phase.Arrival): 30.0,
+    (Mode.Eco, Phase.Launch): 5.0,
+    (Mode.Eco, Phase.Cruise): 15.0,
+    (Mode.Eco, Phase.Arrival): 25.0,
+    (Mode.Boost, Phase.Launch): 50.0,
+    (Mode.Boost, Phase.Cruise): 60.0,
+    (Mode.Boost, Phase.Arrival): 70.0,
 };
 
 param actual: Dimensionless[Mode, Phase] = {
-    (Mode::Normal, Phase::Launch): 8.0,
-    (Mode::Normal, Phase::Cruise): 25.0,
-    (Mode::Normal, Phase::Arrival): 28.0,
-    (Mode::Eco, Phase::Launch): 3.0,
-    (Mode::Eco, Phase::Cruise): 10.0,
-    (Mode::Eco, Phase::Arrival): 30.0,
-    (Mode::Boost, Phase::Launch): 55.0,
-    (Mode::Boost, Phase::Cruise): 58.0,
-    (Mode::Boost, Phase::Arrival): 75.0,
+    (Mode.Normal, Phase.Launch): 8.0,
+    (Mode.Normal, Phase.Cruise): 25.0,
+    (Mode.Normal, Phase.Arrival): 28.0,
+    (Mode.Eco, Phase.Launch): 3.0,
+    (Mode.Eco, Phase.Cruise): 10.0,
+    (Mode.Eco, Phase.Arrival): 30.0,
+    (Mode.Boost, Phase.Launch): 55.0,
+    (Mode.Boost, Phase.Cruise): 58.0,
+    (Mode.Boost, Phase.Arrival): 75.0,
 };
 
 // Multi-index check: fails where actual >= threshold

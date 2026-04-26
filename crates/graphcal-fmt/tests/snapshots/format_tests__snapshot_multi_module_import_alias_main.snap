@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // Module import with alias
-import "./constants.gcl" as c;
+import constants as c;
 
 dim Acceleration = Length / Time^2;
 
-node g: Acceleration = @c::g0;
+node g: Acceleration = @c.g0;

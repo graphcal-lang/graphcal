@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 464
 expression: formatted
 ---
 // indexed.gcl -- Phase 5 milestone: indexed values
@@ -12,36 +11,36 @@ pub index Maneuver = { Departure, Correction, Insertion };
 pub index Phase = { Launch, Cruise, Arrival };
 
 param spacecraft_mass: Mass[Phase, Maneuver] = for p: Phase, m: Maneuver {
-    if p == Phase::Launch && m == Maneuver::Departure {
+    if p == Phase.Launch && m == Maneuver.Departure {
         5000.0 kg
     } else {
-        if p == Phase::Cruise && m == Maneuver::Correction {
+        if p == Phase.Cruise && m == Maneuver.Correction {
             4500.0 kg
         } else {
-            if p == Phase::Arrival && m == Maneuver::Insertion { 4000.0 kg } else { 0.0 kg }
+            if p == Phase.Arrival && m == Maneuver.Insertion { 4000.0 kg } else { 0.0 kg }
         }
     }
 };
 
 // default for non-applicable combinations
 param spacecraft_mass2: Mass[Phase, Maneuver] = {
-    (Phase::Launch, Maneuver::Departure): 5000.0 kg,
-    (Phase::Launch, Maneuver::Correction): 0.0 kg,
-    (Phase::Launch, Maneuver::Insertion): 0.0 kg,
-    (Phase::Cruise, Maneuver::Departure): 0.0 kg,
-    (Phase::Cruise, Maneuver::Correction): 4500.0 kg,
-    (Phase::Cruise, Maneuver::Insertion): 0.0 kg,
-    (Phase::Arrival, Maneuver::Departure): 0.0 kg,
-    (Phase::Arrival, Maneuver::Correction): 0.0 kg,
-    (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
+    (Phase.Launch, Maneuver.Departure): 5000.0 kg,
+    (Phase.Launch, Maneuver.Correction): 0.0 kg,
+    (Phase.Launch, Maneuver.Insertion): 0.0 kg,
+    (Phase.Cruise, Maneuver.Departure): 0.0 kg,
+    (Phase.Cruise, Maneuver.Correction): 4500.0 kg,
+    (Phase.Cruise, Maneuver.Insertion): 0.0 kg,
+    (Phase.Arrival, Maneuver.Departure): 0.0 kg,
+    (Phase.Arrival, Maneuver.Correction): 0.0 kg,
+    (Phase.Arrival, Maneuver.Insertion): 4000.0 kg,
 };
 
 // default for non-applicable combinations
 // Indexed param: delta-v per maneuver
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 // for comprehension: double each delta-v
@@ -63,7 +62,7 @@ node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 node n_maneuvers: Dimensionless = count(for m: Maneuver { @delta_v[m] });
 
 // Direct variant access (extracted to param to avoid variant literal in node)
-param departure_maneuver: Velocity = @delta_v[Maneuver::Departure];
+param departure_maneuver: Velocity = @delta_v[Maneuver.Departure];
 node departure_dv: Velocity = @departure_maneuver;
 
 // Scan: cumulative delta-v

@@ -4,6 +4,6 @@ expression: formatted
 ---
 // main.gcl -- selective include; does NOT import the assertion explicitly
 // The assertion in lib.gcl should still be evaluated and reported.
-include "./lib.gcl" { doubled };
+import lib.{ doubled };
 
 node result: Dimensionless = @doubled + 1.0;

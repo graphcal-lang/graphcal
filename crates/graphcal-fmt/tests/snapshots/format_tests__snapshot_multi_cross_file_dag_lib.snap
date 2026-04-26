@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 640
 expression: formatted
 ---
 // lib.gcl -- defines a reusable DAG
@@ -9,7 +8,7 @@ pub dim Velocity = Length / Time;
 const node speed_of_sound: Velocity = 343.0 m/s;
 
 pub dag double_speed {
-    import .. { speed_of_sound };
+    import lib.{ speed_of_sound };
     
     param v: Velocity;
     

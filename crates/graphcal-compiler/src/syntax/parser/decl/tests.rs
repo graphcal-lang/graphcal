@@ -659,9 +659,7 @@ fn parse_import_brace_list_no_alias() {
 
 #[test]
 fn parse_import_brace_list_with_alias() {
-    let file = Parser::new("import helper.{x as y};")
-        .parse_file()
-        .unwrap();
+    let file = Parser::new("import helper.{x as y};").parse_file().unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
@@ -1065,7 +1063,8 @@ fn parse_attribute_group_arg() {
 
 #[test]
 fn parse_attribute_multiple_groups() {
-    let source = "#[expected_fail((Mode.Boost, Phase.Launch), (Mode.Eco, Phase.Cruise))]\nassert x = true;";
+    let source =
+        "#[expected_fail((Mode.Boost, Phase.Launch), (Mode.Eco, Phase.Cruise))]\nassert x = true;";
     let file = Parser::new(source).parse_file().unwrap();
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.args.len(), 2);

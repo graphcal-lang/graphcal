@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 506
 expression: formatted
 ---
 // expected_fail_multi_indexed_partial.gcl -- Bug reproducer for multi-index per-tuple-key expected_fail.
@@ -12,24 +11,24 @@ pub index Mode = { Normal, Eco, Boost };
 pub index Phase = { Launch, Cruise };
 
 param threshold: Dimensionless[Mode, Phase] = {
-    (Mode::Normal, Phase::Launch): 10.0,
-    (Mode::Normal, Phase::Cruise): 20.0,
-    (Mode::Eco, Phase::Launch): 5.0,
-    (Mode::Eco, Phase::Cruise): 15.0,
-    (Mode::Boost, Phase::Launch): 50.0,
-    (Mode::Boost, Phase::Cruise): 60.0,
+    (Mode.Normal, Phase.Launch): 10.0,
+    (Mode.Normal, Phase.Cruise): 20.0,
+    (Mode.Eco, Phase.Launch): 5.0,
+    (Mode.Eco, Phase.Cruise): 15.0,
+    (Mode.Boost, Phase.Launch): 50.0,
+    (Mode.Boost, Phase.Cruise): 60.0,
 };
 
 param actual: Dimensionless[Mode, Phase] = {
-    (Mode::Normal, Phase::Launch): 8.0,
-    (Mode::Normal, Phase::Cruise): 25.0,
-    (Mode::Eco, Phase::Launch): 3.0,
-    (Mode::Eco, Phase::Cruise): 20.0,
-    (Mode::Boost, Phase::Launch): 55.0,
-    (Mode::Boost, Phase::Cruise): 58.0,
+    (Mode.Normal, Phase.Launch): 8.0,
+    (Mode.Normal, Phase.Cruise): 25.0,
+    (Mode.Eco, Phase.Launch): 3.0,
+    (Mode.Eco, Phase.Cruise): 20.0,
+    (Mode.Boost, Phase.Launch): 55.0,
+    (Mode.Boost, Phase.Cruise): 58.0,
 };
 
 // Failures: (Normal, Cruise) 25>20, (Eco, Cruise) 20>15, (Boost, Launch) 55>50
 // Only (Normal, Cruise) and (Boost, Launch) are expected -- (Eco, Cruise) should still report
-#[expected_fail((Mode::Normal, Phase::Cruise), (Mode::Boost, Phase::Launch))]
+#[expected_fail((Mode.Normal, Phase.Cruise), (Mode.Boost, Phase.Launch))]
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };

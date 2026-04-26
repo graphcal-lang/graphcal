@@ -111,14 +111,12 @@ pub fn eval_expr(
             index_name: index.value.clone(),
             variant: variant.value.clone(),
         }),
-        ExprKind::GraphRef(ident) => {
-            values.get(ident.value.as_str()).cloned().ok_or_else(|| {
-                ctx.eval_error(
-                    format!("undefined graph reference `@{}`", ident.value),
-                    expr.span,
-                )
-            })
-        }
+        ExprKind::GraphRef(ident) => values.get(ident.value.as_str()).cloned().ok_or_else(|| {
+            ctx.eval_error(
+                format!("undefined graph reference `@{}`", ident.value),
+                expr.span,
+            )
+        }),
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
             .get(ident.value.as_str())
             .cloned()
