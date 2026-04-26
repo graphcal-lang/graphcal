@@ -626,9 +626,7 @@ pub enum GraphcalError {
     #[error("unknown attribute `{name}`")]
     #[diagnostic(
         code(graphcal::A007),
-        help(
-            "recognized attributes are `#[assumes(...)]`, `#[lazy]`, `#[expected_fail]`, and `#[allow_defaults]`"
-        )
+        help("recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`")
     )]
     UnknownAttribute {
         name: String,
@@ -732,31 +730,6 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("declared here without a default value")]
-        span: SourceSpan,
-    },
-
-    #[error("param `{name}` has a default value but was not explicitly provided")]
-    #[diagnostic(code(graphcal::O004), help("{help}"))]
-    DefaultParamNotProvided {
-        name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("has default but not explicitly provided")]
-        span: SourceSpan,
-        help: String,
-    },
-
-    #[error("`#[{attr_name}]` is not valid on `{kind}` declarations")]
-    #[diagnostic(
-        code(graphcal::A012),
-        help("`#[{attr_name}]` is only valid on `import` declarations with param bindings")
-    )]
-    InvalidAttributeTarget {
-        attr_name: String,
-        kind: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("not valid here")]
         span: SourceSpan,
     },
 
@@ -908,17 +881,6 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("kind mismatch")]
         span: SourceSpan,
-    },
-
-    #[error("index `{name}` has a default but was not explicitly bound")]
-    #[diagnostic(code(graphcal::M019), help("{help}"))]
-    DefaultIndexNotProvided {
-        name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("has default but not explicitly bound")]
-        span: SourceSpan,
-        help: String,
     },
 
     #[error(

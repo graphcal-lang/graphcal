@@ -1,7 +1,6 @@
 // main.gcl -- instantiated import: override one param, selective import
 dim Velocity = Length / Time;
 
-#[allow_defaults]
 include rocket(dry_mass: 800.0 kg).{ delta_v };
 
 node result: Velocity = @delta_v;

@@ -49,30 +49,13 @@ graphcal eval [OPTIONS] <FILE>
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
-| `--allow-defaults` | Allow params with defaults to keep their defaults when using `--set`/`--input` |
 | `--no-assert` | Skip assertion checking |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print Vega-Lite JSON) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
-### Strict Parameter Override Mode
-
-When you use `--set` or `--input` to override any parameter, Graphcal requires you to provide values for **all** parameters (including those with defaults). This prevents accidentally relying on stale default values when you intended to customize the computation.
-
-```bash
-# ERROR: isp is overridden but dry_mass and fuel_mass are not
-$ graphcal eval rocket.gcl --set 'isp=450.0 s'
-# error[graphcal::O004]: param `dry_mass` has a default value but was not explicitly provided
-
-# OK: all params are overridden
-$ graphcal eval rocket.gcl --set 'dry_mass=800.0 kg' --set 'fuel_mass=3200.0 kg' --set 'isp=450.0 s'
-
-# OK: opt out of strict mode with --allow-defaults
-$ graphcal eval rocket.gcl --set 'isp=450.0 s' --allow-defaults
-
-# OK: no overrides at all → defaults are used freely
-$ graphcal eval rocket.gcl
-```
+Params not given via `--set` or `--input` keep their declared defaults.
+Params declared without a default (required params) must be provided.
 
 **Exit codes:**
 

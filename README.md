@@ -48,8 +48,8 @@ graphcal eval path/to/file.gcl
 # JSON output
 graphcal eval path/to/file.gcl --format json
 
-# Override param values (all params must be provided, or use --allow-defaults)
-graphcal eval path/to/file.gcl --set 'isp=450.0 s' --allow-defaults
+# Override param values (params not overridden keep their defaults)
+graphcal eval path/to/file.gcl --set 'isp=450.0 s'
 
 # Override params from a JSON file
 graphcal eval path/to/file.gcl --input params.json
@@ -92,7 +92,7 @@ node transfer_time: Time = @storage / @rate;
 
 ### Reactive computation graph
 
-Three declaration kinds -- `param` (inputs), `node` (computed), `const node` (compile-time) -- form a DAG that is automatically evaluated in dependency order. A `param` can have a default value or be **required** (no `= value`), in which case it must be provided via `--set`, `--input`, or a parameterized import binding. Override any `param` at the command line with `--set` or `--input`. When any override is provided, all params must be explicitly supplied (use `--allow-defaults` to opt out).
+Three declaration kinds -- `param` (inputs), `node` (computed), `const node` (compile-time) -- form a DAG that is automatically evaluated in dependency order. A `param` can have a default value or be **required** (no `= value`), in which case it must be provided via `--set`, `--input`, or a parameterized import binding. Override any `param` at the command line with `--set` or `--input`; params not overridden keep their declared defaults.
 
 ```sh
 graphcal eval rocket.gcl --set 'dry_mass=800.0 kg' --set 'fuel_mass=3200.0 kg' --set 'isp=450.0 s'
@@ -703,10 +703,10 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-Imported params can be overridden at the command line (all params must be provided, or use `--allow-defaults`):
+Imported params can be overridden at the command line (params not overridden keep their defaults):
 
 ```sh
-$ graphcal eval main.gcl --set 'isp=450.0 s' --allow-defaults
+$ graphcal eval main.gcl --set 'isp=450.0 s'
 g0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg

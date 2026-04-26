@@ -258,86 +258,10 @@ pub(super) fn evaluate_and_store_file(
 pub(super) fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
     // Pre-compute override routing: map each override name to the file that owns
     // the param. Walk root file's imports to find the owning file for each override.
     let override_targets = route_overrides_to_files(project, overrides)?;
-
-    // Strict param check: when overrides are provided and --allow-defaults is not set,
-    // all overridable params (root file + selectively imported) must be explicitly provided.
-    if !overrides.is_empty() && !allow_defaults {
-        let root_file = &project.files[&project.root];
-        let root_src = &root_file.named_source;
-
-        // Check root file's own params
-        for decl in &root_file.ast.declarations {
-            if let DeclKind::Param(p) = &decl.kind
-                && p.value.is_some()
-            {
-                let is_overridden = override_targets.values().any(|(target_dag_id, orig_name)| {
-                    *target_dag_id == project.root && orig_name.as_str() == p.name.value.as_str()
-                });
-                if !is_overridden {
-                    return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
-                        name: p.name.value.to_string(),
-                        help: format!(
-                            "provide via `--set '{name}=<value>'` or use `--allow-defaults`",
-                            name = p.name.value,
-                        ),
-                        src: root_src.clone(),
-                        span: decl.span.into(),
-                    }));
-                }
-            }
-        }
-
-        // Check params from non-parameterized selective imports and includes
-        let selective_imports: Vec<_> = root_file
-            .imports_with_dag_ids()
-            .map(|(_, d, c)| (&d.kind, c))
-            .chain(root_file.includes_with_dag_ids().filter_map(|(_, d, c)| {
-                if d.param_bindings.is_empty() {
-                    Some((&d.kind, c))
-                } else {
-                    None
-                }
-            }))
-            .collect();
-        for (import_kind, import_canonical) in selective_imports {
-            if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = import_kind {
-                let dep_file = &project.files[import_canonical];
-                let dep_src = &dep_file.named_source;
-
-                // For each param in the dep that is selectively imported
-                for item in names {
-                    let orig_name = item.name.name.as_str();
-                    // Find the param declaration in the dep
-                    for dep_decl in &dep_file.ast.declarations {
-                        if let DeclKind::Param(p) = &dep_decl.kind
-                            && p.name.value.as_str() == orig_name
-                            && p.value.is_some()
-                        {
-                            let local_name = item.local_name();
-                            let is_overridden = overrides.keys().any(|k| k.as_str() == local_name);
-                            if !is_overridden {
-                                return Err(CompileError::Eval(
-                                    GraphcalError::DefaultParamNotProvided {
-                                        name: local_name.to_string(),
-                                        help: format!(
-                                            "provide via `--set '{local_name}=<value>'` or use `--allow-defaults`",
-                                        ),
-                                        src: dep_src.clone(),
-                                        span: dep_decl.span.into(),
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
         HashMap::new();

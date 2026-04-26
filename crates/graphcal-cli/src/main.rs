@@ -47,9 +47,6 @@ enum Commands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Allow params with default values to keep their defaults when using --set/--input
-        #[arg(long)]
-        allow_defaults: bool,
         /// Plot output mode: browser (default), json, or a file path for HTML output
         #[arg(long)]
         plot: Option<PlotOutput>,
@@ -127,7 +124,6 @@ fn main() {
             input_max_bytes,
             no_assert,
             root,
-            allow_defaults,
             plot: plot_output,
         } => {
             let overrides = match parse_overrides(&set, input.as_deref(), input_max_bytes) {
@@ -140,7 +136,6 @@ fn main() {
                 &overrides,
                 no_assert,
                 root.as_deref(),
-                allow_defaults,
                 plot_output.as_ref(),
             );
         }
@@ -174,7 +169,6 @@ fn handle_eval(
     overrides: &std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     no_assert: bool,
     root: Option<&Path>,
-    allow_defaults: bool,
     plot_output: Option<&PlotOutput>,
 ) {
     // Rooted sandbox: derive the project root from the loader's rules and
@@ -182,7 +176,7 @@ fn handle_eval(
     // precedence; otherwise walk up from `file`'s parent looking for
     // `graphcal.toml`, falling back to `file`'s parent.
     let fs = build_rooted_fs(file, root);
-    match compile_and_eval_project(file, overrides, root, allow_defaults, &fs) {
+    match compile_and_eval_project(file, overrides, root, &fs) {
         Ok(result) => {
             match format {
                 OutputFormat::Text => print_text(&result, no_assert),

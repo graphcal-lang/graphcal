@@ -483,9 +483,8 @@ pub fn compile_to_tir_from_project(
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-    allow_defaults: bool,
 ) -> Result<EvalResult, CompileError> {
-    pipeline::evaluate_project_perfile(project, overrides, allow_defaults)
+    pipeline::evaluate_project_perfile(project, overrides)
 }
 
 /// Full pipeline for multi-file projects with parameter overrides.
@@ -506,11 +505,10 @@ pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     project_root: Option<&Path>,
-    allow_defaults: bool,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::load_project(root_path, project_root, fs)?;
-    compile_and_eval_from_project(&project, overrides, allow_defaults)
+    compile_and_eval_from_project(&project, overrides)
 }
 
 /// Compile source to TIR without evaluating.

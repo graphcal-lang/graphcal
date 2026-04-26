@@ -113,7 +113,7 @@ fn build_dep_decl_index(decls: &[graphcal_compiler::syntax::ast::Declaration]) -
 /// post-lowering IR merging.
 #[expect(
     clippy::too_many_lines,
-    reason = "binding validation, scope registration, and allow_defaults check form a single cohesive pipeline"
+    reason = "binding validation and scope registration form a single cohesive pipeline"
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -384,7 +384,7 @@ pub(super) fn process_instantiated_include<'a>(
         }
     };
 
-    // Required indexes must always be bound (regardless of allow_defaults).
+    // Required indexes must always be bound.
     for dep_decl in &dep_loaded.ast.declarations {
         if let DeclKind::Index(idx) = &dep_decl.kind
             && idx.kind.is_required()
@@ -397,46 +397,6 @@ pub(super) fn process_instantiated_include<'a>(
                     span: include_decl.path.span().into(),
                 },
             ));
-        }
-    }
-
-    // Strict check: when any binding is provided, ALL params and indexes
-    // with defaults must be explicitly bound unless #[allow_defaults].
-    let allow_defaults = decl
-        .attributes
-        .iter()
-        .any(|a| a.name.name == "allow_defaults");
-    if !allow_defaults {
-        for dep_decl in &dep_loaded.ast.declarations {
-            if let DeclKind::Param(p) = &dep_decl.kind
-                && p.value.is_some()
-                && !bindings.contains_key(p.name.value.as_str())
-            {
-                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
-                    name: p.name.value.to_string(),
-                    help: format!(
-                        "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
-                        name = p.name.value,
-                    ),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                }));
-            }
-            // Indexes with defaults (Named/Range, not Required*) must also be bound.
-            if let DeclKind::Index(idx) = &dep_decl.kind
-                && !idx.kind.is_required()
-                && !index_bindings.contains_key(idx.name.value.as_str())
-            {
-                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
-                    name: idx.name.value.to_string(),
-                    help: format!(
-                        "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
-                        name = idx.name.value,
-                    ),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                }));
-            }
         }
     }
 
@@ -708,43 +668,6 @@ pub(super) fn process_inline_dag_include(
                     span: include_decl.path.span().into(),
                 },
             ));
-        }
-    }
-
-    let allow_defaults = decl
-        .attributes
-        .iter()
-        .any(|a| a.name.name == "allow_defaults");
-    if !allow_defaults {
-        for dep_decl in &dag_body.declarations {
-            if let DeclKind::Param(p) = &dep_decl.kind
-                && p.value.is_some()
-                && !bindings.contains_key(p.name.value.as_str())
-            {
-                return Err(CompileError::Eval(GraphcalError::DefaultParamNotProvided {
-                    name: p.name.value.to_string(),
-                    help: format!(
-                        "provide `{name} = <value>` in the include binding or add `#[allow_defaults]` to the include",
-                        name = p.name.value,
-                    ),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                }));
-            }
-            if let DeclKind::Index(idx) = &dep_decl.kind
-                && !idx.kind.is_required()
-                && !index_bindings.contains_key(idx.name.value.as_str())
-            {
-                return Err(CompileError::Eval(GraphcalError::DefaultIndexNotProvided {
-                    name: idx.name.value.to_string(),
-                    help: format!(
-                        "provide `{name} = <IndexName>` in the include binding or add `#[allow_defaults]` to the include",
-                        name = idx.name.value,
-                    ),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                }));
-            }
         }
     }
 

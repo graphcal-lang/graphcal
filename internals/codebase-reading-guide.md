@@ -426,10 +426,9 @@ Graphcal splits cross-file and DAG reuse into two keywords:
 
 Only `pub` items can be imported/included across files (V001).
 
-When an `include` has any bindings, Graphcal enters strict binding mode:
-all params and indexes with defaults must be bound explicitly unless the
-declaration has `#[allow_defaults]`. Required params/indexes must always be
-bound.
+Bindings on an `include` are optional for any param or index that has a
+default; unbound ones keep their declared defaults. Required params and
+indexes (declared without a default) must always be bound.
 
 Circular imports are detected during project loading via depth-first traversal
 with cycle tracking. Files are loaded in topological order (dependencies first).
