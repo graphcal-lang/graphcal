@@ -1389,3 +1389,81 @@ fn parse_pub_unclosed_paren_is_error() {
             .is_err()
     );
 }
+
+#[test]
+fn parse_plot_without_trailing_comma_after_last_field() {
+    let src = r#"plot p = {
+    mark: line,
+    encode: { x: 1.0, y: 2.0 },
+    title: "no trailing comma"
+};"#;
+    let file = Parser::new(src).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Plot(p) => {
+            assert_eq!(p.name.value.as_str(), "p");
+            assert_eq!(p.encodings.len(), 2);
+            assert_eq!(p.properties.len(), 1);
+        }
+        other => panic!("expected Plot, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_plot_encode_without_trailing_comma() {
+    let src = r"plot p = {
+    mark: point,
+    encode: { x: 1.0, y: 2.0 },
+};";
+    let file = Parser::new(src).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Plot(p) => assert_eq!(p.encodings.len(), 2),
+        other => panic!("expected Plot, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_plot_mark_properties_without_trailing_comma() {
+    let src = r"plot p = {
+    mark: line { stroke_width: 2.0, opacity: 0.5 },
+    encode: { x: 1.0 },
+};";
+    let file = Parser::new(src).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Plot(p) => {
+            assert_eq!(p.mark.properties.len(), 2);
+        }
+        other => panic!("expected Plot, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_figure_without_trailing_comma_after_last_field() {
+    let src = r#"figure f = {
+    plots: [a, b],
+    title: "tail"
+};"#;
+    let file = Parser::new(src).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Figure(f) => {
+            assert_eq!(f.plot_names.len(), 2);
+            assert_eq!(f.fields.len(), 1);
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_layer_without_trailing_comma_after_last_field() {
+    let src = r#"layer l = {
+    plots: [a, b],
+    title: "tail"
+};"#;
+    let file = Parser::new(src).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Layer(l) => {
+            assert_eq!(l.plot_names.len(), 2);
+            assert_eq!(l.fields.len(), 1);
+        }
+        other => panic!("expected Layer, got {other:?}"),
+    }
+}

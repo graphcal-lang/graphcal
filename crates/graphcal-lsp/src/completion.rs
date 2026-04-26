@@ -9,12 +9,10 @@ use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 /// Top-level declaration keywords.
 ///
 /// Mirrors the grammar keywords that can introduce a declaration at the file
-/// level. `fn` remains here for the impending function-syntax work; the
-/// obsolete `cat` / `range` entries from an earlier grammar experiment were
-/// dropped in 2026-04.
+/// level.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "param", "node", "const", "fn", "type", "dim", "unit", "index", "assert", "dag", "plot",
-    "figure", "layer", "import", "include",
+    "param", "node", "const", "type", "dim", "unit", "index", "assert", "dag", "plot", "figure",
+    "layer", "import", "include",
 ];
 
 /// Built-in type keywords available in type annotation position.
@@ -141,4 +139,31 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
     }));
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "test code")]
+    use super::TOP_LEVEL_KEYWORDS;
+
+    #[test]
+    fn top_level_keywords_do_not_include_removed_fn() {
+        assert!(
+            !TOP_LEVEL_KEYWORDS.contains(&"fn"),
+            "`fn` was removed from the language; completions must not suggest it"
+        );
+    }
+
+    #[test]
+    fn top_level_keywords_include_core_decl_kinds() {
+        for required in [
+            "param", "node", "const", "type", "dim", "unit", "index", "dag", "plot", "figure",
+            "layer", "import", "include",
+        ] {
+            assert!(
+                TOP_LEVEL_KEYWORDS.contains(&required),
+                "missing top-level keyword: {required}"
+            );
+        }
+    }
 }

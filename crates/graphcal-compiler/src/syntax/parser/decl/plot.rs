@@ -44,7 +44,11 @@ impl Parser<'_> {
                     });
                 }
             }
-            self.expect(Token::Comma)?;
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.expect(Token::Comma)?;
+            } else {
+                break;
+            }
         }
         self.expect(Token::RBrace)?;
 
@@ -106,7 +110,11 @@ impl Parser<'_> {
                     value,
                     span: prop_start.merge(prop_end),
                 });
-                self.expect(Token::Comma)?;
+                if self.lexer.peek() == Some(&Token::Comma) {
+                    self.expect(Token::Comma)?;
+                } else {
+                    break;
+                }
             }
             let (_, rbrace_span) = self.expect(Token::RBrace)?;
             rbrace_span
@@ -157,7 +165,11 @@ impl Parser<'_> {
                 value,
                 span: channel_span.merge(value_span),
             });
-            self.expect(Token::Comma)?;
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.expect(Token::Comma)?;
+            } else {
+                break;
+            }
         }
         self.expect(Token::RBrace)?;
 

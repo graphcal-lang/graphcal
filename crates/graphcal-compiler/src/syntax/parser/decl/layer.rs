@@ -44,7 +44,11 @@ impl Parser<'_> {
                     span: field_start.merge(field_end),
                 });
             }
-            self.expect(Token::Comma)?;
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.expect(Token::Comma)?;
+            } else {
+                break;
+            }
         }
         self.expect(Token::RBrace)?;
 

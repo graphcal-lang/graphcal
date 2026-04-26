@@ -622,13 +622,14 @@ fn format_tuple_keyed_entries(
 
 /// Collect imported definitions from a loaded project.
 ///
-/// For each `import` declaration in the root file, uses the loader-resolved
-/// canonical paths to look up the imported file in the project, and builds a
-/// symbol table from the imported file's AST to extract the definition info.
+/// For each `import` and `include` declaration in the root file, uses the
+/// loader-resolved DAG ids to look up the dependency in the project, and
+/// builds a symbol table from the imported file's AST to extract the
+/// definition info.
 ///
-/// This uses `LoadedFile::imports_with_paths()` to consume the same canonical
-/// import paths that the loader established, avoiding re-resolution and
-/// supporting both file-path and module-path imports.
+/// Selective items are keyed by their **local name** (alias if present,
+/// otherwise the original name), so that references using the alias resolve
+/// correctly in LSP features.
 fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
@@ -640,14 +641,21 @@ fn collect_imported_definitions(
         return result;
     };
 
-    // Cache symbol tables per canonical path to avoid re-building for files imported
-    // by multiple `import` declarations.
+    // Cache symbol tables per dag_id to avoid re-building for files referenced
+    // by multiple import/include declarations.
     let mut table_cache: HashMap<
         &graphcal_compiler::syntax::dag_id::DagId,
         (SymbolTable, Url, Arc<String>),
     > = HashMap::new();
 
-    for (_decl, import_decl, dag_id) in root_file.imports_with_dag_ids() {
+    let imports = root_file
+        .imports_with_dag_ids()
+        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+    let includes = root_file
+        .includes_with_dag_ids()
+        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+
+    for (path_display, kind, dag_id) in imports.chain(includes) {
         let Some(loaded_file) = project.files.get(dag_id) else {
             continue;
         };
@@ -658,35 +666,48 @@ fn collect_imported_definitions(
                 if let Some(tir) = tir {
                     symbol_table::enrich_from_tir(&mut table, tir);
                 }
-                // Url::from_file_path handles percent-encoding correctly (spaces, special chars).
-                // It only fails for non-absolute paths, which should not occur for loaded files.
-                let uri =
-                    Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| root_uri.clone());
+                let uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
+                    // Url::from_file_path only fails for non-absolute paths.
+                    // The loader canonicalizes, so this should not happen — but
+                    // emit to stderr (LSP clients surface this) rather than
+                    // silently misattribute go-to-definition.
+                    #[expect(
+                        clippy::print_stderr,
+                        clippy::unnecessary_debug_formatting,
+                        reason = "developer-visible warning for an unreachable fallback"
+                    )]
+                    {
+                        eprintln!(
+                            "graphcal-lsp: Url::from_file_path failed for {:?}; falling back to root URI",
+                            loaded_file.path,
+                        );
+                    }
+                    root_uri.clone()
+                });
                 let src = Arc::clone(&loaded_file.source);
                 (table, uri, src)
             });
 
-        match &import_decl.kind {
-            graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
-                for import_item in names {
-                    let key = SymbolKey::TopLevel(import_item.name.name.clone());
-                    if let Some(def) = imported_table.definitions.get(&key) {
-                        insert_imported_def(&mut result, key, imported_uri, source, def);
-                    }
+        match kind {
+            graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
+                for import_item in items {
+                    let original_key = SymbolKey::TopLevel(import_item.name.name.clone());
+                    let Some(def) = imported_table.definitions.get(&original_key) else {
+                        continue;
+                    };
+                    let local_key = SymbolKey::TopLevel(import_item.local_name().to_string());
+                    insert_imported_def(&mut result, local_key, imported_uri, source, def);
                 }
             }
             graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
-                // Derive the module name from alias or filename stem.
                 let module_name = alias.as_ref().map_or_else(
                     || {
-                        graphcal_eval::loader::derive_module_name(&import_decl.path.display_path())
+                        graphcal_eval::loader::derive_module_name(&path_display)
                             .unwrap_or_else(|stem| stem)
                     },
                     |alias_ident| alias_ident.name.clone(),
                 );
                 for (key, def) in &imported_table.definitions {
-                    // Only re-key TopLevel definitions; builtins, variants,
-                    // fields, and expr-scoped locals keep their original key.
                     let qualified_key = match key {
                         SymbolKey::TopLevel(name) => SymbolKey::Qualified {
                             module: module_name.clone(),
@@ -1265,6 +1286,83 @@ node bad: Mass = mass + length;
         assert!(
             !analysis.diagnostics.is_empty(),
             "dim mismatch in executable file must still produce a diagnostic",
+        );
+    }
+
+    fn write_project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, content) in files {
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, content).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn imported_definitions_collected_for_selective_includes() {
+        let dir = write_project(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"lib\"\nsource_dir = \".\"\n",
+            ),
+            (
+                "lib.gcl",
+                "param limit: Dimensionless = 100.0;\npub node doubled: Dimensionless = @limit * 2.0;\n",
+            ),
+            (
+                "main.gcl",
+                "include lib().{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("main.gcl");
+        let uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&uri, &text);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        let doubled_key = crate::symbol_table::SymbolKey::TopLevel("doubled".to_string());
+        assert!(
+            analysis.imported_definitions.contains_key(&doubled_key),
+            "expected imported definition for selective include `doubled`, got: {:?}",
+            analysis.imported_definitions.keys().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn imported_definitions_keyed_by_local_alias_for_selective_imports() {
+        let dir = write_project(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+            ),
+            ("helper.gcl", "pub const node y: Dimensionless = 2.0;"),
+            (
+                "main.gcl",
+                "import helper.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
+            ),
+        ]);
+        let main_path = dir.path().join("main.gcl");
+        let uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&uri, &text);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        let renamed_key = crate::symbol_table::SymbolKey::TopLevel("renamed".to_string());
+        assert!(
+            analysis.imported_definitions.contains_key(&renamed_key),
+            "expected imported definition keyed by local alias `renamed`, got: {:?}",
+            analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
     }
 }

@@ -544,6 +544,7 @@ dependencies = [
  "graphcal-io",
  "indexmap",
  "miette",
+ "tempfile",
  "tokio",
  "tower-lsp",
 ]
