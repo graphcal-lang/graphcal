@@ -17,23 +17,31 @@ As projects grow, it helps to separate concerns:
 
 ## Files Are Packages
 
-Every `.gcl` file in Graphcal is a **package**. As long as no
-`graphcal.toml` manifest is present, each file is a *virtual* package
-whose name equals the file's stem — `constants.gcl` is the package
-named `constants`. You can `import` from it by that name from any
-sibling file in the same directory.
+Every `.gcl` file in Graphcal is a **package**. Without a
+`graphcal.toml` manifest, the file is a *virtual* package — a
+standalone Graphcal script. The package contains exactly one module:
+the file itself. You can self-reference its top-level decls from
+inline DAGs (e.g. `import dynamics.{T};` from inside `dynamics.gcl`),
+but you **cannot** import a sibling file. The first multi-file step
+in any Graphcal project is to add a manifest.
 
-This is the simplest way to start. Later in this step, we'll
-"promote" the project to a real (manifest-backed) package once the
-file count grows.
+In other words: virtual = one file. The moment you want a second
+file, you add a `graphcal.toml` and graduate to a real package. The
+rest of this step walks through that promotion end to end.
 
 ## Project Structure
 
+A multi-file project always has a `graphcal.toml` manifest at the
+root and source files arranged under the package's source directory:
+
 ```text
 rocket_project/
-  constants.gcl
-  params.gcl
-  main.gcl
+  graphcal.toml                # [package] name = "rocket_project"
+  src/
+    rocket_project/
+      constants.gcl
+      params.gcl
+      main.gcl
 ```
 
 ### `constants.gcl`
@@ -54,8 +62,8 @@ pub param isp: Time = 320.0 s;
 ### `main.gcl`
 
 ```graphcal
-import constants.{g0};
-import params.{dry_mass, fuel_mass, isp};
+import rocket_project.constants.{g0};
+include rocket_project.params().{dry_mass, fuel_mass, isp};
 
 dim Velocity = Length / Time;
 
@@ -64,15 +72,21 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-The path before `.{...}` is the package — here, the file's own stem.
-The brace list lists the names being brought into scope.
+The path before `.{...}` is absolute from the package root. The
+first segment is the package name (from `graphcal.toml`); subsequent
+segments walk the directory tree under `source_dir`.
+
+Note `params` uses `include`, not `import`: `params.gcl` exposes
+`param`s (runtime values), and runtime values cross file boundaries
+only through DAG instantiation. `import` brings compile-time names
+only.
 
 ## Running a Multi-File Project
 
 Point `graphcal eval` at the entry file:
 
 ```bash
-$ graphcal eval rocket_project/main.gcl
+$ graphcal eval rocket_project/src/rocket_project/main.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
@@ -130,53 +144,41 @@ the producing DAG instead of importing the value (see
 | `index`          | `import file.{IndexName}`           | `IndexName`      |
 | `dag`            | `import file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
 
-## Promoting to a Real Package
+## When a Single File Suffices
 
-Once a project grows beyond a handful of files in one directory, add
-a `graphcal.toml` manifest at the project root. This makes the
-package "real" — its name comes from the manifest instead of from
-each file's stem, and source files live under a dedicated source
-directory.
-
-```text
-rocket_project/
-  graphcal.toml         # [package] name = "rocket_project"
-  src/
-    rocket_project/
-      constants.gcl
-      params.gcl
-      main.gcl
-```
-
-```toml
-# graphcal.toml
-[package]
-name = "rocket_project"
-# source_dir = "src"  # optional, defaults to "src"
-```
-
-After promotion, every import in `main.gcl` is rewritten to the full
-package path:
+If your whole calculation fits in one file, you don't need a manifest
+at all. A standalone `rocket.gcl` script behaves like a virtual
+package — its only externally addressable name is its own stem.
+References from inline DAGs back to top-level decls use that
+self-reference path:
 
 ```graphcal
-import rocket_project.constants.{g0};
-import rocket_project.params.{dry_mass, fuel_mass, isp};
+// rocket.gcl  (standalone script, no graphcal.toml)
+type OrbitType { sma: Length, ecc: Dimensionless };
+
+dag analyze {
+    import rocket.{OrbitType};   // file's own name
+    param o: OrbitType;
+    // ...
+}
 ```
 
-The semantics are identical to the virtual-package version — only
-the prefix changes. The LSP rename refactor handles this rewrite
-mechanically.
+The moment you split into a second file, add a `graphcal.toml` at
+the project root and arrange the files under `<source_dir>/<pkg>/`
+as shown above. Sibling-file `import`s in a manifest-less project
+are rejected with a clear error.
 
 ## Circular Import Detection
 
-Graphcal detects circular imports at compile time:
+Graphcal detects circular imports at compile time. In a real package
+with two modules `<pkg>.a` and `<pkg>.b`:
 
 ```graphcal
-// a.gcl
-import b.{x};
+// src/<pkg>/a.gcl
+import <pkg>.b.{x};
 
-// b.gcl
-import a.{y};   // ERROR: circular import
+// src/<pkg>/b.gcl
+import <pkg>.a.{y};   // ERROR: circular import
 ```
 
 ## Assertions Are Always Checked
@@ -190,14 +192,14 @@ for details.
 
 ## What You Learned
 
-- Every `.gcl` file is a **package** — virtual (file stem) or real
-  (manifest-backed).
+- Every `.gcl` file is a **package** — virtual (single-file
+  standalone script) or real (manifest-backed multi-file project).
+- A virtual package has exactly one file. Multi-file projects always
+  have a `graphcal.toml`.
 - The three `import` forms — bare, aliased, and brace list — bring
   exactly the names you write into scope.
 - `import` is for compile-time names; runtime values cross file
   boundaries via `include`.
-- A project graduates from a virtual package to a real package by
-  adding a `graphcal.toml` and rewriting prefixes.
 - Circular imports and assertion checks are handled automatically.
 
 ## Next Step

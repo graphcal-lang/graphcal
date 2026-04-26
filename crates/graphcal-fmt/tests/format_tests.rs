@@ -551,11 +551,11 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_a,
-    "multi/alias_conflict/a.gcl"
+    "multi/alias_conflict/lib/a.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_b,
-    "multi/alias_conflict/b.gcl"
+    "multi/alias_conflict/lib/b.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_alias_conflict_main,
@@ -707,11 +707,11 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_rocket_split_constants,
-    "multi/rocket_split/constants.gcl"
+    "multi/rocket_split/lib/constants.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_params,
-    "multi/rocket_split/params.gcl"
+    "multi/rocket_split/lib/params.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_rocket_split_main,
@@ -723,11 +723,11 @@ snapshot_test!(
 );
 snapshot_test!(
     snapshot_multi_rocket_split_constants,
-    "multi/rocket_split/constants.gcl"
+    "multi/rocket_split/lib/constants.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_params,
-    "multi/rocket_split/params.gcl"
+    "multi/rocket_split/lib/params.gcl"
 );
 
 // explicit_index: import of index types
@@ -755,15 +755,15 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_shared,
-    "multi/diamond_assert/shared.gcl"
+    "multi/diamond_assert/graph/shared.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_left,
-    "multi/diamond_assert/left.gcl"
+    "multi/diamond_assert/graph/left.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_right,
-    "multi/diamond_assert/right.gcl"
+    "multi/diamond_assert/graph/right.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_diamond_assert_main,

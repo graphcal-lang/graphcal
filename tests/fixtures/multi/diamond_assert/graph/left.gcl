@@ -1,4 +1,4 @@
 // left.gcl -- left branch of diamond, includes shared
-include shared().{ base_val };
+include graph.shared().{ base_val };
 pub node doubled: Dimensionless = @base_val * 2.0;
 assert doubled_positive = @doubled > 0.0;

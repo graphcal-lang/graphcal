@@ -1,5 +1,5 @@
 // main.gcl -- diamond include: both left and right include shared
-include left().{ doubled };
-include right().{ tripled };
+include graph.left().{ doubled };
+include graph.right().{ tripled };
 
 node total: Dimensionless = @doubled + @tripled;

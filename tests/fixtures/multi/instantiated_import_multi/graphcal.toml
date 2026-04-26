@@ -1,0 +1,3 @@
+[package]
+name = "rocket"
+source_dir = "."

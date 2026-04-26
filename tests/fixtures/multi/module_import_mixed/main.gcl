@@ -1,6 +1,6 @@
 // Mixed: selective import and module include from different files
-import constants.{ g0 };
-import params;
+import lib.constants.{ g0 };
+import lib.params;
 
 dim Acceleration = Length / Time^2;
 dim Velocity = Length / Time;

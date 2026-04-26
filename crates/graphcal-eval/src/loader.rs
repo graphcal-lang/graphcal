@@ -514,22 +514,19 @@ fn resolve_module_path<F: FileSystemReader>(
         }));
     }
 
-    // No manifest — virtual-package mode. Each `.gcl` file is its own
-    // one-file virtual package whose name is the file's stem. Resolve
-    // the first segment to `<project_root>/<segment>.gcl`.
-    if !segments.is_empty() {
-        let mut file_path = project_root.join(&segments[0].name);
-        file_path.set_extension("gcl");
-        if let Ok(canonical) = fs.canonicalize(&file_path) {
-            return Ok(canonical);
-        }
-    }
-
-    Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
-        path: display_path,
-        src: src.clone(),
-        span: span.into(),
-    }))
+    // No manifest — virtual-package mode. The project is a single standalone
+    // file. The only legal path is the file's own stem (Concept 7
+    // self-reference), and that case is intercepted earlier in `load_file_dfs`
+    // before resolution; reaching this point means the user asked for a
+    // sibling or descendant that has no manifest-backed package to resolve
+    // it.
+    Err(CompileError::Eval(
+        GraphcalError::CrossFileImportInVirtualPackage {
+            path: display_path,
+            src: src.clone(),
+            span: span.into(),
+        },
+    ))
 }
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
@@ -582,6 +579,10 @@ mod tests {
     #[test]
     fn load_simple_import() {
         let dir = setup_temp_dir(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+            ),
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
@@ -599,10 +600,38 @@ mod tests {
     }
 
     #[test]
-    fn load_circular_import_detected() {
+    fn load_cross_file_import_in_virtual_package_rejected() {
+        // Without a `graphcal.toml`, the project is a single-file virtual
+        // package; a sibling-file import is rejected with a structured
+        // error pointing the user at the manifest fix.
         let dir = setup_temp_dir(&[
-            ("a.gcl", "import b.{y};\nparam x: Dimensionless = 1.0;"),
-            ("b.gcl", "import a.{x};\nparam y: Dimensionless = 2.0;"),
+            ("helper.gcl", "param y: Dimensionless = 2.0;"),
+            (
+                "main.gcl",
+                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
+            ),
+        ]);
+        let result = load_project(&dir.path().join("main.gcl"), None, &fs());
+        let err = result.expect_err("expected sibling import to be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("CrossFileImportInVirtualPackage"),
+            "expected CrossFileImportInVirtualPackage, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_circular_import_detected() {
+        // Manifest layout: `package = "a"`, files at `<root>/a.gcl` and
+        // `<root>/a/b.gcl`. `a` imports from `a.b` and `a.b` imports from
+        // `a` — yielding a cycle through dot-paths.
+        let dir = setup_temp_dir(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"a\"\nsource_dir = \".\"\n",
+            ),
+            ("a.gcl", "import a.b.{y};\nparam x: Dimensionless = 1.0;"),
+            ("a/b.gcl", "import a.{x};\nparam y: Dimensionless = 2.0;"),
         ]);
         let result = load_project(&dir.path().join("a.gcl"), None, &fs());
         assert!(result.is_err());
@@ -658,6 +687,10 @@ mod tests {
     #[test]
     fn load_with_overlay_uses_disk_for_imports() {
         let dir = setup_temp_dir(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+            ),
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
@@ -703,21 +736,35 @@ mod tests {
 
     #[test]
     fn load_diamond_import_deduplication() {
-        // A imports B and C; both B and C import D.
-        // D should only be loaded once.
+        // A imports B and C; both B and C import D. D should only be
+        // loaded once.
+        //
+        // Manifest layout: `package = "graph"`, source_dir = ".". The
+        // four files live at `<root>/graph/{a,b,c,d}.gcl` so every
+        // import path starts with the package name.
         let dir = setup_temp_dir(&[
-            ("d.gcl", "param w: Dimensionless = 4.0;"),
-            ("b.gcl", "import d.{w};\nparam x: Dimensionless = @w + 1.0;"),
-            ("c.gcl", "import d.{w};\nparam y: Dimensionless = @w + 2.0;"),
             (
-                "a.gcl",
-                "import b.{x};\nimport c.{y};\nnode z: Dimensionless = @x + @y;",
+                "graphcal.toml",
+                "[package]\nname = \"graph\"\nsource_dir = \".\"\n",
+            ),
+            ("graph/d.gcl", "param w: Dimensionless = 4.0;"),
+            (
+                "graph/b.gcl",
+                "import graph.d.{w};\nparam x: Dimensionless = @w + 1.0;",
+            ),
+            (
+                "graph/c.gcl",
+                "import graph.d.{w};\nparam y: Dimensionless = @w + 2.0;",
+            ),
+            (
+                "graph/a.gcl",
+                "import graph.b.{x};\nimport graph.c.{y};\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
-        let project = load_project(&dir.path().join("a.gcl"), None, &fs()).unwrap();
+        let project = load_project(&dir.path().join("graph/a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_dag_id = DagId::new(["d"]);
+        let d_dag_id = DagId::new(["graph", "d"]);
         assert_eq!(project.load_order[0], d_dag_id);
     }
 

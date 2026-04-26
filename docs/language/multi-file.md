@@ -33,10 +33,18 @@ two places:
 | **Virtual**  | The file's stem (the `.gcl` filename without extension) | No `graphcal.toml` present          |
 | **Real**     | `package.name` in `graphcal.toml`    | A manifest sits in an ancestor dir    |
 
-Both flavors use identical resolution semantics. Promoting a project
-from virtual to real means adding a manifest and rewriting the
-package-root prefix on existing imports — see
+A **virtual package is a single file** — a standalone Graphcal script.
+The package consists of exactly one module: the file itself. The only
+import path that resolves in a virtual package is the file's own stem
+(see [Self-Reference](#self-reference-a-file-is-its-own-package)
+below). There are no sibling-file imports without a manifest; if a
+sibling file `helper.gcl` sits next to your script, the loader rejects
+`import helper.{X};` with a structured error pointing you at
 [Promoting to a Real Package](#promoting-to-a-real-package).
+
+A **real package** can span many files arranged in a directory tree
+under `source_dir`. Resolution walks `<source_dir>/<segments>.gcl`
+exactly as the path is written.
 
 A path like `nasa.rocket.dynamics` walks the tree starting at the
 package root: package `nasa` → directory `rocket` → file `dynamics.gcl`

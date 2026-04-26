@@ -1,0 +1,3 @@
+[package]
+name = "library"
+source_dir = "."
