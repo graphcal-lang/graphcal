@@ -87,7 +87,7 @@ impl FileSystemReader for RealFileSystem {
 
     fn is_file(&self, path: &Path) -> bool {
         if self.root.is_some() {
-            self.check_access(path).ok().is_some_and(|p| p.is_file())
+            self.check_access(path).is_ok_and(|p| p.is_file())
         } else {
             path.is_file()
         }

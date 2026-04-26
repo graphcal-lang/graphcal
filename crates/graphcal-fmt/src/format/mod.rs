@@ -12,9 +12,17 @@ pub use decl::format_decl;
 pub use expr::format_expr;
 pub use type_expr::{format_dim_expr_inline, format_type_expr_inline, format_unit_expr_inline};
 
+/// Indentation step used everywhere in formatter docs. Typed as `isize`
+/// because `pretty::RcDoc::nest` takes `isize`; the few `repeat` sites
+/// cast through `usize` explicitly.
+///
+/// `pub` here is module-scoped: the parent module is private, so this is
+/// effectively crate-internal.
 pub const INDENT: isize = 4;
 
 /// State for tracking comments during formatting.
+///
+/// `pub` is module-scoped (parent module is private).
 pub struct Formatter<'src> {
     source: &'src str,
     metadata: &'src SourceMetadata,
@@ -166,5 +174,12 @@ pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
     let mut buf = Vec::new();
     // Use a large width so we get single-line rendering for cell values.
     let _ = doc.render(1000, &mut buf);
-    String::from_utf8(buf).unwrap_or_default()
+    // The doc is built from valid UTF-8 source slices and string literals,
+    // so render output is always valid UTF-8 — panic loudly if that
+    // invariant is ever violated rather than silently producing "".
+    #[expect(
+        clippy::expect_used,
+        reason = "doc bytes are always valid UTF-8 by construction"
+    )]
+    String::from_utf8(buf).expect("rendered doc must be valid UTF-8")
 }

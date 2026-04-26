@@ -16,6 +16,17 @@ use graphcal_io::RealFileSystem;
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{OverrideParseError, parse_overrides};
 
+/// True when an assertion result represents a failure (a `Fail` outcome or
+/// a runtime `Error` while evaluating the assertion). Used to decide both
+/// the process exit code and stderr-vs-stdout routing in text output.
+const fn is_assert_failure(r: &graphcal_eval::eval::AssertResult) -> bool {
+    matches!(
+        r,
+        graphcal_eval::eval::AssertResult::Fail { .. }
+            | graphcal_eval::eval::AssertResult::Error { .. }
+    )
+}
+
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
 struct Cli {
@@ -233,13 +244,10 @@ fn handle_eval(
 
             let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                 || result.nodes.iter().any(|(_, r)| r.is_err());
-            let has_assert_failures = result.assertions.iter().any(|(_, r, _)| {
-                matches!(
-                    r,
-                    graphcal_eval::eval::AssertResult::Fail { .. }
-                        | graphcal_eval::eval::AssertResult::Error { .. }
-                )
-            });
+            let has_assert_failures = result
+                .assertions
+                .iter()
+                .any(|(_, r, _)| is_assert_failure(r));
             if has_eval_errors || has_assert_failures {
                 process::exit(1);
             }
@@ -515,11 +523,7 @@ fn print_text(result: &EvalResult) {
                 max_assert_len,
                 result.assumes_map.get(name.as_str()),
             );
-            if matches!(
-                assert_result,
-                graphcal_eval::eval::AssertResult::Fail { .. }
-                    | graphcal_eval::eval::AssertResult::Error { .. }
-            ) {
+            if is_assert_failure(assert_result) {
                 eprintln!("{line}");
             } else {
                 println!("{line}");

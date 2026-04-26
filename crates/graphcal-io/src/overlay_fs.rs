@@ -44,9 +44,9 @@ impl<F: FileSystemReader> OverlayFileSystem<F> {
     /// still hit the overlay. If the file does not exist yet (unsaved LSP
     /// buffer), the raw path is used.
     pub fn new(base: F, overlay_path: PathBuf, overlay_content: String) -> Self {
-        let canonicalized = base.canonicalize(&overlay_path).ok();
-        let base_canonicalized = canonicalized.is_some();
-        let canonical_overlay_path = canonicalized.unwrap_or(overlay_path);
+        let (canonical_overlay_path, base_canonicalized) = base
+            .canonicalize(&overlay_path)
+            .map_or((overlay_path, false), |canonical| (canonical, true));
         Self {
             base,
             canonical_overlay_path,
