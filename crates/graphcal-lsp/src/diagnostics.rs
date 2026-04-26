@@ -1,5 +1,7 @@
 //! Diagnostic production from compile errors and evaluation results.
 
+use std::collections::HashMap;
+
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
     Url,
@@ -86,41 +88,65 @@ pub fn eval_result_to_diagnostics(
     diagnostics
 }
 
-/// Convert a `CompileError` to a list of LSP diagnostics using the miette `Diagnostic` trait.
+/// Convert a `CompileError` to LSP diagnostics, grouped by the URI of the
+/// source file the error actually belongs to.
+///
+/// Each label's offset is interpreted against the source name carried by the
+/// diagnostic's `source_code` (typically the imported file's basename). The
+/// `resolve` callback maps that name to a (URI, source-text) pair so a parse
+/// or type error in `helper.gcl` is published on `helper.gcl`'s URI with
+/// offsets resolved against `helper.gcl`'s text — not the importer's.
 ///
 /// When an error has multiple labeled spans (e.g., "duplicate definition here" +
 /// "first defined here"), the first label becomes the primary diagnostic and the
-/// remaining labels are attached as `DiagnosticRelatedInformation`.
-pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<Diagnostic> {
+/// remaining labels are attached as `DiagnosticRelatedInformation`. All labels
+/// of a single error share one source per the miette API, so the related
+/// information references the same URI.
+pub fn compile_error_to_diagnostics_grouped(
+    error: &CompileError,
+    fallback_uri: &Url,
+    fallback_source: &str,
+    resolve: impl Fn(&str) -> Option<(Url, String)>,
+) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = match error {
         CompileError::Parse(e) => e,
         CompileError::Eval(e) => e,
     };
 
+    let (uri, source) = diag
+        .source_code()
+        .and_then(|sc| sc.read_span(&(0, 0).into(), 0, 0).ok())
+        .and_then(|data| {
+            let name = data.name()?;
+            // First try treating the name as a parseable URL or absolute path.
+            // Otherwise defer to the resolver, which knows about loaded files.
+            Url::parse(name)
+                .ok()
+                .or_else(|| Url::from_file_path(name).ok())
+                .map(|u| (u, fallback_source.to_string()))
+                .or_else(|| resolve(name))
+        })
+        .unwrap_or_else(|| (fallback_uri.clone(), fallback_source.to_string()));
+
+    let diags = compile_error_to_diagnostics_in_source(diag, &source, &uri);
+
+    let mut grouped: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+    grouped.insert(uri, diags);
+    grouped
+}
+
+/// Build the LSP diagnostics for one error against a known (URI, source).
+fn compile_error_to_diagnostics_in_source(
+    diag: &dyn miette::Diagnostic,
+    source: &str,
+    uri: &Url,
+) -> Vec<Diagnostic> {
     let message = format!("{diag}");
     let code = diag.code().map(|c| NumberOrString::String(c.to_string()));
 
     let help_suffix = diag
         .help()
         .map_or_else(String::new, |help| format!("\n\nhint: {help}"));
-
-    // Use a synthetic URI for related information locations.
-    // The source name from miette is embedded in the error, but we use a
-    // placeholder URI since all spans are within the same document.
-    let doc_uri = diag
-        .source_code()
-        .and_then(|sc| sc.read_span(&(0, 0).into(), 0, 0).ok())
-        .and_then(|data| {
-            let name = data.name()?;
-            Url::parse(name)
-                .ok()
-                .or_else(|| Url::from_file_path(name).ok())
-        })
-        .unwrap_or_else(|| {
-            // "file:///unknown" is a valid static URL; this parse cannot fail.
-            #[expect(clippy::unwrap_used, reason = "static URL literal is always valid")]
-            Url::parse("file:///unknown").unwrap()
-        });
 
     let mut diagnostics = Vec::new();
 
@@ -135,12 +161,11 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
                 |l| format!("{message}: {l}{help_suffix}"),
             );
 
-            // Remaining labels become related information.
             let related: Vec<DiagnosticRelatedInformation> = labels[1..]
                 .iter()
                 .map(|label| DiagnosticRelatedInformation {
                     location: Location {
-                        uri: doc_uri.clone(),
+                        uri: uri.clone(),
                         range: offset_len_to_range(source, label.offset(), label.len()),
                     },
                     message: label.label().unwrap_or("related location").to_string(),
@@ -163,7 +188,6 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
         }
     }
 
-    // Fallback: error with no labeled spans → report at start of file
     if diagnostics.is_empty() {
         diagnostics.push(Diagnostic {
             range: Range::default(),
@@ -176,6 +200,17 @@ pub fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<D
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<Diagnostic> {
+    // Static URL literal — always parses.
+    #[expect(clippy::unwrap_used, reason = "static URL literal is always valid")]
+    let fallback_uri = Url::parse("file:///unknown").unwrap();
+    compile_error_to_diagnostics_grouped(error, &fallback_uri, source, |_| None)
+        .into_values()
+        .flatten()
+        .collect()
 }
 
 #[cfg(test)]
