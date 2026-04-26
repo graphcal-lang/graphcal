@@ -27,6 +27,17 @@ const fn is_assert_failure(r: &graphcal_eval::eval::AssertResult) -> bool {
     )
 }
 
+/// Print `prefix: {err}` to stderr and exit with the given non-zero code.
+/// Used to keep the plot pipeline's "could not X" branches one-line each.
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI binary, stderr output is expected for errors"
+)]
+fn bail_with(prefix: &str, err: impl std::fmt::Display, exit_code: i32) -> ! {
+    eprintln!("error: {prefix}: {err}");
+    process::exit(exit_code);
+}
+
 #[derive(Parser)]
 #[command(name = "graphcal", version, about = "Graphcal language evaluator")]
 struct Cli {
@@ -202,39 +213,28 @@ fn handle_eval(
                     match plot_mode {
                         PlotOutput::Browser => {
                             let html = plot::render_html(&rendered).unwrap_or_else(|e| {
-                                eprintln!("error: could not render plots as HTML: {e}");
-                                process::exit(2);
+                                bail_with("could not render plots as HTML", e, 2)
                             });
                             let mut tmp = tempfile::Builder::new()
                                 .prefix("graphcal_plot_")
                                 .suffix(".html")
                                 .tempfile()
-                                .unwrap_or_else(|e| {
-                                    eprintln!("error: could not create temp file: {e}");
-                                    process::exit(2);
-                                });
-                            std::io::Write::write_all(&mut tmp, html.as_bytes()).unwrap_or_else(
-                                |e| {
-                                    eprintln!("error: could not write HTML: {e}");
-                                    process::exit(2);
-                                },
-                            );
+                                .unwrap_or_else(|e| bail_with("could not create temp file", e, 2));
+                            std::io::Write::write_all(&mut tmp, html.as_bytes())
+                                .unwrap_or_else(|e| bail_with("could not write HTML", e, 2));
                             // Keep the temp file so the browser has time to read it.
                             // The OS will clean it up on reboot.
                             let path = tmp.into_temp_path();
-                            let kept = path.keep().unwrap_or_else(|e| {
-                                eprintln!("error: could not persist temp file: {e}");
-                                process::exit(2);
-                            });
+                            let kept = path
+                                .keep()
+                                .unwrap_or_else(|e| bail_with("could not persist temp file", e, 2));
                             if let Err(e) = open::that(&kept) {
-                                eprintln!("error: could not open browser: {e}");
-                                process::exit(2);
+                                bail_with("could not open browser", e, 2);
                             }
                         }
                         PlotOutput::Json => {
                             let json = plot::render_json(&rendered).unwrap_or_else(|e| {
-                                eprintln!("error: could not render plots as JSON: {e}");
-                                process::exit(2);
+                                bail_with("could not render plots as JSON", e, 2)
                             });
                             println!("{json}");
                         }

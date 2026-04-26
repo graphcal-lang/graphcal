@@ -23,6 +23,10 @@ pub(super) fn lower_and_finalize(
     overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
+    // Snapshot before lower_to_builder_with_imported_values consumes
+    // `ctx.imported_values`. The deferred-instantiated-include processing
+    // below (and lower in this function) needs the original map back —
+    // builder construction moves it.
     let saved_imported_values = ctx.imported_values.clone();
 
     let (mut builder, mut unfrozen) =

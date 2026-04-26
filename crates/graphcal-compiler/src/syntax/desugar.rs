@@ -200,6 +200,11 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
         // whole multi-decl so diagnostics land on the source surface.
         let decl_span = slot.header_span.merge(multi.span);
 
+        // TODO(#481): plumb slot visibility once the parser accepts per-slot
+        // `pub`/`pub(bind)` markers on multi-decls. Today the parser rejects
+        // any visibility on the whole block (see
+        // `multi_decl_rejects_visibility_on_whole`), so every desugared slot
+        // is unconditionally Private.
         out.push(Declaration {
             attributes: vec![],
             visibility: Visibility::Private,
