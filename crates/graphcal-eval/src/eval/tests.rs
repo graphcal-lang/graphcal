@@ -1742,7 +1742,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+node doubled: Length = @scale(factor: 2.0, v: @src).result;
 ";
     let result = compile_and_eval(source).unwrap();
     let doubled = find_value(&result, "doubled");
@@ -1764,7 +1764,7 @@ dag two_step {
 }
 
 param src: Length = 3.0 m;
-node out: Length = @two_step(v: @src)::result;
+node out: Length = @two_step(v: @src).result;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
@@ -1785,7 +1785,7 @@ dag id_len {
 }
 
 param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 2.0 m };
-node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
 ";
     let result = compile_and_eval(source).unwrap();
     // distances is indexed, look it up by cell.
@@ -1829,8 +1829,8 @@ param dist_secondary: Length[Region] = { Region::A: 10.0 m, Region::B: 20.0 m };
 
 node effective: Length[Source, Region] = for s: Source, r: Region {
     match s {
-        Source::Primary   => @id_len(v: @dist_primary[r])::result,
-        Source::Secondary => @id_len(v: @dist_secondary[r])::result,
+        Source::Primary   => @id_len(v: @dist_primary[r]).result,
+        Source::Secondary => @id_len(v: @dist_secondary[r]).result,
     }
 };
 ";
@@ -1900,7 +1900,7 @@ dag forward {
 }
 
 param src: Length = 3.0 m;
-node out: Length = @forward(v: @src)::b;
+node out: Length = @forward(v: @src).b;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
@@ -1920,8 +1920,8 @@ dag doubler {
 }
 
 param dist: Length[Region] = { Region::A: 1.0 m, Region::B: 3.0 m };
-node out_a: Length = @doubler(v: @dist)::result[Region::A];
-node out_b: Length = @doubler(v: @dist)::result[Region::B];
+node out_a: Length = @doubler(v: @dist).result[Region::A];
+node out_b: Length = @doubler(v: @dist).result[Region::B];
 ";
     let result = compile_and_eval(source).unwrap();
     let a = find_value(&result, "out_a");
@@ -1942,7 +1942,7 @@ dag with_const {
 }
 
 param src: Length = 4.0 m;
-node out: Length = @with_const(v: @src)::result;
+node out: Length = @with_const(v: @src).result;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");

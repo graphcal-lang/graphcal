@@ -264,7 +264,7 @@ fn resolve_node_with_convert() {
 #[test]
 fn resolve_import_decl_skipped() {
     // import declarations should not be treated as param/node/const
-    let source = r#"import "./helper.gcl" { something };"#;
+    let source = "import helper.{something};";
     let file = Parser::new(source).parse_file().unwrap();
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert!(resolved.params.is_empty());

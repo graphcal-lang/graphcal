@@ -1287,11 +1287,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_qualified_at_rejected() {
-        // Qualified `@module.name` is rejected — the new design requires
-        // bringing the name into scope first via `import pkg.{name};`.
-        let result = Parser::new("node x: Dimensionless = @params.dry_mass;").parse_file();
-        assert!(result.is_err(), "qualified `@module.name` should be rejected");
+    fn parse_at_with_field_access_parses_as_field_chain() {
+        // `@instance.field` is valid: `instance` is a single in-scope ident
+        // (typically an include's instance alias), and `.field` is postfix
+        // field access producing the instance's projected output node.
+        let file = Parser::new("node x: Dimensionless = @stage.delta_v;")
+            .parse_file()
+            .unwrap();
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        // The expression should be `FieldAccess(GraphRef(stage), delta_v)`,
+        // not a qualified-graph-ref construct.
+        match &node.value.kind {
+            ExprKind::FieldAccess { expr: inner, field } => {
+                assert!(matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.as_str() == "stage"));
+                assert_eq!(field.value.as_str(), "delta_v");
+            }
+            other => panic!("expected FieldAccess on GraphRef, got {other:?}"),
+        }
     }
 
     #[test]

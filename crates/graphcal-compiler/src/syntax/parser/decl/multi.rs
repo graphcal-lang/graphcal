@@ -873,7 +873,7 @@ param q: Int[Phase, Component]
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Foo::Launch]
+      [Foo.Launch]
       :           _, _;
       ComponentA: 1, 2;
   };
@@ -896,7 +896,7 @@ index OpMode = { Safe, Nominal };
 param p: Power[Component],
 param m: Bool[Component, OpMode]
   = table[Component, (_, OpMode)] {
-      :           _,      OpMode::Safe, OpMode::Nominal;
+      :           _,      OpMode.Safe, OpMode.Nominal;
       ComponentA: 10.0 W, true,         false;
   };
 ";

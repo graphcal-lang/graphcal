@@ -653,12 +653,12 @@ mod tests {
     #[test]
     fn parse_table_3d() {
         let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-        [Time::T1]
+        [Time.T1]
         : Departure, Correction;
         Launch: 5000.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4500.0 kg;
 
-        [Time::T2]
+        [Time.T2]
         : Departure, Correction;
         Launch: 4800.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4300.0 kg;

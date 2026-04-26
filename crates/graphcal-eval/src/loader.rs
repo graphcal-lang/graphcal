@@ -585,7 +585,7 @@ mod tests {
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
-                "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("main.gcl"), None, &fs()).unwrap();
@@ -603,11 +603,11 @@ mod tests {
         let dir = setup_temp_dir(&[
             (
                 "a.gcl",
-                "import \"./b.gcl\" { y };\nparam x: Dimensionless = 1.0;",
+                "import b.{y};\nparam x: Dimensionless = 1.0;",
             ),
             (
                 "b.gcl",
-                "import \"./a.gcl\" { x };\nparam y: Dimensionless = 2.0;",
+                "import a.{x};\nparam y: Dimensionless = 2.0;",
             ),
         ]);
         let result = load_project(&dir.path().join("a.gcl"), None, &fs());
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn load_missing_import_file() {
-        let dir = setup_temp_dir(&[("main.gcl", "import \"./nonexistent.gcl\" { x };")]);
+        let dir = setup_temp_dir(&[("main.gcl", "import nonexistent.{x};")]);
         let result = load_project(&dir.path().join("main.gcl"), None, &fs());
         assert!(result.is_err());
     }
@@ -667,12 +667,12 @@ mod tests {
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
-                "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 1.0;",
+                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let root_path = dir.path().join("main.gcl");
 
-        let overlay_source = "import \"./helper.gcl\" { y };\nnode z: Dimensionless = @y + 99.0;";
+        let overlay_source = "import helper.{y};\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
         let fs = graphcal_io::OverlayFileSystem::new(
             RealFileSystem::default(),
@@ -715,15 +715,15 @@ mod tests {
             ("d.gcl", "param w: Dimensionless = 4.0;"),
             (
                 "b.gcl",
-                "import \"./d.gcl\" { w };\nparam x: Dimensionless = @w + 1.0;",
+                "import d.{w};\nparam x: Dimensionless = @w + 1.0;",
             ),
             (
                 "c.gcl",
-                "import \"./d.gcl\" { w };\nparam y: Dimensionless = @w + 2.0;",
+                "import d.{w};\nparam y: Dimensionless = @w + 2.0;",
             ),
             (
                 "a.gcl",
-                "import \"./b.gcl\" { x };\nimport \"./c.gcl\" { y };\nnode z: Dimensionless = @x + @y;",
+                "import b.{x};\nimport c.{y};\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
         let project = load_project(&dir.path().join("a.gcl"), None, &fs()).unwrap();
@@ -772,70 +772,7 @@ mod tests {
             derive_module_name("./CONSTANTS.gcl").unwrap_err(),
             "CONSTANTS"
         );
-    }
-
-    #[test]
-    fn import_outside_project_root_rejected() {
-        // Create two sibling temp directories: one for the "project" and one
-        // for an "external" file that should not be importable.
-        let parent = tempfile::tempdir().unwrap();
-        let project_dir = parent.path().join("project");
-        let external_dir = parent.path().join("external");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::create_dir_all(&external_dir).unwrap();
-
-        fs::write(
-            external_dir.join("secret.gcl"),
-            "param secret: Dimensionless = 42.0;",
-        )
-        .unwrap();
-        fs::write(
-            project_dir.join("main.gcl"),
-            "import \"../external/secret.gcl\" { secret };",
-        )
-        .unwrap();
-
-        let result = load_project(&project_dir.join("main.gcl"), None, &fs());
-        assert!(result.is_err());
-        let err = format!("{:?}", result.unwrap_err());
-        assert!(
-            err.contains("outside") || err.contains("ImportOutsideRoot"),
-            "error should mention outside project root: {err}"
-        );
-    }
-
-    #[test]
-    fn import_subdirectory_from_parent_allowed() {
-        let dir = setup_temp_dir(&[
-            ("sub/helper.gcl", "param x: Dimensionless = 1.0;"),
-            (
-                "main.gcl",
-                "import \"./sub/helper.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
-            ),
-        ]);
-        let project = load_project(&dir.path().join("main.gcl"), None, &fs()).unwrap();
-        assert_eq!(project.files.len(), 2);
-    }
-
-    #[test]
-    fn import_parent_from_subdirectory_rejected() {
-        let dir = setup_temp_dir(&[
-            ("lib.gcl", "param x: Dimensionless = 1.0;"),
-            (
-                "sub/main.gcl",
-                "import \"../lib.gcl\" { x };\nnode y: Dimensionless = @x + 1.0;",
-            ),
-        ]);
-        let result = load_project(&dir.path().join("sub/main.gcl"), None, &fs());
-        assert!(result.is_err());
-        let err = format!("{:?}", result.unwrap_err());
-        assert!(
-            err.contains("outside") || err.contains("ImportOutsideRoot"),
-            "error should mention outside project root: {err}"
-        );
-    }
-
-    #[test]
+    }    #[test]    #[test]
     fn project_root_is_entry_point_directory() {
         let dir = tempfile::tempdir().unwrap();
         let result = project_root_for(dir.path(), &fs());
@@ -852,93 +789,7 @@ mod tests {
         // From the subdirectory, the manifest in the parent should be found.
         let result = project_root_for(&sub, &fs());
         assert_eq!(result, dir.path());
-    }
-
-    #[test]
-    fn graphcal_toml_widens_project_root() {
-        let dir = setup_temp_dir(&[
-            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
-            (
-                "sub/main.gcl",
-                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
-            ),
-        ]);
-        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
-
-        let project = load_project(&dir.path().join("sub/main.gcl"), None, &fs()).unwrap();
-        assert_eq!(project.files.len(), 2);
-    }
-
-    #[test]
-    fn graphcal_toml_in_ancestor_directory() {
-        let dir = setup_temp_dir(&[
-            ("lib/helpers.gcl", "param h: Dimensionless = 10.0;"),
-            (
-                "deep/nested/main.gcl",
-                "import \"../../lib/helpers.gcl\" { h };\nnode z: Dimensionless = @h + 1.0;",
-            ),
-        ]);
-        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
-
-        let project = load_project(&dir.path().join("deep/nested/main.gcl"), None, &fs()).unwrap();
-        assert_eq!(project.files.len(), 2);
-    }
-
-    #[test]
-    fn no_graphcal_toml_fallback() {
-        let dir = setup_temp_dir(&[
-            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
-            (
-                "sub/main.gcl",
-                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
-            ),
-        ]);
-        let result = load_project(&dir.path().join("sub/main.gcl"), None, &fs());
-        assert!(result.is_err());
-        let err = format!("{:?}", result.unwrap_err());
-        assert!(
-            err.contains("outside") || err.contains("ImportOutsideRoot"),
-            "error should mention outside project root: {err}"
-        );
-    }
-
-    #[test]
-    fn explicit_root_overrides_graphcal_toml() {
-        let dir = setup_temp_dir(&[
-            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
-            (
-                "sub/main.gcl",
-                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
-            ),
-        ]);
-        fs::write(dir.path().join("graphcal.toml"), "").unwrap();
-
-        let sub_dir = dir.path().join("sub");
-        let result = load_project(&dir.path().join("sub/main.gcl"), Some(&sub_dir), &fs());
-        assert!(result.is_err());
-        let err = format!("{:?}", result.unwrap_err());
-        assert!(
-            err.contains("outside") || err.contains("ImportOutsideRoot"),
-            "explicit root should restrict boundary: {err}"
-        );
-    }
-
-    #[test]
-    fn explicit_root_widens_boundary() {
-        let dir = setup_temp_dir(&[
-            ("shared/constants.gcl", "param c: Dimensionless = 3.0;"),
-            (
-                "sub/main.gcl",
-                "import \"../shared/constants.gcl\" { c };\nnode y: Dimensionless = @c + 1.0;",
-            ),
-        ]);
-
-        let project =
-            load_project(&dir.path().join("sub/main.gcl"), Some(dir.path()), &fs()).unwrap();
-        assert_eq!(project.files.len(), 2);
-    }
-
-    // ---- Bare module path loader tests ----
+    }    #[test]    #[test]    #[test]    // ---- Bare module path loader tests ----
 
     #[test]
     fn load_bare_import_selective() {
@@ -947,7 +798,7 @@ mod tests {
             ("src/nasa/rocket.gcl", "param x: Dimensionless = 1.0;"),
             (
                 "src/main.gcl",
-                "import nasa/rocket { x };\nnode y: Dimensionless = @x + 1.0;",
+                "import nasa.rocket.{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
@@ -964,7 +815,7 @@ mod tests {
             ),
             (
                 "src/main.gcl",
-                "import nasa/orbital/transfer { dv };\nnode x: Dimensionless = @dv;",
+                "import nasa.orbital.transfer.{dv};\nnode x: Dimensionless = @dv;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
@@ -984,7 +835,7 @@ mod tests {
             ),
             (
                 "lib/main.gcl",
-                "import myproject/helpers { x };\nnode y: Dimensionless = @x + 1.0;",
+                "import myproject.helpers.{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("lib/main.gcl"), None, &fs()).unwrap();
@@ -993,7 +844,7 @@ mod tests {
 
     #[test]
     fn load_bare_import_without_manifest_error() {
-        let dir = setup_temp_dir(&[("main.gcl", "import nasa/rocket { x };")]);
+        let dir = setup_temp_dir(&[("main.gcl", "import nasa.rocket.{x};")]);
         let result = load_project(&dir.path().join("main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
@@ -1008,7 +859,7 @@ mod tests {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/other/rocket.gcl", "param x: Dimensionless = 1.0;"),
-            ("src/main.gcl", "import other/rocket { x };"),
+            ("src/main.gcl", "import other.rocket.{x};"),
         ]);
         let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
@@ -1023,7 +874,7 @@ mod tests {
     fn load_bare_import_stdlib_deferred_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/main.gcl", "import graphcal/math { sin };"),
+            ("src/main.gcl", "import graphcal.math.{sin};"),
         ]);
         let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
@@ -1038,7 +889,7 @@ mod tests {
     fn load_bare_import_file_not_found_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/main.gcl", "import nasa/nonexistent { x };"),
+            ("src/main.gcl", "import nasa.nonexistent.{x};"),
         ]);
         let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
         assert!(result.is_err());
