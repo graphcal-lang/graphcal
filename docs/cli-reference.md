@@ -49,7 +49,6 @@ graphcal eval [OPTIONS] <FILE>
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
-| `--no-assert` | Skip assertion checking |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print Vega-Lite JSON) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
@@ -162,15 +161,6 @@ Assertions:
   fuel_positive  PASS
   pressure_safe  FAIL  (assertion evaluated to false)
                        affected: safety_factor
-```
-
-Use `--no-assert` to skip assertion checking:
-
-```bash
-$ graphcal eval rocket.gcl --no-assert
-dry_mass   = 1200 kg
-fuel_mass  = 2800 kg
-...
 ```
 
 ### Plot Output

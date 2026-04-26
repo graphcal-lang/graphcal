@@ -41,9 +41,6 @@ enum Commands {
         /// Maximum size (in bytes) of the --input JSON file. Defaults to 1 MiB.
         #[arg(long)]
         input_max_bytes: Option<u64>,
-        /// Skip assertion checking
-        #[arg(long)]
-        no_assert: bool,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -122,7 +119,6 @@ fn main() {
             set,
             input,
             input_max_bytes,
-            no_assert,
             root,
             plot: plot_output,
         } => {
@@ -134,7 +130,6 @@ fn main() {
                 &file,
                 &format,
                 &overrides,
-                no_assert,
                 root.as_deref(),
                 plot_output.as_ref(),
             );
@@ -167,7 +162,6 @@ fn handle_eval(
     file: &Path,
     format: &OutputFormat,
     overrides: &std::collections::HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
-    no_assert: bool,
     root: Option<&Path>,
     plot_output: Option<&PlotOutput>,
 ) {
@@ -179,9 +173,9 @@ fn handle_eval(
     match compile_and_eval_project(file, overrides, root, &fs) {
         Ok(result) => {
             match format {
-                OutputFormat::Text => print_text(&result, no_assert),
+                OutputFormat::Text => print_text(&result),
                 OutputFormat::Json => {
-                    if let Err(e) = print_json(&result, no_assert) {
+                    if let Err(e) = print_json(&result) {
                         eprintln!("JSON serialization error: {e}");
                         process::exit(2);
                     }
@@ -239,14 +233,13 @@ fn handle_eval(
 
             let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
                 || result.nodes.iter().any(|(_, r)| r.is_err());
-            let has_assert_failures = !no_assert
-                && result.assertions.iter().any(|(_, r, _)| {
-                    matches!(
-                        r,
-                        graphcal_eval::eval::AssertResult::Fail { .. }
-                            | graphcal_eval::eval::AssertResult::Error { .. }
-                    )
-                });
+            let has_assert_failures = result.assertions.iter().any(|(_, r, _)| {
+                matches!(
+                    r,
+                    graphcal_eval::eval::AssertResult::Fail { .. }
+                        | graphcal_eval::eval::AssertResult::Error { .. }
+                )
+            });
             if has_eval_errors || has_assert_failures {
                 process::exit(1);
             }
@@ -455,7 +448,7 @@ fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
 
 #[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
-fn print_text(result: &EvalResult, no_assert: bool) {
+fn print_text(result: &EvalResult) {
     use graphcal_eval::eval::Value;
 
     // Build output blocks preserving source order.
@@ -505,8 +498,8 @@ fn print_text(result: &EvalResult, no_assert: bool) {
         }
     }
 
-    // Print assertion results (unless --no-assert)
-    if !no_assert && !result.assertions.is_empty() {
+    // Print assertion results
+    if !result.assertions.is_empty() {
         println!();
         println!("Assertions:");
         let max_assert_len = result
@@ -577,7 +570,7 @@ fn format_assertion_line(
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
 )]
-fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Error> {
+fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
     use graphcal_eval::eval::{NodeError, Value};
 
     fn value_to_json(
@@ -727,7 +720,7 @@ fn print_json(result: &EvalResult, no_assert: bool) -> Result<(), serde_json::Er
     output.insert("param".to_string(), serde_json::Value::Object(params));
     output.insert("node".to_string(), serde_json::Value::Object(nodes));
 
-    if !no_assert && !result.assertions.is_empty() {
+    if !result.assertions.is_empty() {
         use graphcal_eval::eval::AssertResult;
 
         let assertions: serde_json::Map<String, serde_json::Value> = result
