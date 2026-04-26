@@ -938,8 +938,7 @@ fn collect_expr_refs(
                 target: SymbolKey::TopLevel(name.value.to_string()),
             });
         }
-        ExprKind::QualifiedGraphRef { module, name }
-        | ExprKind::QualifiedConstRef { module, name } => {
+        ExprKind::QualifiedConstRef { module, name } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: SymbolKey::Qualified {
@@ -948,19 +947,8 @@ fn collect_expr_refs(
                 },
             });
         }
-        ExprKind::InlineDagRef {
-            module,
-            dag,
-            args,
-            output,
-        } => {
-            let dag_target = module.as_ref().map_or_else(
-                || SymbolKey::TopLevel(dag.value.to_string()),
-                |m| SymbolKey::Qualified {
-                    module: m.name.clone(),
-                    name: dag.value.to_string(),
-                },
-            );
+        ExprKind::InlineDagRef { dag, args, output } => {
+            let dag_target = SymbolKey::TopLevel(dag.value.to_string());
             table.references.push(ReferenceInfo {
                 span: dag.span,
                 target: dag_target,
