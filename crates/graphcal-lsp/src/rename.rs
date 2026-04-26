@@ -143,7 +143,7 @@ mod tests {
             source: source.to_string(),
             symbol_table,
             imported_definitions: HashMap::new(),
-            diagnostics: Vec::new(),
+            diagnostics: HashMap::new(),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
             import_links: Vec::new(),

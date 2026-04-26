@@ -30,7 +30,7 @@ use graphcal_eval::loader::LoadedProject;
 use indexmap::IndexMap;
 
 use crate::convert::position_to_byte_offset;
-use crate::diagnostics::{compile_error_to_diagnostics, eval_result_to_diagnostics};
+use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
@@ -71,8 +71,10 @@ pub(crate) struct AnalysisResult {
     pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
     pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
-    /// Diagnostics to publish.
-    pub(crate) diagnostics: Vec<Diagnostic>,
+    /// Diagnostics to publish, grouped by the URI they belong to. The active
+    /// document's URI is always present (with an empty Vec when clean) so a
+    /// previously-published diagnostic can be cleared.
+    pub(crate) diagnostics: HashMap<Url, Vec<Diagnostic>>,
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub(crate) eval_values: HashMap<String, String>,
@@ -98,13 +100,24 @@ pub struct Backend {
     change_generations: Arc<RwLock<HashMap<Url, u64>>>,
 }
 
+#[cfg(test)]
+impl AnalysisResult {
+    /// True when no diagnostics are present across any URI.
+    pub(crate) fn has_no_diagnostics(&self) -> bool {
+        self.diagnostics.values().all(Vec::is_empty)
+    }
+}
+
 impl std::fmt::Debug for AnalysisResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnalysisResult")
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field("imported_defs", &self.imported_definitions.len())
-            .field("diagnostics_count", &self.diagnostics.len())
+            .field(
+                "diagnostics_count",
+                &self.diagnostics.values().map(Vec::len).sum::<usize>(),
+            )
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
             .field("import_links_count", &self.import_links.len())
@@ -196,9 +209,15 @@ impl Backend {
                 return;
             }
 
-            let diagnostics = analysis.diagnostics.clone();
+            let new_diags = analysis.diagnostics.clone();
+            let stale_uris = collect_stale_uris(&documents, &uri, &new_diags).await;
             documents.write().await.insert(uri.clone(), analysis);
-            client.publish_diagnostics(uri, diagnostics, None).await;
+            for stale in stale_uris {
+                client.publish_diagnostics(stale, Vec::new(), None).await;
+            }
+            for (target_uri, diags) in new_diags {
+                client.publish_diagnostics(target_uri, diags, None).await;
+            }
             // Best-effort: the client may not support inlay-hint refresh.
             let _ = client.inlay_hint_refresh().await;
         });
@@ -222,14 +241,43 @@ impl Backend {
         if !is_generation_current(&self.change_generations, &uri, generation).await {
             return;
         }
-        let diagnostics = analysis.diagnostics.clone();
+        let new_diags = analysis.diagnostics.clone();
+        let stale_uris = collect_stale_uris(&self.documents, &uri, &new_diags).await;
         self.documents.write().await.insert(uri.clone(), analysis);
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+        for stale in stale_uris {
+            self.client
+                .publish_diagnostics(stale, Vec::new(), None)
+                .await;
+        }
+        for (target_uri, diags) in new_diags {
+            self.client
+                .publish_diagnostics(target_uri, diags, None)
+                .await;
+        }
         // Best-effort: the client may not support inlay-hint refresh.
         let _ = self.client.inlay_hint_refresh().await;
     }
+}
+
+/// Compute the set of URIs that previously had diagnostics published from
+/// `active_uri`'s analysis but are absent from the new diagnostic map. The
+/// caller publishes empty Vecs to those URIs to clear stale markers.
+async fn collect_stale_uris(
+    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    active_uri: &Url,
+    new_diags: &HashMap<Url, Vec<Diagnostic>>,
+) -> Vec<Url> {
+    let stale = {
+        let docs = documents.read().await;
+        docs.get(active_uri).map(|prev| {
+            prev.diagnostics
+                .keys()
+                .filter(|u| !new_diags.contains_key(*u))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+    };
+    stale.unwrap_or_default()
 }
 
 /// Check whether `generation` is still the current generation stored for `uri`.
@@ -265,6 +313,49 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
     }
 }
 
+/// Build a resolver that maps a diagnostic's source name (typically the
+/// imported file's basename) to its (URI, source-text) pair, using the loaded
+/// project as the lookup table.
+fn build_source_resolver(project: &LoadedProject) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
+    move |name: &str| {
+        project.files.values().find_map(|f| {
+            let basename = f.path.file_name().map(|s| s.to_string_lossy());
+            let matches = basename.as_deref() == Some(name) || f.path.to_string_lossy() == name;
+            if !matches {
+                return None;
+            }
+            let uri = Url::from_file_path(&f.path).ok()?;
+            Some((uri, f.source.as_str().to_string()))
+        })
+    }
+}
+
+/// Fallback resolver used when no project loaded: resolve the diagnostic's
+/// source name as a sibling of the active URI's file. Reads the file off
+/// disk to recover the source text. Returns None if the file can't be read.
+///
+/// This exists so that an unparseable imported file still routes its
+/// diagnostic to the right URI even when `load_project` itself failed.
+fn sibling_file_resolver(active_uri: &Url) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
+    move |name: &str| {
+        let active_path = active_uri.to_file_path().ok()?;
+        let candidate = active_path.parent()?.join(name);
+        let source = std::fs::read_to_string(&candidate).ok()?;
+        let uri = Url::from_file_path(&candidate).ok()?;
+        Some((uri, source))
+    }
+}
+
+/// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
+/// document's URI is always present (even when empty) and so eval diagnostics
+/// — which always belong to the active file — sit alongside any cross-file
+/// parse/TIR diagnostics.
+fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url, Vec<Diagnostic>> {
+    let mut out = HashMap::new();
+    out.insert(uri.clone(), diags);
+    out
+}
+
 /// Run the analysis pipeline, producing an `AnalysisResult`.
 ///
 /// The pipeline has two stages:
@@ -278,11 +369,18 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
     let project = match build_project(uri, text) {
         Ok(project) => project,
         Err(e) => {
+            // No loaded project, but the diagnostic's source name might point
+            // at a sibling file we can resolve by joining onto the active
+            // URI's directory (this is enough for "imported file failed to
+            // parse" — the common case).
+            let resolve = sibling_file_resolver(uri);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            diagnostics.entry(uri.clone()).or_default();
             return AnalysisResult {
                 source: text.to_string(),
                 symbol_table: SymbolTable::default(),
                 imported_definitions: HashMap::new(),
-                diagnostics: compile_error_to_diagnostics(&e, text),
+                diagnostics,
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links: Vec::new(),
@@ -292,6 +390,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 
     let root_ast = &project.files[&project.root].ast;
     let import_links = collect_import_links(&project);
+    let resolve = build_source_resolver(&project);
 
     // Stage 2: Compile TIR from the project.
     match compile_to_tir_from_project(&project) {
@@ -306,11 +405,12 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
-            let (diagnostics, eval_values) = if tir.is_library() {
-                (Vec::new(), HashMap::new())
+            let (mut diagnostics, eval_values) = if tir.is_library() {
+                (HashMap::new(), HashMap::new())
             } else {
-                run_eval_from_project(&project, text, &symbol_table)
+                run_eval_from_project(&project, uri, text, &symbol_table)
             };
+            diagnostics.entry(uri.clone()).or_default();
 
             AnalysisResult {
                 source: text.to_string(),
@@ -326,7 +426,8 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
             let symbol_table = symbol_table::build_from_ast(root_ast, text);
             let imported_definitions = collect_imported_definitions(uri, &project, None);
-            let diagnostics = compile_error_to_diagnostics(&e, text);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            diagnostics.entry(uri.clone()).or_default();
 
             AnalysisResult {
                 source: text.to_string(),
@@ -344,17 +445,20 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 /// Run evaluation from a loaded project and extract diagnostics and formatted values.
 fn run_eval_from_project(
     project: &LoadedProject,
+    uri: &Url,
     text: &str,
     symbol_table: &SymbolTable,
-) -> (Vec<Diagnostic>, HashMap<String, String>) {
+) -> (HashMap<Url, Vec<Diagnostic>>, HashMap<String, String>) {
     match compile_and_eval_from_project(project, &HashMap::new()) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
             let values = format_eval_values(&result);
-            (diagnostics, values)
+            (diagnostics_for_active_uri(uri, diagnostics), values)
         }
         Err(e) => {
-            let diagnostics = compile_error_to_diagnostics(&e, text);
+            let resolve = build_source_resolver(project);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            diagnostics.entry(uri.clone()).or_default();
             (diagnostics, HashMap::new())
         }
     }
@@ -829,9 +933,23 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        // Pull the previous diagnostic URI set out of the cached analysis so
+        // we can clear cross-file diagnostics this document had published.
+        let stale_uris: Vec<Url> = self
+            .documents
+            .read()
+            .await
+            .get(&uri)
+            .map(|prev| prev.diagnostics.keys().cloned().collect())
+            .unwrap_or_default();
         self.documents.write().await.remove(&uri);
         self.change_generations.write().await.remove(&uri);
-        // Clear diagnostics for the closed document so stale errors don't linger.
+        for stale in stale_uris {
+            self.client
+                .publish_diagnostics(stale, Vec::new(), None)
+                .await;
+        }
+        // Always clear the closed document's URI even if it was never analyzed.
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
         // No `inlay_hint_refresh` here — the document is gone; there's
         // nothing for the client to re-fetch hints for. The refresh call
@@ -1254,7 +1372,7 @@ pub(bind) index Accel: Length / Time^2;
 ";
         let analysis = run_analysis(&untitled_uri(), text);
         assert!(
-            analysis.diagnostics.is_empty(),
+            analysis.has_no_diagnostics(),
             "library file should have no diagnostics, got: {:?}",
             analysis.diagnostics
         );
@@ -1267,7 +1385,7 @@ param mass: Mass;
 ";
         let analysis = run_analysis(&untitled_uri(), text);
         assert!(
-            analysis.diagnostics.is_empty(),
+            analysis.has_no_diagnostics(),
             "file with required param should have no diagnostics, got: {:?}",
             analysis.diagnostics
         );
@@ -1284,7 +1402,7 @@ node bad: Mass = mass + length;
 ";
         let analysis = run_analysis(&untitled_uri(), text);
         assert!(
-            !analysis.diagnostics.is_empty(),
+            !analysis.has_no_diagnostics(),
             "dim mismatch in executable file must still produce a diagnostic",
         );
     }
@@ -1322,7 +1440,7 @@ node bad: Mass = mass + length;
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text);
         assert!(
-            analysis.diagnostics.is_empty(),
+            analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
             analysis.diagnostics,
         );
@@ -1332,6 +1450,49 @@ node bad: Mass = mass + length;
             analysis.imported_definitions.contains_key(&doubled_key),
             "expected imported definition for selective include `doubled`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn parse_error_in_imported_file_routes_to_imported_uri() {
+        // helper.gcl has a syntax error; main.gcl is fine. The diagnostic must
+        // surface on helper.gcl's URI, not main.gcl's URI.
+        let dir = write_project(&[
+            (
+                "graphcal.toml",
+                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+            ),
+            ("helper.gcl", "this is not valid graphcal"),
+            (
+                "main.gcl",
+                "import helper.{y};\nnode z: Dimensionless = 1.0;",
+            ),
+        ]);
+        let main_path = dir.path().join("main.gcl");
+        let helper_path = dir.path().join("helper.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let helper_uri = Url::from_file_path(&helper_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+
+        let helper_diags = analysis
+            .diagnostics
+            .get(&helper_uri)
+            .cloned()
+            .unwrap_or_default();
+        let main_diags = analysis
+            .diagnostics
+            .get(&main_uri)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !helper_diags.is_empty(),
+            "expected parse error in helper.gcl to surface on its own URI; full map: {:?}",
+            analysis.diagnostics,
+        );
+        assert!(
+            main_diags.is_empty(),
+            "main.gcl should not carry the parse error from the imported file; got: {main_diags:?}",
         );
     }
 
@@ -1353,7 +1514,7 @@ node bad: Mass = mass + length;
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text);
         assert!(
-            analysis.diagnostics.is_empty(),
+            analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
             analysis.diagnostics,
         );
