@@ -176,7 +176,7 @@ fn forward_ref_range_index_unit() {
 proptest! {
     #[test]
     fn rocket_order_independent(seed in 0u64..10000) {
-        let source = include_str!("../../../tests/fixtures/rocket.gcl");
+        let source = include_str!("../../../tests/fixtures/valid/rocket.gcl");
         let shuffled = shuffle_source(source, seed);
         let original_result = compile_and_eval(source)
             .expect("original source must evaluate");
@@ -187,7 +187,7 @@ proptest! {
 
     #[test]
     fn indexed_order_independent(seed in 0u64..10000) {
-        let source = include_str!("../../../tests/fixtures/indexed.gcl");
+        let source = include_str!("../../../tests/fixtures/valid/indexed.gcl");
         let shuffled = shuffle_source(source, seed);
         let original_result = compile_and_eval(source)
             .expect("original source must evaluate");
@@ -198,7 +198,7 @@ proptest! {
 
     #[test]
     fn range_index_order_independent(seed in 0u64..10000) {
-        let source = include_str!("../../../tests/fixtures/range_index.gcl");
+        let source = include_str!("../../../tests/fixtures/valid/range_index.gcl");
         let shuffled = shuffle_source(source, seed);
         let original_result = compile_and_eval(source)
             .expect("original source must evaluate");
@@ -209,7 +209,7 @@ proptest! {
 
     #[test]
     fn mixed_index_order_independent(seed in 0u64..10000) {
-        let source = include_str!("../../../tests/fixtures/mixed_index.gcl");
+        let source = include_str!("../../../tests/fixtures/valid/mixed_index.gcl");
         let shuffled = shuffle_source(source, seed);
         let original_result = compile_and_eval(source)
             .expect("original source must evaluate");

@@ -24,7 +24,7 @@ fn fixture(name: &str) -> String {
 #[test]
 fn eval_rocket_text_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl")])
+        .args(["eval", &fixture("valid/rocket.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -51,7 +51,7 @@ fn eval_rocket_text_output() {
 #[test]
 fn eval_rocket_json_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--format", "json"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -83,7 +83,7 @@ fn eval_nonexistent_file_fails() {
 #[test]
 fn eval_indexed_text_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("indexed.gcl")])
+        .args(["eval", &fixture("valid/indexed.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -114,7 +114,7 @@ fn eval_indexed_text_output() {
 #[test]
 fn eval_indexed_json_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("indexed.gcl"), "--format", "json"])
+        .args(["eval", &fixture("valid/indexed.gcl"), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -157,7 +157,7 @@ fn eval_invalid_syntax_fails() {
 #[test]
 fn eval_with_set_flag() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=450.0 s"])
         .output()
         .expect("failed to run graphcal");
 
@@ -187,7 +187,7 @@ fn eval_with_multiple_set() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("rocket.gcl"),
+            &fixture("valid/rocket.gcl"),
             "--set",
             "isp=450.0 s",
             "--set",
@@ -219,7 +219,7 @@ fn eval_with_multiple_set() {
 #[test]
 fn eval_set_invalid_param() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "nonexistent=100"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "nonexistent=100"])
         .output()
         .expect("failed to run graphcal");
 
@@ -234,7 +234,7 @@ fn eval_set_invalid_param() {
 #[test]
 fn eval_user_defined_dimensions() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("user_dimensions.gcl")])
+        .args(["eval", &fixture("valid/user_dimensions.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -259,7 +259,7 @@ fn eval_user_defined_dimensions() {
 #[test]
 fn eval_set_node_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "delta_v=100.0 m/s"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "delta_v=100.0 m/s"])
         .output()
         .expect("failed to run graphcal");
 
@@ -274,7 +274,7 @@ fn eval_set_node_error() {
 #[test]
 fn eval_set_bad_value() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=???"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=???"])
         .output()
         .expect("failed to run graphcal");
 
@@ -288,7 +288,7 @@ fn eval_set_bad_value() {
 #[test]
 fn eval_missing_import_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi/missing_import.gcl")])
+        .args(["eval", &fixture("invalid/multi/missing_import.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -300,7 +300,7 @@ fn eval_missing_import_error() {
 #[test]
 fn eval_tagged_union_text_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("tagged_union.gcl")])
+        .args(["eval", &fixture("valid/tagged_union.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -344,7 +344,7 @@ fn eval_tagged_union_text_output() {
 #[test]
 fn eval_tagged_union_json_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("tagged_union.gcl"), "--format", "json"])
+        .args(["eval", &fixture("valid/tagged_union.gcl"), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -373,7 +373,7 @@ fn eval_tagged_union_json_output() {
 #[test]
 fn eval_import_name_not_found() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi/bad_name_import.gcl")])
+        .args(["eval", &fixture("invalid/multi/bad_name_import.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -392,9 +392,9 @@ fn eval_with_input_json() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("rocket.gcl"),
+            &fixture("valid/rocket.gcl"),
             "--input",
-            &fixture("input_rocket.json"),
+            &fixture("valid/input_rocket.json"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -427,9 +427,9 @@ fn eval_input_json_set_precedence() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("rocket.gcl"),
+            &fixture("valid/rocket.gcl"),
             "--input",
-            &fixture("input_rocket.json"),
+            &fixture("valid/input_rocket.json"),
             "--set",
             "isp=500.0 s",
         ])
@@ -463,9 +463,9 @@ fn eval_input_json_indexed() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("indexed.gcl"),
+            &fixture("valid/indexed.gcl"),
             "--input",
-            &fixture("input_indexed.json"),
+            &fixture("valid/input_indexed.json"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -490,9 +490,9 @@ fn eval_input_json_tagged_union() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("tagged_union_param.gcl"),
+            &fixture("valid/tagged_union_param.gcl"),
             "--input",
-            &fixture("input_tagged_union.json"),
+            &fixture("valid/input_tagged_union.json"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -527,7 +527,7 @@ fn eval_input_json_unknown_param() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("rocket.gcl"),
+            &fixture("valid/rocket.gcl"),
             "--input",
             json_path.to_str().unwrap(),
         ])
@@ -554,7 +554,7 @@ fn eval_input_json_invalid_json() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("rocket.gcl"),
+            &fixture("valid/rocket.gcl"),
             "--input",
             json_path.to_str().unwrap(),
         ])
@@ -574,7 +574,7 @@ fn eval_input_json_invalid_json() {
 #[test]
 fn eval_assertions_pass() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions.gcl")])
+        .args(["eval", &fixture("valid/assertions.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -605,7 +605,7 @@ fn eval_assertions_pass() {
 #[test]
 fn eval_assertions_pass_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions.gcl"), "--format", "json"])
+        .args(["eval", &fixture("valid/assertions.gcl"), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -633,7 +633,7 @@ fn eval_assertions_pass_json() {
 #[test]
 fn eval_assertions_fail_exit_code() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions_fail.gcl")])
+        .args(["eval", &fixture("valid/assertions_fail.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -652,7 +652,7 @@ fn eval_assertions_fail_exit_code() {
 #[test]
 fn eval_assertions_tolerance_fail() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions_tolerance_fail.gcl")])
+        .args(["eval", &fixture("valid/assertions_tolerance_fail.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -675,7 +675,7 @@ fn eval_assertions_tolerance_fail() {
 #[test]
 fn eval_assertions_assumes_affected_nodes() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions_assumes.gcl")])
+        .args(["eval", &fixture("valid/assertions_assumes.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -698,7 +698,7 @@ fn eval_assertions_assumes_affected_nodes() {
 #[test]
 fn eval_assertions_indexed_fail() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("assertions_indexed.gcl")])
+        .args(["eval", &fixture("valid/assertions_indexed.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -729,7 +729,7 @@ fn eval_assertions_indexed_fail() {
 #[test]
 fn eval_assertions_compile_error_exit_code() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("errors/assert_not_bool.gcl")])
+        .args(["eval", &fixture("invalid/errors/assert_not_bool.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -743,7 +743,7 @@ fn eval_assertions_compile_error_exit_code() {
 fn eval_explicit_index_import() {
     // Bug 3: `import "./lib.gcl" { Color }` should import the Color index explicitly.
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi/explicit_index/main.gcl")])
+        .args(["eval", &fixture("valid/multi/explicit_index/main.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -766,7 +766,7 @@ fn eval_explicit_index_import() {
 #[test]
 fn eval_variant_comparison() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("variant_comparison.gcl")])
+        .args(["eval", &fixture("valid/variant_comparison.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -814,7 +814,7 @@ fn eval_variant_comparison() {
 #[test]
 fn eval_variant_match() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("variant_match.gcl")])
+        .args(["eval", &fixture("valid/variant_match.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -872,7 +872,7 @@ fn eval_variant_match() {
 #[test]
 fn eval_power_budget() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("power_budget.gcl")])
+        .args(["eval", &fixture("valid/power_budget.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -912,7 +912,7 @@ fn eval_power_budget() {
 fn eval_multi_decl_sliced() {
     // Multi-decl v3: multi-axis shared prefix with slice sections.
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi_decl_sliced.gcl")])
+        .args(["eval", &fixture("valid/multi_decl_sliced.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -939,7 +939,7 @@ fn eval_multi_decl_sliced() {
 fn eval_multi_decl_2d() {
     // Multi-decl v2: mixed 1-D and 2-D slots sharing one row axis.
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi_decl_2d.gcl")])
+        .args(["eval", &fixture("valid/multi_decl_2d.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -969,7 +969,7 @@ fn eval_multi_decl_1d() {
     // Multi-decl (issue #481) v1: homogeneous 1-D slots across
     // param/const-node kinds must evaluate end-to-end.
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi_decl_1d.gcl")])
+        .args(["eval", &fixture("valid/multi_decl_1d.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -997,7 +997,7 @@ fn eval_multi_decl_1d() {
 #[test]
 fn eval_power_budget_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("power_budget.gcl"), "--format", "json"])
+        .args(["eval", &fixture("valid/power_budget.gcl"), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1036,7 +1036,7 @@ fn eval_power_budget_json() {
 #[test]
 fn eval_thermal_analysis() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("thermal_analysis.gcl")])
+        .args(["eval", &fixture("valid/thermal_analysis.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1073,7 +1073,7 @@ fn eval_thermal_analysis() {
 #[test]
 fn eval_parenthesized_exprs() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("parenthesized_exprs.gcl")])
+        .args(["eval", &fixture("valid/parenthesized_exprs.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1117,7 +1117,7 @@ fn eval_parenthesized_exprs() {
 fn eval_expected_fail_pass() {
     // A failing assertion marked #[expected_fail] should invert to pass
     let output = graphcal_bin()
-        .args(["eval", &fixture("expected_fail_pass.gcl")])
+        .args(["eval", &fixture("valid/expected_fail_pass.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1137,7 +1137,7 @@ fn eval_expected_fail_pass() {
 fn eval_expected_fail_unexpected_pass() {
     // A passing assertion marked #[expected_fail] should invert to fail
     let output = graphcal_bin()
-        .args(["eval", &fixture("expected_fail_unexpected_pass.gcl")])
+        .args(["eval", &fixture("valid/expected_fail_unexpected_pass.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1161,7 +1161,7 @@ fn eval_expected_fail_unexpected_pass() {
 fn eval_expected_fail_on_node_error() {
     // #[expected_fail] on a node should produce a compile error
     let output = graphcal_bin()
-        .args(["eval", &fixture("errors/expected_fail_on_node.gcl")])
+        .args(["eval", &fixture("invalid/errors/expected_fail_on_node.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1176,7 +1176,7 @@ fn eval_expected_fail_on_node_error() {
 fn eval_expected_fail_all_on_indexed_error() {
     // #[expected_fail] without arguments on an indexed assertion should produce a compile error
     let output = graphcal_bin()
-        .args(["eval", &fixture("errors/expected_fail_all_on_indexed.gcl")])
+        .args(["eval", &fixture("invalid/errors/expected_fail_all_on_indexed.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1192,7 +1192,7 @@ fn eval_expected_fail_indexed_partial() {
     // Per-variant expected_fail should only suppress the specified variant;
     // other failing variants should still be reported.
     let output = graphcal_bin()
-        .args(["eval", &fixture("expected_fail_indexed_partial.gcl")])
+        .args(["eval", &fixture("valid/expected_fail_indexed_partial.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1215,7 +1215,7 @@ fn eval_expected_fail_indexed_unexpected_pass() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("expected_fail_indexed_unexpected_pass.gcl"),
+            &fixture("valid/expected_fail_indexed_unexpected_pass.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -1239,7 +1239,7 @@ fn eval_expected_fail_multi_indexed_partial() {
     // Per-tuple-key expected_fail should only suppress specified tuple keys;
     // other failing keys should still be reported.
     let output = graphcal_bin()
-        .args(["eval", &fixture("expected_fail_multi_indexed_partial.gcl")])
+        .args(["eval", &fixture("valid/expected_fail_multi_indexed_partial.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1261,7 +1261,7 @@ fn eval_expected_fail_multi_indexed_partial() {
 fn format_check_already_formatted() {
     // rocket.gcl is a formatter-tested fixture and should already be formatted.
     let output = graphcal_bin()
-        .args(["format", "--check", &fixture("rocket.gcl")])
+        .args(["format", "--check", &fixture("valid/rocket.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1375,7 +1375,7 @@ fn format_in_place_then_check() {
 fn format_check_recursive_directory() {
     // --check on a directory should recursively find .gcl files
     let output = graphcal_bin()
-        .args(["format", "--check", &fixture("multi/rocket_split")])
+        .args(["format", "--check", &fixture("valid/multi/rocket_split")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1389,7 +1389,7 @@ fn format_check_recursive_directory() {
 #[test]
 fn eval_datetime_basic() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_basic.gcl")])
+        .args(["eval", &fixture("valid/datetime_basic.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1420,7 +1420,7 @@ fn eval_datetime_basic() {
 #[test]
 fn eval_datetime_epoch() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_epoch.gcl")])
+        .args(["eval", &fixture("valid/datetime_epoch.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1454,7 +1454,7 @@ fn eval_datetime_epoch() {
 #[test]
 fn eval_datetime_scale_mismatch_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("errors/datetime_scale_mismatch.gcl")])
+        .args(["eval", &fixture("invalid/errors/datetime_scale_mismatch.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1472,7 +1472,7 @@ fn eval_datetime_scale_mismatch_error() {
 #[test]
 fn eval_datetime_conversion() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_conversion.gcl")])
+        .args(["eval", &fixture("valid/datetime_conversion.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1501,7 +1501,7 @@ fn eval_datetime_conversion_non_datetime_error() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("errors/datetime_conversion_non_datetime.gcl"),
+            &fixture("invalid/errors/datetime_conversion_non_datetime.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -1524,9 +1524,9 @@ fn format_check_multiple_fixtures() {
         .args([
             "format",
             "--check",
-            &fixture("rocket.gcl"),
-            &fixture("functions.gcl"),
-            &fixture("generics.gcl"),
+            &fixture("valid/rocket.gcl"),
+            &fixture("invalid/functions.gcl"),
+            &fixture("valid/generics.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -1547,9 +1547,9 @@ fn format_check_multi_decl_fixtures_idempotent() {
         .args([
             "format",
             "--check",
-            &fixture("multi_decl_1d.gcl"),
-            &fixture("multi_decl_2d.gcl"),
-            &fixture("multi_decl_sliced.gcl"),
+            &fixture("valid/multi_decl_1d.gcl"),
+            &fixture("valid/multi_decl_2d.gcl"),
+            &fixture("valid/multi_decl_sliced.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -1564,7 +1564,7 @@ fn format_check_multi_decl_fixtures_idempotent() {
 #[test]
 fn eval_datetime_timezone() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_timezone.gcl")])
+        .args(["eval", &fixture("valid/datetime_timezone.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1615,7 +1615,7 @@ fn eval_datetime_timezone_non_datetime_error() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("errors/datetime_timezone_non_datetime.gcl"),
+            &fixture("invalid/errors/datetime_timezone_non_datetime.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -1634,7 +1634,7 @@ fn eval_datetime_timezone_non_datetime_error() {
 #[test]
 fn eval_datetime_extract() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_extract.gcl")])
+        .args(["eval", &fixture("valid/datetime_extract.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1659,7 +1659,7 @@ fn eval_datetime_extract() {
 #[test]
 fn eval_datetime_extract_non_datetime_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("errors/datetime_extract_non_datetime.gcl")])
+        .args(["eval", &fixture("invalid/errors/datetime_extract_non_datetime.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1677,7 +1677,7 @@ fn eval_datetime_extract_non_datetime_error() {
 #[test]
 fn eval_datetime_jd_unix() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("datetime_jd_unix.gcl")])
+        .args(["eval", &fixture("valid/datetime_jd_unix.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1700,7 +1700,7 @@ fn eval_datetime_jd_unix() {
 #[test]
 fn eval_instantiated_import_selective() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("multi/instantiated_import/main.gcl")])
+        .args(["eval", &fixture("valid/multi/instantiated_import/main.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1725,7 +1725,7 @@ fn eval_instantiated_import_selective() {
 fn eval_partial_set_uses_defaults() {
     // Partial --set falls back to defaults for the unset params.
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--set", "isp=450.0 s"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=450.0 s"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1740,7 +1740,7 @@ fn eval_partial_set_uses_defaults() {
 fn eval_no_overrides_defaults_freely() {
     // No --set or --input at all → defaults used freely, no error
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl")])
+        .args(["eval", &fixture("valid/rocket.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -1756,7 +1756,7 @@ fn eval_no_overrides_defaults_freely() {
 #[test]
 fn eval_plot_json_output() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_basic.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_basic.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1784,7 +1784,7 @@ fn eval_plot_json_output() {
 #[test]
 fn eval_plot_scatter_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_scatter.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_scatter.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1803,7 +1803,7 @@ fn eval_plot_scatter_json() {
 #[test]
 fn eval_plot_line_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_line.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_line.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1822,7 +1822,7 @@ fn eval_plot_line_json() {
 #[test]
 fn eval_plot_bar_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_bar.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_bar.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1841,7 +1841,7 @@ fn eval_plot_bar_json() {
 #[test]
 fn eval_plot_heatmap_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_heatmap.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_heatmap.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1860,7 +1860,7 @@ fn eval_plot_heatmap_json() {
 #[test]
 fn eval_plot_no_plots_warns() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("rocket.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1881,7 +1881,7 @@ fn eval_plot_no_plots_warns() {
 #[test]
 fn eval_figure_basic_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("figure_basic.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/figure_basic.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1942,7 +1942,7 @@ fn eval_figure_basic_json() {
 #[test]
 fn eval_figure_hidden_json() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("figure_hidden.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/figure_hidden.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -1986,7 +1986,7 @@ fn eval_figure_hidden_json() {
 fn eval_plot_basic_standalone_figures() {
     // plot_basic.gcl has 2 plots, no figures — should produce 2 standalone figures
     let output = graphcal_bin()
-        .args(["eval", &fixture("plot_basic.gcl"), "--plot", "json"])
+        .args(["eval", &fixture("valid/plot_basic.gcl"), "--plot", "json"])
         .output()
         .expect("failed to run graphcal");
 
@@ -2020,8 +2020,8 @@ fn format_check_figure_fixtures() {
         .args([
             "format",
             "--check",
-            &fixture("figure_basic.gcl"),
-            &fixture("figure_hidden.gcl"),
+            &fixture("valid/figure_basic.gcl"),
+            &fixture("valid/figure_hidden.gcl"),
         ])
         .output()
         .expect("failed to run graphcal");
@@ -2038,7 +2038,7 @@ fn format_check_figure_fixtures() {
 #[test]
 fn eval_dynamic_units() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("dynamic_units.gcl")])
+        .args(["eval", &fixture("valid/dynamic_units.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -2067,7 +2067,7 @@ fn eval_dynamic_units_with_override() {
     let output = graphcal_bin()
         .args([
             "eval",
-            &fixture("dynamic_units.gcl"),
+            &fixture("valid/dynamic_units.gcl"),
             "--set",
             "usd_per_eur=1.20",
         ])

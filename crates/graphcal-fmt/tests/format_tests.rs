@@ -29,62 +29,62 @@ macro_rules! idempotency_test {
     };
 }
 
-idempotency_test!(idempotent_constants, "constants.gcl");
-idempotency_test!(idempotent_functions, "functions.gcl");
-idempotency_test!(idempotent_generics, "generics.gcl");
-idempotency_test!(idempotent_hohmann, "hohmann.gcl");
-idempotency_test!(idempotent_indexed, "indexed.gcl");
-idempotency_test!(idempotent_integers, "integers.gcl");
-idempotency_test!(idempotent_orbital, "orbital.gcl");
-idempotency_test!(idempotent_range_index, "range_index.gcl");
-idempotency_test!(idempotent_rocket, "rocket.gcl");
-idempotency_test!(idempotent_tagged_union, "tagged_union.gcl");
-idempotency_test!(idempotent_tagged_union_param, "tagged_union_param.gcl");
-idempotency_test!(idempotent_table_literal, "table_literal.gcl");
-idempotency_test!(idempotent_time_scan, "time_scan.gcl");
-idempotency_test!(idempotent_user_dimensions, "user_dimensions.gcl");
-idempotency_test!(idempotent_assertions, "assertions.gcl");
-idempotency_test!(idempotent_assertions_fail, "assertions_fail.gcl");
+idempotency_test!(idempotent_constants, "valid/constants.gcl");
+idempotency_test!(idempotent_functions, "invalid/functions.gcl");
+idempotency_test!(idempotent_generics, "valid/generics.gcl");
+idempotency_test!(idempotent_hohmann, "invalid/hohmann.gcl");
+idempotency_test!(idempotent_indexed, "valid/indexed.gcl");
+idempotency_test!(idempotent_integers, "valid/integers.gcl");
+idempotency_test!(idempotent_orbital, "valid/orbital.gcl");
+idempotency_test!(idempotent_range_index, "valid/range_index.gcl");
+idempotency_test!(idempotent_rocket, "valid/rocket.gcl");
+idempotency_test!(idempotent_tagged_union, "valid/tagged_union.gcl");
+idempotency_test!(idempotent_tagged_union_param, "valid/tagged_union_param.gcl");
+idempotency_test!(idempotent_table_literal, "valid/table_literal.gcl");
+idempotency_test!(idempotent_time_scan, "invalid/time_scan.gcl");
+idempotency_test!(idempotent_user_dimensions, "valid/user_dimensions.gcl");
+idempotency_test!(idempotent_assertions, "valid/assertions.gcl");
+idempotency_test!(idempotent_assertions_fail, "valid/assertions_fail.gcl");
 idempotency_test!(
     idempotent_assertions_tolerance_fail,
-    "assertions_tolerance_fail.gcl"
+    "valid/assertions_tolerance_fail.gcl"
 );
-idempotency_test!(idempotent_assertions_assumes, "assertions_assumes.gcl");
-idempotency_test!(idempotent_assertions_indexed, "assertions_indexed.gcl");
-idempotency_test!(idempotent_plot_basic, "plot_basic.gcl");
-idempotency_test!(idempotent_variant_comparison, "variant_comparison.gcl");
-idempotency_test!(idempotent_variant_match, "variant_match.gcl");
-idempotency_test!(idempotent_power_budget, "power_budget.gcl");
-idempotency_test!(idempotent_thermal_analysis, "thermal_analysis.gcl");
-idempotency_test!(idempotent_parenthesized_exprs, "parenthesized_exprs.gcl");
-idempotency_test!(idempotent_expected_fail_pass, "expected_fail_pass.gcl");
+idempotency_test!(idempotent_assertions_assumes, "valid/assertions_assumes.gcl");
+idempotency_test!(idempotent_assertions_indexed, "valid/assertions_indexed.gcl");
+idempotency_test!(idempotent_plot_basic, "valid/plot_basic.gcl");
+idempotency_test!(idempotent_variant_comparison, "valid/variant_comparison.gcl");
+idempotency_test!(idempotent_variant_match, "valid/variant_match.gcl");
+idempotency_test!(idempotent_power_budget, "valid/power_budget.gcl");
+idempotency_test!(idempotent_thermal_analysis, "valid/thermal_analysis.gcl");
+idempotency_test!(idempotent_parenthesized_exprs, "valid/parenthesized_exprs.gcl");
+idempotency_test!(idempotent_expected_fail_pass, "valid/expected_fail_pass.gcl");
 idempotency_test!(
     idempotent_expected_fail_unexpected_pass,
-    "expected_fail_unexpected_pass.gcl"
+    "valid/expected_fail_unexpected_pass.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_indexed,
-    "expected_fail_indexed.gcl"
+    "invalid/expected_fail_indexed.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_multi_indexed,
-    "expected_fail_multi_indexed.gcl"
+    "invalid/expected_fail_multi_indexed.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_indexed_partial,
-    "expected_fail_indexed_partial.gcl"
+    "valid/expected_fail_indexed_partial.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_indexed_unexpected_pass,
-    "expected_fail_indexed_unexpected_pass.gcl"
+    "valid/expected_fail_indexed_unexpected_pass.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_multi_indexed_partial,
-    "expected_fail_multi_indexed_partial.gcl"
+    "valid/expected_fail_multi_indexed_partial.gcl"
 );
-idempotency_test!(idempotent_required_indexes, "required_indexes.gcl");
-idempotency_test!(idempotent_domain_scalar, "domain_scalar.gcl");
-idempotency_test!(idempotent_domain_indexed, "domain_indexed.gcl");
+idempotency_test!(idempotent_required_indexes, "invalid/required_indexes.gcl");
+idempotency_test!(idempotent_domain_scalar, "invalid/domain_scalar.gcl");
+idempotency_test!(idempotent_domain_indexed, "invalid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -108,59 +108,59 @@ macro_rules! roundtrip_test {
     };
 }
 
-roundtrip_test!(roundtrip_constants, "constants.gcl");
-roundtrip_test!(roundtrip_functions, "functions.gcl");
-roundtrip_test!(roundtrip_generics, "generics.gcl");
-roundtrip_test!(roundtrip_hohmann, "hohmann.gcl");
-roundtrip_test!(roundtrip_indexed, "indexed.gcl");
-roundtrip_test!(roundtrip_integers, "integers.gcl");
-roundtrip_test!(roundtrip_orbital, "orbital.gcl");
-roundtrip_test!(roundtrip_range_index, "range_index.gcl");
-roundtrip_test!(roundtrip_rocket, "rocket.gcl");
-roundtrip_test!(roundtrip_tagged_union, "tagged_union.gcl");
-roundtrip_test!(roundtrip_tagged_union_param, "tagged_union_param.gcl");
-roundtrip_test!(roundtrip_table_literal, "table_literal.gcl");
-roundtrip_test!(roundtrip_time_scan, "time_scan.gcl");
-roundtrip_test!(roundtrip_user_dimensions, "user_dimensions.gcl");
-roundtrip_test!(roundtrip_assertions, "assertions.gcl");
-roundtrip_test!(roundtrip_assertions_fail, "assertions_fail.gcl");
+roundtrip_test!(roundtrip_constants, "valid/constants.gcl");
+roundtrip_test!(roundtrip_functions, "invalid/functions.gcl");
+roundtrip_test!(roundtrip_generics, "valid/generics.gcl");
+roundtrip_test!(roundtrip_hohmann, "invalid/hohmann.gcl");
+roundtrip_test!(roundtrip_indexed, "valid/indexed.gcl");
+roundtrip_test!(roundtrip_integers, "valid/integers.gcl");
+roundtrip_test!(roundtrip_orbital, "valid/orbital.gcl");
+roundtrip_test!(roundtrip_range_index, "valid/range_index.gcl");
+roundtrip_test!(roundtrip_rocket, "valid/rocket.gcl");
+roundtrip_test!(roundtrip_tagged_union, "valid/tagged_union.gcl");
+roundtrip_test!(roundtrip_tagged_union_param, "valid/tagged_union_param.gcl");
+roundtrip_test!(roundtrip_table_literal, "valid/table_literal.gcl");
+roundtrip_test!(roundtrip_time_scan, "invalid/time_scan.gcl");
+roundtrip_test!(roundtrip_user_dimensions, "valid/user_dimensions.gcl");
+roundtrip_test!(roundtrip_assertions, "valid/assertions.gcl");
+roundtrip_test!(roundtrip_assertions_fail, "valid/assertions_fail.gcl");
 roundtrip_test!(
     roundtrip_assertions_tolerance_fail,
-    "assertions_tolerance_fail.gcl"
+    "valid/assertions_tolerance_fail.gcl"
 );
-roundtrip_test!(roundtrip_assertions_assumes, "assertions_assumes.gcl");
-roundtrip_test!(roundtrip_assertions_indexed, "assertions_indexed.gcl");
-roundtrip_test!(roundtrip_plot_basic, "plot_basic.gcl");
-roundtrip_test!(roundtrip_variant_comparison, "variant_comparison.gcl");
-roundtrip_test!(roundtrip_variant_match, "variant_match.gcl");
-roundtrip_test!(roundtrip_power_budget, "power_budget.gcl");
-roundtrip_test!(roundtrip_thermal_analysis, "thermal_analysis.gcl");
-roundtrip_test!(roundtrip_parenthesized_exprs, "parenthesized_exprs.gcl");
-roundtrip_test!(roundtrip_expected_fail_pass, "expected_fail_pass.gcl");
+roundtrip_test!(roundtrip_assertions_assumes, "valid/assertions_assumes.gcl");
+roundtrip_test!(roundtrip_assertions_indexed, "valid/assertions_indexed.gcl");
+roundtrip_test!(roundtrip_plot_basic, "valid/plot_basic.gcl");
+roundtrip_test!(roundtrip_variant_comparison, "valid/variant_comparison.gcl");
+roundtrip_test!(roundtrip_variant_match, "valid/variant_match.gcl");
+roundtrip_test!(roundtrip_power_budget, "valid/power_budget.gcl");
+roundtrip_test!(roundtrip_thermal_analysis, "valid/thermal_analysis.gcl");
+roundtrip_test!(roundtrip_parenthesized_exprs, "valid/parenthesized_exprs.gcl");
+roundtrip_test!(roundtrip_expected_fail_pass, "valid/expected_fail_pass.gcl");
 roundtrip_test!(
     roundtrip_expected_fail_unexpected_pass,
-    "expected_fail_unexpected_pass.gcl"
+    "valid/expected_fail_unexpected_pass.gcl"
 );
-roundtrip_test!(roundtrip_expected_fail_indexed, "expected_fail_indexed.gcl");
+roundtrip_test!(roundtrip_expected_fail_indexed, "invalid/expected_fail_indexed.gcl");
 roundtrip_test!(
     roundtrip_expected_fail_multi_indexed,
-    "expected_fail_multi_indexed.gcl"
+    "invalid/expected_fail_multi_indexed.gcl"
 );
 roundtrip_test!(
     roundtrip_expected_fail_indexed_partial,
-    "expected_fail_indexed_partial.gcl"
+    "valid/expected_fail_indexed_partial.gcl"
 );
 roundtrip_test!(
     roundtrip_expected_fail_indexed_unexpected_pass,
-    "expected_fail_indexed_unexpected_pass.gcl"
+    "valid/expected_fail_indexed_unexpected_pass.gcl"
 );
 roundtrip_test!(
     roundtrip_expected_fail_multi_indexed_partial,
-    "expected_fail_multi_indexed_partial.gcl"
+    "valid/expected_fail_multi_indexed_partial.gcl"
 );
-roundtrip_test!(roundtrip_required_indexes, "required_indexes.gcl");
-roundtrip_test!(roundtrip_domain_scalar, "domain_scalar.gcl");
-roundtrip_test!(roundtrip_domain_indexed, "domain_indexed.gcl");
+roundtrip_test!(roundtrip_required_indexes, "invalid/required_indexes.gcl");
+roundtrip_test!(roundtrip_domain_scalar, "invalid/domain_scalar.gcl");
+roundtrip_test!(roundtrip_domain_indexed, "invalid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -458,66 +458,66 @@ macro_rules! snapshot_test {
     };
 }
 
-snapshot_test!(snapshot_constants, "constants.gcl");
-snapshot_test!(snapshot_functions, "functions.gcl");
-snapshot_test!(snapshot_generics, "generics.gcl");
-snapshot_test!(snapshot_hohmann, "hohmann.gcl");
-snapshot_test!(snapshot_indexed, "indexed.gcl");
-snapshot_test!(snapshot_integers, "integers.gcl");
-snapshot_test!(snapshot_orbital, "orbital.gcl");
-snapshot_test!(snapshot_range_index, "range_index.gcl");
-snapshot_test!(snapshot_rocket, "rocket.gcl");
-snapshot_test!(snapshot_tagged_union, "tagged_union.gcl");
-snapshot_test!(snapshot_tagged_union_param, "tagged_union_param.gcl");
-snapshot_test!(snapshot_table_literal, "table_literal.gcl");
-snapshot_test!(snapshot_multi_decl_1d, "multi_decl_1d.gcl");
-snapshot_test!(snapshot_multi_decl_2d, "multi_decl_2d.gcl");
-snapshot_test!(snapshot_multi_decl_sliced, "multi_decl_sliced.gcl");
-snapshot_test!(snapshot_time_scan, "time_scan.gcl");
-snapshot_test!(snapshot_user_dimensions, "user_dimensions.gcl");
-snapshot_test!(snapshot_assertions, "assertions.gcl");
-snapshot_test!(snapshot_assertions_fail, "assertions_fail.gcl");
+snapshot_test!(snapshot_constants, "valid/constants.gcl");
+snapshot_test!(snapshot_functions, "invalid/functions.gcl");
+snapshot_test!(snapshot_generics, "valid/generics.gcl");
+snapshot_test!(snapshot_hohmann, "invalid/hohmann.gcl");
+snapshot_test!(snapshot_indexed, "valid/indexed.gcl");
+snapshot_test!(snapshot_integers, "valid/integers.gcl");
+snapshot_test!(snapshot_orbital, "valid/orbital.gcl");
+snapshot_test!(snapshot_range_index, "valid/range_index.gcl");
+snapshot_test!(snapshot_rocket, "valid/rocket.gcl");
+snapshot_test!(snapshot_tagged_union, "valid/tagged_union.gcl");
+snapshot_test!(snapshot_tagged_union_param, "valid/tagged_union_param.gcl");
+snapshot_test!(snapshot_table_literal, "valid/table_literal.gcl");
+snapshot_test!(snapshot_multi_decl_1d, "valid/multi_decl_1d.gcl");
+snapshot_test!(snapshot_multi_decl_2d, "valid/multi_decl_2d.gcl");
+snapshot_test!(snapshot_multi_decl_sliced, "valid/multi_decl_sliced.gcl");
+snapshot_test!(snapshot_time_scan, "invalid/time_scan.gcl");
+snapshot_test!(snapshot_user_dimensions, "valid/user_dimensions.gcl");
+snapshot_test!(snapshot_assertions, "valid/assertions.gcl");
+snapshot_test!(snapshot_assertions_fail, "valid/assertions_fail.gcl");
 snapshot_test!(
     snapshot_assertions_tolerance_fail,
-    "assertions_tolerance_fail.gcl"
+    "valid/assertions_tolerance_fail.gcl"
 );
-snapshot_test!(snapshot_assertions_assumes, "assertions_assumes.gcl");
-snapshot_test!(snapshot_assertions_indexed, "assertions_indexed.gcl");
-snapshot_test!(snapshot_plot_basic, "plot_basic.gcl");
-snapshot_test!(snapshot_variant_comparison, "variant_comparison.gcl");
-snapshot_test!(snapshot_variant_match, "variant_match.gcl");
-snapshot_test!(snapshot_power_budget, "power_budget.gcl");
-snapshot_test!(snapshot_thermal_analysis, "thermal_analysis.gcl");
-snapshot_test!(snapshot_parenthesized_exprs, "parenthesized_exprs.gcl");
-snapshot_test!(snapshot_expected_fail_pass, "expected_fail_pass.gcl");
+snapshot_test!(snapshot_assertions_assumes, "valid/assertions_assumes.gcl");
+snapshot_test!(snapshot_assertions_indexed, "valid/assertions_indexed.gcl");
+snapshot_test!(snapshot_plot_basic, "valid/plot_basic.gcl");
+snapshot_test!(snapshot_variant_comparison, "valid/variant_comparison.gcl");
+snapshot_test!(snapshot_variant_match, "valid/variant_match.gcl");
+snapshot_test!(snapshot_power_budget, "valid/power_budget.gcl");
+snapshot_test!(snapshot_thermal_analysis, "valid/thermal_analysis.gcl");
+snapshot_test!(snapshot_parenthesized_exprs, "valid/parenthesized_exprs.gcl");
+snapshot_test!(snapshot_expected_fail_pass, "valid/expected_fail_pass.gcl");
 snapshot_test!(
     snapshot_expected_fail_unexpected_pass,
-    "expected_fail_unexpected_pass.gcl"
+    "valid/expected_fail_unexpected_pass.gcl"
 );
-snapshot_test!(snapshot_expected_fail_indexed, "expected_fail_indexed.gcl");
+snapshot_test!(snapshot_expected_fail_indexed, "invalid/expected_fail_indexed.gcl");
 snapshot_test!(
     snapshot_expected_fail_multi_indexed,
-    "expected_fail_multi_indexed.gcl"
+    "invalid/expected_fail_multi_indexed.gcl"
 );
 snapshot_test!(
     snapshot_expected_fail_indexed_partial,
-    "expected_fail_indexed_partial.gcl"
+    "valid/expected_fail_indexed_partial.gcl"
 );
 snapshot_test!(
     snapshot_expected_fail_indexed_unexpected_pass,
-    "expected_fail_indexed_unexpected_pass.gcl"
+    "valid/expected_fail_indexed_unexpected_pass.gcl"
 );
 snapshot_test!(
     snapshot_expected_fail_multi_indexed_partial,
-    "expected_fail_multi_indexed_partial.gcl"
+    "valid/expected_fail_multi_indexed_partial.gcl"
 );
 snapshot_test!(
     snapshot_comments_in_expressions,
-    "comments_in_expressions.gcl"
+    "invalid/comments_in_expressions.gcl"
 );
-snapshot_test!(snapshot_required_indexes, "required_indexes.gcl");
-snapshot_test!(snapshot_domain_scalar, "domain_scalar.gcl");
-snapshot_test!(snapshot_domain_indexed, "domain_indexed.gcl");
+snapshot_test!(snapshot_required_indexes, "invalid/required_indexes.gcl");
+snapshot_test!(snapshot_domain_scalar, "invalid/domain_scalar.gcl");
+snapshot_test!(snapshot_domain_indexed, "invalid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Fixture: comments_in_expressions.gcl
@@ -525,11 +525,11 @@ snapshot_test!(snapshot_domain_indexed, "domain_indexed.gcl");
 
 idempotency_test!(
     idempotent_comments_in_expressions,
-    "comments_in_expressions.gcl"
+    "invalid/comments_in_expressions.gcl"
 );
 roundtrip_test!(
     roundtrip_comments_in_expressions,
-    "comments_in_expressions.gcl"
+    "invalid/comments_in_expressions.gcl"
 );
 
 // ---------------------------------------------------------------------------
@@ -537,357 +537,357 @@ roundtrip_test!(
 // ---------------------------------------------------------------------------
 
 // alias: selective import with renaming
-idempotency_test!(idempotent_multi_alias_main, "multi/alias/main.gcl");
-idempotency_test!(idempotent_multi_alias_helper, "multi/alias/helper.gcl");
-roundtrip_test!(roundtrip_multi_alias_main, "multi/alias/main.gcl");
-roundtrip_test!(roundtrip_multi_alias_helper, "multi/alias/helper.gcl");
-snapshot_test!(snapshot_multi_alias_main, "multi/alias/main.gcl");
-snapshot_test!(snapshot_multi_alias_helper, "multi/alias/helper.gcl");
+idempotency_test!(idempotent_multi_alias_main, "valid/multi/alias/main.gcl");
+idempotency_test!(idempotent_multi_alias_helper, "valid/multi/alias/helper.gcl");
+roundtrip_test!(roundtrip_multi_alias_main, "valid/multi/alias/main.gcl");
+roundtrip_test!(roundtrip_multi_alias_helper, "valid/multi/alias/helper.gcl");
+snapshot_test!(snapshot_multi_alias_main, "valid/multi/alias/main.gcl");
+snapshot_test!(snapshot_multi_alias_helper, "valid/multi/alias/helper.gcl");
 
 // alias_conflict: multiple imports with renaming
 idempotency_test!(
     idempotent_multi_alias_conflict_main,
-    "multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_a,
-    "multi/alias_conflict/lib/a.gcl"
+    "valid/multi/alias_conflict/lib/a.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_b,
-    "multi/alias_conflict/lib/b.gcl"
+    "valid/multi/alias_conflict/lib/b.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_alias_conflict_main,
-    "multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_alias_conflict_main,
-    "multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/main.gcl"
 );
 
 // module_import: whole-module import
 idempotency_test!(
     idempotent_multi_module_import_main,
-    "multi/module_import/main.gcl"
+    "invalid/multi/module_import/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_constants,
-    "multi/module_import/constants.gcl"
+    "invalid/multi/module_import/constants.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_main,
-    "multi/module_import/main.gcl"
+    "invalid/multi/module_import/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_main,
-    "multi/module_import/main.gcl"
+    "invalid/multi/module_import/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_constants,
-    "multi/module_import/constants.gcl"
+    "invalid/multi/module_import/constants.gcl"
 );
 
 // module_import_alias: import with alias
 idempotency_test!(
     idempotent_multi_module_import_alias_main,
-    "multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_alias_main,
-    "multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_alias_main,
-    "multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/main.gcl"
 );
 
 // module_import_fn: qualified function call
 idempotency_test!(
     idempotent_multi_module_import_fn_main,
-    "multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_fn_lib,
-    "multi/module_import_fn/lib.gcl"
+    "valid/multi/module_import_fn/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_fn_main,
-    "multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_fn_main,
-    "multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_fn_lib,
-    "multi/module_import_fn/lib.gcl"
+    "valid/multi/module_import_fn/lib.gcl"
 );
 
 // cross_file_dag: cross-file DAG paths
 idempotency_test!(
     idempotent_multi_cross_file_dag_main,
-    "multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_cross_file_dag_lib,
-    "multi/cross_file_dag/lib.gcl"
+    "invalid/multi/cross_file_dag/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_cross_file_dag_main,
-    "multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_cross_file_dag_main,
-    "multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_cross_file_dag_lib,
-    "multi/cross_file_dag/lib.gcl"
+    "invalid/multi/cross_file_dag/lib.gcl"
 );
 
 // bare_dag_ref: bare module path DAG references
 idempotency_test!(
     idempotent_multi_bare_dag_ref_main,
-    "multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_bare_dag_ref_lib,
-    "multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
+    "valid/multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_bare_dag_ref_main,
-    "multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_bare_dag_ref_main,
-    "multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_bare_dag_ref_lib,
-    "multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
+    "valid/multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
 );
 
 // module_import_graph_ref: qualified @-references
 idempotency_test!(
     idempotent_multi_module_import_graph_ref_main,
-    "multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_graph_ref_params,
-    "multi/module_import_graph_ref/params.gcl"
+    "invalid/multi/module_import_graph_ref/params.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_graph_ref_main,
-    "multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_graph_ref_main,
-    "multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/main.gcl"
 );
 
 // module_import_mixed: selective + module imports in same file
 idempotency_test!(
     idempotent_multi_module_import_mixed_main,
-    "multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_mixed_main,
-    "multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_mixed_main,
-    "multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/main.gcl"
 );
 
 // rocket_split: selective import with many identifiers
 idempotency_test!(
     idempotent_multi_rocket_split_main,
-    "multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_constants,
-    "multi/rocket_split/lib/constants.gcl"
+    "valid/multi/rocket_split/lib/constants.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_params,
-    "multi/rocket_split/lib/params.gcl"
+    "valid/multi/rocket_split/lib/params.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_rocket_split_main,
-    "multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_main,
-    "multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_constants,
-    "multi/rocket_split/lib/constants.gcl"
+    "valid/multi/rocket_split/lib/constants.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_params,
-    "multi/rocket_split/lib/params.gcl"
+    "valid/multi/rocket_split/lib/params.gcl"
 );
 
 // explicit_index: import of index types
 idempotency_test!(
     idempotent_multi_explicit_index_main,
-    "multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_explicit_index_lib,
-    "multi/explicit_index/lib.gcl"
+    "valid/multi/explicit_index/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_explicit_index_main,
-    "multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_explicit_index_main,
-    "multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/main.gcl"
 );
 
 // diamond_assert: diamond-shaped import graph
 idempotency_test!(
     idempotent_multi_diamond_assert_main,
-    "multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_shared,
-    "multi/diamond_assert/graph/shared.gcl"
+    "valid/multi/diamond_assert/graph/shared.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_left,
-    "multi/diamond_assert/graph/left.gcl"
+    "valid/multi/diamond_assert/graph/left.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_right,
-    "multi/diamond_assert/graph/right.gcl"
+    "valid/multi/diamond_assert/graph/right.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_diamond_assert_main,
-    "multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_diamond_assert_main,
-    "multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/main.gcl"
 );
 
 // assertions: cross-file assertions with #[assumes]
 idempotency_test!(
     idempotent_multi_assertions_main,
-    "multi/assertions/main.gcl"
+    "valid/multi/assertions/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_assertions_checks,
-    "multi/assertions/checks.gcl"
+    "valid/multi/assertions/checks.gcl"
 );
-roundtrip_test!(roundtrip_multi_assertions_main, "multi/assertions/main.gcl");
-snapshot_test!(snapshot_multi_assertions_main, "multi/assertions/main.gcl");
+roundtrip_test!(roundtrip_multi_assertions_main, "valid/multi/assertions/main.gcl");
+snapshot_test!(snapshot_multi_assertions_main, "valid/multi/assertions/main.gcl");
 snapshot_test!(
     snapshot_multi_assertions_checks,
-    "multi/assertions/checks.gcl"
+    "valid/multi/assertions/checks.gcl"
 );
 
 // auto_assert: auto-evaluated assertions from imports
 idempotency_test!(
     idempotent_multi_auto_assert_main,
-    "multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_auto_assert_lib,
-    "multi/auto_assert/lib.gcl"
+    "valid/multi/auto_assert/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_auto_assert_main,
-    "multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_auto_assert_main,
-    "multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/main.gcl"
 );
-snapshot_test!(snapshot_multi_auto_assert_lib, "multi/auto_assert/lib.gcl");
+snapshot_test!(snapshot_multi_auto_assert_lib, "valid/multi/auto_assert/lib.gcl");
 
 // auto_assert_module: module import with auto assertions
 idempotency_test!(
     idempotent_multi_auto_assert_module_main,
-    "multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_auto_assert_module_lib,
-    "multi/auto_assert_module/lib.gcl"
+    "invalid/multi/auto_assert_module/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_auto_assert_module_main,
-    "multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_auto_assert_module_main,
-    "multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/main.gcl"
 );
 
 // imported_deps: import with internal graph dependencies
 idempotency_test!(
     idempotent_multi_imported_deps_main,
-    "multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_imported_deps_lib,
-    "multi/imported_deps/lib.gcl"
+    "valid/multi/imported_deps/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_imported_deps_main,
-    "multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_imported_deps_main,
-    "multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/main.gcl"
 );
 
 // imported_assert_fail: import with failing assertion
 idempotency_test!(
     idempotent_multi_imported_assert_fail_main,
-    "multi/imported_assert_fail/main.gcl"
+    "valid/multi/imported_assert_fail/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_imported_assert_fail_lib,
-    "multi/imported_assert_fail/lib.gcl"
+    "valid/multi/imported_assert_fail/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_imported_assert_fail_main,
-    "multi/imported_assert_fail/main.gcl"
+    "valid/multi/imported_assert_fail/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_imported_assert_fail_main,
-    "multi/imported_assert_fail/main.gcl"
+    "valid/multi/imported_assert_fail/main.gcl"
 );
 
 // bad_name_import, missing_import, circular: error-case import syntax (still parseable)
 idempotency_test!(
     idempotent_multi_bad_name_import,
-    "multi/bad_name_import.gcl"
+    "invalid/multi/bad_name_import.gcl"
 );
-idempotency_test!(idempotent_multi_missing_import, "multi/missing_import.gcl");
-idempotency_test!(idempotent_multi_circular_a, "multi/circular_a.gcl");
-idempotency_test!(idempotent_multi_circular_b, "multi/circular_b.gcl");
-idempotency_test!(idempotent_multi_helper, "multi/helper.gcl");
-roundtrip_test!(roundtrip_multi_bad_name_import, "multi/bad_name_import.gcl");
-roundtrip_test!(roundtrip_multi_missing_import, "multi/missing_import.gcl");
-roundtrip_test!(roundtrip_multi_circular_a, "multi/circular_a.gcl");
-roundtrip_test!(roundtrip_multi_circular_b, "multi/circular_b.gcl");
-snapshot_test!(snapshot_multi_bad_name_import, "multi/bad_name_import.gcl");
-snapshot_test!(snapshot_multi_missing_import, "multi/missing_import.gcl");
-snapshot_test!(snapshot_multi_circular_a, "multi/circular_a.gcl");
-snapshot_test!(snapshot_multi_circular_b, "multi/circular_b.gcl");
+idempotency_test!(idempotent_multi_missing_import, "invalid/multi/missing_import.gcl");
+idempotency_test!(idempotent_multi_circular_a, "invalid/multi/circular_a.gcl");
+idempotency_test!(idempotent_multi_circular_b, "invalid/multi/circular_b.gcl");
+idempotency_test!(idempotent_multi_helper, "invalid/multi/helper.gcl");
+roundtrip_test!(roundtrip_multi_bad_name_import, "invalid/multi/bad_name_import.gcl");
+roundtrip_test!(roundtrip_multi_missing_import, "invalid/multi/missing_import.gcl");
+roundtrip_test!(roundtrip_multi_circular_a, "invalid/multi/circular_a.gcl");
+roundtrip_test!(roundtrip_multi_circular_b, "invalid/multi/circular_b.gcl");
+snapshot_test!(snapshot_multi_bad_name_import, "invalid/multi/bad_name_import.gcl");
+snapshot_test!(snapshot_multi_missing_import, "invalid/multi/missing_import.gcl");
+snapshot_test!(snapshot_multi_circular_a, "invalid/multi/circular_a.gcl");
+snapshot_test!(snapshot_multi_circular_b, "invalid/multi/circular_b.gcl");
 
 // ---------------------------------------------------------------------------
 // Edge-case fixture: long lines, deep nesting, complex expressions
 // ---------------------------------------------------------------------------
 
-idempotency_test!(idempotent_format_edge_cases, "format_edge_cases.gcl");
-roundtrip_test!(roundtrip_format_edge_cases, "format_edge_cases.gcl");
-snapshot_test!(snapshot_format_edge_cases, "format_edge_cases.gcl");
+idempotency_test!(idempotent_format_edge_cases, "invalid/format_edge_cases.gcl");
+roundtrip_test!(roundtrip_format_edge_cases, "invalid/format_edge_cases.gcl");
+snapshot_test!(snapshot_format_edge_cases, "invalid/format_edge_cases.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment-in-expression preservation tests

@@ -1365,7 +1365,7 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_call_basic_fixture() {
-        let source = include_str!("../../../../../tests/fixtures/inline_dag_call_basic/main.gcl");
+        let source = include_str!("../../../../../tests/fixtures/valid/inline_dag_call_basic/main.gcl");
         let file = Parser::new(source)
             .parse_file()
             .expect("fixture should parse");
