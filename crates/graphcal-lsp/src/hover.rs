@@ -1,6 +1,6 @@
 //! textDocument/hover handler.
 
-use graphcal_compiler::syntax::ast::Visibility;
+use graphcal_compiler::desugar::desugared_ast::Visibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::convert::span_to_range;

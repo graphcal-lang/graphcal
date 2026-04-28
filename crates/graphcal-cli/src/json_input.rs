@@ -342,10 +342,7 @@ fn convert_field_inits(
 
 /// Create an `Expr` with a synthetic span.
 const fn synth_expr(kind: ExprKind) -> Expr {
-    Expr {
-        kind,
-        span: SYNTH_SPAN,
-    }
+    Expr::new(kind, SYNTH_SPAN)
 }
 
 // ---------------------------------------------------------------------------

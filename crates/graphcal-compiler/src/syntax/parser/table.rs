@@ -47,10 +47,10 @@ impl Parser<'_> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
 
-        Ok(Expr {
-            kind: ExprKind::TableLiteral { indexes, entries },
+        Ok(Expr::new(
+            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral { indexes, entries }),
             span,
-        })
+        ))
     }
 
     /// Parse a single index spec in `table[...]`: either an identifier or an
@@ -391,10 +391,7 @@ impl Parser<'_> {
         }
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = brace_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::MapLiteral { entries },
-            span,
-        })
+        Ok(Expr::new(ExprKind::MapLiteral { entries }, span))
     }
 
     /// Parse a tuple-key map literal after `{` has been consumed.
@@ -434,10 +431,7 @@ impl Parser<'_> {
         }
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = brace_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::MapLiteral { entries },
-            span,
-        })
+        Ok(Expr::new(ExprKind::MapLiteral { entries }, span))
     }
 }
 
@@ -497,7 +491,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(named_index_name(&indexes[0]), "Maneuver");
                     assert_eq!(entries.len(), 3);
@@ -523,7 +520,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(nat_range_size(&indexes[0]), 3);
                     assert_eq!(entries.len(), 3);
@@ -549,7 +549,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(named_index_name(&indexes[0]), "Phase");
                     assert_eq!(named_index_name(&indexes[1]), "Maneuver");
@@ -578,7 +581,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(nat_range_size(&indexes[0]), 2);
                     assert_eq!(nat_range_size(&indexes[1]), 3);
@@ -605,7 +611,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(named_index_name(&indexes[0]), "Phase");
                     assert_eq!(nat_range_size(&indexes[1]), 3);
@@ -632,7 +641,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(nat_range_size(&indexes[0]), 2);
                     assert_eq!(named_index_name(&indexes[1]), "Maneuver");
@@ -666,7 +678,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 3);
                     assert_eq!(named_index_name(&indexes[0]), "Time");
                     assert_eq!(named_index_name(&indexes[1]), "Phase");
@@ -705,7 +720,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 3);
                     assert_eq!(nat_range_size(&indexes[0]), 2);
                     assert_eq!(named_index_name(&indexes[1]), "Phase");

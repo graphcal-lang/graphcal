@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use crate::desugar::desugared_ast::AttributeArg;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
-use crate::syntax::ast::AttributeArg;
 use crate::syntax::names::{IndexName, VariantName};
 use miette::NamedSource;
 

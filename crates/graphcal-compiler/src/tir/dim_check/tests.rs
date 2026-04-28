@@ -14,7 +14,8 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
 }
 
 fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
-    let file = Parser::new(source).parse_file().unwrap();
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
     let tir = crate::tir::typed::type_resolve(ir, &src)?;

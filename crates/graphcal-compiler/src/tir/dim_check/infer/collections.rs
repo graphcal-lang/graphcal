@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr};
+use crate::desugar::desugared_ast::{
+    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr,
+};
 use crate::syntax::names::{FieldName, GenericParamName, IndexName, StructTypeName};
 use crate::tir::typed::NatLinearForm;
 
@@ -135,7 +137,7 @@ pub(super) fn infer_for_comp(
 )]
 pub(super) fn infer_map_or_table_literal(
     expr: &Expr,
-    entries: &[crate::syntax::ast::MapEntry],
+    entries: &[crate::desugar::desugared_ast::MapEntry],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
@@ -692,8 +694,8 @@ fn fin_plus_literal(
 pub(super) fn infer_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &crate::syntax::ast::Ident,
-    val_name: &crate::syntax::ast::Ident,
+    acc_name: &crate::desugar::desugared_ast::Ident,
+    val_name: &crate::desugar::desugared_ast::Ident,
     body: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -771,8 +773,8 @@ pub(super) fn infer_scan(
 /// owning declaration's type, rather than scanning all declared types.
 pub(super) fn infer_unfold(
     init: &Expr,
-    prev_name: &crate::syntax::ast::Ident,
-    curr_name: &crate::syntax::ast::Ident,
+    prev_name: &crate::desugar::desugared_ast::Ident,
+    curr_name: &crate::desugar::desugared_ast::Ident,
     body: &Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
@@ -942,8 +944,8 @@ pub(super) fn infer_field_access(
 pub(super) fn infer_struct_construction(
     expr: &Expr,
     type_name: &crate::syntax::names::Spanned<StructTypeName>,
-    constructor_type_args: &[crate::syntax::ast::TypeExpr],
-    fields: &[crate::syntax::ast::FieldInit],
+    constructor_type_args: &[crate::desugar::desugared_ast::TypeExpr],
+    fields: &[crate::desugar::desugared_ast::FieldInit],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     dag_tirs: &HashMap<String, crate::tir::typed::TIR>,

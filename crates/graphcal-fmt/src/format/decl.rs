@@ -34,7 +34,9 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Plot(d) => format_plot_decl(fmt, d),
         DeclKind::Figure(d) => format_figure_decl(fmt, d),
         DeclKind::Layer(d) => format_layer_decl(fmt, d),
-        DeclKind::Multi(d) => format_multi_decl(fmt, d),
+        DeclKind::Sugar(graphcal_compiler::syntax::phase::RawDeclSugar::Multi(d)) => {
+            format_multi_decl(fmt, d)
+        }
     };
 
     // Prepend the visibility annotation (if any).

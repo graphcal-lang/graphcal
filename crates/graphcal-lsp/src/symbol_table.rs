@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::ast::{
+use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
     FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
-    PatternBinding, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl,
-    UnitDecl, UnitExpr, Visibility,
+    PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
+    Visibility,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -414,7 +414,10 @@ impl ScopeStack {
 /// `source` is the text the `ast` was parsed from — it is used to precompute
 /// LSP `Position`s for inlay-hint candidates so the request path avoids
 /// O(source) scans.
-pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File, source: &str) -> SymbolTable {
+pub fn build_from_ast(
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
+    source: &str,
+) -> SymbolTable {
     let mut table = SymbolTable::default();
     let mut scopes = ScopeStack::new();
 
@@ -443,32 +446,15 @@ pub fn build_from_ast(ast: &graphcal_compiler::syntax::ast::File, source: &str) 
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
             DeclKind::Dag(d) => collect_dag_decl(d, decl.span, vis, &mut table),
-            DeclKind::Multi(multi) => {
-                // Register each slot as its own symbol (goto-def / rename /
-                // hover work on the slot header). Surface features like
-                // inlay hints on header cells can walk the `multi` AST
-                // directly.
-                for slot_decl in graphcal_compiler::syntax::desugar::expand_multi_decl(multi) {
-                    match &slot_decl.kind {
-                        DeclKind::Param(p) => {
-                            collect_param_decl(p, slot_decl.span, vis, &mut table, &mut scopes);
-                        }
-                        DeclKind::Node(n) => {
-                            collect_node_decl(n, slot_decl.span, vis, &mut table, &mut scopes);
-                        }
-                        DeclKind::ConstNode(c) => {
-                            collect_const_node_decl(
-                                c,
-                                slot_decl.span,
-                                vis,
-                                &mut table,
-                                &mut scopes,
-                            );
-                        }
-                        _ => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
-                    }
-                }
-            }
+            // `Sugar(_)` carries `Infallible` for the `Desugared` phase, so
+            // this arm is statically unreachable. The deref of `&Infallible`
+            // is sound (no value can be observed) — this is the canonical
+            // proof of unreachability for sealed sugar variants.
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) — proof of unreachability"
+            )]
+            DeclKind::Sugar(s) => match *s {},
         }
     }
 
@@ -513,7 +499,7 @@ fn register_builtins(table: &mut SymbolTable) {
 }
 
 fn collect_attribute_refs(
-    attributes: &[graphcal_compiler::syntax::ast::Attribute],
+    attributes: &[graphcal_compiler::desugar::desugared_ast::Attribute],
     table: &mut SymbolTable,
 ) {
     for attr in attributes {
@@ -573,7 +559,7 @@ fn collect_node_decl(
 }
 
 fn collect_const_node_decl(
-    c: &graphcal_compiler::syntax::ast::ConstNodeDecl,
+    c: &graphcal_compiler::desugar::desugared_ast::ConstNodeDecl,
     decl_span: Span,
     visibility: Visibility,
     table: &mut SymbolTable,
@@ -760,10 +746,10 @@ fn collect_assert_decl(
         visibility,
     );
     match &a.body {
-        graphcal_compiler::syntax::ast::AssertBody::Expr(expr) => {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(expr) => {
             collect_expr_refs(expr, table, scopes);
         }
-        graphcal_compiler::syntax::ast::AssertBody::Tolerance {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -861,13 +847,13 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table:
     let dag_name = d.name.value.to_string();
     for body_decl in &d.body {
         let (member_name, member_span, category) = match &body_decl.kind {
-            graphcal_compiler::syntax::ast::DeclKind::Param(p) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::Param(p) => {
                 (p.name.value.to_string(), p.name.span, SymbolCategory::Param)
             }
-            graphcal_compiler::syntax::ast::DeclKind::Node(n) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::Node(n) => {
                 (n.name.value.to_string(), n.name.span, SymbolCategory::Node)
             }
-            graphcal_compiler::syntax::ast::DeclKind::ConstNode(c) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::ConstNode(c) => {
                 (c.name.value.to_string(), c.name.span, SymbolCategory::Const)
             }
             _ => continue,
@@ -896,15 +882,18 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     collect_import_or_include_names(&u.kind, table);
 }
 
-fn collect_include_decl(u: &graphcal_compiler::syntax::ast::IncludeDecl, table: &mut SymbolTable) {
+fn collect_include_decl(
+    u: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
+    table: &mut SymbolTable,
+) {
     collect_import_or_include_names(&u.kind, table);
 }
 
 fn collect_import_or_include_names(
-    kind: &graphcal_compiler::syntax::ast::ImportKind,
+    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     table: &mut SymbolTable,
 ) {
-    if let graphcal_compiler::syntax::ast::ImportKind::Selective(names) = kind {
+    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) = kind {
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
@@ -930,7 +919,7 @@ fn register_local_var(
     scopes: &mut ScopeStack,
     kind: ExprScopeKind,
     offset: usize,
-    name: &graphcal_compiler::syntax::ast::Ident,
+    name: &graphcal_compiler::desugar::desugared_ast::Ident,
     detail: &str,
 ) {
     let key = SymbolKey::ExprScoped {
@@ -959,7 +948,7 @@ fn register_local_var(
     reason = "expression walker needs to handle every ExprKind variant"
 )]
 fn collect_expr_refs(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -1087,18 +1076,13 @@ fn collect_expr_refs(
                 }
             }
         }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            // For TableLiteral, also add references for the index names in table[...].
-            if let ExprKind::TableLiteral { indexes, .. } = &expr.kind {
-                for idx in indexes {
-                    if let TableIndexSpec::Named(spanned) = idx {
-                        table.references.push(ReferenceInfo {
-                            span: spanned.span,
-                            target: SymbolKey::TopLevel(spanned.value.to_string()),
-                        });
-                    }
-                }
-            }
+        ExprKind::MapLiteral { entries } => {
+            // Note: the `table[I, J]` bracket-prefix index references are lost
+            // because the LSP consumes `File<Desugared>` (TableLiteral has
+            // been desugared to MapLiteral). Entry-level `Index.Variant` keys
+            // below still produce references. To restore bracket-prefix
+            // references, the LSP would have to consume the raw AST or carry
+            // a side-channel of preserved metadata.
             for entry in entries {
                 for key in &entry.keys {
                     table.references.push(ReferenceInfo {
@@ -1120,7 +1104,7 @@ fn collect_expr_refs(
             scopes.push();
             for binding in bindings {
                 let (detail, ref_info) = match &binding.index {
-                    graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
+                    graphcal_compiler::desugar::desugared_ast::ForBindingIndex::Named(spanned) => {
                         let detail = format!("loop variable over {}", spanned.value);
                         let ref_info = Some(ReferenceInfo {
                             span: spanned.span,
@@ -1128,7 +1112,10 @@ fn collect_expr_refs(
                         });
                         (detail, ref_info)
                     }
-                    graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
+                    graphcal_compiler::desugar::desugared_ast::ForBindingIndex::Range {
+                        arg,
+                        ..
+                    } => {
                         let detail = format!("loop variable over range({arg})");
                         (detail, None)
                     }
@@ -1163,7 +1150,10 @@ fn collect_expr_refs(
             collect_expr_refs(expr, table, scopes);
             for arg in args {
                 match arg {
-                    graphcal_compiler::syntax::ast::IndexArg::Variant { index, variant } => {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Variant {
+                        index,
+                        variant,
+                    } => {
                         table.references.push(ReferenceInfo {
                             span: index.span,
                             target: SymbolKey::TopLevel(index.value.to_string()),
@@ -1176,7 +1166,7 @@ fn collect_expr_refs(
                             },
                         });
                     }
-                    graphcal_compiler::syntax::ast::IndexArg::Var(ident) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Var(ident) => {
                         let target = scopes
                             .resolve(&ident.name)
                             .cloned()
@@ -1186,7 +1176,7 @@ fn collect_expr_refs(
                             target,
                         });
                     }
-                    graphcal_compiler::syntax::ast::IndexArg::Expr(e) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Expr(e) => {
                         collect_expr_refs(e, table, scopes);
                     }
                 }
@@ -1345,6 +1335,12 @@ fn collect_expr_refs(
                 collect_expr_refs(&arm.body, table, scopes);
             }
         }
+        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) — proof of unreachability"
+        )]
+        ExprKind::Sugar(s) => match *s {},
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
@@ -1371,7 +1367,7 @@ fn collect_expr_refs(
 
 /// Collect references from a type expression.
 fn collect_type_expr_refs(
-    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     table: &mut SymbolTable,
 ) {
     match &type_expr.kind {
@@ -1386,14 +1382,14 @@ fn collect_type_expr_refs(
             collect_type_expr_refs(base, table);
             for idx in indexes {
                 match idx {
-                    graphcal_compiler::syntax::ast::IndexExpr::Name(ident) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(ident) => {
                         table.references.push(ReferenceInfo {
                             span: ident.span,
                             target: SymbolKey::TopLevel(ident.name.clone()),
                         });
                     }
-                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(_, _)
-                    | graphcal_compiler::syntax::ast::IndexExpr::NatExpr(_) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::NatLiteral(_, _)
+                    | graphcal_compiler::desugar::desugared_ast::IndexExpr::NatExpr(_) => {
                         // No reference to resolve for literal integers or nat expressions
                     }
                 }
@@ -1417,7 +1413,7 @@ fn collect_type_expr_refs(
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
 fn collect_constraint_expr_refs(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     table: &mut SymbolTable,
 ) {
     match &expr.kind {
@@ -1454,7 +1450,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 /// Format a domain bound expression as a human-readable string.
 ///
 /// Handles the common cases: number literals, unit-annotated literals, and negated forms.
-fn format_bound_expr(expr: &graphcal_compiler::syntax::ast::Expr) -> String {
+fn format_bound_expr(expr: &graphcal_compiler::desugar::desugared_ast::Expr) -> String {
     match &expr.kind {
         ExprKind::Number(v) => format_number(*v),
         ExprKind::Integer(v) => v.to_string(),
@@ -1464,7 +1460,7 @@ fn format_bound_expr(expr: &graphcal_compiler::syntax::ast::Expr) -> String {
             format!("{num} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_compiler::syntax::ast::UnaryOp::Neg,
+            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_expr(operand))
@@ -1706,9 +1702,10 @@ mod tests {
     #[test]
     fn build_symbol_table_basic() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let table = build_from_ast(&file, source);
 
         let x_key = SymbolKey::TopLevel("x".to_string());
@@ -1741,9 +1738,10 @@ param q: Int[I]
       B: 2, 4;
   };
 ";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let table = build_from_ast(&file, source);
 
         let p_key = SymbolKey::TopLevel("p".to_string());
@@ -1774,9 +1772,10 @@ param q: Int[I]
     #[test]
     fn find_reference_at_offset() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
-        let file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let table = build_from_ast(&file, source);
 
         // Find the @x reference -- it should be near the end of the source

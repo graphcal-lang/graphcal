@@ -460,10 +460,7 @@ impl Parser<'_> {
                         span: span.into(),
                     }
                 })?;
-                Ok(Expr {
-                    kind: ExprKind::Number(value),
-                    span,
-                })
+                Ok(Expr::new(ExprKind::Number(value), span))
             }
             Some(Token::LParen) => {
                 let (_, _lp_span) = self.advance()?;

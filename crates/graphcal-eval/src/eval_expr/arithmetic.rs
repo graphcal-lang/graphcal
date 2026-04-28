@@ -1,4 +1,4 @@
-use graphcal_compiler::syntax::ast::{BinOp, Expr, UnaryOp};
+use graphcal_compiler::desugar::desugared_ast::{BinOp, Expr, UnaryOp};
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::syntax::span::Span;
 

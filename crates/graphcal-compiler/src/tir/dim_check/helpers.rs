@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::desugar::desugared_ast::Expr;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
-use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, IndexName, VariantName};
 
@@ -119,7 +119,7 @@ impl From<&DeclaredType> for InferredType {
 /// using the registry. For generic types, generic params in the field type are substituted
 /// with the corresponding concrete type args.
 pub(super) fn resolve_field_type(
-    field_type_ann: &crate::syntax::ast::TypeExpr,
+    field_type_ann: &crate::desugar::desugared_ast::TypeExpr,
     type_def: &crate::registry::types::TypeDef,
     type_args: &[InferredType],
     registry: &Registry,
@@ -204,7 +204,7 @@ pub(super) fn resolve_field_type(
         .collect();
 
     // Check if the field type references an unconstrained (Type) param directly
-    if let crate::syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
+    if let crate::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
     {
@@ -230,7 +230,7 @@ pub(super) fn resolve_field_type(
 /// Check that all match arm types are identical, returning the common type.
 pub(super) fn check_arm_types_match(
     arm_types: &[InferredType],
-    arms: &[crate::syntax::ast::MatchArm],
+    arms: &[crate::desugar::desugared_ast::MatchArm],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     expr: &Expr,

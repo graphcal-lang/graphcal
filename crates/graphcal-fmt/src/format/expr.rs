@@ -85,7 +85,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             fields,
         } => format_struct_construction(fmt, type_name, type_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
-        ExprKind::TableLiteral { indexes, entries } => format_table_literal(fmt, indexes, entries),
+        ExprKind::Sugar(graphcal_compiler::syntax::phase::RawExprSugar::TableLiteral {
+            indexes,
+            entries,
+        }) => format_table_literal(fmt, indexes, entries),
         ExprKind::ForComp { bindings, body } => format_for_comp(fmt, bindings, body),
         ExprKind::IndexAccess { expr: inner, args } => {
             let arg_docs: Vec<RcDoc<'static>> = args

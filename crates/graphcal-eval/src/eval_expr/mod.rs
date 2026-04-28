@@ -13,7 +13,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::ast::{Expr, ExprKind, MulDivOp, UnitExpr};
+use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 use graphcal_compiler::syntax::names::DeclName;
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
@@ -177,7 +177,7 @@ pub fn eval_expr(
         }
 
         // --- Collections (delegated) ---
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+        ExprKind::MapLiteral { entries } => {
             collections::eval_map_literal(entries, values, local_values, ctx)
         }
         ExprKind::ForComp { bindings, body } => {
@@ -274,6 +274,13 @@ pub fn eval_expr(
         ExprKind::InlineDagRef { dag, args, output } => {
             eval_inline_dag_call(expr, dag, args, output, values, local_values, ctx)
         }
+
+        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) — proof of unreachability"
+        )]
+        ExprKind::Sugar(s) => match *s {},
     }
 }
 
@@ -301,7 +308,7 @@ pub fn eval_expr(
 fn eval_inline_dag_call(
     _call_expr: &Expr,
     dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
-    args: &[graphcal_compiler::syntax::ast::ParamBinding],
+    args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     caller_values: &HashMap<DeclName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,

@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::desugar::desugared_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
-use crate::syntax::ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::UnitName;
 
@@ -277,18 +277,16 @@ pub(super) fn infer_type_with_owner(
             src,
         ),
 
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-            collections::infer_map_or_table_literal(
-                expr,
-                entries,
-                declared_types,
-                local_types,
-                dag_tirs,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
+        ExprKind::MapLiteral { entries } => collections::infer_map_or_table_literal(
+            expr,
+            entries,
+            declared_types,
+            local_types,
+            dag_tirs,
+            registry,
+            builtin_fns,
+            src,
+        ),
 
         ExprKind::IndexAccess { expr: inner, args } => collections::infer_index_access(
             expr,
@@ -399,6 +397,13 @@ pub(super) fn infer_type_with_owner(
             builtin_fns,
             src,
         ),
+
+        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) — proof of unreachability"
+        )]
+        ExprKind::Sugar(s) => match *s {},
     }
 }
 
@@ -416,7 +421,7 @@ pub(super) fn infer_type_with_owner(
 fn infer_inline_dag_ref(
     expr: &Expr,
     dag: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
-    args: &[crate::syntax::ast::ParamBinding],
+    args: &[crate::desugar::desugared_ast::ParamBinding],
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,

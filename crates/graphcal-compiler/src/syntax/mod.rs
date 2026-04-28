@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod name_resolve;
 pub mod names;
 pub mod parser;
+pub mod phase;
 pub mod span;
 pub mod token;
 pub mod visitor;

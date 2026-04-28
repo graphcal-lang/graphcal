@@ -313,7 +313,7 @@ impl Parser<'_> {
         Ok(Declaration {
             attributes: vec![],
             visibility: Visibility::Private,
-            kind: DeclKind::Multi(multi),
+            kind: DeclKind::Sugar(crate::syntax::phase::RawDeclSugar::Multi(multi)),
             span: surface_span,
         })
     }
@@ -612,7 +612,7 @@ mod tests {
         file.declarations
             .iter()
             .find_map(|d| match &d.kind {
-                DeclKind::Multi(m) => Some(m),
+                DeclKind::Sugar(crate::syntax::phase::RawDeclSugar::Multi(m)) => Some(m),
                 _ => None,
             })
             .expect("file has one multi-decl")
@@ -653,7 +653,10 @@ param n_installed:       Int[Component]
             panic!("expected Param")
         };
         match &first.value.as_ref().unwrap().kind {
-            ExprKind::TableLiteral { indexes, entries } => {
+            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                indexes,
+                entries,
+            }) => {
                 assert_eq!(indexes.len(), 1);
                 assert_eq!(entries.len(), 2);
             }
@@ -790,7 +793,10 @@ param      power_mode:        Bool[Component, OperationMode]
         assert_eq!(desugared.len(), 4);
         match &desugared[3].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(entries.len(), 4); // 2 components × 2 modes
                     assert_eq!(entries[0].keys[0].index.value.as_str(), "Component");
@@ -852,7 +858,10 @@ param q: Int[Phase, Component]
         assert_eq!(desugared.len(), 2);
         match &desugared[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::TableLiteral { indexes, entries } => {
+                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(entries.len(), 2); // 2 phases × 1 component
                     for e in entries {

@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::desugar::desugared_ast::Expr;
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
-use crate::syntax::ast::Expr;
 use crate::syntax::dimension::Dimension;
 
 pub(super) fn infer_fn_dim(

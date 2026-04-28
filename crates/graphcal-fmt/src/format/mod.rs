@@ -129,7 +129,7 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
         // Multi-decl (issue #481): consume comments that fall inside the
         // surface span so they aren't re-emitted later; `format_multi_decl`
         // doesn't interleave source comments inside the body.
-        if matches!(&decl.kind, DeclKind::Multi(_)) {
+        if matches!(&decl.kind, DeclKind::Sugar(_)) {
             while fmt.next_comment < fmt.metadata.comments.len() {
                 let c = &fmt.metadata.comments[fmt.next_comment];
                 if c.span.offset() < emit_end {

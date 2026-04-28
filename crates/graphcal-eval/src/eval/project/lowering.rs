@@ -17,10 +17,10 @@ pub(super) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    file_ast: &graphcal_compiler::syntax::ast::File,
+    file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     // Snapshot before lower_to_builder_with_imported_values consumes
@@ -86,11 +86,12 @@ pub(super) fn lower_and_finalize(
 
     // Apply overrides routed to this file (using original param names).
     let mut ir = ir;
-    let file_overrides: HashMap<DeclName, graphcal_compiler::syntax::ast::Expr> = override_targets
-        .iter()
-        .filter(|(_, (target_dag_id, _))| target_dag_id == file_dag_id)
-        .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
-        .collect();
+    let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr> =
+        override_targets
+            .iter()
+            .filter(|(_, (target_dag_id, _))| target_dag_id == file_dag_id)
+            .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
+            .collect();
     if !file_overrides.is_empty() {
         apply_overrides(&mut ir, &file_overrides)?;
     }
@@ -295,7 +296,7 @@ pub(super) fn process_deferred_instantiated_imports(
 pub(super) fn process_deferred_inline_dag_includes(
     deferred_dags: &[DeferredInlineDagInclude],
     file_src: &NamedSource<Arc<String>>,
-    importer_ast: &graphcal_compiler::syntax::ast::File,
+    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
@@ -386,7 +387,7 @@ pub(super) fn process_deferred_inline_dag_includes(
 
 /// Add alias declarations for selective inline DAG includes.
 pub(super) fn add_inline_dag_selective_aliases(
-    dag_body: &graphcal_compiler::syntax::ast::File,
+    dag_body: &graphcal_compiler::desugar::desugared_ast::File,
     selective: &[(String, String)],
     deferred: &DeferredInlineDagInclude,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
@@ -426,21 +427,21 @@ pub(super) fn add_inline_dag_selective_aliases(
             |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
         );
         let alias_expr = if is_const {
-            Expr {
-                kind: ExprKind::ConstRef(Spanned::new(
+            Expr::new(
+                ExprKind::ConstRef(Spanned::new(
                     DeclName::new(&prefixed_name),
                     deferred.import_span,
                 )),
-                span: deferred.import_span,
-            }
+                deferred.import_span,
+            )
         } else {
-            Expr {
-                kind: ExprKind::GraphRef(Spanned::new(
+            Expr::new(
+                ExprKind::GraphRef(Spanned::new(
                     DeclName::new(&prefixed_name),
                     deferred.import_span,
                 )),
-                span: deferred.import_span,
-            }
+                deferred.import_span,
+            )
         };
 
         if is_const {
@@ -518,21 +519,21 @@ pub(super) fn add_selective_aliases(
 
         // Create an alias expression: `@prefix::orig_name` (or `PREFIX::CONST`)
         let alias_expr = if is_const {
-            Expr {
-                kind: ExprKind::ConstRef(Spanned::new(
+            Expr::new(
+                ExprKind::ConstRef(Spanned::new(
                     DeclName::new(&prefixed_name),
                     deferred.import_span,
                 )),
-                span: deferred.import_span,
-            }
+                deferred.import_span,
+            )
         } else {
-            Expr {
-                kind: ExprKind::GraphRef(Spanned::new(
+            Expr::new(
+                ExprKind::GraphRef(Spanned::new(
                     DeclName::new(&prefixed_name),
                     deferred.import_span,
                 )),
-                span: deferred.import_span,
-            }
+                deferred.import_span,
+            )
         };
 
         // Add the alias as a declaration in the importer's IR.
@@ -779,7 +780,7 @@ pub(super) fn build_dep_imported_values(
 /// When `is_import` is `true`, runtime values are skipped (import semantics).
 pub(super) fn build_dep_import_values_for_kind(
     import_path: &ModulePath,
-    import_kind: &graphcal_compiler::syntax::ast::ImportKind,
+    import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     trans_dep: &EvaluatedFile,
     _dep_src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
@@ -787,7 +788,7 @@ pub(super) fn build_dep_import_values_for_kind(
     is_import: bool,
 ) {
     match import_kind {
-        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
@@ -812,7 +813,7 @@ pub(super) fn build_dep_import_values_for_kind(
                 }
             }
         }
-        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.name.clone(),
@@ -836,7 +837,7 @@ pub(super) fn build_dep_import_values_for_kind(
 /// symbol (V = private at the importer) from a builtin or cross-file
 /// symbol for the V006 check.
 fn collect_local_type_names(
-    file: &graphcal_compiler::syntax::ast::File,
+    file: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> HashMap<String, &'static str> {
     let mut names = HashMap::new();
     for decl in &file.declarations {
@@ -859,10 +860,10 @@ fn collect_local_type_names(
 /// check to decide which names in a re-exported signature need a
 /// visibility review at the importing site.
 fn collect_type_expr_names(
-    type_expr: &graphcal_compiler::syntax::ast::TypeExpr,
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     refs: &mut Vec<String>,
 ) {
-    use graphcal_compiler::syntax::ast::{IndexExpr, TypeExprKind};
+    use graphcal_compiler::desugar::desugared_ast::{IndexExpr, TypeExprKind};
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &dim_expr.terms {
@@ -904,7 +905,7 @@ fn collect_type_expr_names(
     reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
 )]
 fn check_generics_leakage(
-    dep_ast: &graphcal_compiler::syntax::ast::File,
+    dep_ast: &graphcal_compiler::desugar::desugared_ast::File,
     pub_reexport_whole: bool,
     pub_reexport_items: &HashSet<String>,
     index_bindings: &HashMap<IndexName, IndexName>,

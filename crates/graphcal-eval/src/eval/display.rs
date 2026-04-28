@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::ast::{ExprKind, MapEntryKey};
+use graphcal_compiler::desugar::desugared_ast::{ExprKind, MapEntryKey};
 use graphcal_compiler::syntax::names::{DeclName, VariantName};
 use indexmap::IndexMap;
 
@@ -15,7 +15,7 @@ use graphcal_compiler::registry::format::{format_number, format_unit_expr};
 
 pub(super) fn attach_display_units(
     value: &mut Value,
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     registry: &Registry,
     values: &HashMap<DeclName, RuntimeValue>,
 ) {
@@ -42,10 +42,6 @@ pub(super) fn attach_display_units(
             Value::Indexed { entries, .. },
             ExprKind::MapLiteral {
                 entries: map_entries,
-            }
-            | ExprKind::TableLiteral {
-                entries: map_entries,
-                ..
             },
         ) => {
             for map_entry in map_entries {
@@ -85,7 +81,7 @@ pub(super) fn attach_display_units(
 /// Handles both static and dynamic unit scales. For dynamic units, the scale
 /// expression is evaluated using the provided `values` map.
 pub(super) fn resolve_unit_to_display(
-    unit: &graphcal_compiler::syntax::ast::UnitExpr,
+    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     registry: &Registry,
     values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<DisplayUnit> {
@@ -101,14 +97,14 @@ pub(super) fn resolve_unit_to_display(
 /// Used for indexed collections (for comprehensions, scan) where all entries
 /// share the same display unit.
 pub(super) fn extract_flat_display_unit(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     registry: &Registry,
     values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<DisplayUnit> {
     match &expr.kind {
         ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, registry, values),
         ExprKind::Convert { target, .. } => resolve_unit_to_display(target, registry, values),
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => entries
+        ExprKind::MapLiteral { entries } => entries
             .first()
             .and_then(|e| extract_flat_display_unit(&e.value, registry, values)),
         ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, registry, values),
@@ -124,7 +120,7 @@ pub(super) fn extract_flat_display_unit(
 /// Delegates to `eval_expr::resolve_unit_scale` with a minimal `EvalContext`,
 /// converting the `Result` to `Option`.
 fn resolve_display_unit_scale(
-    unit: &graphcal_compiler::syntax::ast::UnitExpr,
+    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     registry: &Registry,
     values: &HashMap<DeclName, RuntimeValue>,
 ) -> Option<f64> {

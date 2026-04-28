@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
@@ -499,11 +499,11 @@ impl std::fmt::Display for NatPolyForm {
 /// All variables referenced must be Nat generic parameters in scope.
 /// Returns an error if a variable is not a known Nat param.
 pub fn normalize_nat_expr(
-    expr: &crate::syntax::ast::NatExpr,
+    expr: &crate::desugar::desugared_ast::NatExpr,
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<NatPolyForm, GraphcalError> {
-    use crate::syntax::ast::NatExpr;
+    use crate::desugar::desugared_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         NatExpr::Var(ident) => {
@@ -750,8 +750,8 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
 /// set to enforce projection of `pub` nodes only. Same-file calls still
 /// read visibility from the raw AST because the body is reachable through
 /// `registry.dags`; this set is the proxy that survives cross-file merges.
-fn populate_pub_nodes(dag_tir: &mut TIR, dag_body: &[crate::syntax::ast::Declaration]) {
-    use crate::syntax::ast::DeclKind;
+fn populate_pub_nodes(dag_tir: &mut TIR, dag_body: &[crate::desugar::desugared_ast::Declaration]) {
+    use crate::desugar::desugared_ast::DeclKind;
 
     for decl in dag_body {
         if !decl.visibility.is_public() {
@@ -1564,17 +1564,17 @@ pub fn resolve_type_expr(
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
-                    crate::syntax::ast::IndexExpr::NatLiteral(n, span) => {
+                    crate::desugar::desugared_ast::IndexExpr::NatLiteral(n, span) => {
                         resolved_indexes.push(ResolvedIndex::NatExpr(
                             NatPolyForm::from_constant(*n),
                             *span,
                         ));
                     }
-                    crate::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
+                    crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
-                    crate::syntax::ast::IndexExpr::Name(ident) => {
+                    crate::desugar::desugared_ast::IndexExpr::Name(ident) => {
                         let idx_name = &ident.name;
                         if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
                             // Generic nat param in index position: `D[N]` where `N: Nat`
@@ -1631,7 +1631,7 @@ pub fn resolve_type_expr(
 /// struct types, and generic dimension parameters. Multi-term expressions with
 /// generic params become `GenericDimExpr`; fully concrete expressions become `Scalar`.
 fn resolve_dim_expr(
-    dim_expr: &crate::syntax::ast::DimExpr,
+    dim_expr: &crate::desugar::desugared_ast::DimExpr,
     registry: &Registry,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
@@ -1736,7 +1736,7 @@ fn resolve_dim_expr(
 )]
 fn resolve_type_application(
     type_ann: &TypeExpr,
-    name: &crate::syntax::ast::Ident,
+    name: &crate::desugar::desugared_ast::Ident,
     type_args: &[TypeExpr],
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -1874,22 +1874,24 @@ mod tests {
     }
 
     /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
-    fn make_dim_type_expr(name: &str) -> crate::syntax::ast::TypeExpr {
-        crate::syntax::ast::TypeExpr {
-            kind: crate::syntax::ast::TypeExprKind::DimExpr(crate::syntax::ast::DimExpr {
-                terms: vec![crate::syntax::ast::DimExprItem {
-                    op: crate::syntax::ast::MulDivOp::Mul,
-                    term: crate::syntax::ast::DimTerm {
-                        name: crate::syntax::ast::Ident {
-                            name: name.to_string(),
+    fn make_dim_type_expr(name: &str) -> crate::desugar::desugared_ast::TypeExpr {
+        crate::desugar::desugared_ast::TypeExpr {
+            kind: crate::desugar::desugared_ast::TypeExprKind::DimExpr(
+                crate::desugar::desugared_ast::DimExpr {
+                    terms: vec![crate::desugar::desugared_ast::DimExprItem {
+                        op: crate::desugar::desugared_ast::MulDivOp::Mul,
+                        term: crate::desugar::desugared_ast::DimTerm {
+                            name: crate::desugar::desugared_ast::Ident {
+                                name: name.to_string(),
+                                span: Span::new(0, 0),
+                            },
+                            power: None,
                             span: Span::new(0, 0),
                         },
-                        power: None,
-                        span: Span::new(0, 0),
-                    },
-                }],
-                span: Span::new(0, 0),
-            }),
+                    }],
+                    span: Span::new(0, 0),
+                },
+            ),
             constraints: vec![],
             span: Span::new(0, 0),
         }
@@ -1940,9 +1942,10 @@ mod tests {
     fn parse_type(source: &str) -> TypeExpr {
         // Wrap in a param declaration so the parser can handle it
         let full = format!("param x: {source} = 0.0;");
-        let file = Parser::new(&full).parse_file().unwrap();
+        let raw_file = Parser::new(&full).parse_file().unwrap();
+        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         match &file.declarations[0].kind {
-            crate::syntax::ast::DeclKind::Param(p) => p.type_ann.clone(),
+            crate::desugar::desugared_ast::DeclKind::Param(p) => p.type_ann.clone(),
             _ => panic!("expected param"),
         }
     }
@@ -2141,7 +2144,8 @@ mod tests {
     // --- type_resolve() integration tests ---
 
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
-        let file = Parser::new(source).parse_file().unwrap();
+        let raw_file = Parser::new(source).parse_file().unwrap();
+        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         type_resolve(ir, &src)

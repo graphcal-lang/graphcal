@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::syntax::ast::Expr;
+use crate::desugar::desugared_ast::Expr;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, StructTypeName};
 
@@ -116,7 +116,7 @@ fn check_decl_expr_type(
 /// verifies actual/expected have matching dimensions and tolerance is compatible.
 #[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_assert_body(
-    body: &crate::syntax::ast::AssertBody,
+    body: &crate::desugar::desugared_ast::AssertBody,
     span: crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
@@ -126,7 +126,7 @@ fn check_assert_body(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match body {
-        crate::syntax::ast::AssertBody::Expr(body_expr) => {
+        crate::desugar::desugared_ast::AssertBody::Expr(body_expr) => {
             let inferred = infer_type(
                 body_expr,
                 declared_types,
@@ -144,7 +144,7 @@ fn check_assert_body(
                 });
             }
         }
-        crate::syntax::ast::AssertBody::Tolerance {
+        crate::desugar::desugared_ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -403,7 +403,7 @@ fn check_domain_constraint_dimensions(
 
 fn check_one_bound(
     name: &crate::registry::resolve_types::ScopedName,
-    bound: &crate::syntax::ast::DomainBound,
+    bound: &crate::desugar::desugared_ast::DomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
     registry: &Registry,
@@ -457,12 +457,12 @@ fn check_one_bound(
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
 /// not on the outer `Indexed` wrapper.
 fn extract_domain_bounds(
-    type_ann: &crate::syntax::ast::TypeExpr,
-) -> &[crate::syntax::ast::DomainBound] {
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+) -> &[crate::desugar::desugared_ast::DomainBound] {
     if !type_ann.constraints.is_empty() {
         return &type_ann.constraints;
     }
-    if let crate::syntax::ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
+    if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
         return &base.constraints;
     }
     &[]
@@ -550,15 +550,17 @@ struct DagTargetCollector<'a> {
     out: &'a mut std::collections::BTreeSet<String>,
 }
 
-impl crate::syntax::visitor::ExprVisitor for DagTargetCollector<'_> {
+impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
+    for DagTargetCollector<'_>
+{
     type Error = std::convert::Infallible;
 
     fn visit_inline_dag_ref(
         &mut self,
-        expr: &crate::syntax::ast::Expr,
-        args: &[crate::syntax::ast::ParamBinding],
+        expr: &crate::desugar::desugared_ast::Expr,
+        args: &[crate::desugar::desugared_ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::syntax::ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
+        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
             self.out.insert(dag.value.to_string());
         }
         for b in args {

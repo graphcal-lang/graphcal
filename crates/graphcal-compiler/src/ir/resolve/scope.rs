@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::desugar::desugared_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::registry::error::GraphcalError;
-use crate::syntax::ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::syntax::names::DeclName;
 use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
@@ -23,7 +23,7 @@ struct ForbiddenGraphRefChecker<'a, S, F> {
     make_error: F,
 }
 
-impl<S, F> ExprVisitor for ForbiddenGraphRefChecker<'_, S, F>
+impl<S, F> ExprVisitor<crate::syntax::phase::Desugared> for ForbiddenGraphRefChecker<'_, S, F>
 where
     S: Eq + Hash + Borrow<str>,
     F: Fn(&str, &NamedSource<Arc<String>>, Span) -> GraphcalError,
@@ -97,7 +97,7 @@ struct VariantLiteralChecker<'a, F> {
     src: &'a NamedSource<Arc<String>>,
 }
 
-impl<F> ExprVisitor for VariantLiteralChecker<'_, F>
+impl<F> ExprVisitor<crate::syntax::phase::Desugared> for VariantLiteralChecker<'_, F>
 where
     F: Fn(&str, &str, Span, &NamedSource<Arc<String>>) -> Result<(), GraphcalError>,
 {

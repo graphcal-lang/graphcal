@@ -14,11 +14,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::registry::builtins::builtin_constants;
-use crate::registry::resolve_types::is_time_scale_name;
-use crate::syntax::ast::{
+use crate::desugar::desugared_ast::{
     AssertBody, DagDecl, DeclKind, Expr, ExprKind, File, IndexArg, IndexDeclKind,
 };
+use crate::registry::builtins::builtin_constants;
+use crate::registry::resolve_types::is_time_scale_name;
 use crate::syntax::names::{DeclName, IndexName, Spanned, StructTypeName, VariantName};
 
 /// Context for name resolution: what names are in scope.
@@ -51,16 +51,11 @@ impl ResolveContext {
 
 /// Resolve all `NameRef` and `QualifiedNameRef` nodes in a file.
 ///
-/// This modifies the file's AST in place. After this function returns, no
-/// `NameRef`, `QualifiedNameRef`, or `DeclKind::Multi` nodes remain — the
-/// first step desugars every multi-decl surface form into its constituent
-/// single declarations.
+/// Operates on a [`File<Desugared>`](crate::syntax::ast::File) — multi-decl
+/// sugar expansion is the caller's responsibility (in the loader,
+/// `crate::syntax::desugar::desugar_multi_decls_in_file` runs first). After
+/// this function returns, no `NameRef` or `QualifiedNameRef` nodes remain.
 pub fn resolve_name_refs(file: &mut File) {
-    // Expand syntactic sugar (multi-decls, issue #481) before name
-    // resolution so the rest of the pass — and every downstream stage —
-    // sees only ordinary single declarations.
-    crate::syntax::desugar::desugar_multi_decls_in_file(file);
-
     let builtin_consts = builtin_constants();
 
     // Scan declarations to build context
@@ -90,7 +85,7 @@ pub fn resolve_name_refs(file: &mut File) {
 
 /// Collect type names, index variants, and module names from declarations.
 fn collect_names_from_decls(
-    decls: &[crate::syntax::ast::Declaration],
+    decls: &[crate::desugar::desugared_ast::Declaration],
     type_names: &mut HashSet<String>,
     index_variants: &mut HashMap<String, HashSet<String>>,
     module_names: &mut HashSet<String>,
@@ -155,7 +150,7 @@ fn collect_names_from_decls(
 }
 
 /// Resolve names in a single declaration.
-fn resolve_decl(decl: &mut crate::syntax::ast::Declaration, ctx: &mut ResolveContext) {
+fn resolve_decl(decl: &mut crate::desugar::desugared_ast::Declaration, ctx: &mut ResolveContext) {
     match &mut decl.kind {
         DeclKind::Param(p) => {
             if let Some(v) = &mut p.value {
@@ -222,7 +217,7 @@ fn resolve_decl(decl: &mut crate::syntax::ast::Declaration, ctx: &mut ResolveCon
         | DeclKind::Type(_)
         | DeclKind::UnionType(_)
         | DeclKind::Import(_) => {}
-        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
     }
 }
 
@@ -334,7 +329,7 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
             }
             return;
         }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+        ExprKind::MapLiteral { entries } => {
             for entry in entries {
                 resolve_expr(&mut entry.value, ctx);
             }
@@ -396,6 +391,12 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
             }
             return;
         }
+        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) — proof of unreachability"
+        )]
+        ExprKind::Sugar(s) => match *s {},
         ExprKind::TupleMatch { scrutinees, arms } => {
             for s in scrutinees {
                 resolve_expr(s, ctx);

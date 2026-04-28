@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::syntax::ast::Expr;
+use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::syntax::parser::ParseError;
 use miette::Diagnostic;
@@ -141,13 +141,15 @@ pub fn parse_overrides(
         if value_str.is_empty() {
             return Err(OverrideParseError::EmptyExpression { raw: s.clone() });
         }
-        let expr = graphcal_compiler::syntax::parser::Parser::new(value_str)
+        let raw_expr = graphcal_compiler::syntax::parser::Parser::new(value_str)
             .parse_single_expr()
             .map_err(|e| OverrideParseError::ExpressionParse {
                 name: name.to_string(),
                 source: Box::new(e),
             })?;
-        overrides.insert(DeclName::new(name), expr);
+        // Override expressions are user-provided literals — they never carry
+        // sugar variants, so the `Raw → Desugared` lift is a structural rebind.
+        overrides.insert(DeclName::new(name), Expr::from(raw_expr));
     }
 
     if let Some(input_path) = input {
@@ -181,7 +183,7 @@ pub fn parse_overrides(
             }
         })?;
         for (name, expr) in json_overrides {
-            overrides.entry(name).or_insert(expr);
+            overrides.entry(name).or_insert_with(|| Expr::from(expr));
         }
     }
 

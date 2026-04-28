@@ -9,14 +9,13 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, ExprKind, File, TypeExpr};
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
     ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
     ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
-use crate::syntax::ast::TypeExpr;
-use crate::syntax::ast::{AssertBody, DeclKind, Expr, ExprKind, File};
 use crate::syntax::names::DeclName;
 use crate::syntax::span::Span;
 
@@ -203,7 +202,7 @@ fn collect_local_declarations(
             | DeclKind::Dag(_) => {
                 continue;
             }
-            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
 
         // Check for duplicates
@@ -246,7 +245,7 @@ fn collect_local_declarations(
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
-            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
         source_order.push((DeclName::new(name.as_str()), category));
     }
@@ -266,7 +265,7 @@ fn collect_local_declarations(
             | DeclKind::Import(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {}
-            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
                 // Collect all expressions from the assert body for validation
                 let body_exprs: Vec<&Expr> = match &a.body {
@@ -588,7 +587,7 @@ fn validate_attributes(
                         DeclKind::Import(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
                         DeclKind::Dag(_) => Some("dag"),
-                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
                     };
                     if let Some(kind) = kind {
                         return Err(GraphcalError::InvalidAssumesTarget {
@@ -662,7 +661,7 @@ fn validate_attributes(
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
                         DeclKind::Dag(_) => "dag",
-                        DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
                     };
                     return Err(GraphcalError::InvalidExpectedFailTarget {
                         kind: kind.to_string(),
@@ -702,7 +701,9 @@ fn validate_private_in_public(
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<DeclName>,
 ) -> Result<(), GraphcalError> {
-    use crate::syntax::ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
+    use crate::desugar::desugared_ast::{
+        DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind,
+    };
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();

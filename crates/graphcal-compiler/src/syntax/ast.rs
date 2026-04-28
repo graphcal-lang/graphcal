@@ -1,13 +1,21 @@
+use std::marker::PhantomData;
+
 use crate::syntax::names::{
     DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, Spanned, StructTypeName,
     UnitName, VariantName,
 };
+use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::Span;
 
 /// A complete source file.
+///
+/// Generic over a [`Phase`] parameter that distinguishes the parser's raw
+/// AST (carrying surface sugar) from the desugared AST consumed by name
+/// resolution and below. Defaults to [`Raw`] so existing call sites — which
+/// always handle the parser output — keep compiling unchanged.
 #[derive(Debug, Clone)]
-pub struct File {
-    pub declarations: Vec<Declaration>,
+pub struct File<P: Phase = Raw> {
+    pub declarations: Vec<Declaration<P>>,
 }
 
 /// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
@@ -80,14 +88,14 @@ impl Visibility {
 
 /// A top-level declaration.
 #[derive(Debug, Clone)]
-pub struct Declaration {
+pub struct Declaration<P: Phase = Raw> {
     pub attributes: Vec<Attribute>,
     pub visibility: Visibility,
-    pub kind: DeclKind,
+    pub kind: DeclKind<P>,
     pub span: Span,
 }
 
-impl Declaration {
+impl<P: Phase> Declaration<P> {
     /// Returns `true` if this declaration is visible (`pub` or `pub(bind)`).
     #[must_use]
     pub const fn is_pub(&self) -> bool {
@@ -102,32 +110,35 @@ impl Declaration {
 }
 
 #[derive(Debug, Clone)]
-pub enum DeclKind {
-    Param(ParamDecl),
-    Node(NodeDecl),
-    ConstNode(ConstNodeDecl),
+pub enum DeclKind<P: Phase = Raw> {
+    Param(ParamDecl<P>),
+    Node(NodeDecl<P>),
+    ConstNode(ConstNodeDecl<P>),
     BaseDimension(BaseDimDecl),
     Dimension(DimDecl),
-    Unit(UnitDecl),
-    Type(TypeDecl),
-    UnionType(UnionTypeDecl),
-    Index(IndexDecl),
+    Unit(UnitDecl<P>),
+    Type(TypeDecl<P>),
+    UnionType(UnionTypeDecl<P>),
+    Index(IndexDecl<P>),
     Import(ImportDecl),
-    Include(IncludeDecl),
-    Dag(DagDecl),
-    Assert(AssertDecl),
-    Plot(PlotDecl),
-    Figure(FigureDecl),
-    Layer(LayerDecl),
-    /// A multi-declaration (issue #481): N parallel param / node / const-node
-    /// declarations sharing a single `table[…] {…}` initializer. Desugared
-    /// into N separate `DeclKind::{Param,Node,ConstNode}` declarations by
-    /// [`syntax::desugar::desugar_multi_decls_in_file`](super::desugar::desugar_multi_decls_in_file)
-    /// before lowering.
-    Multi(MultiDecl),
+    Include(IncludeDecl<P>),
+    Dag(DagDecl<P>),
+    Assert(AssertDecl<P>),
+    Plot(PlotDecl<P>),
+    Figure(FigureDecl<P>),
+    Layer(LayerDecl<P>),
+    /// Phase-specific declaration sugar.
+    ///
+    /// In [`Raw`], this is [`crate::syntax::phase::RawDeclSugar`] and carries
+    /// surface forms like multi-decl (issue #481) that are eliminated by the
+    /// desugar pass. In [`Desugared`](Raw), the
+    /// payload is [`core::convert::Infallible`] — the variant is statically
+    /// unreachable, so post-desugar consumers handle it with
+    /// [`crate::syntax::phase::never`].
+    Sugar(P::DeclSugar),
 }
 
-impl DeclKind {
+impl<P: Phase> DeclKind<P> {
     /// Returns the declaration name as a string slice and its span, if the
     /// variant carries a name. `Import` and `Include` have no name and return
     /// `None`.
@@ -148,7 +159,7 @@ impl DeclKind {
             Self::Plot(p) => Some((p.name.value.as_str(), p.name.span)),
             Self::Figure(f) => Some((f.name.value.as_str(), f.name.span)),
             Self::Layer(l) => Some((l.name.value.as_str(), l.name.span)),
-            Self::Import(_) | Self::Include(_) | Self::Multi(_) => None,
+            Self::Import(_) | Self::Include(_) | Self::Sugar(_) => None,
         }
     }
 }
@@ -158,24 +169,24 @@ impl DeclKind {
 /// The body must evaluate to `Bool`. No type annotation (it's always Bool).
 /// Assert declarations are leaf nodes — they are evaluated after the entire graph.
 #[derive(Debug, Clone)]
-pub struct AssertDecl {
+pub struct AssertDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
-    pub body: AssertBody,
+    pub body: AssertBody<P>,
 }
 
 /// The body of an assert declaration.
 #[derive(Debug, Clone)]
-pub enum AssertBody {
+pub enum AssertBody<P: Phase = Raw> {
     /// Plain boolean expression: `assert name = expr;`
-    Expr(Expr),
+    Expr(Expr<P>),
     /// Tolerance: `assert name = actual ~= expected +/- tolerance;`
     Tolerance {
         /// The actual value expression (left of `~=`).
-        actual: Box<Expr>,
+        actual: Box<Expr<P>>,
         /// The expected value expression (right of `~=`).
-        expected: Box<Expr>,
+        expected: Box<Expr<P>>,
         /// The tolerance expression (right of `+/-`).
-        tolerance: Box<Expr>,
+        tolerance: Box<Expr<P>>,
         /// Whether the tolerance is relative (`%`).
         is_relative: bool,
     },
@@ -237,10 +248,10 @@ impl std::fmt::Display for EncodingChannel {
 
 /// The mark specification in a plot declaration: `mark: point` or `mark: line { stroke_width: 2.0 }`.
 #[derive(Debug, Clone)]
-pub struct MarkSpec {
+pub struct MarkSpec<P: Phase = Raw> {
     pub mark_type: MarkType,
     pub mark_type_span: Span,
-    pub properties: Vec<PlotField>,
+    pub properties: Vec<PlotField<P>>,
     pub span: Span,
 }
 
@@ -248,10 +259,10 @@ pub struct MarkSpec {
 ///
 /// Example: `x: for m: OpMode { @total_power[m] }`
 #[derive(Debug, Clone)]
-pub struct Encoding {
+pub struct Encoding<P: Phase = Raw> {
     pub channel: EncodingChannel,
     pub channel_span: Span,
-    pub value: Expr,
+    pub value: Expr<P>,
     pub span: Span,
 }
 
@@ -259,11 +270,11 @@ pub struct Encoding {
 ///
 /// Example: `title: "My Chart"`
 #[derive(Debug, Clone)]
-pub struct PlotField {
+pub struct PlotField<P: Phase = Raw> {
     /// The field name (e.g., "title", "width", "height").
     pub name: Ident,
     /// The field value expression.
-    pub value: Expr,
+    pub value: Expr<P>,
     pub span: Span,
 }
 
@@ -272,11 +283,11 @@ pub struct PlotField {
 /// Plots are leaf declarations that depend on params/nodes via `@`-references.
 /// They produce a plot specification, not a runtime `Value`.
 #[derive(Debug, Clone)]
-pub struct PlotDecl {
+pub struct PlotDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
-    pub mark: MarkSpec,
-    pub encodings: Vec<Encoding>,
-    pub properties: Vec<PlotField>,
+    pub mark: MarkSpec<P>,
+    pub encodings: Vec<Encoding<P>>,
+    pub properties: Vec<PlotField<P>>,
 }
 
 /// Figure declaration: `figure name = { plots: [a, b], title: "..." };`
@@ -284,12 +295,12 @@ pub struct PlotDecl {
 /// Figures group multiple plot declarations into a single combined chart
 /// with subplots. Like plots, they are leaf declarations.
 #[derive(Debug, Clone)]
-pub struct FigureDecl {
+pub struct FigureDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     /// The plot names referenced by this figure (from the `plots: [...]` field).
     pub plot_names: Vec<Spanned<DeclName>>,
     /// Additional fields (e.g., `title`).
-    pub fields: Vec<PlotField>,
+    pub fields: Vec<PlotField<P>>,
 }
 
 /// A layer declaration: overlays multiple plots on shared axes.
@@ -300,12 +311,12 @@ pub struct FigureDecl {
 /// them on the same coordinate space. In Vega-Lite this maps to the
 /// `"layer"` composition operator.
 #[derive(Debug, Clone)]
-pub struct LayerDecl {
+pub struct LayerDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     /// The plot names to overlay (from the `plots: [...]` field).
     pub plot_names: Vec<Spanned<DeclName>>,
     /// Additional fields (e.g., `title`).
-    pub fields: Vec<PlotField>,
+    pub fields: Vec<PlotField<P>>,
 }
 
 /// The kind of an `import` or `include` declaration.
@@ -388,9 +399,9 @@ pub struct ImportDecl {
 /// `include nasa.rocket.compute_thrust(args).{thrust};` — exposes selected
 /// outputs as nodes in the including DAG.
 #[derive(Debug, Clone)]
-pub struct IncludeDecl {
+pub struct IncludeDecl<P: Phase = Raw> {
     pub path: ModulePath,
-    pub param_bindings: Vec<ParamBinding>,
+    pub param_bindings: Vec<ParamBinding<P>>,
     pub kind: ImportKind,
 }
 
@@ -399,11 +410,11 @@ pub struct IncludeDecl {
 /// The body contains declarations (same as file-level). Semantics are not yet
 /// implemented — this phase only parses the syntax.
 #[derive(Debug, Clone)]
-pub struct DagDecl {
+pub struct DagDecl<P: Phase = Raw> {
     /// The DAG name.
     pub name: Spanned<DeclName>,
     /// Declarations inside the DAG block.
-    pub body: Vec<Declaration>,
+    pub body: Vec<Declaration<P>>,
     /// Span covering the entire `dag name { ... }` block.
     pub span: Span,
 }
@@ -412,11 +423,11 @@ pub struct DagDecl {
 ///
 /// Used in `include "path"(name: expr, ...) { ... };`
 #[derive(Debug, Clone)]
-pub struct ParamBinding {
+pub struct ParamBinding<P: Phase = Raw> {
     /// The param name in the imported file.
     pub name: Ident,
     /// The value expression (evaluated in the importer's scope).
-    pub value: Expr,
+    pub value: Expr<P>,
     /// Span covering the entire `name: expr`.
     pub span: Span,
 }
@@ -454,11 +465,11 @@ impl ImportItem {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParamDecl {
+pub struct ParamDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr,
+    pub type_ann: TypeExpr<P>,
     /// The default value expression. `None` for required params (no default).
-    pub value: Option<Expr>,
+    pub value: Option<Expr<P>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -478,10 +489,10 @@ pub struct ParamDecl {
 /// The surface form of a multi-decl: parallel declaration slots sharing a
 /// single `table[…] {…}` initializer.
 #[derive(Debug, Clone)]
-pub struct MultiDecl {
+pub struct MultiDecl<P: Phase = Raw> {
     /// Slot headers in declaration order. Length = number of declarations
     /// this multi-decl expanded into.
-    pub slots: Vec<MultiDeclSlot>,
+    pub slots: Vec<MultiDeclSlot<P>>,
     /// Shared axes from the bracket prefix `table[A, B, …, (…)]`. The
     /// **last** entry is the row axis; earlier entries become slice axes
     /// when there is more than one.
@@ -491,7 +502,7 @@ pub struct MultiDecl {
     pub slot_axes: Vec<MultiSlotAxis>,
     /// Body slices. Exactly one slice for single-shared-axis multi-decls;
     /// multiple slices for N-D shared-axis prefixes (v3).
-    pub slices: Vec<MultiDeclSlice>,
+    pub slices: Vec<MultiDeclSlice<P>>,
     /// Full surface span: from the first slot's kind keyword through the
     /// closing `;`.
     pub span: Span,
@@ -501,12 +512,12 @@ pub struct MultiDecl {
 
 /// One slot in a multi-decl: kind keyword, name, type annotation.
 #[derive(Debug, Clone)]
-pub struct MultiDeclSlot {
+pub struct MultiDeclSlot<P: Phase = Raw> {
     pub kind: MultiSlotKind,
     /// Span covering the kind keyword(s) (`param`, `node`, or `const node`).
     pub kind_span: Span,
     pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr,
+    pub type_ann: TypeExpr<P>,
     /// Span from kind keyword through end of the type annotation.
     pub header_span: Span,
 }
@@ -543,7 +554,7 @@ pub enum MultiSlotColumnSpan {
 
 /// One slice of a multi-decl body: optional slice-label prefix + header + rows.
 #[derive(Debug, Clone)]
-pub struct MultiDeclSlice {
+pub struct MultiDeclSlice<P: Phase = Raw> {
     /// Slice labels covering the shared-axis prefix except the row axis.
     /// Empty for single-shared-axis bodies.
     pub prefix_keys: Vec<MapEntryKey>,
@@ -556,7 +567,7 @@ pub struct MultiDeclSlice {
     /// slices if their header rows list variants in different orders.
     pub column_layout: Vec<MultiSlotColumnSpan>,
     /// Data rows for this slice.
-    pub rows: Vec<MultiDataRow>,
+    pub rows: Vec<MultiDataRow<P>>,
 }
 
 /// One cell of a multi-decl header row.
@@ -585,26 +596,26 @@ impl MultiHeaderCell {
 
 /// One data row of a multi-decl body: label + value per column.
 #[derive(Debug, Clone)]
-pub struct MultiDataRow {
+pub struct MultiDataRow<P: Phase = Raw> {
     pub label: Spanned<VariantName>,
-    pub values: Vec<Expr>,
+    pub values: Vec<Expr<P>>,
     pub span: Span,
 }
 
 /// Runtime node declaration: `node name: Type = expr;`
 #[derive(Debug, Clone)]
-pub struct NodeDecl {
+pub struct NodeDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr,
-    pub value: Expr,
+    pub type_ann: TypeExpr<P>,
+    pub value: Expr<P>,
 }
 
 /// Const node declaration: `const node name: Type = expr;`
 #[derive(Debug, Clone)]
-pub struct ConstNodeDecl {
+pub struct ConstNodeDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr,
-    pub value: Expr,
+    pub type_ann: TypeExpr<P>,
+    pub value: Expr<P>,
 }
 
 /// Base dimension declaration: `base dim Length;`
@@ -630,19 +641,19 @@ pub struct DimDecl {
 /// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
 /// or `base unit m: Length;`.
 #[derive(Debug, Clone)]
-pub struct UnitDecl {
+pub struct UnitDecl<P: Phase = Raw> {
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
     /// `None` iff this is a base unit (`base unit m: Length;`).
-    pub definition: Option<UnitDef>,
+    pub definition: Option<UnitDef<P>>,
 }
 
 /// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.
 #[derive(Debug, Clone)]
-pub struct UnitDef {
-    pub scale_expr: Expr,
+pub struct UnitDef<P: Phase = Raw> {
+    pub scale_expr: Expr<P>,
     pub unit_expr: UnitExpr,
     pub span: Span,
 }
@@ -655,53 +666,53 @@ pub struct UnitDef {
 /// - Required type: `type T;` — the library requires a type bound from
 ///   outside; no body at declaration.
 #[derive(Debug, Clone)]
-pub struct TypeDecl {
+pub struct TypeDecl<P: Phase = Raw> {
     pub name: Spanned<StructTypeName>,
-    pub generic_params: Vec<GenericParam>,
+    pub generic_params: Vec<GenericParam<P>>,
     /// Fields of the type:
     /// - `None` — required type (`type T;`, no body).
     /// - `Some(vec![])` — empty record (`type T {}`).
     /// - `Some(non-empty)` — record with fields.
-    pub fields: Option<Vec<FieldDecl>>,
+    pub fields: Option<Vec<FieldDecl<P>>>,
 }
 
 /// Union type declaration: `type ManeuverKind = Impulsive | Coasting;`
 ///
 /// Members must reference previously defined record or unit types.
 #[derive(Debug, Clone)]
-pub struct UnionTypeDecl {
+pub struct UnionTypeDecl<P: Phase = Raw> {
     pub name: Spanned<StructTypeName>,
-    pub generic_params: Vec<GenericParam>,
-    pub members: Vec<UnionMember>,
+    pub generic_params: Vec<GenericParam<P>>,
+    pub members: Vec<UnionMember<P>>,
 }
 
 /// A member of a union type, optionally with type arguments.
 ///
 /// E.g., `Ok<D>` in `type Result<D: Dim> = Ok<D> | Err;`
 #[derive(Debug, Clone)]
-pub struct UnionMember {
+pub struct UnionMember<P: Phase = Raw> {
     pub name: Spanned<StructTypeName>,
-    pub type_args: Vec<TypeExpr>,
+    pub type_args: Vec<TypeExpr<P>>,
     pub span: Span,
 }
 
 /// A field in a variant or struct type declaration.
 #[derive(Debug, Clone)]
-pub struct FieldDecl {
+pub struct FieldDecl<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
-    pub type_ann: TypeExpr,
+    pub type_ann: TypeExpr<P>,
 }
 
 ///// The kind of an index declaration.
 #[derive(Debug, Clone)]
-pub enum IndexDeclKind {
+pub enum IndexDeclKind<P: Phase = Raw> {
     /// Named variants: `{ Departure, Correction, Insertion }`
     Named { variants: Vec<Spanned<VariantName>> },
     /// Numeric range: `linspace(start, end, step: step)`
     Range {
-        start: Box<Expr>,
-        end: Box<Expr>,
-        step: Box<Expr>,
+        start: Box<Expr<P>>,
+        end: Box<Expr<P>>,
+        step: Box<Expr<P>>,
     },
     /// Required named index (no variants): `index Foo;`
     ///
@@ -713,7 +724,7 @@ pub enum IndexDeclKind {
     RequiredRange { dimension: DimExpr },
 }
 
-impl IndexDeclKind {
+impl<P: Phase> IndexDeclKind<P> {
     /// Returns `true` for required index declarations that must be bound via import.
     #[must_use]
     pub const fn is_required(&self) -> bool {
@@ -724,18 +735,18 @@ impl IndexDeclKind {
 /// Index declaration: `index Maneuver = { Departure, Correction, Insertion };`
 /// or `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
-pub struct IndexDecl {
+pub struct IndexDecl<P: Phase = Raw> {
     pub name: Spanned<IndexName>,
-    pub kind: IndexDeclKind,
+    pub kind: IndexDeclKind<P>,
 }
 
 /// A generic parameter: `D: Dim`
 #[derive(Debug, Clone)]
-pub struct GenericParam {
+pub struct GenericParam<P: Phase = Raw> {
     pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,
     /// Optional default type, e.g. `F: Type = Unframed`.
-    pub default: Option<TypeExpr>,
+    pub default: Option<TypeExpr<P>>,
 }
 
 /// Constraint on a generic parameter.
@@ -842,13 +853,13 @@ impl std::fmt::Display for DomainBoundKind {
 ///
 /// Used in `Type(min: 100 kg, max: 2000 kg)` to declare valid value ranges.
 #[derive(Debug, Clone)]
-pub struct DomainBound {
+pub struct DomainBound<P: Phase = Raw> {
     /// The bound kind (`min` or `max`).
     pub kind: DomainBoundKind,
     /// The span of the keyword (`min` or `max`).
     pub kind_span: Span,
     /// The bound value expression.
-    pub value: Expr,
+    pub value: Expr<P>,
     pub span: Span,
 }
 
@@ -884,16 +895,16 @@ impl IndexExpr {
 ///
 /// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
 #[derive(Debug, Clone)]
-pub struct TypeExpr {
-    pub kind: TypeExprKind,
+pub struct TypeExpr<P: Phase = Raw> {
+    pub kind: TypeExprKind<P>,
     /// Optional domain constraints on the type.
-    pub constraints: Vec<DomainBound>,
+    pub constraints: Vec<DomainBound<P>>,
     pub span: Span,
 }
 
 /// The kind of a type expression.
 #[derive(Debug, Clone)]
-pub enum TypeExprKind {
+pub enum TypeExprKind<P: Phase = Raw> {
     /// `Dimensionless`
     Dimensionless,
     /// `Bool`
@@ -906,13 +917,13 @@ pub enum TypeExprKind {
     DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
-        base: Box<TypeExpr>,
+        base: Box<TypeExpr<P>>,
         indexes: Vec<IndexExpr>,
     },
     /// A generic type application like `Vec3<Length, ECI>` or `Timestamp<UTC>`
     TypeApplication {
         name: Ident,
-        type_args: Vec<TypeExpr>,
+        type_args: Vec<TypeExpr<P>>,
     },
 }
 
@@ -971,14 +982,34 @@ pub enum MulDivOp {
 // --- Expressions ---
 
 /// An expression node.
+///
+/// Construct via [`Expr::new`] — direct struct literal syntax is blocked
+/// by the private phase marker.
 #[derive(Debug, Clone)]
-pub struct Expr {
-    pub kind: ExprKind,
+pub struct Expr<P: Phase = Raw> {
+    pub kind: ExprKind<P>,
     pub span: Span,
+    // Marker forcing a concrete (non-recursive) use of `P` so the compiler
+    // can determine variance for `Expr<P>` and, transitively, every type
+    // that contains `Expr<P>`. Private so callers must use `Expr::new` —
+    // that keeps the phase marker out of their sight entirely.
+    _phase: PhantomData<fn() -> P>,
+}
+
+impl<P: Phase> Expr<P> {
+    /// Construct an expression with the given kind and span.
+    #[must_use]
+    pub const fn new(kind: ExprKind<P>, span: Span) -> Self {
+        Self {
+            kind,
+            span,
+            _phase: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub enum ExprKind {
+pub enum ExprKind<P: Phase = Raw> {
     /// Numeric literal: `1200.0`, `3.98e5`, `200_000.0`
     Number(f64),
     /// Integer literal: `42`, `1_000`
@@ -994,74 +1025,73 @@ pub enum ExprKind {
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
         op: BinOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: Box<Expr<P>>,
+        rhs: Box<Expr<P>>,
     },
     /// Unary operation: `-x`, `!x`
-    UnaryOp { op: UnaryOp, operand: Box<Expr> },
+    UnaryOp { op: UnaryOp, operand: Box<Expr<P>> },
     /// Function call: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`
     FnCall {
         name: Spanned<FnName>,
-        type_args: Vec<GenericArg>,
-        args: Vec<Expr>,
+        type_args: Vec<GenericArg<P>>,
+        args: Vec<Expr<P>>,
     },
     /// Conditional: `if cond { then_expr } else { else_expr }`
     If {
-        condition: Box<Expr>,
-        then_branch: Box<Expr>,
-        else_branch: Box<Expr>,
+        condition: Box<Expr<P>>,
+        then_branch: Box<Expr<P>>,
+        else_branch: Box<Expr<P>>,
     },
     /// Unit-annotated literal: `400 km`, `9.80665 m/s^2`
     UnitLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
-    Convert { expr: Box<Expr>, target: UnitExpr },
+    Convert {
+        expr: Box<Expr<P>>,
+        target: UnitExpr,
+    },
     /// Timezone display: `expr -> "America/New_York"` (datetime only)
-    DisplayTimezone { expr: Box<Expr>, timezone: String },
+    DisplayTimezone {
+        expr: Box<Expr<P>>,
+        timezone: String,
+    },
     /// Phantom type cast: `expr as TypeExpr`
     AsCast {
-        expr: Box<Expr>,
-        target_type: TypeExpr,
+        expr: Box<Expr<P>>,
+        target_type: TypeExpr<P>,
     },
     /// Local variable reference (loop variable, function parameter, match binding, etc.)
     LocalRef(Ident),
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
     FieldAccess {
-        expr: Box<Expr>,
+        expr: Box<Expr<P>>,
         field: Spanned<FieldName>,
     },
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
     /// or with type args: `Vec3<Length, ECI> { x: 1 km, y: 0 km, z: 0 km }`
     StructConstruction {
         type_name: Spanned<StructTypeName>,
-        type_args: Vec<TypeExpr>,
-        fields: Vec<FieldInit>,
+        type_args: Vec<TypeExpr<P>>,
+        fields: Vec<FieldInit<P>>,
     },
     /// Map literal: `{ Maneuver.Departure: 2.46 km/s, Maneuver.Correction: 0.05 km/s }`
-    MapLiteral { entries: Vec<MapEntry> },
-    /// Table literal: `table[Phase, 3] { ... }`
-    /// Semantically equivalent to `MapLiteral` but preserves tabular structure for formatting.
-    /// Indexes can be named (`Phase`) or Nat range literals (`3`).
-    TableLiteral {
-        indexes: Vec<TableIndexSpec>,
-        entries: Vec<MapEntry>,
-    },
+    MapLiteral { entries: Vec<MapEntry<P>> },
     /// For comprehension: `for m: Maneuver { @delta_v[m] + 1.0 }`
     ForComp {
         bindings: Vec<ForBinding>,
-        body: Box<Expr>,
+        body: Box<Expr<P>>,
     },
     /// Index access: `@delta_v[m]`, `@delta_v[Maneuver.Departure]`, `@P[a, b]`
     IndexAccess {
-        expr: Box<Expr>,
-        args: Vec<IndexArg>,
+        expr: Box<Expr<P>>,
+        args: Vec<IndexArg<P>>,
     },
     /// Scan: `scan(source, init, |acc, val| body)`
     Scan {
-        source: Box<Expr>,
-        init: Box<Expr>,
+        source: Box<Expr<P>>,
+        init: Box<Expr<P>>,
         acc_name: Ident,
         val_name: Ident,
-        body: Box<Expr>,
+        body: Box<Expr<P>>,
     },
     /// Unfold: `unfold(init, |prev_i, i| body)`
     ///
@@ -1069,23 +1099,23 @@ pub enum ExprKind {
     /// The closure receives `(prev_i, i)` bindings for the previous and current
     /// step indices, and the body can reference `@node_name[prev_i]`.
     Unfold {
-        init: Box<Expr>,
+        init: Box<Expr<P>>,
         prev_name: Ident,
         curr_name: Ident,
-        body: Box<Expr>,
+        body: Box<Expr<P>>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`
     Match {
-        scrutinee: Box<Expr>,
-        arms: Vec<MatchArm>,
+        scrutinee: Box<Expr<P>>,
+        arms: Vec<MatchArm<P>>,
     },
     /// Tuple match expression: `match (a, b) { (X, Y) => expr, _ => fallback }`
     ///
     /// Preserved in the AST for formatting and tooling. Desugared to nested
     /// `If` / `BinOp(Eq)` chains before evaluation.
     TupleMatch {
-        scrutinees: Vec<Expr>,
-        arms: Vec<TupleMatchArm>,
+        scrutinees: Vec<Expr<P>>,
+        arms: Vec<TupleMatchArm<P>>,
     },
     /// Standalone index variant reference: `Maneuver.Departure`
     /// Used in comparisons with loop variables: `m == Maneuver.Departure`
@@ -1106,7 +1136,7 @@ pub enum ExprKind {
         /// Name of the `dag` being invoked (single in-scope identifier).
         dag: Spanned<DeclName>,
         /// Param/index bindings, same shape as `include` bindings.
-        args: Vec<ParamBinding>,
+        args: Vec<ParamBinding<P>>,
         /// Projected output node name (after the closing paren `.`).
         output: Spanned<DeclName>,
     },
@@ -1127,6 +1157,13 @@ pub enum ExprKind {
     /// without a following `(`. A name-resolution pass rewrites this to
     /// `VariantLiteral` or `QualifiedConstRef` based on what `a` resolves to.
     QualifiedNameRef { qualifier: Ident, member: Ident },
+    /// Phase-specific expression sugar.
+    ///
+    /// In [`Raw`], this is [`crate::syntax::phase::RawExprSugar`] and carries
+    /// surface forms like `TableLiteral` that are eliminated by the desugar
+    /// pass. In `Desugared`, the payload is [`core::convert::Infallible`] —
+    /// the variant is statically unreachable.
+    Sugar(P::ExprSugar),
 }
 
 /// An index specification in a table literal's bracket list: `table[Phase, 3]`
@@ -1170,9 +1207,9 @@ pub struct MapEntryKey {
 /// Single-axis: `Maneuver.Departure: 2.46 km/s` (keys has 1 element)
 /// Multi-axis:  `(Phase.Launch, Maneuver.Departure): 2.46 km/s` (keys has 2+ elements)
 #[derive(Debug, Clone)]
-pub struct MapEntry {
+pub struct MapEntry<P: Phase = Raw> {
     pub keys: Vec<MapEntryKey>,
-    pub value: Expr,
+    pub value: Expr<P>,
 }
 
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: range(3)`
@@ -1238,14 +1275,14 @@ impl std::fmt::Display for NatExpr {
 /// `eye<3>()` has one `GenericArg::Nat(NatExpr::Literal(3, ..))`.
 /// `some_fn<Length>()` has one `GenericArg::Type(TypeExpr { kind: DimExpr(..), .. })`.
 #[derive(Debug, Clone)]
-pub enum GenericArg {
+pub enum GenericArg<P: Phase = Raw> {
     /// A type expression (for Dim or Index generic params): `Length`, `Maneuver`
-    Type(TypeExpr),
+    Type(TypeExpr<P>),
     /// A nat expression (for Nat generic params): `3`, `N + 1`
     Nat(NatExpr),
 }
 
-impl GenericArg {
+impl<P: Phase> GenericArg<P> {
     /// Get the source span of this generic argument.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -1258,7 +1295,7 @@ impl GenericArg {
 
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
-pub enum IndexArg {
+pub enum IndexArg<P: Phase = Raw> {
     /// Qualified variant: `Maneuver.Departure`
     Variant {
         index: Spanned<IndexName>,
@@ -1267,31 +1304,31 @@ pub enum IndexArg {
     /// Loop variable: `m`
     Var(Ident),
     /// Arbitrary expression: `i + 1`, `i - M`
-    Expr(Box<Expr>),
+    Expr(Box<Expr<P>>),
 }
 
 /// A field initializer in struct construction.
 #[derive(Debug, Clone)]
-pub struct FieldInit {
+pub struct FieldInit<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
     /// `None` means shorthand: `{ dv1 }` is equivalent to `{ dv1: dv1 }`
-    pub value: Option<Expr>,
+    pub value: Option<Expr<P>>,
 }
 
 /// One arm of a `match` expression: `Impulsive { delta_v } => expr`
 #[derive(Debug, Clone)]
-pub struct MatchArm {
+pub struct MatchArm<P: Phase = Raw> {
     pub pattern: MatchPattern,
-    pub body: Expr,
+    pub body: Expr<P>,
     pub span: Span,
 }
 
 /// One arm of a tuple `match` expression: `(X, Y) => expr` or `_ => fallback`
 #[derive(Debug, Clone)]
-pub struct TupleMatchArm {
+pub struct TupleMatchArm<P: Phase = Raw> {
     /// `None` for the wildcard `_` arm.
-    pub patterns: Option<Vec<Expr>>,
-    pub body: Expr,
+    pub patterns: Option<Vec<Expr<P>>>,
+    pub body: Expr<P>,
     pub span: Span,
 }
 
@@ -1354,7 +1391,10 @@ pub enum UnaryOp {
 /// This must be called before evaluation, dim-checking, and dependency analysis,
 /// which only understand the desugared form. The formatter and LSP symbol table
 /// operate on the original AST (before desugaring) so they see `TupleMatch`.
-pub fn desugar_tuple_matches(file: &mut File) {
+///
+/// Runs *after* [`crate::syntax::desugar::desugar_multi_decls_in_file`] —
+/// hence the [`Desugared`](Raw) phase parameter.
+pub fn desugar_tuple_matches(file: &mut File<crate::syntax::phase::Desugared>) {
     for decl in &mut file.declarations {
         match &mut decl.kind {
             DeclKind::Param(p) => {
@@ -1405,7 +1445,7 @@ pub fn desugar_tuple_matches(file: &mut File) {
             }
             DeclKind::Dag(d) => {
                 // Recursively desugar declarations inside the dag block
-                let mut inner_file = File {
+                let mut inner_file = File::<crate::syntax::phase::Desugared> {
                     declarations: std::mem::take(&mut d.body),
                 };
                 desugar_tuple_matches(&mut inner_file);
@@ -1418,13 +1458,13 @@ pub fn desugar_tuple_matches(file: &mut File) {
             | DeclKind::UnionType(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_) => {}
-            DeclKind::Multi(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         }
     }
 }
 
 /// Recursively desugar `TupleMatch` inside a single expression.
-fn desugar_expr(expr: &mut Expr) {
+fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
     // First, recurse into children.
     match &mut expr.kind {
         ExprKind::Number(_)
@@ -1477,7 +1517,7 @@ fn desugar_expr(expr: &mut Expr) {
                 }
             }
         }
-        ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
+        ExprKind::MapLiteral { entries } => {
             for e in entries {
                 desugar_expr(&mut e.value);
             }
@@ -1500,6 +1540,12 @@ fn desugar_expr(expr: &mut Expr) {
                 desugar_expr(&mut arm.body);
             }
         }
+        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) — proof of unreachability"
+        )]
+        ExprKind::Sugar(s) => match *s {},
     }
 
     // Now desugar TupleMatch at this node.
@@ -1533,14 +1579,15 @@ fn desugar_expr(expr: &mut Expr) {
 /// else if a == P && b == Q { e2 }
 /// else { e3 }
 /// ```
-fn desugar_tuple_match(scrutinees: &[Expr], arms: Vec<TupleMatchArm>, span: Span) -> ExprKind {
-    let false_expr = Expr {
-        kind: ExprKind::Bool(false),
-        span,
-    };
+fn desugar_tuple_match(
+    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
+    arms: Vec<TupleMatchArm<crate::syntax::phase::Desugared>>,
+    span: Span,
+) -> ExprKind<crate::syntax::phase::Desugared> {
+    let false_expr = Expr::new(ExprKind::Bool(false), span);
 
     // Build the chain from last arm to first.
-    let mut result: Option<Expr> = None;
+    let mut result: Option<Expr<crate::syntax::phase::Desugared>> = None;
 
     for arm in arms.into_iter().rev() {
         match arm.patterns {
@@ -1552,14 +1599,14 @@ fn desugar_tuple_match(scrutinees: &[Expr], arms: Vec<TupleMatchArm>, span: Span
                 // Build `scrutinee[0] == pattern[0] && scrutinee[1] == pattern[1] && ...`
                 let condition = build_conjunction(scrutinees, &patterns, arm.span);
                 let else_branch = result.unwrap_or_else(|| false_expr.clone());
-                result = Some(Expr {
-                    kind: ExprKind::If {
+                result = Some(Expr::new(
+                    ExprKind::If {
                         condition: Box::new(condition),
                         then_branch: Box::new(arm.body),
                         else_branch: Box::new(else_branch),
                     },
-                    span: arm.span,
-                });
+                    arm.span,
+                ));
             }
         }
     }
@@ -1576,25 +1623,33 @@ fn desugar_tuple_match(scrutinees: &[Expr], arms: Vec<TupleMatchArm>, span: Span
     clippy::unreachable,
     reason = "invariant: parser guarantees arity >= 1"
 )]
-fn build_conjunction(scrutinees: &[Expr], patterns: &[Expr], span: Span) -> Expr {
+fn build_conjunction(
+    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
+    patterns: &[Expr<crate::syntax::phase::Desugared>],
+    span: Span,
+) -> Expr<crate::syntax::phase::Desugared> {
     scrutinees
         .iter()
         .zip(patterns.iter())
-        .map(|(s, p)| Expr {
-            kind: ExprKind::BinOp {
-                op: BinOp::Eq,
-                lhs: Box::new(s.clone()),
-                rhs: Box::new(p.clone()),
-            },
-            span,
+        .map(|(s, p)| {
+            Expr::new(
+                ExprKind::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(s.clone()),
+                    rhs: Box::new(p.clone()),
+                },
+                span,
+            )
         })
-        .reduce(|acc, eq| Expr {
-            kind: ExprKind::BinOp {
-                op: BinOp::And,
-                lhs: Box::new(acc),
-                rhs: Box::new(eq),
-            },
-            span,
+        .reduce(|acc, eq| {
+            Expr::new(
+                ExprKind::BinOp {
+                    op: BinOp::And,
+                    lhs: Box::new(acc),
+                    rhs: Box::new(eq),
+                },
+                span,
+            )
         })
         // The parser guarantees at least one scrutinee.
         .unwrap_or_else(|| unreachable!("tuple match must have at least one scrutinee"))
@@ -1614,7 +1669,7 @@ mod tests {
 
     #[test]
     fn construct_ast_by_hand() {
-        let file = File {
+        let file: File<crate::syntax::phase::Desugared> = File {
             declarations: vec![Declaration {
                 attributes: vec![],
                 visibility: Visibility::Private,
@@ -1625,10 +1680,7 @@ mod tests {
                         constraints: vec![],
                         span: Span::new(9, 15),
                     },
-                    value: Some(Expr {
-                        kind: ExprKind::Number(1.0),
-                        span: Span::new(27, 3),
-                    }),
+                    value: Some(Expr::new(ExprKind::Number(1.0), Span::new(27, 3))),
                 }),
                 span: Span::new(0, 31),
             }],

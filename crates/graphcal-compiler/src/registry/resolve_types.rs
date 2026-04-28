@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::syntax::ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use crate::desugar::desugared_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::syntax::names::{DeclName, IndexName, VariantName};
 use crate::syntax::span::Span;
 
