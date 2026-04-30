@@ -285,7 +285,7 @@ pub(super) fn evaluate_plan(
         run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
     // Build a map from name -> expression for display unit extraction
-    let expr_map: HashMap<String, &graphcal_compiler::syntax::ast::Expr> = tir
+    let expr_map: HashMap<String, &graphcal_compiler::desugar::desugared_ast::Expr> = tir
         .consts
         .iter()
         .map(|e| (e.name.to_string(), &e.expr))
@@ -460,7 +460,7 @@ pub(super) fn evaluate_plan(
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
 fn evaluate_assert_with_expected_fail(
-    body: &graphcal_compiler::syntax::ast::AssertBody,
+    body: &graphcal_compiler::desugar::desugared_ast::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -481,7 +481,8 @@ fn evaluate_assert_with_expected_fail(
         Some(ExpectedFail::Variants(keys)) => {
             // Per-variant: we need the raw RuntimeValue to invert specific entries.
             // Only Expr-based assertions can be indexed; Tolerance assertions are scalar.
-            let graphcal_compiler::syntax::ast::AssertBody::Expr(body_expr) = body else {
+            let graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(body_expr) = body
+            else {
                 // Tolerance assertions cannot be indexed, so Variants makes no sense.
                 // The resolver should have caught this, but be safe.
                 return AssertResult::Error {
@@ -736,13 +737,13 @@ fn collect_failing_paths(
 
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
-    body: &graphcal_compiler::syntax::ast::AssertBody,
+    body: &graphcal_compiler::desugar::desugared_ast::AssertBody,
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match body {
-        graphcal_compiler::syntax::ast::AssertBody::Expr(body_expr) => {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(body_expr) => {
             match eval_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
                 Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
@@ -760,7 +761,7 @@ pub(super) fn evaluate_assert_body(
                 },
             }
         }
-        graphcal_compiler::syntax::ast::AssertBody::Tolerance {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -842,12 +843,12 @@ pub(super) fn evaluate_assert_body(
 /// `RuntimeValue`. Returns `None` on evaluation failure — plots are
 /// best-effort, so a single bad encoding/property aborts the plot.
 fn eval_plot_property(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Option<PlotFieldValue> {
-    if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &expr.kind {
+    if let graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(s) = &expr.kind {
         return Some(PlotFieldValue::String(s.clone()));
     }
     let rv = eval_expr(expr, values, local_values, ctx).ok()?;
@@ -861,7 +862,7 @@ fn eval_plot_property(
 /// (they are not runtime values in Graphcal).
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
-    decl: &graphcal_compiler::syntax::ast::PlotDecl,
+    decl: &graphcal_compiler::desugar::desugared_ast::PlotDecl,
     name: &str,
     is_pub: bool,
     values: &HashMap<DeclName, RuntimeValue>,
@@ -923,7 +924,7 @@ fn evaluate_plot(
 /// their declared type for the dimension. Also extracts display unit info from
 /// unit literals and conversion targets.
 fn extract_encoding_axis_meta(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
     values: &HashMap<DeclName, RuntimeValue>,
@@ -938,11 +939,11 @@ fn extract_encoding_axis_meta(
 
 /// Walk an expression tree to find the first `@`-reference and extract its dimension name.
 fn extract_dimension_from_expr(
-    expr: &graphcal_compiler::syntax::ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
 ) -> Option<String> {
-    use graphcal_compiler::syntax::ast::ExprKind;
+    use graphcal_compiler::desugar::desugared_ast::ExprKind;
     match &expr.kind {
         ExprKind::GraphRef(name) => {
             let dt = declared_types.get(name.value.as_str())?;
@@ -986,7 +987,7 @@ fn dimension_label_from_declared_type(
 
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
-    fields: &[graphcal_compiler::syntax::ast::PlotField],
+    fields: &[graphcal_compiler::desugar::desugared_ast::PlotField],
     plot_name_spans: &[graphcal_compiler::syntax::names::Spanned<DeclName>],
     values: &HashMap<DeclName, RuntimeValue>,
     empty_locals: &HashMap<String, RuntimeValue>,
@@ -1000,7 +1001,9 @@ fn eval_composition_fields(
         let Some(comp_prop) = super::types::CompositionProperty::from_name(&field.name.name) else {
             continue;
         };
-        if let graphcal_compiler::syntax::ast::ExprKind::StringLiteral(s) = &field.value.kind {
+        if let graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(s) =
+            &field.value.kind
+        {
             properties.push((comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }

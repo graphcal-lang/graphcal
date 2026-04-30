@@ -12,15 +12,20 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
     NamedSource::new("test", Arc::new(source.to_string()))
 }
 
+fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    crate::syntax::desugar::desugar_multi_decls_in_file(raw_file)
+}
+
 fn parse_and_resolve(source: &str) -> Result<ResolvedFile, GraphcalError> {
-    let file = Parser::new(source).parse_file().unwrap();
+    let file = parse_and_desugar(source);
     resolve(&file, &make_src(source))
 }
 
 #[test]
 fn resolve_rocket_ksr() {
     let source = include_str!("../../../../../tests/fixtures/rocket.gcl");
-    let file = Parser::new(source).parse_file().unwrap();
+    let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert_eq!(resolved.consts.len(), 1);
     assert_eq!(resolved.params.len(), 3);
@@ -30,7 +35,7 @@ fn resolve_rocket_ksr() {
 #[test]
 fn resolve_constants_ksr() {
     let source = include_str!("../../../../../tests/fixtures/constants.gcl");
-    let file = Parser::new(source).parse_file().unwrap();
+    let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert_eq!(resolved.consts.len(), 4);
     assert_eq!(resolved.params.len(), 1);
@@ -265,7 +270,7 @@ fn resolve_node_with_convert() {
 fn resolve_import_decl_skipped() {
     // import declarations should not be treated as param/node/const
     let source = "import helper.{something};";
-    let file = Parser::new(source).parse_file().unwrap();
+    let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert!(resolved.params.is_empty());
     assert!(resolved.nodes.is_empty());

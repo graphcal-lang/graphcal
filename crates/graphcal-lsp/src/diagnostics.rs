@@ -236,7 +236,10 @@ mod tests {
         let mut parser = Parser::new(source);
         parser
             .parse_file()
-            .map(|ast| build_from_ast(&ast, source))
+            .map(|raw_ast| {
+                let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+                build_from_ast(&ast, source)
+            })
             .unwrap_or_default()
     }
 

@@ -6,26 +6,33 @@
 //! - `ExprVisitor` for read-only traversals (reference collection, validation)
 //! - [`ExprVisitorMut`] for in-place rewriting (name prefixing, qualification rewriting)
 //!
+//! Both traits are generic over the AST [`Phase`]: a single visitor can walk
+//! either `Expr<Raw>` (parser output, surface-aware tooling) or
+//! `Expr<Desugared>` (post-desugar consumers). The dispatch logic is
+//! phase-invariant — variants and field shapes are identical across phases —
+//! so the same default-method bodies work for both.
+//!
 //! Default implementations recurse into child expressions. Implementors override
 //! only the leaf methods they care about.
 
 use crate::syntax::ast::{Expr, ExprKind, IndexArg};
+use crate::syntax::phase::Phase;
 
-/// Read-only visitor for [`Expr`] trees.
+/// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
 ///
 /// Default implementations for container nodes recurse into children.
 /// Override leaf methods to intercept specific node types.
-pub(crate) trait ExprVisitor {
+pub(crate) trait ExprVisitor<P: Phase> {
     type Error;
 
     /// Top-level dispatch. Override to add pre/post-visit logic.
-    fn visit_expr(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+    fn visit_expr(&mut self, expr: &Expr<P>) -> Result<(), Self::Error> {
         self.dispatch(expr)
     }
 
     /// Dispatches to the appropriate handler based on [`ExprKind`].
     /// Typically not overridden.
-    fn dispatch(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+    fn dispatch(&mut self, expr: &Expr<P>) -> Result<(), Self::Error> {
         match &expr.kind {
             ExprKind::Number(_)
             | ExprKind::Integer(_)
@@ -74,9 +81,7 @@ pub(crate) trait ExprVisitor {
                 self.visit_struct_construction(expr, fields)
             }
 
-            ExprKind::MapLiteral { entries } | ExprKind::TableLiteral { entries, .. } => {
-                self.visit_map_entries(expr, entries)
-            }
+            ExprKind::MapLiteral { entries } => self.visit_map_entries(expr, entries),
 
             ExprKind::ForComp { body, .. } => self.visit_expr(body),
 
@@ -91,33 +96,45 @@ pub(crate) trait ExprVisitor {
             ExprKind::TupleMatch { scrutinees, arms } => {
                 self.visit_tuple_match(expr, scrutinees, arms)
             }
+
+            // Phase-specific sugar. Default: ignore — Raw consumers that need
+            // to walk into sugar (formatter) bypass the visitor; Desugared
+            // consumers' Sugar payload is `Infallible` so this arm is
+            // statically unreachable.
+            ExprKind::Sugar(_) => self.visit_sugar(expr),
         }
     }
 
     // -- Leaf handlers (default: no-op) --
 
     /// Called for literal/reference leaves that have no sub-expressions.
-    fn visit_leaf(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+    fn visit_leaf(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_graph_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+    /// Called for `Sugar` variants (Raw-only surface forms). Default: no-op.
+    /// Override in Raw-phase visitors that need to walk into sugar payloads.
+    fn visit_sugar(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_const_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+    fn visit_graph_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_qualified_const_ref(&mut self, _expr: &Expr) -> Result<(), Self::Error> {
+    fn visit_const_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn visit_qualified_const_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
     fn visit_inline_dag_ref(
         &mut self,
-        _expr: &Expr,
-        args: &[crate::syntax::ast::ParamBinding],
+        _expr: &Expr<P>,
+        args: &[crate::syntax::ast::ParamBinding<P>],
     ) -> Result<(), Self::Error> {
         for arg in args {
             self.visit_expr(&arg.value)?;
@@ -127,28 +144,33 @@ pub(crate) trait ExprVisitor {
 
     // -- Container handlers (default: recurse into children) --
 
-    fn visit_fn_call(&mut self, _expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
+    fn visit_fn_call(&mut self, _expr: &Expr<P>, args: &[Expr<P>]) -> Result<(), Self::Error> {
         for arg in args {
             self.visit_expr(arg)?;
         }
         Ok(())
     }
 
-    fn visit_bin_op(&mut self, _expr: &Expr, lhs: &Expr, rhs: &Expr) -> Result<(), Self::Error> {
+    fn visit_bin_op(
+        &mut self,
+        _expr: &Expr<P>,
+        lhs: &Expr<P>,
+        rhs: &Expr<P>,
+    ) -> Result<(), Self::Error> {
         self.visit_expr(lhs)?;
         self.visit_expr(rhs)
     }
 
-    fn visit_unary_op(&mut self, _expr: &Expr, operand: &Expr) -> Result<(), Self::Error> {
+    fn visit_unary_op(&mut self, _expr: &Expr<P>, operand: &Expr<P>) -> Result<(), Self::Error> {
         self.visit_expr(operand)
     }
 
     fn visit_if(
         &mut self,
-        _expr: &Expr,
-        condition: &Expr,
-        then_branch: &Expr,
-        else_branch: &Expr,
+        _expr: &Expr<P>,
+        condition: &Expr<P>,
+        then_branch: &Expr<P>,
+        else_branch: &Expr<P>,
     ) -> Result<(), Self::Error> {
         self.visit_expr(condition)?;
         self.visit_expr(then_branch)?;
@@ -156,14 +178,14 @@ pub(crate) trait ExprVisitor {
     }
 
     /// Called for `Convert`, `DisplayTimezone`, `AsCast`, `FieldAccess`, `IndexAccess`.
-    fn visit_single_child(&mut self, _expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
+    fn visit_single_child(&mut self, _expr: &Expr<P>, inner: &Expr<P>) -> Result<(), Self::Error> {
         self.visit_expr(inner)
     }
 
     fn visit_struct_construction(
         &mut self,
-        _expr: &Expr,
-        fields: &[crate::syntax::ast::FieldInit],
+        _expr: &Expr<P>,
+        fields: &[crate::syntax::ast::FieldInit<P>],
     ) -> Result<(), Self::Error> {
         for field in fields {
             if let Some(val) = &field.value {
@@ -175,8 +197,8 @@ pub(crate) trait ExprVisitor {
 
     fn visit_map_entries(
         &mut self,
-        _expr: &Expr,
-        entries: &[crate::syntax::ast::MapEntry],
+        _expr: &Expr<P>,
+        entries: &[crate::syntax::ast::MapEntry<P>],
     ) -> Result<(), Self::Error> {
         for entry in entries {
             self.visit_expr(&entry.value)?;
@@ -186,26 +208,31 @@ pub(crate) trait ExprVisitor {
 
     fn visit_scan(
         &mut self,
-        _expr: &Expr,
-        source: &Expr,
-        init: &Expr,
-        body: &Expr,
+        _expr: &Expr<P>,
+        source: &Expr<P>,
+        init: &Expr<P>,
+        body: &Expr<P>,
     ) -> Result<(), Self::Error> {
         self.visit_expr(source)?;
         self.visit_expr(init)?;
         self.visit_expr(body)
     }
 
-    fn visit_unfold(&mut self, _expr: &Expr, init: &Expr, body: &Expr) -> Result<(), Self::Error> {
+    fn visit_unfold(
+        &mut self,
+        _expr: &Expr<P>,
+        init: &Expr<P>,
+        body: &Expr<P>,
+    ) -> Result<(), Self::Error> {
         self.visit_expr(init)?;
         self.visit_expr(body)
     }
 
     fn visit_match(
         &mut self,
-        _expr: &Expr,
-        scrutinee: &Expr,
-        arms: &[crate::syntax::ast::MatchArm],
+        _expr: &Expr<P>,
+        scrutinee: &Expr<P>,
+        arms: &[crate::syntax::ast::MatchArm<P>],
     ) -> Result<(), Self::Error> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
@@ -216,9 +243,9 @@ pub(crate) trait ExprVisitor {
 
     fn visit_tuple_match(
         &mut self,
-        _expr: &Expr,
-        scrutinees: &[Expr],
-        arms: &[crate::syntax::ast::TupleMatchArm],
+        _expr: &Expr<P>,
+        scrutinees: &[Expr<P>],
+        arms: &[crate::syntax::ast::TupleMatchArm<P>],
     ) -> Result<(), Self::Error> {
         for s in scrutinees {
             self.visit_expr(s)?;
@@ -235,17 +262,17 @@ pub(crate) trait ExprVisitor {
     }
 }
 
-/// Mutable visitor for in-place rewriting of [`Expr`] trees.
+/// Mutable visitor for in-place rewriting of [`Expr`] trees, generic over [`Phase`].
 ///
-/// Same structure as `ExprVisitor` but takes `&mut Expr` references.
-pub trait ExprVisitorMut {
+/// Same structure as `ExprVisitor` but takes `&mut Expr<P>` references.
+pub trait ExprVisitorMut<P: Phase> {
     type Error;
 
-    fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         self.dispatch_mut(expr)
     }
 
-    fn dispatch_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn dispatch_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         match &mut expr.kind {
             ExprKind::Number(_)
             | ExprKind::Integer(_)
@@ -296,7 +323,7 @@ pub trait ExprVisitorMut {
             }
 
             ExprKind::MapLiteral { .. } => self.visit_map_literal_mut(expr),
-            ExprKind::TableLiteral { .. } => self.visit_table_literal_mut(expr),
+            ExprKind::Sugar(_) => self.visit_sugar_mut(expr),
 
             ExprKind::ForComp { .. } => self.visit_for_comp_mut(expr),
             ExprKind::Scan {
@@ -330,19 +357,19 @@ pub trait ExprVisitorMut {
 
     // -- Leaf handlers for mutable visitor (default: no-op) --
 
-    fn visit_graph_ref_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_graph_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_const_ref_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_const_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_qualified_const_ref_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_qualified_const_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn visit_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_fn_call_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::FnCall { args, .. } = &mut expr.kind {
             for arg in args {
                 self.visit_expr_mut(arg)?;
@@ -352,7 +379,7 @@ pub trait ExprVisitorMut {
     }
 
     /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
-    fn visit_inline_dag_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_inline_dag_ref_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::InlineDagRef { args, .. } = &mut expr.kind {
             for arg in args {
                 self.visit_expr_mut(&mut arg.value)?;
@@ -367,12 +394,12 @@ pub trait ExprVisitorMut {
     // bindings, pattern labels) without overriding the entire `dispatch_mut`.
 
     /// Called for `VariantLiteral`. Default: no-op (leaf node).
-    fn visit_variant_literal_mut(&mut self, _expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_variant_literal_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Called for `ForComp`. Default: recurse into `body`.
-    fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_for_comp_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::ForComp { body, .. } = &mut expr.kind {
             self.visit_expr_mut(body)?;
         }
@@ -380,7 +407,7 @@ pub trait ExprVisitorMut {
     }
 
     /// Called for `IndexAccess`. Default: recurse into inner expr and expression args.
-    fn visit_index_access_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_index_access_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::IndexAccess {
             expr: inner, args, ..
         } = &mut expr.kind
@@ -396,7 +423,7 @@ pub trait ExprVisitorMut {
     }
 
     /// Called for `MapLiteral`. Default: recurse into entry values.
-    fn visit_map_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_map_literal_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::MapLiteral { entries } = &mut expr.kind {
             for entry in entries {
                 self.visit_expr_mut(&mut entry.value)?;
@@ -405,18 +432,14 @@ pub trait ExprVisitorMut {
         Ok(())
     }
 
-    /// Called for `TableLiteral`. Default: recurse into entry values.
-    fn visit_table_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::TableLiteral { entries, .. } = &mut expr.kind {
-            for entry in entries {
-                self.visit_expr_mut(&mut entry.value)?;
-            }
-        }
+    /// Called for `Sugar` variants (Raw-only surface forms). Default: no-op.
+    /// Override in Raw-phase visitors that need to mutate sugar payloads.
+    fn visit_sugar_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
     /// Called for `Match`. Default: recurse into scrutinee and arm bodies.
-    fn visit_match_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+    fn visit_match_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
             self.visit_expr_mut(scrutinee)?;
             for arm in arms {

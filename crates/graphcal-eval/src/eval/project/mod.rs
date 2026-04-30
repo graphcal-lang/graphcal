@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::ast::{DeclKind, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
@@ -42,7 +42,7 @@ pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> S
 /// Visitor that rewrites qualified const references to flat names.
 struct QualifiedRefRewriter;
 
-impl ExprVisitorMut for QualifiedRefRewriter {
+impl ExprVisitorMut<graphcal_compiler::syntax::phase::Desugared> for QualifiedRefRewriter {
     type Error = std::convert::Infallible;
 
     fn visit_qualified_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
@@ -149,7 +149,7 @@ pub(super) struct DeferredInstantiatedImport {
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on imported assertions).
     /// Key = original name in dep, Value = list of attributes from the import item.
     pub(super) import_item_attributes:
-        HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
+        HashMap<String, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
     pub(super) pub_reexport_whole: bool,
     /// Original names (in the dep) of selective items marked `pub` in the
@@ -160,7 +160,7 @@ pub(super) struct DeferredInstantiatedImport {
 /// A deferred inline DAG include that needs IR merging.
 pub(super) struct DeferredInlineDagInclude {
     /// Virtual File AST constructed from the DAG body declarations.
-    pub(super) dag_body: graphcal_compiler::syntax::ast::File,
+    pub(super) dag_body: graphcal_compiler::desugar::desugared_ast::File,
     /// Imported names collected from `import ..` inside the DAG body.
     pub(super) dag_imported_names: ImportedValueNames,
     /// The prefix for all merged declarations (from alias or dag name).
@@ -180,7 +180,7 @@ pub(super) struct DeferredInlineDagInclude {
     pub(super) import_span: Span,
     /// Per-import-item attributes.
     pub(super) import_item_attributes:
-        HashMap<String, Vec<graphcal_compiler::syntax::ast::Attribute>>,
+        HashMap<String, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
     pub(super) pub_reexport_whole: bool,
     /// Original names (in the DAG body) of selective items marked `pub` in
@@ -224,9 +224,9 @@ pub(super) enum SelectiveImportResult {
 /// Otherwise, clones the AST and rewrites `QualifiedGraphRef` and `QualifiedConstRef`
 /// to their flat counterparts.
 pub(super) fn rewrite_qualified_refs_in_ast<'a>(
-    ast: &'a graphcal_compiler::syntax::ast::File,
+    ast: &'a graphcal_compiler::desugar::desugared_ast::File,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
-) -> std::borrow::Cow<'a, graphcal_compiler::syntax::ast::File> {
+) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
     if module_map.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
     }
@@ -242,8 +242,10 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
             DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
             DeclKind::ConstNode(c) => rewrite_qualified_refs(&mut c.value),
             DeclKind::Assert(a) => match &mut a.body {
-                graphcal_compiler::syntax::ast::AssertBody::Expr(e) => rewrite_qualified_refs(e),
-                graphcal_compiler::syntax::ast::AssertBody::Tolerance {
+                graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => {
+                    rewrite_qualified_refs(e);
+                }
+                graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
                     actual,
                     expected,
                     tolerance,
@@ -281,14 +283,18 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
 /// from X; that form is resolved transitively during import processing
 /// (the enumeration requires X's own `pub_names`, which this pure AST
 /// walk does not have), so it is not expanded here.
-pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> HashSet<String> {
+pub(super) fn extract_pub_names(
+    file: &graphcal_compiler::desugar::desugared_ast::File,
+) -> HashSet<String> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
         let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
         if !decl.is_pub() && !implicitly_visible {
             match &decl.kind {
                 DeclKind::Import(d) => {
-                    if let graphcal_compiler::syntax::ast::ImportKind::Selective(items) = &d.kind {
+                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                        &d.kind
+                    {
                         for item in items {
                             if item.is_pub {
                                 pub_names.insert(item.local_name().to_string());
@@ -297,7 +303,9 @@ pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> 
                     }
                 }
                 DeclKind::Include(d) => {
-                    if let graphcal_compiler::syntax::ast::ImportKind::Selective(items) = &d.kind {
+                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                        &d.kind
+                    {
                         for item in items {
                             if item.is_pub {
                                 pub_names.insert(item.local_name().to_string());
@@ -325,7 +333,7 @@ pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> 
             DeclKind::Layer(l) => l.name.value.to_string(),
             DeclKind::Dag(d) => d.name.value.to_string(),
             DeclKind::Import(_) | DeclKind::Include(_) => continue,
-            DeclKind::Multi(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+            DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
         };
         pub_names.insert(name);
     }
@@ -339,7 +347,7 @@ pub(super) fn extract_pub_names(file: &graphcal_compiler::syntax::ast::File) -> 
 /// local declaration when a downstream importer asks "does this file have
 /// `name`?".
 pub(super) fn file_has_declaration(
-    file: &graphcal_compiler::syntax::ast::File,
+    file: &graphcal_compiler::desugar::desugared_ast::File,
     name: &str,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
@@ -359,15 +367,15 @@ pub(super) fn file_has_declaration(
         DeclKind::Dag(d) => d.name.value.as_str() == name,
         DeclKind::Import(d) => matches!(
             &d.kind,
-            graphcal_compiler::syntax::ast::ImportKind::Selective(items)
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
                 if items.iter().any(|it| it.is_pub && it.local_name() == name)
         ),
         DeclKind::Include(d) => matches!(
             &d.kind,
-            graphcal_compiler::syntax::ast::ImportKind::Selective(items)
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
                 if items.iter().any(|it| it.is_pub && it.local_name() == name)
         ),
-        DeclKind::Multi(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
     })
 }
 
@@ -382,7 +390,8 @@ pub(super) fn resolve_field_declared_type(
     registry: &Registry,
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
-    if let graphcal_compiler::syntax::ast::TypeExprKind::DimExpr(dim_expr) = &field.type_ann.kind
+    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) =
+        &field.type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
     {
@@ -401,7 +410,7 @@ pub(super) fn resolve_field_declared_type(
 /// Validate and apply parameter overrides to an IR.
 pub(super) fn apply_overrides(
     ir: &mut graphcal_compiler::ir::lower::IR,
-    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
@@ -480,7 +489,7 @@ pub fn compile_to_tir_from_project(
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     pipeline::evaluate_project_perfile(project, overrides)
 }
@@ -501,7 +510,7 @@ pub fn compile_and_eval_from_project(
 )]
 pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_compiler::syntax::ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     project_root: Option<&Path>,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {

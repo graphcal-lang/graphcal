@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use graphcal_compiler::syntax::ast::{Expr, MapEntry};
+use graphcal_compiler::desugar::desugared_ast::{Expr, MapEntry};
 use graphcal_compiler::syntax::names::{DeclName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
@@ -16,11 +16,11 @@ use super::eval_expr;
 ///
 /// Looks up nat parameter values from `local_values` (stored as `__nat_param_X`).
 fn eval_nat_expr(
-    expr: &graphcal_compiler::syntax::ast::NatExpr,
+    expr: &graphcal_compiler::desugar::desugared_ast::NatExpr,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<u64, GraphcalError> {
-    use graphcal_compiler::syntax::ast::NatExpr;
+    use graphcal_compiler::desugar::desugared_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, _) => Ok(*n),
         NatExpr::Var(ident) => {
@@ -66,7 +66,7 @@ fn eval_nat_expr(
 pub(super) fn eval_index_access(
     expr: &Expr,
     inner: &Expr,
-    args: &[graphcal_compiler::syntax::ast::IndexArg],
+    args: &[graphcal_compiler::desugar::desugared_ast::IndexArg],
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -77,10 +77,10 @@ pub(super) fn eval_index_access(
             return Err(ctx.eval_error("indexing a non-indexed value", expr.span));
         };
         let variant_name: VariantName = match arg {
-            graphcal_compiler::syntax::ast::IndexArg::Variant { variant, .. } => {
+            graphcal_compiler::desugar::desugared_ast::IndexArg::Variant { variant, .. } => {
                 variant.value.clone()
             }
-            graphcal_compiler::syntax::ast::IndexArg::Var(ident) => {
+            graphcal_compiler::desugar::desugared_ast::IndexArg::Var(ident) => {
                 let var_val = local_values.get(&ident.name).ok_or_else(|| {
                     ctx.eval_error(
                         format!("undefined loop variable `{}`", ident.name),
@@ -105,7 +105,7 @@ pub(super) fn eval_index_access(
                     }
                 }
             }
-            graphcal_compiler::syntax::ast::IndexArg::Expr(index_expr) => {
+            graphcal_compiler::desugar::desugared_ast::IndexArg::Expr(index_expr) => {
                 let val = eval_expr(index_expr, values, local_values, ctx)?;
                 match val {
                     RuntimeValue::Int(n) => {
@@ -141,8 +141,8 @@ pub(super) fn eval_index_access(
 pub(super) fn eval_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &graphcal_compiler::syntax::ast::Ident,
-    val_name: &graphcal_compiler::syntax::ast::Ident,
+    acc_name: &graphcal_compiler::desugar::desugared_ast::Ident,
+    val_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     body: &Expr,
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -191,8 +191,8 @@ pub(super) fn eval_scan(
 pub(super) fn eval_unfold(
     expr: &Expr,
     init: &Expr,
-    prev_name: &graphcal_compiler::syntax::ast::Ident,
-    curr_name: &graphcal_compiler::syntax::ast::Ident,
+    prev_name: &graphcal_compiler::desugar::desugared_ast::Ident,
+    curr_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     body: &Expr,
     values: &HashMap<DeclName, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -402,13 +402,13 @@ pub(super) fn eval_map_literal(
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
 pub(super) fn eval_for_comp(
-    bindings: &[graphcal_compiler::syntax::ast::ForBinding],
+    bindings: &[graphcal_compiler::desugar::desugared_ast::ForBinding],
     body: &Expr,
     values: &HashMap<DeclName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::syntax::ast::ForBindingIndex;
+    use graphcal_compiler::desugar::desugared_ast::ForBindingIndex;
 
     let binding = &bindings[0];
 

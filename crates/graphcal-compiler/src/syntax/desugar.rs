@@ -1,14 +1,23 @@
 //! Syntactic sugar desugaring pass (issue #481).
 //!
 //! Multi-declarations — `param a: T[I], const node b: U[I, J] = table[…]{…};` —
-//! are parsed as `DeclKind::Multi(MultiDecl)` to preserve source structure
-//! for surface-aware tools (formatter, etc.). This module expands them into
-//! N parallel ordinary declarations before semantic analysis, so lowering,
-//! TIR, resolver, and LSP all see only single declarations.
+//! are parsed as `DeclKind::Sugar(RawDeclSugar::Multi(MultiDecl))` to preserve
+//! source structure for surface-aware tools (formatter, LSP). This module
+//! expands them into N parallel ordinary declarations before semantic
+//! analysis, so lowering, TIR, resolver, and the runtime all see only
+//! single declarations.
 //!
-//! The desugar pass is called at the top of
+//! The desugar pass is invoked at the top of
 //! [`crate::syntax::name_resolve::resolve_name_refs`]; everything downstream
-//! can assume `DeclKind::Multi` does not appear in the AST.
+//! can assume `DeclKind::Sugar` does not appear in the AST.
+//!
+//! Note: today this pass mutates a `File<Raw>` in place, eliminating sugar
+//! variants by walking + flattening. A future commit will switch the API
+//! to `File<Raw> -> File<Desugared>` (the [`From`] impl in
+//! [`crate::desugar::convert`] is the engine for that transition) and
+//! pin all consumers to `File<Desugared>`, replacing the runtime
+//! [`unreachable_post_desugar`] panics with [`crate::syntax::phase::never`]
+//! on the [`Infallible`](core::convert::Infallible) `Sugar` payload.
 //!
 //! ## Span fidelity
 //!
@@ -33,55 +42,31 @@
 )]
 pub fn unreachable_post_desugar() -> ! {
     panic!(
-        "DeclKind::Multi should have been removed by syntax::desugar::desugar_multi_decls_in_file"
+        "DeclKind::Sugar should have been removed by syntax::desugar::desugar_multi_decls_in_file"
     )
 }
 
 use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
-    ConstNodeDecl, DagDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryKey,
-    MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl,
-    TableIndexSpec, Visibility,
+    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryKey, MultiDecl,
+    MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,
+    Visibility,
 };
 use crate::syntax::names::{IndexName, Spanned, VariantName};
+use crate::syntax::phase::{Desugared, Raw};
 
-/// Expand every `DeclKind::Multi` declaration in `file` into its N
-/// constituent ordinary declarations (in source order). Recurses into
-/// `DagDecl` bodies.
-pub fn desugar_multi_decls_in_file(file: &mut File) {
-    file.declarations = file.declarations.drain(..).flat_map(desugar_decl).collect();
-}
-
-fn desugar_decl(decl: Declaration) -> Vec<Declaration> {
-    let Declaration {
-        attributes,
-        visibility,
-        kind,
-        span,
-    } = decl;
-    match kind {
-        DeclKind::Multi(multi) => expand_multi_decl(&multi),
-        DeclKind::Dag(mut dag) => {
-            desugar_multi_decls_in_dag(&mut dag);
-            vec![Declaration {
-                attributes,
-                visibility,
-                kind: DeclKind::Dag(dag),
-                span,
-            }]
-        }
-        other => vec![Declaration {
-            attributes,
-            visibility,
-            kind: other,
-            span,
-        }],
-    }
-}
-
-fn desugar_multi_decls_in_dag(dag: &mut DagDecl) {
-    let body = std::mem::take(&mut dag.body);
-    dag.body = body.into_iter().flat_map(desugar_decl).collect();
+/// Expand every multi-decl in `file` into its N constituent ordinary
+/// declarations and return the result as [`File<Desugared>`].
+///
+/// Consumes the raw file by value because the phase split is a type-level
+/// transformation: `File<Raw>` and `File<Desugared>` are distinct types and
+/// cannot share storage. The actual conversion logic lives in
+/// [`crate::desugar::convert`] (the `From<File<Raw>> for File<Desugared>`
+/// impl), which dispatches the multi-decl `Sugar` arm to
+/// [`expand_multi_decl`].
+#[must_use]
+pub fn desugar_multi_decls_in_file(file: File<Raw>) -> File<Desugared> {
+    file.into()
 }
 
 /// Expand a single `MultiDecl` into its N constituent declarations.
@@ -170,13 +155,13 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
             slot_indexes.push(TableIndexSpec::Named(extra));
         }
 
-        let table_expr = Expr {
-            kind: ExprKind::TableLiteral {
+        let table_expr = Expr::new(
+            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
                 indexes: slot_indexes,
                 entries: slot_entries,
-            },
-            span: multi.table_expr_span,
-        };
+            }),
+            multi.table_expr_span,
+        );
 
         let kind = match slot.kind {
             MultiSlotKind::Param => DeclKind::Param(ParamDecl {

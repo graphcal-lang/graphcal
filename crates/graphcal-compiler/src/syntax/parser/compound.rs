@@ -32,10 +32,7 @@ impl Parser<'_> {
                 let arms = self.parse_tuple_match_arms(scrutinees.len(), start_span)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
-                return Ok(Expr {
-                    kind: ExprKind::TupleMatch { scrutinees, arms },
-                    span,
-                });
+                return Ok(Expr::new(ExprKind::TupleMatch { scrutinees, arms }, span));
             }
             self.expect(Token::RParen)?;
             self.expect(Token::LBrace)?;
@@ -43,10 +40,7 @@ impl Parser<'_> {
             let arms = self.parse_match_arm_list()?;
             let (_, end_span) = self.expect(Token::RBrace)?;
             let span = start_span.merge(end_span);
-            return Ok(Expr {
-                kind: ExprKind::Match { scrutinee, arms },
-                span,
-            });
+            return Ok(Expr::new(ExprKind::Match { scrutinee, arms }, span));
         }
         let scrutinee = Box::new(self.parse_expr()?);
         self.expect(Token::LBrace)?;
@@ -55,10 +49,7 @@ impl Parser<'_> {
 
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Match { scrutinee, arms },
-            span,
-        })
+        Ok(Expr::new(ExprKind::Match { scrutinee, arms }, span))
     }
 
     /// Parse tuple-match arms into a `TupleMatch` AST node.
@@ -266,14 +257,14 @@ impl Parser<'_> {
 
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = type_name.span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::StructConstruction {
+        Ok(Expr::new(
+            ExprKind::StructConstruction {
                 type_name,
                 type_args,
                 fields,
             },
             span,
-        })
+        ))
     }
 
     // --- For comprehension ---
@@ -313,13 +304,13 @@ impl Parser<'_> {
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::ForComp {
+        Ok(Expr::new(
+            ExprKind::ForComp {
                 bindings,
                 body: Box::new(body),
             },
             span,
-        })
+        ))
     }
 
     /// Parse a for binding index: either a named index (`Maneuver`) or `range(N)`.
@@ -424,8 +415,8 @@ impl Parser<'_> {
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
         let span = keyword_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Scan {
+        Ok(Expr::new(
+            ExprKind::Scan {
                 source: Box::new(first_expr),
                 init: Box::new(init),
                 acc_name,
@@ -433,7 +424,7 @@ impl Parser<'_> {
                 body: Box::new(body),
             },
             span,
-        })
+        ))
     }
 
     // --- Unfold expression ---
@@ -453,15 +444,15 @@ impl Parser<'_> {
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
         let span = keyword_span.merge(end_span);
-        Ok(Expr {
-            kind: ExprKind::Unfold {
+        Ok(Expr::new(
+            ExprKind::Unfold {
                 init: Box::new(init),
                 prev_name,
                 curr_name,
                 body: Box::new(body),
             },
             span,
-        })
+        ))
     }
 }
 

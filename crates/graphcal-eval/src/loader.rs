@@ -5,8 +5,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::eval::CompileError;
+use graphcal_compiler::desugar::desugared_ast::File;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, File, ModulePath};
+use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::FileSystemReader;
 
@@ -37,7 +38,7 @@ impl LoadedFile {
         &self,
     ) -> impl Iterator<
         Item = (
-            &graphcal_compiler::syntax::ast::Declaration,
+            &graphcal_compiler::desugar::desugared_ast::Declaration,
             &graphcal_compiler::syntax::ast::ImportDecl,
             &DagId,
         ),
@@ -59,8 +60,8 @@ impl LoadedFile {
         &self,
     ) -> impl Iterator<
         Item = (
-            &graphcal_compiler::syntax::ast::Declaration,
-            &graphcal_compiler::syntax::ast::IncludeDecl,
+            &graphcal_compiler::desugar::desugared_ast::Declaration,
+            &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
             &DagId,
         ),
     > {
@@ -101,9 +102,9 @@ impl LoadedProject {
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
         let source = Arc::new(source.to_string());
         let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
-        let mut ast =
+        let raw_ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
-        graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(&mut ast);
+        let mut ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
         graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
         let path = PathBuf::from(name);
@@ -222,9 +223,9 @@ fn load_file_dfs<F: FileSystemReader>(
         .file_name()
         .map_or_else(|| display_name.clone(), |n| n.to_string_lossy().to_string());
     let named_source = graphcal_compiler::syntax::named_source(&name, Arc::clone(&source));
-    let mut ast =
+    let raw_ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
-    graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(&mut ast);
+    let mut ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
     graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
 

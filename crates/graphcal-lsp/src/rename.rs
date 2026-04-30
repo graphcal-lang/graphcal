@@ -122,9 +122,10 @@ mod tests {
 
     /// Build a minimal `AnalysisResult` from source text.
     fn analysis_from_source(source: &str) -> AnalysisResult {
-        let ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
+        let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         let symbol_table = symbol_table::build_from_ast(&ast, source);
         AnalysisResult {
             source: source.to_string(),

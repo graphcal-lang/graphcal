@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 use miette::Diagnostic;
 use thiserror::Error;
 
-use graphcal_compiler::syntax::ast::EncodingChannel;
+use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::syntax::names::{
     DeclName, FieldName, IndexName, StructTypeName, VariantName,
@@ -456,7 +456,7 @@ pub struct PlotSpec {
     /// The plot declaration name.
     pub name: DeclName,
     /// The mark type (point, line, bar, area, rect, tick).
-    pub mark_type: graphcal_compiler::syntax::ast::MarkType,
+    pub mark_type: graphcal_compiler::desugar::desugared_ast::MarkType,
     /// Evaluated encoding channels (x, y, color, etc.) with their data.
     pub encodings: Vec<(EncodingChannel, PlotFieldValue)>,
     /// Axis metadata per encoding channel.

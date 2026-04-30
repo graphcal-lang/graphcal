@@ -798,7 +798,7 @@ fn collect_imported_definitions(
             });
 
         match kind {
-            graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                 for import_item in items {
                     let original_key = SymbolKey::TopLevel(import_item.name.name.clone());
                     let Some(def) = imported_table.definitions.get(&original_key) else {
@@ -808,7 +808,7 @@ fn collect_imported_definitions(
                     insert_imported_def(&mut result, local_key, imported_uri, source, def);
                 }
             }
-            graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
                 let module_name = alias.as_ref().map_or_else(
                     || {
                         graphcal_eval::loader::derive_module_name(&path_display)
