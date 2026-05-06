@@ -250,7 +250,7 @@ File
 
 Declaration
   attributes: Vec<Attribute>    // #[assumes(...)], etc.
-  is_pub: bool                  // visibility (private by default)
+  visibility: Visibility        // Private | Public | PublicBind
   kind: DeclKind                // Param | Node | ConstNode | Dimension | Unit | ...
   span: Span
 
@@ -336,21 +336,26 @@ Example: velocity = `{ Length: 1, Time: -1 }`.
 Graphcal distinguishes declarations by category, which determines when and how
 they are evaluated:
 
-All declarations are **private by default**. The `pub` keyword makes them
-visible to other files. Required params and indexes must be marked `pub`.
+All declarations are **private by default**. The two visibility modifiers
+are `pub` (visible at the include / import boundary) and `pub(bind)`
+(visible AND overridable via include / import bindings). Required `index`,
+`type`, and `dim` declarations must carry `pub(bind)`. The `param` keyword
+never takes a visibility modifier — required `param` is implicitly bindable.
 
-| Category          | Keyword                                          | Evaluated                                               | Can Reference                                        | Visibility                                     | Naming Convention                                |
-| ----------------- | ------------------------------------------------ | ------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------ |
-| Type system       | `base dim`, `dim`, `unit`, `type`, `index`, `fn` | At registry build                                       | Other type-system decls                              | `pub` optional; required `index` must be `pub` | PascalCase (types/indexes) or snake_case (units) |
-| DAG               | `dag`                                            | At include-time (body compiled/merged on instantiation) | Parent-scope imports, local params/nodes/const nodes | `pub` optional                                 | `lower_snake_case`                               |
-| Const node        | `const node`                                     | Compile-time (ExecPlan)                                 | Other const nodes via `@`, built-in constants        | `pub` optional                                 | `lower_snake_case`                               |
-| Param             | `param`                                          | Runtime (input)                                         | Const nodes, other params/nodes                      | `pub` optional; required params must be `pub`  | `lower_snake_case`                               |
-| Node              | `node`                                           | Runtime (computed)                                      | Const nodes, params, other nodes                     | `pub` optional                                 | `lower_snake_case`                               |
-| Assert            | `assert`                                         | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional                                 | `lower_snake_case`                               |
-| Plot/Figure/Layer | `plot`, `figure`, `layer`                        | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional                                 | `lower_snake_case`                               |
+| Category          | Keyword                                     | Evaluated                                               | Can Reference                                        | Visibility                                            | Naming Convention                                |
+| ----------------- | ------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------ |
+| Type system       | `base dim`, `dim`, `unit`, `type`, `index`  | At registry build                                       | Other type-system decls                              | `pub` / `pub(bind)`; required forms need `pub(bind)`  | PascalCase (types/indexes) or snake_case (units) |
+| DAG               | `dag`                                       | At include-time (body compiled/merged on instantiation) | Own params/nodes, own imports, own includes          | `pub` optional                                        | `lower_snake_case`                               |
+| Const node        | `const node`                                | Compile-time (ExecPlan)                                 | Other const nodes via `@`, built-in constants        | `pub` optional                                        | `lower_snake_case`                               |
+| Param             | `param`                                     | Runtime (input)                                         | Const nodes, other params/nodes                      | none (implicitly bindable; A5)                        | `lower_snake_case`                               |
+| Node              | `node`                                      | Runtime (computed)                                      | Const nodes, params, other nodes                     | `pub` optional                                        | `lower_snake_case`                               |
+| Assert            | `assert`                                    | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional                                        | `lower_snake_case`                               |
+| Plot/Figure/Layer | `plot`, `figure`, `layer`                   | After all nodes                                         | Const nodes, params, nodes                           | `pub` optional (`pub` plot ⇒ standalone output)       | `lower_snake_case`                               |
+| Multi-decl sugar  | `param,node,…  =  table[...] { … }`         | Desugared at parse                                      | Same as the slot kinds                               | none (forbidden on multi-decl in v1)                  | `lower_snake_case` per slot                      |
 
 The `@name` syntax references params, nodes, and const nodes. Built-in
-constants (PI, E, TAU) use bare `UPPER_SNAKE_CASE` names without `@`.
+constants (PI, E, TAU, SQRT2, LN2, LN10) use bare `UPPER_SNAKE_CASE` names
+without `@`.
 
 ---
 
@@ -405,30 +410,51 @@ Error codes are searchable (e.g., `D001` for dimension mismatch).
 Graphcal splits cross-file and DAG reuse into two keywords:
 
 - **`import`** -- compile-time names only: `const node`, `dim`, `unit`, `type`,
-  `index`, `fn`, `dag`, and evaluated `assert` declarations. Using `import` for
+  `index`, `dag`, and evaluated `assert` declarations. Using `import` for
   runtime items (`param`, `node`) is an error (M020). `import` does not accept
-  parameter bindings and cannot target cross-file DAG paths.
+  parameter bindings and cannot target cross-file DAG instantiation.
 - **`include`** -- selective/module inclusion with optional param/index bindings.
-  It is used for runtime items and for DAG instantiation (inline, cross-file, or
-  bare-module DAG references).
+  It is used for runtime items (cross-file `param`s) and for DAG instantiation
+  (inline, cross-file, or via a fully-qualified module path).
 
-| Style                   | Syntax                                           | Effect                                                  |
-| ----------------------- | ------------------------------------------------ | ------------------------------------------------------- |
-| Selective import        | `import "./lib.gcl" { fn_a, const_b as alias }`  | Import specific compile-time names                      |
-| Module import           | `import "./lib.gcl" as ns`                       | Import under namespace (`ns::name`)                     |
-| Parent scope            | `import .. { name1, name2 }`                     | Access enclosing DAG scope from inside a `dag`          |
-| Selective include       | `include "./model.gcl" { x, y as z }`            | Bring selected exported names into scope                |
-| Module include          | `include "./model.gcl" as model`                 | Bring exported names under a module prefix              |
-| Parameterized include   | `include "./model.gcl"(param_x: 42.0) { y }`     | Bind params/indexes, then include selected outputs      |
-| Inline DAG include      | `include orbital_velocity(gm: @gm, r: @r) { v }` | Instantiate a same-file `dag` block                     |
-| Cross-file DAG include  | `include "./file.gcl"/dag_name(x: 1.0) { y }`    | Instantiate a named `dag` from another file             |
-| Bare-module DAG include | `include pkg/lib/dag_name(x: 1.0) { y }`         | Instantiate a `dag` defined in the resolved module file |
+All paths are **dot-separated** identifiers, absolute from a package root.
+The first segment is the package name (a virtual single-file package's name
+is the file stem; a real package's name comes from `graphcal.toml`).
+There are no quoted file strings, no `..`, and no `/` inside Graphcal source
+(see `docs/language/multi-file.md`).
 
-Only `pub` items can be imported/included across files (V001).
+| Style                   | Syntax                                              | Effect                                                  |
+| ----------------------- | --------------------------------------------------- | ------------------------------------------------------- |
+| Bare import             | `import nasa.rocket;`                               | Bring module `rocket` into scope under its leaf name    |
+| Aliased import          | `import nasa.rocket as nr;`                         | Bring the module under alias `nr`                       |
+| Selective import        | `import nasa.rocket.{Orbit, compute_thrust as ct};` | Bring only the listed compile-time names                |
+| Re-export (whole)       | `pub import nasa.rocket;`                           | Re-export every `pub` item from the leaf module         |
+| Re-export (selective)   | `import nasa.rocket.{ pub Orbit };`                 | Re-export only the marked items                         |
+| Bare include            | `include nasa.rocket.compute_thrust(args);`         | Sugar for `... as compute_thrust`                       |
+| Aliased include         | `include nasa.rocket.compute_thrust(args) as ct;`   | Outputs reached as `@ct.<output>`                       |
+| Selective include       | `include nasa.rocket.compute_thrust(args).{ y };`   | `y` becomes a node in the current DAG                   |
+| Parameterized include   | `include lib.rocket(dry_mass: 800.0 kg).{ delta_v };` | Bind params/indexes, then take selected outputs       |
+| Inline DAG include      | `include orbital_velocity(gm: @gm, r: @r).{ v };`   | Instantiate a same-file `dag` block                     |
+| Inline DAG call expr    | `@compute_thrust(dry_mass: @m).thrust`              | Inline DAG invocation in expression position            |
+
+Visibility is a two-axis split (see `docs/language/multi-file.md`):
+
+- bare = private (V001 if imported)
+- `pub` = visible at boundary, not bindable
+- `pub(bind)` = visible AND bindable; required `dim` / `type` / `index` must be
+  `pub(bind)` (V002)
+- `param` is annotation-free and implicitly bindable (axiom A5)
+
+`pub(bind)` is illegal on `import` (use-sites are not bindable).
 
 Bindings on an `include` are optional for any param or index that has a
 default; unbound ones keep their declared defaults. Required params and
 indexes (declared without a default) must always be bound.
+
+Inline DAG bodies see only their own declarations, their own imports, and
+the outputs of their own includes -- there is no lexical inheritance from
+the enclosing file's top-level scope. Top-level types (`type`, `dim`, etc.)
+referenced inside a `dag` body must be brought in by an explicit `import`.
 
 Circular imports are detected during project loading via depth-first traversal
 with cycle tracking. Files are loaded in topological order (dependencies first).

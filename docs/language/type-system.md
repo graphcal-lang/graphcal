@@ -27,7 +27,7 @@ Expression-level:
 - **Primitive** — An indivisible atomic datum.
 - **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, union types). This is the type of one value: you can pass it to a function, return it, store it.
 - **DeclType** — What can appear in type annotations of `param`, `node`, and `const node` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
-- **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver::Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies and match bindings.
+- **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver.Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies and match bindings.
 
 ### DAG Correspondence
 
@@ -202,9 +202,9 @@ For indexed types, constraints apply **element-wise** to each entry:
 
 ```
 param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
-    Maneuver::Departure: 3200.0 m/s,
-    Maneuver::Correction: 500.0 m/s,
-    Maneuver::Insertion: 1800.0 m/s,
+    Maneuver.Departure: 3200.0 m/s,
+    Maneuver.Correction: 500.0 m/s,
+    Maneuver.Insertion: 1800.0 m/s,
 };
 ```
 
@@ -242,22 +242,22 @@ An index declares a finite, ordered set of labels usable as collection axes in `
 
 A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
 
-1. An **expression-level type**: `Maneuver::Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from union types. Labels exist only within expressions, not in declaration type annotations.
+1. An **expression-level type**: `Maneuver.Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from union types. Labels exist only within expressions, not in declaration type annotations.
 2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Named index labels use qualified syntax (`Maneuver::Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
+Named index labels use qualified syntax (`Maneuver.Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
 
 Named index labels are proper runtime values within expressions:
 
 - Use in DAG block parameters: `param m: Maneuver` works.
 - Use as DAG block node types: `node result: Maneuver` works.
-- Store in nodes: `node x: Maneuver = Maneuver::Departure` works.
-- Compare: `m == Maneuver::Departure` works.
-- Pattern match: `match m { Maneuver::Departure => ..., ... }` works.
+- Store in nodes: `node x: Maneuver = Maneuver.Departure` works.
+- Compare: `m == Maneuver.Departure` works.
+- Pattern match: `match m { Maneuver.Departure => ..., ... }` works.
 - Use in struct fields: `type Config { phase: Phase, maneuver: Maneuver }` works.
 
 However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
@@ -282,7 +282,7 @@ Range index labels are scalar values, not union type members. The loop variable 
 | Indexing: `@x[m]` | Yes | Yes |
 | Map literal key | Yes | No (range labels are implicit) |
 | Equality comparison | Yes (as Label) | Yes (as Scalar) |
-| Pattern matching | Yes (qualified: `Maneuver::X => ...`) | No |
+| Pattern matching | Yes (qualified: `Maneuver.X => ...`) | No |
 | Arithmetic | No (not a scalar) | Yes |
 | Pass to DAG param | Yes | Yes (as scalar) |
 
@@ -294,9 +294,9 @@ Both loop variable types are runtime values -- named index labels are `Label` va
 
 ```
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.05 km/s,
-    Maneuver::Insertion: 1.48 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.05 km/s,
+    Maneuver.Insertion: 1.48 km/s,
 }
 ```
 
@@ -304,19 +304,19 @@ param delta_v: Velocity[Maneuver] = {
 
 ```
 param delta_v_budget: Velocity[Phase, Maneuver] = {
-    (Phase::Launch, Maneuver::Departure): 2.46 km/s,
-    (Phase::Launch, Maneuver::Correction): 0.0 m/s,
-    (Phase::Launch, Maneuver::Insertion): 0.0 m/s,
-    (Phase::Cruise, Maneuver::Departure): 0.0 m/s,
-    (Phase::Cruise, Maneuver::Correction): 0.05 km/s,
-    (Phase::Cruise, Maneuver::Insertion): 0.0 m/s,
-    (Phase::Arrival, Maneuver::Departure): 0.0 m/s,
-    (Phase::Arrival, Maneuver::Correction): 0.0 m/s,
-    (Phase::Arrival, Maneuver::Insertion): 1.48 km/s,
+    (Phase.Launch, Maneuver.Departure): 2.46 km/s,
+    (Phase.Launch, Maneuver.Correction): 0.0 m/s,
+    (Phase.Launch, Maneuver.Insertion): 0.0 m/s,
+    (Phase.Cruise, Maneuver.Departure): 0.0 m/s,
+    (Phase.Cruise, Maneuver.Correction): 0.05 km/s,
+    (Phase.Cruise, Maneuver.Insertion): 0.0 m/s,
+    (Phase.Arrival, Maneuver.Departure): 0.0 m/s,
+    (Phase.Arrival, Maneuver.Correction): 0.0 m/s,
+    (Phase.Arrival, Maneuver.Insertion): 1.48 km/s,
 }
 ```
 
-Single-axis map literals use bare keys (`Maneuver::Departure: ...`); multi-axis map literals use tuple keys (`(Phase::Launch, Maneuver::Departure): ...`).
+Single-axis map literals use bare keys (`Maneuver.Departure: ...`); multi-axis map literals use tuple keys (`(Phase.Launch, Maneuver.Departure): ...`).
 
 **`for` comprehension** (one value per label):
 
@@ -339,14 +339,14 @@ node matrix: Dimensionless[Row, Col] = for r: Row, c: Col {
 **Indexing** -- extracts a single element by providing all index labels:
 
 ```
-@delta_v[Maneuver::Departure]                // Velocity[Maneuver] -> Velocity
-@matrix[Row::R1, Col::C2]                    // Dimensionless[Row, Col] -> Dimensionless
+@delta_v[Maneuver.Departure]                // Velocity[Maneuver] -> Velocity
+@matrix[Row.R1, Col.C2]                    // Dimensionless[Row, Col] -> Dimensionless
 ```
 
 No partial indexing -- all axes must be specified. To extract a "slice" along one axis, use explicit `for`:
 
 ```
-node row1: Dimensionless[Col] = for c: Col { @matrix[Row::R1, c] }
+node row1: Dimensionless[Col] = for c: Col { @matrix[Row.R1, c] }
 ```
 
 **Aggregation** -- collapses one or more axes:
@@ -536,9 +536,9 @@ expr.field_name
 ### Index Access
 
 ```
-expr[Index::Variant]        // access a specific element
+expr[Index.Variant]        // access a specific element
 expr[loop_var]              // access with a for-binding variable
-expr[Index1::V1, Index2::V2] // multi-dimensional access
+expr[Index1.V1, Index2.V2] // multi-dimensional access
 ```
 
 - `expr` must be an indexed type `T[I]` (or `T[I1, I2]` for multi-dimensional).
@@ -560,7 +560,7 @@ MemberName                                        // unit type (no fields)
 ### Variant Literal
 
 ```
-IndexName::VariantName
+IndexName.VariantName
 ```
 
 - References a specific label of a named index.
@@ -579,14 +579,14 @@ match scrutinee {
 - `scrutinee` must be a union type or a `Label` type.
 - All members/labels must be covered (exhaustiveness check).
 - For union type scrutinees, arms use bare member names and can bind fields.
-- For `Label` scrutinees, arms use qualified names (`Index::Label`) and cannot bind fields (labels are fieldless).
+- For `Label` scrutinees, arms use qualified names (`Index.Label`) and cannot bind fields (labels are fieldless).
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 
 ### Map Literal
 
 ```
-{ Index::Variant1: expr1, Index::Variant2: expr2, ... }
+{ Index.Variant1: expr1, Index.Variant2: expr2, ... }
 ```
 
 - All variants of the index must be covered.
@@ -596,7 +596,7 @@ match scrutinee {
 For multi-axis map literals, use tuple keys:
 
 ```
-{ (I1::V1, I2::V2): expr1, (I1::V1, I2::V3): expr2, ... }
+{ (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
 ```
 
 - All label tuples must be present.
@@ -661,9 +661,11 @@ dag hohmann_transfer {
 DAG blocks are instantiated with `include`, which embeds their nodes into the enclosing computation graph:
 
 ```
-include hohmann_transfer(gm: @gm_earth, r1: @r_earth + @parking_alt, r2: @r_earth + @target_alt) {
-    total_dv,
-}
+include hohmann_transfer(
+    gm: @gm_earth,
+    r1: @r_earth + @parking_alt,
+    r2: @r_earth + @target_alt,
+).{ total_dv };
 ```
 
 ## Generics
@@ -764,4 +766,4 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Unit | No (compile-time) | No | No | No | In literals only |
 | Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
 
-Named index labels have a dedicated `Label(IndexName)` type kind, distinct from union type members. Labels use qualified syntax (`Maneuver::Departure`) while union type members use bare syntax (`Nominal`).
+Named index labels have a dedicated `Label(IndexName)` type kind, distinct from union type members. Labels use qualified syntax (`Maneuver.Departure`) while union type members use bare syntax (`Nominal`).

@@ -46,7 +46,7 @@ When the body evaluates to `Bool[SomeIndex]`, each variant is checked
 individually. Failing variants are listed in the diagnostic:
 
 ```
-index Stage = First, Second, Third;
+index Stage = { First, Second, Third };
 
 param thrust: Force[Stage] = ...;
 param min_thrust: Force = 100.0 kN;

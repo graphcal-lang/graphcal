@@ -185,8 +185,7 @@ pub plot curve_a = {
 
 A non-`pub` plot still participates in the computation graph and can be
 referenced by `figure` and `layer` declarations -- it simply does not appear
-as a standalone chart in the output. This replaces the former `#[hidden]`
-attribute, which has been removed.
+as a standalone chart in the output.
 
 ## Figure Declarations
 

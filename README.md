@@ -12,9 +12,9 @@ Graphcal replaces the spreadsheets and simulation tools that engineers reluctant
 dim Velocity = Length / Time;
 dim Acceleration = Length / Time^2;
 
-param dry_mass: Mass = 1200 kg;
-param fuel_mass: Mass = 2800 kg;
-param isp: Time = 320 s;
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+param isp: Time = 320.0 s;
 const node g0: Acceleration = 9.80665 m/s^2;
 
 node v_exhaust: Velocity = @isp * @g0;
@@ -70,7 +70,7 @@ The compiler catches mismatched operations (e.g., `km + kg`) at compile time.
 A built-in prelude provides SI base dimensions, derived dimensions, and common units.
 
 ```gcl
-param parking_alt: Length = 200 km;
+param parking_alt: Length = 200.0 km;
 node speed: Velocity = 3138.128 m/s;
 node tof_hours: Time = @transfer.tof -> hour;  // unit conversion
 ```
@@ -106,7 +106,7 @@ Graphcal has three primitive types:
 
 | Type | Description | Example |
 | --- | --- | --- |
-| `Float` | 64-bit float with a physical dimension | `1200 kg`, `9.8 m/s^2`, `3.14` |
+| `Float` | 64-bit float with a physical dimension | `1200.0 kg`, `9.8 m/s^2`, `3.14` |
 | `Int` | 64-bit signed integer | `42`, `1_000` |
 | `Bool` | Boolean | `true`, `false` |
 
@@ -508,7 +508,8 @@ param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 dag hohmann_transfer {
-    <!-- TODO(graphcal-migrate): parent import — pick absolute path -->
+    param r_earth: Length;
+    param gm_earth: GravParam;
     param parking_alt: Length;
     param target_alt: Length;
 
@@ -529,7 +530,12 @@ dag hohmann_transfer {
     };
 }
 
-include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt).{result as transfer};
+include hohmann_transfer(
+    r_earth: @r_earth,
+    gm_earth: @gm_earth,
+    parking_alt: @parking_alt,
+    target_alt: @target_alt,
+).{ result as transfer };
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;
@@ -667,23 +673,36 @@ node transfer_time: Time = @storage / @rate;
 
 ### Multi-file projects with imports
 
+A multi-file project lives under a package manifest (`graphcal.toml`).
+`import` brings compile-time names (dimensions, units, types, indexes,
+const nodes, dags) into scope; `include` instantiates a DAG (or
+includes a sibling file's runtime params) and exposes its outputs.
+Paths are dot-separated and absolute from the package root.
+
+```toml
+# graphcal.toml
+[package]
+name = "rocket"
+source_dir = "."
+```
+
 ```gcl
 // constants.gcl
-dim Acceleration = Length / Time^2;
-const node g0: Acceleration = 9.80665 m/s^2;
+pub dim Acceleration = Length / Time^2;
+pub const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 ```gcl
 // params.gcl
-param dry_mass: Mass = 1200 kg;
-param fuel_mass: Mass = 2800 kg;
-param isp: Time = 320 s;
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+param isp: Time = 320.0 s;
 ```
 
 ```gcl
 // main.gcl
-import constants.{g0};
-import params.{dry_mass, fuel_mass, isp};
+import rocket.constants.{ g0 };
+include rocket.params().{ dry_mass, fuel_mass, isp };
 
 dim Velocity = Length / Time;
 
@@ -703,7 +722,8 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-Imported params can be overridden at the command line (params not overridden keep their defaults):
+Included params can be overridden at the command line (params not
+overridden keep their defaults), or rebound at the include site:
 
 ```sh
 $ graphcal eval main.gcl --set 'isp=450.0 s'
@@ -823,12 +843,12 @@ See the [GitHub issues](https://github.com/shunichironomura/graphcal/issues) for
 ```
 graphcal/
   crates/
-    graphcal-compiler/ # lexer (logos) + recursive descent parser + AST
-    graphcal-eval/     # name resolution, dim check, const eval, runtime eval
+    graphcal-compiler/ # lexer (logos) + parser + AST + IR + TIR + registry
+    graphcal-eval/     # const eval, runtime eval, project loader, exec plan
     graphcal-fmt/      # code formatter
-    graphcal-io/       # input/output (JSON, text)
-    graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
-    graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, go-to-def, hover
+    graphcal-io/       # filesystem abstraction (real, in-memory, overlay)
+    graphcal-cli/      # CLI binary (clap + miette) -- `eval`, `format`, `check`, `lsp`
+    graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, etc.
   grammar.ebnf       # formal grammar (source of truth for tree-sitter/TextMate grammars)
   tests/fixtures/    # .gcl test files, organized by validity:
                      #   valid/         (passes `graphcal check`, evaluates cleanly)
