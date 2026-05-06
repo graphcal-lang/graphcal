@@ -24,7 +24,7 @@ fn parse_and_resolve(source: &str) -> Result<ResolvedFile, GraphcalError> {
 
 #[test]
 fn resolve_rocket_ksr() {
-    let source = include_str!("../../../../../tests/fixtures/rocket.gcl");
+    let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert_eq!(resolved.consts.len(), 1);
@@ -34,7 +34,7 @@ fn resolve_rocket_ksr() {
 
 #[test]
 fn resolve_constants_ksr() {
-    let source = include_str!("../../../../../tests/fixtures/constants.gcl");
+    let source = include_str!("../../../../../tests/fixtures/valid/constants.gcl");
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert_eq!(resolved.consts.len(), 4);

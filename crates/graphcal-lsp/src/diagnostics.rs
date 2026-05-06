@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn v001_import_private_item_produces_diagnostic() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/multi/import_private_item/main.gcl");
+            .join("../../tests/fixtures/invalid/multi/import_private_item/main.gcl");
         let source = std::fs::read_to_string(&root).unwrap();
         let diags = produce_diagnostics_for_file(&root, &source);
         assert_eq!(diags.len(), 1);

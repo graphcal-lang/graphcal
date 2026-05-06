@@ -830,7 +830,10 @@ graphcal/
     graphcal-cli/      # CLI binary (clap + miette) -- includes `graphcal lsp` subcommand
     graphcal-lsp/      # LSP server library (tower-lsp) -- diagnostics, symbols, go-to-def, hover
   grammar.ebnf       # formal grammar (source of truth for tree-sitter/TextMate grammars)
-  tests/fixtures/    # .gcl test files (single-file and multi-file)
+  tests/fixtures/    # .gcl test files, organized by validity:
+                     #   valid/         (passes `graphcal check`, evaluates cleanly)
+                     #   runtime_error/ (passes `graphcal check`, fails at evaluation)
+                     #   invalid/       (fails `graphcal check`)
 ```
 
 ## Design Influences
