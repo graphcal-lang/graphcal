@@ -42,7 +42,7 @@ pub struct EvalContext<'a> {
     /// Used by [`eval_inline_dag_call`] to evaluate `@dag(args)::out` against
     /// the dag's topologically ordered body. The map is shared across nested
     /// inline calls so a dag body invoking another dag can still resolve it.
-    pub compiled_dags: &'a HashMap<String, TIR>,
+    pub compiled_dags: &'a graphcal_compiler::tir::typed::DagRegistry,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -271,8 +271,8 @@ pub fn eval_expr(
             unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
         }
 
-        ExprKind::InlineDagRef { dag, args, output } => {
-            eval_inline_dag_call(expr, dag, args, output, values, local_values, ctx)
+        ExprKind::InlineDagRef { path, args, output } => {
+            eval_inline_dag_call(expr, path, args, output, values, local_values, ctx)
         }
 
         // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
@@ -284,7 +284,7 @@ pub fn eval_expr(
     }
 }
 
-/// Evaluate an inline DAG invocation `@dag(args)::out`.
+/// Evaluate an inline DAG invocation `@<path>(args).<out>`.
 ///
 /// Semantics (from issue #451):
 /// - Each call site is a fresh DAG instantiation; every evaluation produces a
@@ -301,25 +301,26 @@ pub fn eval_expr(
 /// dag's own registry is used for all nested lookups so sibling dag calls
 /// from inside the body resolve through the same pipeline.
 ///
-/// Inline DAG calls always name a single in-scope DAG (no `module.dag`
-/// qualification after `@`); `ctx.compiled_dags` is keyed by bare DAG name
-/// for same-file calls and `"alias::dag"` for cross-file calls brought
-/// into scope via `import path as alias`.
+/// `ctx.compiled_dags` is keyed by [`DagKey`](graphcal_compiler::tir::typed::DagKey):
+/// a single-segment key for same-file calls (`@dag(args).out`) and a two-
+/// segment `(module-alias, dag-name)` key for cross-file qualified calls
+/// (`@module.dag(args).out`) brought into scope via `import path as module;`
+/// or `import path;`.
 fn eval_inline_dag_call(
     _call_expr: &Expr,
-    dag: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
+    path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     caller_values: &HashMap<DeclName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let key = dag.value.to_string();
+    let key = graphcal_compiler::tir::typed::DagKey::from_module_path(path);
 
     let dag_tir = ctx.compiled_dags.get(&key).ok_or_else(|| {
         ctx.internal_error(
             format!("dag `{key}` has no compiled TIR (should have been caught by dim-check)"),
-            dag.span,
+            path.span,
         )
     })?;
 
@@ -398,8 +399,8 @@ fn eval_inline_dag_call(
         .ok_or_else(|| {
             ctx.internal_error(
                 format!(
-                    "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
-                    dag.value, output.value,
+                    "dag `{key}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                    output.value,
                 ),
                 output.span,
             )

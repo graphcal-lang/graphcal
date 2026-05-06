@@ -1,0 +1,8 @@
+// Error fixture: qualified `@module.dag(args)` with no `.<out>` projection
+// is rejected for the same reason as the bare form — `@` requires a *node*,
+// and an instantiated DAG without projection is not a node. The reason has
+// nothing to do with how many identifiers appear after `@`.
+import lib;
+
+param src: Length = 1.0 m;
+node bad: Length = @lib.scale(v: @src);

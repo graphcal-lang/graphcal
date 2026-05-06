@@ -650,7 +650,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index::Variant` or `(Index::Variant, ...)`"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant` or `(Index.Variant, ...)`"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -676,7 +676,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index::Variant, ...)]` to specify which variants are expected to fail"
+            "use `#[expected_fail(Index.Variant, ...)]` to specify which variants are expected to fail"
         )
     )]
     ExpectedFailAllOnIndexed {
@@ -1101,7 +1101,7 @@ pub enum GraphcalError {
     /// must not appear in bodies that cannot themselves be re-bound by
     /// importers (the defining library must abstract over the index).
     #[error(
-        "variant literal `{index}::{variant}` of `pub(bind) index` cannot be used in the defining file"
+        "variant literal `{index}.{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
     #[diagnostic(
         code(graphcal::V004),
@@ -1123,7 +1123,7 @@ pub enum GraphcalError {
     /// `s` and was not itself re-bound by the same include statement
     /// (A8).
     ///
-    /// Nominally-tied mentions today are: variant literals `s::v` for
+    /// Nominally-tied mentions today are: variant literals `s.v` for
     /// an overridden `index`, and constructors / field accesses of `s`
     /// for an overridden `type`. `dim` and `param` overrides are
     /// vacuous for A8 — their substitution is total — so they never
@@ -1222,7 +1222,7 @@ pub enum GraphcalError {
     #[error("unknown output `{name}` in inline dag call to `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G005),
-        help("the projection after `::` must name a `node` declared in the called dag")
+        help("the projection after `).` must name a `node` declared in the called dag")
     )]
     UnknownInlineDagOutput {
         name: String,

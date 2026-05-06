@@ -482,7 +482,7 @@ pub type ExpectedFailKey = Vec<(IndexName, VariantName)>;
 pub enum ExpectedFail {
     /// The entire assertion is expected to fail: `#[expected_fail]`.
     All,
-    /// Specific index keys are expected to fail: `#[expected_fail(Index::Variant, ...)]`.
+    /// Specific index keys are expected to fail: `#[expected_fail(Index.Variant, ...)]`.
     Variants(Vec<ExpectedFailKey>),
 }
 

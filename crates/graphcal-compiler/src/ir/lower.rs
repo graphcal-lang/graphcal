@@ -999,7 +999,10 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
             return Err(self.orphan_error(
                 "index",
                 index.value.as_ref(),
-                format!("`{}::{}`", index.value.as_ref(), variant.value.as_ref()),
+                format!(
+                    "`{}`",
+                    crate::syntax::names::fmt_qualified_variant(&index.value, &variant.value)
+                ),
             ));
         }
         Ok(())
@@ -1015,7 +1018,13 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
                         return Err(self.orphan_error(
                             "index",
                             index.value.as_ref(),
-                            format!("`{}::{}`", index.value.as_ref(), variant.value.as_ref()),
+                            format!(
+                                "`{}`",
+                                crate::syntax::names::fmt_qualified_variant(
+                                    &index.value,
+                                    &variant.value
+                                )
+                            ),
                         ));
                     }
                 }
@@ -1041,9 +1050,11 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
                     "index",
                     key.index.value.as_ref(),
                     format!(
-                        "`{}::{}`",
-                        key.index.value.as_ref(),
-                        key.variant.value.as_ref()
+                        "`{}`",
+                        crate::syntax::names::fmt_qualified_variant(
+                            &key.index.value,
+                            &key.variant.value,
+                        )
                     ),
                 ));
             }
@@ -1067,9 +1078,11 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
                     "index",
                     qi.value.as_ref(),
                     format!(
-                        "`{}::{}`",
-                        qi.value.as_ref(),
-                        arm.pattern.variant_name.value.as_ref()
+                        "`{}`",
+                        crate::syntax::names::fmt_qualified_variant(
+                            &qi.value,
+                            &arm.pattern.variant_name.value,
+                        )
                     ),
                 ));
             }

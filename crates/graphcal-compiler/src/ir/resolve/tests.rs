@@ -546,7 +546,7 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
 fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
     // A10(b) carve-out: private sink kinds are pruned from the merged
     // IR when the file is used as a library, so literal mentions of
-    // `Phase::v` cannot orphan anything under override.
+    // `Phase.v` cannot orphan anything under override.
     let source = r"
         pub(bind) index Phase = { Design, Build };
         param cost: Dimensionless[Phase] = {

@@ -2,7 +2,7 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-non-exhaustive match: variant `Maneuver::Insertion` not covered
+non-exhaustive match: variant `Maneuver.Insertion` not covered
     Diagnostic severity: error
 Begin snippet for non_exhaustive_index_match.gcl starting at line 4, column 1
 

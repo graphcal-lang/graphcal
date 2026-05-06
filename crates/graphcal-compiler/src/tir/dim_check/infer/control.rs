@@ -22,7 +22,7 @@ pub(super) fn infer_if(
     else_branch: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -89,7 +89,7 @@ pub(super) fn infer_match(
     arms: &[MatchArm],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -172,7 +172,11 @@ pub(super) fn infer_match(
                 if !arm.pattern.bindings.is_empty() {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "index label variant `{index_name}::{variant_name_str}` has no fields to bind"
+                            "index label variant `{}` has no fields to bind",
+                            crate::syntax::names::fmt_qualified_variant(
+                                index_name,
+                                variant_name_str
+                            )
                         ),
                         src: src.clone(),
                         span: arm.pattern.span.into(),
@@ -197,8 +201,8 @@ pub(super) fn infer_match(
                 if !covered.contains(variant.as_str()) {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "non-exhaustive match: variant `{index_name}::{}` not covered",
-                            variant.as_str()
+                            "non-exhaustive match: variant `{}` not covered",
+                            crate::syntax::names::fmt_qualified_variant(index_name, variant)
                         ),
                         src: src.clone(),
                         span: expr.span.into(),

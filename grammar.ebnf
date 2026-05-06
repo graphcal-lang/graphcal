@@ -696,25 +696,35 @@ bool_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", IDENT, [ inline_dag_call_suffix ];
+   = "@", IDENT, { ".", IDENT }, [ inline_dag_call_suffix ];
 
 inline_dag_call_suffix
    = "(", [ include_param_binding,
             { ",", include_param_binding }, [ "," ] ],
      ")", ".", IDENT;
 
-(* @name -- graph ref (param, node, or const node).
-   @name(args).out -- inline DAG invocation projecting output `out`.
-   The thing immediately after `@` must be a single in-scope
-   identifier (a node directly, or a DAG whose output projection
-   yields a node). Qualified forms like `@module.dag(args).out` are
-   rejected because the leftmost identifier is a module, not a node;
-   bring the DAG into scope first via `import <pkg>.{<dag>};`.
+(* @name                              -- graph ref (param, node, or const node).
+   @name(args).out                    -- same-file inline DAG invocation.
+   @module.name(args).out             -- qualified inline DAG invocation,
+                                         where `module` is brought into scope
+                                         via `import <pkg>(.<sub>)* as module;`
+                                         (or unaliased `import <pkg>.module;`).
+   @name.field, @name.field.subfield  -- struct field projection on a graph
+                                         reference (no `(` follows the path).
+
+   What `@` enforces is semantic, not syntactic: the post-`@` expression
+   must denote a *node*. `@dag(args).out` is well-formed because `out` is a
+   node belonging to the instantiated DAG `dag(args)`, and likewise
+   `@module.dag(args).out` projects an output node from a DAG brought into
+   scope via `import`. Bare `@dag(args)` (no `.<out>` projection) is
+   rejected — a DAG instance with no projection is not a node — and so is
+   `@module.dag(args)` for the same reason; the rule is about what `@`
+   resolves to, not about how many segments precede the `(`.
+
    Each inline-call call site denotes a fresh DAG instantiation and
-   desugars to a synthetic `include ... as <id>; @<id>.out` during
-   TIR lowering. Built-in constants (PI, E, TAU) and user-defined
-   const nodes both use their names directly; graph declarations
-   require @. *)
+   desugars to a synthetic `include ... as <id>; @<id>.out` during TIR
+   lowering. Built-in constants (PI, E, TAU) and user-defined const nodes
+   both use their names directly; graph declarations require `@`. *)
 
 (* --- Identifier expression --- *)
 (* Dispatches based on the token(s) following the identifier:

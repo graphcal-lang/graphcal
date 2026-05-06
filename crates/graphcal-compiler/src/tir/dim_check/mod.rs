@@ -75,7 +75,7 @@ fn check_decl_expr_type(
     type_ann_span: &crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -120,7 +120,7 @@ fn check_assert_body(
     span: crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -354,7 +354,7 @@ fn check_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -492,7 +492,7 @@ pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,
     declared_types: &HashMap<String, DeclaredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -542,12 +542,12 @@ pub fn check_override_dimension(
 /// cycle detection, so the same check applies whether the cycle is within
 /// a single file or spans multiple files.
 enum DagCycleFrame {
-    Enter(String),
-    Leave(String),
+    Enter(crate::tir::typed::DagKey),
+    Leave(crate::tir::typed::DagKey),
 }
 
 struct DagTargetCollector<'a> {
-    out: &'a mut std::collections::BTreeSet<String>,
+    out: &'a mut std::collections::BTreeSet<crate::tir::typed::DagKey>,
 }
 
 impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
@@ -560,8 +560,9 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
         expr: &crate::desugar::desugared_ast::Expr,
         args: &[crate::desugar::desugared_ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
-            self.out.insert(dag.value.to_string());
+        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind {
+            self.out
+                .insert(crate::tir::typed::DagKey::from_module_path(path));
         }
         for b in args {
             self.visit_expr(&b.value)?;
@@ -573,12 +574,13 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
 /// Collect inline dag call targets from a compiled TIR's body expressions.
 ///
 /// Walks every const/param/node RHS expression and records the target key
-/// for each `@dag(args)::out` / `@mod::dag(args)::out` found. Keys match
-/// the format used by [`crate::tir::typed::TIR::dags`]: bare dag name for
-/// same-file calls, `"mod::dag"` for cross-file qualified calls.
+/// for each `@dag(args).out` / `@mod.dag(args).out` found. Keys are
+/// [`DagKey`](crate::tir::typed::DagKey)s — single-segment for same-file
+/// calls, two-segment `(module-alias, dag-name)` for cross-file qualified
+/// calls. They match the keys installed in [`crate::tir::typed::TIR::dags`].
 fn collect_dag_call_targets_from_tir(
     dag_tir: &crate::tir::typed::TIR,
-    out: &mut std::collections::BTreeSet<String>,
+    out: &mut std::collections::BTreeSet<crate::tir::typed::DagKey>,
 ) {
     use crate::syntax::visitor::ExprVisitor;
 
@@ -602,24 +604,30 @@ fn detect_cross_dag_cycles(
 ) -> Result<(), GraphcalError> {
     use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
-    for (name, dag_tir) in &tir.dags {
+    use crate::tir::typed::DagKey;
+
+    let mut edges: BTreeMap<DagKey, BTreeSet<DagKey>> = BTreeMap::new();
+    let mut spans: HashMap<DagKey, crate::syntax::span::Span> = HashMap::new();
+    for (key, dag_tir) in &tir.dags {
         let mut targets = BTreeSet::new();
         collect_dag_call_targets_from_tir(dag_tir, &mut targets);
-        edges.insert(name.clone(), targets);
-        // Best-effort span: prefer the registry entry (available for same-file
-        // dags) and fall back to a zero span for cross-file merged dags.
-        let span = tir
-            .registry
-            .dags
-            .get(name)
-            .map_or_else(|| crate::syntax::span::Span::new(0, 0), |d| d.name.span);
-        spans.insert(name.clone(), span);
+        edges.insert(key.clone(), targets);
+        // Best-effort span: prefer the registry entry (available for
+        // single-segment, same-file keys) and fall back to a zero span for
+        // cross-file merged dags.
+        let span = if key.is_local() {
+            tir.registry
+                .dags
+                .get(key.leaf())
+                .map_or_else(|| crate::syntax::span::Span::new(0, 0), |d| d.name.span)
+        } else {
+            crate::syntax::span::Span::new(0, 0)
+        };
+        spans.insert(key.clone(), span);
     }
 
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut on_stack: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<DagKey> = HashSet::new();
+    let mut on_stack: HashSet<DagKey> = HashSet::new();
 
     for start in edges.keys() {
         if visited.contains(start) {
@@ -628,24 +636,24 @@ fn detect_cross_dag_cycles(
         let mut work: Vec<DagCycleFrame> = vec![DagCycleFrame::Enter(start.clone())];
         while let Some(frame) = work.pop() {
             match frame {
-                DagCycleFrame::Enter(name) => {
-                    if visited.contains(&name) {
+                DagCycleFrame::Enter(key) => {
+                    if visited.contains(&key) {
                         continue;
                     }
-                    if on_stack.contains(&name) {
+                    if on_stack.contains(&key) {
                         let span = spans
-                            .get(&name)
+                            .get(&key)
                             .copied()
                             .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
                         return Err(GraphcalError::CyclicDependency {
-                            name: crate::syntax::names::DeclName::new(&name),
+                            name: crate::syntax::names::DeclName::new(key.to_string()),
                             src: src.clone(),
                             span: span.into(),
                         });
                     }
-                    on_stack.insert(name.clone());
-                    work.push(DagCycleFrame::Leave(name.clone()));
-                    if let Some(targets) = edges.get(&name) {
+                    on_stack.insert(key.clone());
+                    work.push(DagCycleFrame::Leave(key.clone()));
+                    if let Some(targets) = edges.get(&key) {
                         for t in targets {
                             if edges.contains_key(t) {
                                 work.push(DagCycleFrame::Enter(t.clone()));
@@ -653,9 +661,9 @@ fn detect_cross_dag_cycles(
                         }
                     }
                 }
-                DagCycleFrame::Leave(name) => {
-                    on_stack.remove(&name);
-                    visited.insert(name);
+                DagCycleFrame::Leave(key) => {
+                    on_stack.remove(&key);
+                    visited.insert(key);
                 }
             }
         }

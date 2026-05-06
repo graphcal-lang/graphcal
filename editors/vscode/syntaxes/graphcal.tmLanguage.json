@@ -558,7 +558,7 @@
     },
 
     "graph-ref": {
-      "comment": "Graph reference: @name. Only a single identifier is allowed after `@`; qualified `@module.name` is rejected. Inline DAG calls (`@name(args).out`) get an extra projection segment via the `inline-dag-output-projection` rule.",
+      "comment": "Graph reference: @name. The leading identifier after `@` is highlighted here as a variable; if a qualified inline DAG call follows (`@module.dag(args).out`), the dotted path segments get the same `variable.other` highlight, and the `inline-dag-output-projection` rule colours the `.out` projection after the closing paren. What `@` enforces is semantic — the post-`@` expression must denote a *node* — not a count of identifiers.",
       "match": "(@)([a-zA-Z][a-zA-Z0-9_]*)",
       "captures": {
         "1": { "name": "punctuation.definition.variable.graphcal" },

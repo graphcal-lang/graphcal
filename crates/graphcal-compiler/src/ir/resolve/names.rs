@@ -9,7 +9,7 @@ use miette::NamedSource;
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
 ///
 /// - No args → `ExpectedFail::All`
-/// - `Path` args (e.g. `Index::Variant`) → `ExpectedFail::Variants` with single-index keys
+/// - `Path` args (e.g. `Index.Variant`) → `ExpectedFail::Variants` with single-index keys
 /// - `Group` args (e.g. `(Mode.Boost, Phase.Launch)`) → `ExpectedFail::Variants` with multi-index keys
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
@@ -23,7 +23,7 @@ pub fn parse_expected_fail_args(
         .iter()
         .map(|arg| match arg {
             AttributeArg::Path { segments, span } => {
-                // Must be exactly 2 segments: Index::Variant
+                // Must be exactly 2 segments: Index.Variant
                 match segments.as_slice() {
                     [index, variant] => Ok(vec![(
                         IndexName::new(&index.name),

@@ -2,7 +2,7 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-variant literal `Phase::Design` of `pub(bind) index` cannot be used in the defining file
+variant literal `Phase.Design` of `pub(bind) index` cannot be used in the defining file
     Diagnostic severity: error
 Begin snippet for pub_assert_variant_literal.gcl starting at line 10, column 1
 

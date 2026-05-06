@@ -29,10 +29,10 @@ pub struct Attribute {
 /// An argument inside an attribute's parenthesized list.
 ///
 /// Supports plain identifiers (`pressure_safe`), qualified paths
-/// (`Index::Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
+/// (`Index.Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
-    /// A path of one or more `::` separated segments: `foo`, `Index::Variant`.
+    /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
     Path { segments: Vec<Ident>, span: Span },
     /// A parenthesized group of args: `(Index::A, Index::B)`.
     Group { elements: Vec<Self>, span: Span },
@@ -1123,18 +1123,27 @@ pub enum ExprKind<P: Phase = Raw> {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
     },
-    /// Inline DAG invocation: `@dag(args).out`.
+    /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
     ///
     /// Each syntactic occurrence denotes a fresh DAG instantiation that is
     /// desugared during TIR lowering to the equivalent
-    /// `include dag(args) as <synthetic>; @<synthetic>.out`. Preserved as a
-    /// distinct AST variant so source spans survive for diagnostics.
-    /// The DAG identifier must be a single in-scope name — qualified
-    /// `@module.dag(args).out` is rejected at parse time (bring the DAG into
-    /// scope first via `import <pkg>.{<dag>};`).
+    /// `include <path>(args) as <synthetic>; @<synthetic>.out`. Preserved as
+    /// a distinct AST variant so source spans survive for diagnostics.
+    ///
+    /// The post-`@` expression as a whole must denote a *node* — that is the
+    /// invariant `@` enforces. `@dag(args).out` is well-formed because
+    /// `dag(args).out` projects an output node from a fresh DAG instance, and
+    /// likewise `@module.dag(args).out` projects an output node from a DAG
+    /// brought into scope via `import module.{dag};` or `import path as
+    /// module;`. Bare `@dag(args)` (no projection) is rejected — a DAG
+    /// instance with no projection is not a node.
     InlineDagRef {
-        /// Name of the `dag` being invoked (single in-scope identifier).
-        dag: Spanned<DeclName>,
+        /// Path to the DAG being invoked. Single-segment for same-file calls
+        /// (`@dag(args).out`), multi-segment for cross-file qualified calls
+        /// (`@module.dag(args).out`). The leaf segment names the DAG; any
+        /// preceding segments resolve through module aliases brought into
+        /// scope by `import`.
+        path: ModulePath,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding<P>>,
         /// Projected output node name (after the closing paren `.`).
@@ -1195,7 +1204,7 @@ impl TableIndexSpec {
     }
 }
 
-/// A single key in a map literal entry: `Index::Variant`
+/// A single key in a map literal entry: `Index.Variant`
 #[derive(Debug, Clone)]
 pub struct MapEntryKey {
     pub index: Spanned<IndexName>,
