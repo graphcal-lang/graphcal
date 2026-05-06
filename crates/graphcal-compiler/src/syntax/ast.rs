@@ -29,10 +29,10 @@ pub struct Attribute {
 /// An argument inside an attribute's parenthesized list.
 ///
 /// Supports plain identifiers (`pressure_safe`), qualified paths
-/// (`Index::Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
+/// (`Index.Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
-    /// A path of one or more `::` separated segments: `foo`, `Index::Variant`.
+    /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
     Path { segments: Vec<Ident>, span: Span },
     /// A parenthesized group of args: `(Index::A, Index::B)`.
     Group { elements: Vec<Self>, span: Span },
@@ -375,19 +375,6 @@ impl ModulePath {
     #[must_use]
     pub fn leaf(&self) -> Option<&Ident> {
         self.segments.last()
-    }
-
-    /// Format this path using `::` as a separator. Used by the inline-DAG
-    /// call site to derive the lookup key into `tir::dags`, matching the
-    /// `"alias::dag_name"` key format used by the cross-file dag-merge
-    /// pipeline. Single-segment paths produce just the leaf name.
-    #[must_use]
-    pub fn dag_lookup_key(&self) -> String {
-        self.segments
-            .iter()
-            .map(|s| s.name.as_str())
-            .collect::<Vec<_>>()
-            .join("::")
     }
 }
 
@@ -1217,7 +1204,7 @@ impl TableIndexSpec {
     }
 }
 
-/// A single key in a map literal entry: `Index::Variant`
+/// A single key in a map literal entry: `Index.Variant`
 #[derive(Debug, Clone)]
 pub struct MapEntryKey {
     pub index: Spanned<IndexName>,

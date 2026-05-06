@@ -123,11 +123,11 @@ pub(super) fn lower_and_finalize(
 }
 
 /// Merge compiled dag TIRs from module-aliased dependencies into the
-/// importer's `tir.dags`, keyed by `"alias::dag_name"`.
+/// importer's `tir.dags`, keyed by a two-segment
+/// [`DagKey::aliased(alias, dag_name)`](graphcal_compiler::tir::typed::DagKey::aliased).
 ///
 /// Enables cross-file qualified inline calls `@alias.dag(args).out` to
-/// resolve via the same `tir.dags` lookup used for same-file calls. The
-/// `::` separator is internal — the surface syntax uses `.` everywhere.
+/// resolve via the same `tir.dags` lookup used for same-file calls.
 ///
 /// Only `pub` dags are exposed across the import boundary; private dags
 /// in the dep stay local (the dep's `pub_names` already filters them).
@@ -144,7 +144,15 @@ pub(super) fn merge_dep_dag_tirs(
         let Some(dep_eval) = evaluated_files.get(dep_dag_id) else {
             continue;
         };
-        for (dag_name, dag_tir) in &dep_eval.dag_tirs {
+        for (dep_key, dag_tir) in &dep_eval.dag_tirs {
+            // Pre-merge dep `dag_tirs` keys are always single-segment
+            // (`DagKey::local`) — the dep file's own dag declarations.
+            // Anything else would be a cross-file merge having happened
+            // there too, which is not produced by the pipeline.
+            if !dep_key.is_local() {
+                continue;
+            }
+            let dag_name = dep_key.leaf();
             if !dep_eval.pub_names.contains(dag_name) {
                 continue;
             }
@@ -160,8 +168,10 @@ pub(super) fn merge_dep_dag_tirs(
                         .or_insert_with(|| (value.clone(), dt.clone()));
                 }
             }
-            let key = format!("{alias}::{dag_name}");
-            tir.dags.insert(key, cloned);
+            tir.dags.insert(
+                graphcal_compiler::tir::typed::DagKey::aliased(alias.clone(), dag_name),
+                cloned,
+            );
         }
     }
 }

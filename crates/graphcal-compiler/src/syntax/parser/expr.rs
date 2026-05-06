@@ -1459,7 +1459,7 @@ mod tests {
                 assert_eq!(path.segments.len(), 2);
                 assert_eq!(path.segments[0].name, "geom");
                 assert_eq!(path.segments[1].name, "clamp");
-                assert_eq!(path.dag_lookup_key(), "geom::clamp");
+                assert_eq!(path.display_path(), "geom.clamp");
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name, "x");
                 assert_eq!(output.value.as_str(), "result");

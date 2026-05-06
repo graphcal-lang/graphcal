@@ -981,13 +981,16 @@ fn collect_expr_refs(
                     target: SymbolKey::TopLevel(leaf.name.clone()),
                 });
             }
-            // The projected output resolves to `<dag_key>::output` as a
+            // The projected output resolves to `<dag>.output` as a
             // qualified member; goto-def jumps into the dag body when the
-            // caller's dag body is in the same file.
+            // caller's dag body is in the same file. For cross-file
+            // qualified calls the symbol-table layer keeps the surface
+            // module path as the qualifier.
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
-                    module: path.dag_lookup_key(),
+                    module: graphcal_compiler::tir::typed::DagKey::from_module_path(path)
+                        .to_string(),
                     name: output.value.to_string(),
                 },
             });
@@ -1250,7 +1253,7 @@ fn collect_expr_refs(
                 span: index.span,
                 target: SymbolKey::TopLevel(index.value.to_string()),
             });
-            // Reference to the qualified variant: Index::Variant
+            // Reference to the qualified variant: Index.Variant
             table.references.push(ReferenceInfo {
                 span: variant.span,
                 target: SymbolKey::Variant {

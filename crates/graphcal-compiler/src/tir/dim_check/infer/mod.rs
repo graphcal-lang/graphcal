@@ -32,7 +32,7 @@ pub(super) fn infer_type(
     expr: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -56,7 +56,7 @@ pub(super) fn infer_type_with_owner(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -409,12 +409,12 @@ pub(super) fn infer_type_with_owner(
 
 /// Infer the type of an inline DAG invocation `@<path>(args).<out>`.
 ///
-/// Looks up the called dag via `dag_tirs` using `<path>.dag_lookup_key()` —
-/// which collapses single-segment paths to the bare name (same-file calls)
-/// and joins multi-segment paths with `::` (cross-file qualified calls,
-/// matching the key format installed by the cross-file dag-merge step).
-/// Both variants share the same compiled-TIR resolution path: param types
-/// come from `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates
+/// Looks up the called dag via `dag_tirs`, indexed by [`DagKey`]: the bare
+/// DAG name for same-file calls (`@dag(args).out`) or a `(module-alias,
+/// dag-name)` pair for cross-file qualified calls (`@module.dag(args).out`,
+/// matching the key inserted by the cross-file dag-merge step). Both
+/// variants share the same compiled-TIR resolution path: param types come
+/// from `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates
 /// projection of non-`pub` outputs.
 #[expect(
     clippy::too_many_arguments,
@@ -427,17 +427,17 @@ fn infer_inline_dag_ref(
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let key = path.dag_lookup_key();
+    let key = crate::tir::typed::DagKey::from_module_path(path);
 
     let dag_tir = dag_tirs
         .get(&key)
         .ok_or_else(|| GraphcalError::UnknownDag {
-            name: key.clone(),
+            name: key.to_string(),
             src: src.clone(),
             span: path.span.into(),
         })?;
@@ -469,7 +469,7 @@ fn infer_inline_dag_ref(
         let expected = param_decl_types.get(binding_name).ok_or_else(|| {
             GraphcalError::UnknownInlineDagParam {
                 name: binding_name.to_string(),
-                dag_name: key.clone(),
+                dag_name: key.to_string(),
                 src: src.clone(),
                 span: binding.name.span.into(),
             }
@@ -505,7 +505,7 @@ fn infer_inline_dag_ref(
         missing.sort();
         return Err(GraphcalError::MissingInlineDagBindings {
             missing,
-            dag_name: key.clone(),
+            dag_name: key.to_string(),
             src: src.clone(),
             span: expr.span.into(),
         });
@@ -516,7 +516,7 @@ fn infer_inline_dag_ref(
     let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
         GraphcalError::UnknownInlineDagOutput {
             name: output.value.to_string(),
-            dag_name: key.clone(),
+            dag_name: key.to_string(),
             src: src.clone(),
             span: output.span.into(),
         }
@@ -524,7 +524,7 @@ fn infer_inline_dag_ref(
     if !dag_tir.pub_nodes.contains(output.value.as_str()) {
         return Err(GraphcalError::ImportPrivateItem {
             name: output.value.to_string(),
-            file_path: key.clone(),
+            file_path: key.to_string(),
             src: src.clone(),
             span: output.span.into(),
         });

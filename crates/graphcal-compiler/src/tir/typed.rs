@@ -567,6 +567,87 @@ pub struct ResolvedDomainConstraint {
 }
 
 // ---------------------------------------------------------------------------
+// DAG registry key
+// ---------------------------------------------------------------------------
+
+/// Lookup key for a compiled DAG inside [`TIR::dags`].
+///
+/// A DAG is reachable either by its bare local name (for same-file inline
+/// calls `@dag(args).out` — single-segment key) or by its module-aliased
+/// path (for cross-file qualified calls `@module.dag(args).out` —
+/// multi-segment key, where leading segments are the importer's module
+/// aliases). Storing the path as a `Vec<Ident>` rather than as a
+/// `"alias::dag"` string keeps the structure explicit and removes the
+/// pre-`v0.0.1-alpha.4` `::` separator from internal data — the surface
+/// language has no such token.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DagKey {
+    /// Path segments. Always non-empty; one segment for same-file calls,
+    /// two-or-more for cross-file qualified calls.
+    segments: Vec<String>,
+}
+
+impl DagKey {
+    /// Same-file call key: just the bare DAG name.
+    #[must_use]
+    pub fn local(name: impl Into<String>) -> Self {
+        Self {
+            segments: vec![name.into()],
+        }
+    }
+
+    /// Cross-file qualified call key: `module-alias.dag-name`.
+    #[must_use]
+    pub fn aliased(alias: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            segments: vec![alias.into(), name.into()],
+        }
+    }
+
+    /// Build a key from a parsed `ModulePath` reference (the post-`@`
+    /// path of an inline DAG call).
+    #[must_use]
+    pub fn from_module_path(path: &crate::syntax::ast::ModulePath) -> Self {
+        Self {
+            segments: path.segments.iter().map(|s| s.name.clone()).collect(),
+        }
+    }
+
+    /// The DAG name itself (the leaf segment, regardless of qualification).
+    #[must_use]
+    pub fn leaf(&self) -> &str {
+        // `segments` is always non-empty by construction.
+        self.segments.last().map_or("", |s| s.as_str())
+    }
+
+    /// `true` if this key is single-segment (a same-file call).
+    #[must_use]
+    pub const fn is_local(&self) -> bool {
+        self.segments.len() == 1
+    }
+}
+
+impl std::fmt::Display for DagKey {
+    /// Render the key in the surface syntax: dot-separated segments,
+    /// matching how the call would appear in source (`module.dag`).
+    /// Used for diagnostics where the user needs to identify the DAG.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for seg in &self.segments {
+            if !first {
+                f.write_str(".")?;
+            }
+            f.write_str(seg)?;
+            first = false;
+        }
+        Ok(())
+    }
+}
+
+/// Map from DAG key to its compiled TIR.
+pub type DagRegistry = HashMap<DagKey, TIR>;
+
+// ---------------------------------------------------------------------------
 // TIR struct
 // ---------------------------------------------------------------------------
 
@@ -633,13 +714,14 @@ pub struct TIR {
     /// top-level Graphcal file whose registry inherits the enclosing file's
     /// dimensions, units, types, and indexes. Produced by [`type_resolve`]
     /// and consumed by `dim_check` and `eval` to resolve inline
-    /// `@dag(args)::out` invocations.
+    /// `@dag(args).out` invocations.
     ///
-    /// Cross-file qualified calls (`@mod::dag(args)::out`) are merged in
-    /// by `graphcal-eval`'s project pipeline using `"mod::dag"` keys.
+    /// Cross-file qualified calls (`@module.dag(args).out`) are merged in
+    /// by `graphcal-eval`'s project pipeline using two-segment
+    /// [`DagKey`]s of the form `(module-alias, dag-name)`.
     ///
     /// Key-lookup only; order irrelevant.
-    pub dags: HashMap<String, Self>,
+    pub dags: DagRegistry,
     /// Names of `pub` nodes declared in this dag body.
     ///
     /// Used by `dim_check` to reject cross-file projection of private
@@ -738,7 +820,7 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
         )?;
         let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
         populate_pub_nodes(&mut compiled_dag, &body);
-        tir.dags.insert(name, compiled_dag);
+        tir.dags.insert(DagKey::local(name), compiled_dag);
     }
 
     Ok(tir)
@@ -826,7 +908,7 @@ fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Gr
         resolved_decl_types,
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
-        dags: HashMap::new(),
+        dags: DagRegistry::new(),
         pub_nodes: std::collections::HashSet::new(),
     })
 }

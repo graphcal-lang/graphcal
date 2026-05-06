@@ -127,7 +127,7 @@ fn resolve_display_unit_scale(
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let empty_src = miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
-    let empty_dags: HashMap<String, graphcal_compiler::tir::typed::TIR> = HashMap::new();
+    let empty_dags: graphcal_compiler::tir::typed::DagRegistry = HashMap::new();
     let ctx = crate::eval_expr::EvalContext {
         builtin_consts,
         builtin_fns,

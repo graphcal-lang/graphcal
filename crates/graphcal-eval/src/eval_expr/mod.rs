@@ -42,7 +42,7 @@ pub struct EvalContext<'a> {
     /// Used by [`eval_inline_dag_call`] to evaluate `@dag(args)::out` against
     /// the dag's topologically ordered body. The map is shared across nested
     /// inline calls so a dag body invoking another dag can still resolve it.
-    pub compiled_dags: &'a HashMap<String, TIR>,
+    pub compiled_dags: &'a graphcal_compiler::tir::typed::DagRegistry,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -301,10 +301,11 @@ pub fn eval_expr(
 /// dag's own registry is used for all nested lookups so sibling dag calls
 /// from inside the body resolve through the same pipeline.
 ///
-/// `ctx.compiled_dags` is keyed by `<path>.dag_lookup_key()`: the bare DAG
-/// name for same-file calls (`@dag(args).out`) and `"alias::dag_name"` for
-/// cross-file qualified calls (`@module.dag(args).out`) brought into scope
-/// via `import path as module;` or `import path;`.
+/// `ctx.compiled_dags` is keyed by [`DagKey`](graphcal_compiler::tir::typed::DagKey):
+/// a single-segment key for same-file calls (`@dag(args).out`) and a two-
+/// segment `(module-alias, dag-name)` key for cross-file qualified calls
+/// (`@module.dag(args).out`) brought into scope via `import path as module;`
+/// or `import path;`.
 fn eval_inline_dag_call(
     _call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
@@ -314,7 +315,7 @@ fn eval_inline_dag_call(
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let key = path.dag_lookup_key();
+    let key = graphcal_compiler::tir::typed::DagKey::from_module_path(path);
 
     let dag_tir = ctx.compiled_dags.get(&key).ok_or_else(|| {
         ctx.internal_error(
