@@ -14,7 +14,7 @@ Declare a finite index with named labels:
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver::Departure`.
+Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver.Departure`.
 
 ## Indexed Values
 
@@ -24,9 +24,9 @@ Annotate a type with `[IndexName]` to create an indexed value:
 dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 ```
 
@@ -34,10 +34,10 @@ Both `param` and `node` can be indexed.
 
 ## Element Access
 
-Access a specific element with `[Index::Label]`:
+Access a specific element with `[Index.Label]`:
 
 ```
-node departure_dv: Velocity = @delta_v[Maneuver::Departure];
+node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
 
 Or with a loop variable:
@@ -108,22 +108,22 @@ Values can be indexed by multiple label indexes using tuple keys:
 index Phase = { Launch, Cruise, Arrival };
 
 param spacecraft_mass: Mass[Phase, Maneuver] = {
-    (Phase::Launch, Maneuver::Departure): 5000.0 kg,
-    (Phase::Launch, Maneuver::Correction): 0.0 kg,
-    (Phase::Launch, Maneuver::Insertion): 0.0 kg,
-    (Phase::Cruise, Maneuver::Departure): 0.0 kg,
-    (Phase::Cruise, Maneuver::Correction): 4500.0 kg,
-    (Phase::Cruise, Maneuver::Insertion): 0.0 kg,
-    (Phase::Arrival, Maneuver::Departure): 0.0 kg,
-    (Phase::Arrival, Maneuver::Correction): 0.0 kg,
-    (Phase::Arrival, Maneuver::Insertion): 4000.0 kg,
+    (Phase.Launch, Maneuver.Departure): 5000.0 kg,
+    (Phase.Launch, Maneuver.Correction): 0.0 kg,
+    (Phase.Launch, Maneuver.Insertion): 0.0 kg,
+    (Phase.Cruise, Maneuver.Departure): 0.0 kg,
+    (Phase.Cruise, Maneuver.Correction): 4500.0 kg,
+    (Phase.Cruise, Maneuver.Insertion): 0.0 kg,
+    (Phase.Arrival, Maneuver.Departure): 0.0 kg,
+    (Phase.Arrival, Maneuver.Correction): 0.0 kg,
+    (Phase.Arrival, Maneuver.Insertion): 4000.0 kg,
 };
 ```
 
 Access elements with multiple index arguments:
 
 ```
-node launch_dep: Mass = @spacecraft_mass[Phase::Launch, Maneuver::Departure];
+node launch_dep: Mass = @spacecraft_mass[Phase.Launch, Maneuver.Departure];
 ```
 
 ## Mixed Label and Range Indexes
@@ -139,9 +139,9 @@ index Maneuver = { Departure, Correction, Insertion };
 index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 param accel: Acceleration[Maneuver] = {
-    Maneuver::Departure: 10.0 m/s^2,
-    Maneuver::Correction: 5.0 m/s^2,
-    Maneuver::Insertion: -3.0 m/s^2,
+    Maneuver.Departure: 10.0 m/s^2,
+    Maneuver.Correction: 5.0 m/s^2,
+    Maneuver.Insertion: -3.0 m/s^2,
 };
 
 node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
@@ -155,9 +155,9 @@ You can also use a map literal where the keys are label index variants and each 
 
 ```
 param v: Velocity[Maneuver, TimeStep] = {
-    Maneuver::Departure: for t: TimeStep { @accel[Maneuver::Departure] * t },
-    Maneuver::Correction: for t: TimeStep { @accel[Maneuver::Correction] * t },
-    Maneuver::Insertion: for t: TimeStep { @accel[Maneuver::Insertion] * t },
+    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * t },
+    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * t },
+    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * t },
 };
 ```
 
@@ -167,7 +167,7 @@ Access elements by providing both a label and a range variable:
 
 ```
 node departure_v: Velocity[TimeStep] = for t: TimeStep {
-    @v[Maneuver::Departure, t]
+    @v[Maneuver.Departure, t]
 };
 ```
 
@@ -201,7 +201,7 @@ param delta_v: Velocity[Maneuver] = table[Maneuver] {
 };
 ```
 
-Labels in the table body are unqualified (`Departure` instead of `Maneuver::Departure`) since the index is declared in `table[...]`. Rows are terminated with `;`.
+Labels in the table body are unqualified (`Departure` instead of `Maneuver.Departure`) since the index is declared in `table[...]`. Rows are terminated with `;`.
 
 ### 2D Table
 
@@ -222,13 +222,13 @@ For three or more indexes, use slice sections with qualified labels:
 
 ```
 param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-    [Time::T1]
+    [Time.T1]
     : Departure, Correction, Insertion;
     Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
     Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
 
-    [Time::T2]
+    [Time.T2]
     : Departure, Correction, Insertion;
     Launch:  4800.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4300.0 kg, 0.0 kg;
@@ -236,7 +236,7 @@ param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
 };
 ```
 
-Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index::Variant` syntax; Nat range slice labels use `#N`.
+Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax; Nat range slice labels use `#N`.
 
 ### Nat Range Tables
 
@@ -277,7 +277,7 @@ param m3d: Dimensionless[2, Phase, Maneuver] = table[2, Phase, Maneuver] {
 };
 ```
 
-Slice labels (all but the last two axes) always require an explicit marker -- `[Index::Variant]` for named axes or `[#N]` for Nat range axes.
+Slice labels (all but the last two axes) always require an explicit marker -- `[Index.Variant]` for named axes or `[#N]` for Nat range axes.
 
 The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
 
@@ -300,7 +300,7 @@ const node mass_per_unit:     Mass[Component]
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
 - The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis (2-D slot typed `T[SharedAxis, ExtraAxis]`).
-- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode::Safe`). Qualification is never required but is accepted for readability.
+- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode.Safe`). Qualification is never required but is accepted for readability.
 
 Mixed 1-D / 2-D slots:
 
@@ -323,7 +323,7 @@ In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis sl
 
 ### N-D with slice sections
 
-When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis::Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
+When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis.Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
 
 ```
 index Phase = { Launch, Cruise };
@@ -333,19 +333,19 @@ index OperationMode = { Safe, Nominal };
 param      power_consumption: Power[Phase, Component],
 param      power_mode_active: Bool[Phase, Component, OperationMode]
   = table[Phase, Component, (_, OperationMode)] {
-      [Phase::Launch]
+      [Phase.Launch]
       :            _,       Safe,  Nominal;
       ComponentA:  5.0 W,   true,  false;
       ComponentB:  6.0 W,   false, false;
 
-      [Phase::Cruise]
+      [Phase.Cruise]
       :            _,       Safe,  Nominal;
       ComponentA:  10.0 W,  true,  true;
       ComponentB:  12.0 W,  false, true;
   };
 ```
 
-Slice labels must qualify each shared axis in the declared order (`Phase::Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
+Slice labels must qualify each shared axis in the declared order (`Phase.Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
 
 ### Editor integration
 

@@ -22,9 +22,9 @@ Use `[IndexName]` to declare an indexed parameter:
 dim Velocity = Length / Time;
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 ```
 
@@ -32,10 +32,10 @@ Each label in the index gets its own value.
 
 ## Direct Element Access
 
-Access a specific element with `[Index::Label]`:
+Access a specific element with `[Index.Label]`:
 
 ```
-node departure_dv: Velocity = @delta_v[Maneuver::Departure];
+node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
 
 ## `for` Comprehensions
@@ -86,9 +86,9 @@ dim Velocity = Length / Time;
 index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver::Departure: 2.46 km/s,
-    Maneuver::Correction: 0.12 km/s,
-    Maneuver::Insertion: 1.83 km/s,
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
 };
 
 node double_dv: Velocity[Maneuver] = for m: Maneuver {
@@ -98,7 +98,7 @@ node double_dv: Velocity[Maneuver] = for m: Maneuver {
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node max_dv: Velocity = max(for m: Maneuver { @delta_v[m] });
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
-node departure_dv: Velocity = @delta_v[Maneuver::Departure];
+node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
 
 ## What You Learned

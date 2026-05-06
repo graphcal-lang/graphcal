@@ -12,18 +12,21 @@ From lowest to highest precedence:
 
 | Precedence | Operator | Description | Associativity |
 |-----------|----------|-------------|---------------|
-| 1 | `\|\|` | Logical OR | Left |
-| 2 | `&&` | Logical AND | Left |
-| 3 | `==` `!=` `<` `>` `<=` `>=` | Comparison | Left |
-| 4 | `+` `-` | Addition, subtraction | Left |
-| 5 | `*` `/` `%` | Multiplication, division, modulo | Left |
-| 6 | `-` `!` | Unary negation, logical NOT | Prefix |
-| 7 | `^` | Exponentiation | Right |
-| 8 | `->` | Unit conversion | Left |
-| 9 | `as` | Phantom type cast | Left |
-| 10 | `.` `[...]` | Field access, index access | Left |
+| 0 | `->` `as` | Unit conversion / phantom type cast (mutually exclusive) | n/a |
+| 1 | `if`/`else` | Conditional expression | Right |
+| 2 | `\|\|` | Logical OR | Left |
+| 3 | `&&` | Logical AND | Left |
+| 4 | `==` `!=` `<` `>` `<=` `>=` | Comparison | Non-chaining |
+| 5 | `+` `-` | Addition, subtraction | Left |
+| 6 | `*` `/` `%` | Multiplication, division, modulo | Left |
+| 7 | `-` `!` | Unary negation, logical NOT | Prefix |
+| 8 | `^` | Exponentiation | Right |
+| 9 | `.` `[...]` | Field access, index access | Left |
 
-Parentheses `()` can be used to override precedence.
+Parentheses `()` can be used to override precedence. `->` and `as` bind at
+the lowest level: an expression carries at most one of them, so the
+trailing form (`expr -> unit` or `expr as Type`) wraps everything to its
+left.
 
 ## Arithmetic Operators
 
@@ -98,7 +101,7 @@ node dv: Velocity = @transfer.total_dv;
 Access an element of an indexed value:
 
 ```
-node first: Velocity = @delta_v[Maneuver::Departure];
+node first: Velocity = @delta_v[Maneuver.Departure];
 ```
 
 ## If/Else Expressions
@@ -111,20 +114,24 @@ node clamped: Int = if @a > @seven { @seven } else { @a };
 
 Both branches must have the same type and dimension. The `else` branch is required.
 
-## Inline DAG Invocation (`@dag(args)::out`)
+## Inline DAG Invocation (`@dag(args).out`)
 
 A `dag` can be invoked as an expression, producing a fresh sub-graph at every
 syntactic call site:
 
 ```
-node doubled: Length = @scale(factor: 2.0, v: @src)::result;
+node doubled: Length = @scale(factor: 2.0, v: @src).result;
 ```
 
-The projected output after `::` is mandatory. Arguments are evaluated in the
+The projected output after `.` is mandatory. Arguments are evaluated in the
 surrounding scope, so they may reference loop variables from an enclosing
 `for` comprehension or other local binders.
 
-See [Multi-File: Inline DAG Invocation](./multi-file.md#inline-dag-invocation)
+The thing immediately after `@` must be a single in-scope identifier (the DAG
+itself); qualified forms like `@module.dag(args).out` are rejected. To call a
+DAG from another module, bring it into scope first with `import <pkg>.{dag};`.
+
+See [Multi-File: Inline-DAG Call Expression](./multi-file.md#inline-dag-call-expression)
 for the full semantics.
 
 ## Numeric Literals

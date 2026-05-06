@@ -4,15 +4,20 @@ icon: material/function
 
 # DAG Blocks (Reusable Computation)
 
-Graphcal uses `dag` blocks as the single mechanism for defining reusable, parameterized computation. DAG blocks replace the previous `fn` keyword, which is no longer supported.
-
-> **Migration note:** The `fn` keyword has been removed. Using `fn` produces a parse error: "fn is no longer supported; use dag blocks instead." See the migration examples below.
+Graphcal uses `dag` blocks as the single mechanism for defining reusable,
+parameterized computation. A `dag` is a named sub-DAG that can be
+instantiated as many times as you like, each instance with its own
+parameter bindings.
 
 ## Declaration Syntax
 
-A `dag` block defines a named, reusable sub-DAG with its own parameters and nodes:
+A `dag` block defines a named, reusable sub-DAG with its own parameters and
+nodes:
 
 ```
+dim Velocity = Length / Time;
+dim GravParam = Length^3 / Time^2;
+
 dag orbital_velocity {
     param gm: GravParam;
     param r: Length;
@@ -20,9 +25,12 @@ dag orbital_velocity {
 }
 ```
 
-### Multi-Node DAGs
+The body uses the same `param` / `node` / `const node` / `@`-sigil syntax
+as the file's top-level declarations.
 
-Unlike the old `fn` (which was limited to a single return value), a `dag` can expose multiple outputs:
+### Multi-Output DAGs
+
+A single `dag` can expose multiple outputs:
 
 ```
 dag hohmann_transfer {
@@ -40,46 +48,99 @@ dag hohmann_transfer {
 
 ## Using DAG Blocks with `include`
 
-DAG blocks are instantiated using `include` declarations, which embed the sub-DAG into the current computation graph:
+DAG blocks are instantiated using `include` declarations, which embed the
+sub-DAG into the current computation graph. The argument list is mandatory
+(it may be empty); outputs are projected via the `.{ ... }` brace list:
 
 ```
-include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
-    total_dv as transfer_dv,
-    dv1 as departure_dv,
-}
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
+
+include hohmann_transfer(
+    gm: @gm_earth,
+    r1: @r_earth + @parking_alt,
+    r2: @r_earth + @target_alt,
+).{ total_dv as transfer_dv, dv1 as departure_dv };
 ```
 
-- Parameters are passed as named arguments
-- Output nodes are selected and optionally aliased with `as`
-- The instantiated nodes become part of the enclosing DAG
+- Parameters are passed as named arguments.
+- Output nodes are selected and optionally aliased with `as` inside the
+  `.{ ... }` brace list.
+- The selected outputs become regular nodes in the enclosing DAG and can
+  be referenced with `@transfer_dv`, `@departure_dv`, etc.
+- An `include` ends with `;`.
 
-### Accessing All Outputs
+### Aliasing the Whole Include
+
+If you only need a few outputs, the brace list is convenient. To bring all
+of a DAG's outputs in under one prefix, alias the whole instantiation
+instead:
 
 ```
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
-    v as v_parking,
-}
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) as parking;
+node speed: Velocity = @parking.v;
 ```
+
+Alias and brace list are mutually exclusive on a single `include`.
 
 ## Cross-File DAG Blocks
 
-DAG blocks defined in other files are included using a DAG path:
+DAG blocks defined in another module are addressed by their full
+dot-separated package path:
 
 ```
-include lib.orbital.hohmann_transfer(gm: GM_EARTH, r1: @r1, r2: @r2).{total_dv};
+include lib.orbital.hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2)
+    .{ total_dv };
 ```
 
-The syntax is `include module.dag_name(params).{outputs};`.
+The path before `(` is absolute from the package root. See
+[Multi-File Projects](multi-file.md) for the full path-resolution rules.
+
+## Inline DAG Invocation (Expression Form)
+
+Inside an expression, `@dag(args).out` is sugar for an anonymous
+include — each call site is a fresh instantiation. Arguments are evaluated
+in the surrounding expression scope, so they may reference loop variables:
+
+```
+index Region = { A, B };
+
+dag id_len {
+    param v: Length;
+    node result: Length = @v;
+}
+
+param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
+
+node distances: Length[Region] = for r: Region {
+    @id_len(v: @dist[r]).result
+};
+```
+
+The thing immediately after `@` must be a single in-scope identifier (a
+node directly, or a DAG in scope by its leaf name). Qualified forms like
+`@module.dag(args).out` are rejected — bring the DAG into scope first via
+`import <pkg>.{<dag>};` and call it as `@<dag>(...)`.
 
 ## Import vs Include
 
 The `import` and `include` keywords serve different purposes:
 
-- **`import`** brings compile-time definitions into scope: `const`, `type`, `dim`, `unit`, `index`, `dag`
-- **`include`** instantiates a DAG (inline or from a file) into the current computation graph
+- **`import`** brings compile-time names into scope: `dim`, `unit`,
+  `type`, `index`, `const node`, `dag`, `assert`. Importing runtime items
+  (`param`, non-`const` `node`) is an error (M020).
+- **`include`** instantiates a DAG, optionally with parameter bindings,
+  and exposes its outputs as runtime nodes in the enclosing graph.
 
 ```
-import constants.{GM_EARTH, R_EARTH};
+// constants.gcl
+pub const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+pub const node r_earth: Length = 6371.0 km;
+
+// main.gcl
+import myproject.constants.{ gm_earth, r_earth };
 
 dag orbital_velocity {
     param gm: GravParam;
@@ -87,97 +148,28 @@ dag orbital_velocity {
     node v: Velocity = sqrt(@gm / @r);
 }
 
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
-    v as v_parking,
-}
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
+    .{ v as v_parking };
 ```
 
-## Migration from `fn`
+See [Multi-File Projects](multi-file.md) for full details on visibility
+(`pub`, `pub(bind)`), required parameters and indexes, and parameterized
+includes.
 
-### Single-expression function
+## Why DAG Blocks?
 
-Before (`fn`):
+A `dag` block is a single mechanism that covers what other languages would
+split between *pure functions* (single-output, expression-level) and
+*parameterized library imports* (multi-output, file-level):
 
-```
-fn orbital_velocity(gm: GravParam, r: Length) -> Velocity = sqrt(gm / r);
+- Multiple outputs (not limited to a single return value).
+- Same `param` / `node` semantics as top-level declarations.
+- Same `@` sigil for referencing values within the DAG body.
+- Composable with the file-level DAG via `include`.
+- Strict scope isolation — every name a DAG uses must either be declared
+  inside it, imported by it, or supplied as a `param`. There is no
+  inheritance from the enclosing file's top-level scope.
 
-node v: Velocity = orbital_velocity(GM_EARTH, R_EARTH + @parking_alt);
-```
-
-After (`dag` + `include`):
-
-```
-dag orbital_velocity {
-    param gm: GravParam;
-    param r: Length;
-    node result: Velocity = sqrt(@gm / @r);
-}
-
-include orbital_velocity(gm: GM_EARTH, r: R_EARTH + @parking_alt) {
-    result as v,
-}
-```
-
-### Block-body function
-
-Before (`fn`):
-
-```
-fn hohmann_dv(gm: GravParam, r1: Length, r2: Length) -> TransferResult {
-    let v1 = sqrt(gm / r1);
-    let v2 = sqrt(gm / r2);
-    let dv1 = sqrt(2.0 * gm * r2 / (r1 * (r1 + r2))) - v1;
-    let dv2 = v2 - sqrt(2.0 * gm * r1 / (r2 * (r1 + r2)));
-    TransferResult { dv1, dv2, total_dv: dv1 + dv2 }
-}
-
-node transfer: TransferResult = hohmann_dv(GM_EARTH, R_EARTH + @parking_alt, R_EARTH + @target_alt);
-```
-
-After (`dag` + `include`):
-
-```
-dag hohmann_transfer {
-    param gm: GravParam;
-    param r1: Length;
-    param r2: Length;
-
-    node v1: Velocity = sqrt(@gm / @r1);
-    node v2: Velocity = sqrt(@gm / @r2);
-    node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
-    node dv2: Velocity = @v2 - sqrt(2.0 * @gm * @r1 / (@r2 * (@r1 + @r2)));
-    node total_dv: Velocity = @dv1 + @dv2;
-}
-
-include hohmann_transfer(gm: GM_EARTH, r1: R_EARTH + @parking_alt, r2: R_EARTH + @target_alt) {
-    total_dv as transfer_total_dv,
-    dv1 as transfer_dv1,
-    dv2 as transfer_dv2,
-}
-```
-
-### Dimension-generic function
-
-Before (`fn`):
-
-```
-fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D = a + (b - a) * t;
-
-node midpoint: Length = lerp(@parking_alt, @target_alt, 0.5);
-```
-
-After: Use built-in functions for simple generic operations, or define a `dag` for domain-specific patterns. Simple generic computations like `lerp` are candidates for built-in functions rather than user-defined DAGs.
-
-## Why DAG Blocks Instead of Functions
-
-The `dag` block unifies two concepts that were previously separate:
-
-1. **Pure functions** (`fn`): Single-output, expression-level, with generics
-2. **Parameterized imports**: Multi-output, file-level, with param bindings
-
-Both solve the same problem -- accepting inputs, computing derived values, producing outputs. The `dag` block provides a single, consistent mechanism:
-
-- Multiple outputs (not limited to a single return value)
-- Same `param`/`node` semantics as top-level declarations
-- Same `@` sigil for referencing values within the DAG
-- Composable with the file-level DAG via `include`
+The strict isolation rule means that to use a top-level constant inside a
+`dag`, you either pass it in as a `param` at the include site or `import`
+it explicitly inside the `dag` body.
