@@ -130,6 +130,28 @@ define_name_type! {
     pub struct GenericParamName;
 }
 
+// --- Qualified-variant rendering ---
+
+/// Render a qualified index variant `Index.Variant` in surface syntax.
+///
+/// Centralizes the separator (`.`, since the alpha-4 module-system redesign
+/// removed `::` from the language) so diagnostics, table headers, error
+/// messages, and value descriptions all stay consistent. Use anywhere a
+/// qualified variant needs to appear in user-visible output — never roll
+/// your own `format!("{idx}.{var}")` inline; if the surface separator
+/// ever changes again, this single call site is the only thing that must
+/// move.
+///
+/// Accepts any `Display` types so the helper works whether the caller
+/// holds typed [`IndexName`] / [`VariantName`] values, raw `&str`s
+/// extracted from the registry, or anything else printable.
+pub fn fmt_qualified_variant(
+    index: impl std::fmt::Display,
+    variant: impl std::fmt::Display,
+) -> String {
+    format!("{index}.{variant}")
+}
+
 // --- Naming convention helpers ---
 
 /// Check if `s` is a valid `lower_snake_case` identifier

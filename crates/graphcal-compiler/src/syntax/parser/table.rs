@@ -286,7 +286,7 @@ impl Parser<'_> {
 
     /// Parse a 3D+ table with slice sections: `[SliceLabel1, ...] header; rows; ...`
     ///
-    /// Slice labels are `Index::Variant` for named axes, or `#N` for `NatRange` axes.
+    /// Slice labels are `Index.Variant` for named axes, or `#N` for `NatRange` axes.
     fn parse_table_sliced(
         &mut self,
         indexes: &[TableIndexSpec],

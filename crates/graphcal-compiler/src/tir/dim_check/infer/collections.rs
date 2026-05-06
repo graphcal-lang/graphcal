@@ -68,7 +68,7 @@ pub(super) fn infer_for_comp(
     body: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -140,7 +140,7 @@ pub(super) fn infer_map_or_table_literal(
     entries: &[crate::desugar::desugared_ast::MapEntry],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -229,7 +229,10 @@ pub(super) fn infer_map_or_table_literal(
                     entry
                         .keys
                         .iter()
-                        .map(|k| format!("{}::{}", k.index.value, k.variant.value))
+                        .map(|k| crate::syntax::names::fmt_qualified_variant(
+                            &k.index.value,
+                            &k.variant.value,
+                        ))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -279,7 +282,7 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(index_names[i], v))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -316,7 +319,7 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| format!("{}::{v}", index_names[i]))
+                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(index_names[i], v))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -343,7 +346,7 @@ pub(super) fn infer_map_or_table_literal(
     // Reject nested Indexed when the inner index is a label (named) index.
     // Label-indexed elements should use tuple keys instead: { (I::A, J::B): expr, ... }.
     // Allow when the inner index is a range index, enabling mixed-index construction:
-    //   { LabelIndex::Variant: for t: RangeIndex { ... }, ... }
+    //   { LabelIndex.Variant: for t: RangeIndex { ... }, ... }
     if let InferredType::Indexed { index, .. } = &first_type {
         let inner_is_label = registry
             .indexes
@@ -394,7 +397,7 @@ pub(super) fn infer_index_access(
     args: &[IndexArg],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -699,7 +702,7 @@ pub(super) fn infer_scan(
     body: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -779,7 +782,7 @@ pub(super) fn infer_unfold(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -878,7 +881,7 @@ pub(super) fn infer_field_access(
     field: &crate::syntax::names::Spanned<FieldName>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -948,7 +951,7 @@ pub(super) fn infer_struct_construction(
     fields: &[crate::desugar::desugared_ast::FieldInit],
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &HashMap<String, crate::tir::typed::TIR>,
+    dag_tirs: &crate::tir::typed::DagRegistry,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,

@@ -150,7 +150,7 @@ impl Parser<'_> {
 
     /// Parse a match pattern:
     /// - Tagged union: `VariantName { field1, field2: binding }` or bare `VariantName`
-    /// - Index variant: `Index::Variant` (qualified form)
+    /// - Index variant: `Index.Variant` (qualified form)
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
         let first_ident = self.parse_any_ident()?;
         let start_span = first_ident.span;

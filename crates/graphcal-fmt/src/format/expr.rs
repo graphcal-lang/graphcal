@@ -640,7 +640,7 @@ fn format_table_sliced(
     let slice_dims = ndim - 2;
 
     // Group entries by their slice keys (first N-2 keys).
-    // Named axes render as `Index::Variant`; NatRange axes render as `#N`
+    // Named axes render as `Index.Variant`; NatRange axes render as `#N`
     // (the variant name is already the synthetic `#N` form).
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
     for (idx, e) in entries.iter().enumerate() {

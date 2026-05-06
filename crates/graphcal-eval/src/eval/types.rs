@@ -88,7 +88,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => format!("{index_name}::{variant}"),
+            } => graphcal_compiler::syntax::names::fmt_qualified_variant(index_name, variant),
             Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
             Self::Datetime { .. } => "Datetime".to_string(),
@@ -193,7 +193,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => format!("{index_name}::{variant}"),
+            } => graphcal_compiler::syntax::names::fmt_qualified_variant(index_name, variant),
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
             Self::Datetime { .. } =>
             {
