@@ -2153,7 +2153,7 @@ mod tests {
 
     #[test]
     fn type_resolve_rocket() {
-        let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // All declarations should have resolved types
         assert!(
@@ -2172,7 +2172,7 @@ mod tests {
 
     #[test]
     fn type_resolve_indexed() {
-        let source = include_str!("../../../../tests/fixtures/indexed.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // delta_v should be Velocity[Maneuver]
         let dv_type = &tir.resolved_decl_types[&ScopedName::local("delta_v")];
@@ -2184,14 +2184,14 @@ mod tests {
         // hohmann.gcl now uses DAG+include, which requires include expansion
         // at a higher phase. Single-file TIR resolution correctly rejects the
         // unknown graph ref `@transfer` that the include would create.
-        let source = include_str!("../../../../tests/fixtures/hohmann.gcl");
+        let source = include_str!("../../../../tests/fixtures/invalid/hohmann.gcl");
         let err = parse_and_type_resolve(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }
 
     #[test]
     fn type_resolve_generics() {
-        let source = include_str!("../../../../tests/fixtures/generics.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/generics.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // pos_eci should be a GenericStruct with type args
         let pos_type = &tir.resolved_decl_types[&ScopedName::local("pos_eci")];
@@ -2222,7 +2222,7 @@ mod tests {
 
     #[test]
     fn type_resolve_default_type_params() {
-        let source = include_str!("../../../../tests/fixtures/generics.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/generics.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
 
         // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args

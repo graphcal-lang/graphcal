@@ -2475,7 +2475,7 @@ mod tests {
 
     #[test]
     fn lower_rocket() {
-        let source = include_str!("../../../../tests/fixtures/rocket.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert_eq!(ir.consts.len(), 1); // G0
         assert_eq!(ir.params.len(), 3); // dry_mass, fuel_mass, isp
@@ -2486,7 +2486,7 @@ mod tests {
 
     #[test]
     fn lower_constants() {
-        let source = include_str!("../../../../tests/fixtures/constants.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/constants.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert_eq!(ir.consts.len(), 4);
         assert_eq!(ir.params.len(), 1);
@@ -2495,7 +2495,7 @@ mod tests {
 
     #[test]
     fn lower_indexed() {
-        let source = include_str!("../../../../tests/fixtures/indexed.gcl");
+        let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert!(ir.registry.indexes.get_index("Maneuver").is_some());
     }
@@ -2505,7 +2505,7 @@ mod tests {
         // hohmann.gcl now uses DAG+include, which requires include expansion
         // at a higher phase. Single-file IR lowering correctly rejects the
         // unknown graph ref `@transfer` that the include would create.
-        let source = include_str!("../../../../tests/fixtures/hohmann.gcl");
+        let source = include_str!("../../../../tests/fixtures/invalid/hohmann.gcl");
         let err = parse_and_lower(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }

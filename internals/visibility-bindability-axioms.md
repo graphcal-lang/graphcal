@@ -403,7 +403,7 @@ include "./lib.gcl"(jpy_in_usd: 0.0067);   // override the rate
 
 The parens around `@jpy_in_usd` are required by the surface grammar
 (`unit_scale = NUMBER | "(" expr ")"`). See
-`tests/fixtures/dynamic_units.gcl` for the canonical reference.
+`tests/fixtures/valid/dynamic_units.gcl` for the canonical reference.
 
 The dual form **`const unit`** marks a unit whose conversion factor does
 _not_ depend on runtime values — useful for dim-check / const-folding

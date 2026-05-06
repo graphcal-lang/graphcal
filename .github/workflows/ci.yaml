@@ -113,7 +113,7 @@ jobs:
 
       - name: Validate highlight query
         working-directory: tree-sitter-graphcal
-        run: tree-sitter query queries/highlights.scm ../tests/fixtures/functions.gcl > /dev/null
+        run: tree-sitter query queries/highlights.scm ../tests/fixtures/invalid/functions.gcl > /dev/null
 
       - name: Verify no uncommitted changes
         run: git diff --exit-code
