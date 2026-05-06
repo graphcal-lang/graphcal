@@ -841,33 +841,3 @@ graphcal eval project/main.gcl
 If the entry file's directory or any ancestor contains a
 `graphcal.toml`, that manifest defines the package layout. Otherwise,
 the file is treated as a single-file virtual package.
-
-## Migration Cheat Sheet
-
-For users coming from earlier Graphcal versions, the surface has
-changed. Read this table left-to-right; the right-hand column is the
-only valid syntax going forward.
-
-| OLD                                                  | NEW                                                                 |
-|------------------------------------------------------|---------------------------------------------------------------------|
-| `import "./foo.gcl";`                                | `import foo;`                                                       |
-| `import "./foo.gcl" { X };`                          | `import foo.{X};`                                                   |
-| `import "./foo.gcl" as f;`                           | `import foo as f;`                                                  |
-| `import nasa/rocket;`                                | `import nasa.rocket;`                                               |
-| `import nasa/rocket { Orbit };`                      | `import nasa.rocket.{Orbit};`                                       |
-| `import nasa/rocket as nr;`                          | `import nasa.rocket as nr;`                                         |
-| `import nasa/rocket.Orbit;` (single-symbol shorthand) | `import nasa.rocket.{Orbit};` (brace list required)                |
-| `include "./rocket.gcl"(args) { y };`                | `include rocket(args).{y};`                                         |
-| `include "./rocket.gcl"(args) as r;`                 | `include rocket(args) as r;`                                        |
-| `include nasa/rocket(args) { thrust };`              | `include nasa.rocket(args).{thrust};`                               |
-| `include my_dag(args) { y };` (bare ident, in-scope) | `include <pkg>.my_dag(args).{y};` (full path required)              |
-| `pub include "./foo.gcl"(args);`                     | `pub include foo(args);`                                            |
-| `Module::fn(args)`                                   | `Module.fn(args)`                                                   |
-| `Module::CONST`                                      | `Module.CONST`                                                      |
-| `Color::Red`                                         | `Color.Red`                                                         |
-| `@lib::scale(...)::result`                           | `import <pkg>.{scale};` then `@scale(...).result`                   |
-| `@module::name`                                      | `import <pkg>.{name};` then `@name`                                 |
-| `#[clippy::allow(...)]`                              | `#[clippy.allow(...)]`                                              |
-| `..` parent navigation                               | Removed — use absolute path from package root                       |
-| `import ../X { Y };` (in inline DAG)                 | `import <pkg>.<enclosing_dag>.{Y};`                                 |
-| `include ..(args) { y };` (parent DAG)               | `include <pkg>.<enclosing_dag>(args).{y};` (recursive instantiation)|
