@@ -968,22 +968,26 @@ fn collect_expr_refs(
                 },
             });
         }
-        ExprKind::InlineDagRef { dag, args, output } => {
-            let dag_target = SymbolKey::TopLevel(dag.value.to_string());
-            table.references.push(ReferenceInfo {
-                span: dag.span,
-                target: dag_target,
-            });
-            // The projected output resolves to `dag_name::output` as a
-            // qualified member; goto-def jumps into the dag body.
-            // For qualified inline calls `@mod::dag(...)::out`, cross-file
-            // dag-member resolution is deferred; we still record the
-            // reference against the local qualified key so that, if the
-            // caller's dag body is also in this file, goto-def works.
+        ExprKind::InlineDagRef { path, args, output } => {
+            // Same-file calls (`@dag(args).out`) reference the DAG by its
+            // bare name. Cross-file qualified calls (`@module.dag(args).out`)
+            // reference the DAG via a module alias; for goto-def we point
+            // the leaf segment at the DAG name as a top-level symbol — best
+            // effort, since the cross-file declaration lives in a different
+            // file's symbol table.
+            if let Some(leaf) = path.leaf() {
+                table.references.push(ReferenceInfo {
+                    span: leaf.span,
+                    target: SymbolKey::TopLevel(leaf.name.clone()),
+                });
+            }
+            // The projected output resolves to `<dag_key>::output` as a
+            // qualified member; goto-def jumps into the dag body when the
+            // caller's dag body is in the same file.
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
-                    module: dag.value.to_string(),
+                    module: path.dag_lookup_key(),
                     name: output.value.to_string(),
                 },
             });

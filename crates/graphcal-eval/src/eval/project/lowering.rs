@@ -125,8 +125,9 @@ pub(super) fn lower_and_finalize(
 /// Merge compiled dag TIRs from module-aliased dependencies into the
 /// importer's `tir.dags`, keyed by `"alias::dag_name"`.
 ///
-/// Enables cross-file qualified inline calls `@alias::dag(args)::out` to
-/// resolve via the same `tir.dags` lookup used for same-file calls.
+/// Enables cross-file qualified inline calls `@alias.dag(args).out` to
+/// resolve via the same `tir.dags` lookup used for same-file calls. The
+/// `::` separator is internal — the surface syntax uses `.` everywhere.
 ///
 /// Only `pub` dags are exposed across the import boundary; private dags
 /// in the dep stay local (the dep's `pub_names` already filters them).

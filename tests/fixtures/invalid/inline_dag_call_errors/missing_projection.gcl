@@ -1,0 +1,10 @@
+// Error fixture: bare `@dag(args)` with no `.<out>` projection is rejected.
+// `@` requires a *node*; an instantiated DAG without projection is not a
+// node, so the form is ill-formed regardless of qualification.
+dag scale {
+    param v: Length;
+    pub node out: Length = @v;
+}
+
+param src: Length = 1.0 m;
+node bad: Length = @scale(v: @src);

@@ -376,6 +376,19 @@ impl ModulePath {
     pub fn leaf(&self) -> Option<&Ident> {
         self.segments.last()
     }
+
+    /// Format this path using `::` as a separator. Used by the inline-DAG
+    /// call site to derive the lookup key into `tir::dags`, matching the
+    /// `"alias::dag_name"` key format used by the cross-file dag-merge
+    /// pipeline. Single-segment paths produce just the leaf name.
+    #[must_use]
+    pub fn dag_lookup_key(&self) -> String {
+        self.segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("::")
+    }
 }
 
 /// Import declaration (compile-time name import).
@@ -1123,18 +1136,27 @@ pub enum ExprKind<P: Phase = Raw> {
         index: Spanned<IndexName>,
         variant: Spanned<VariantName>,
     },
-    /// Inline DAG invocation: `@dag(args).out`.
+    /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
     ///
     /// Each syntactic occurrence denotes a fresh DAG instantiation that is
     /// desugared during TIR lowering to the equivalent
-    /// `include dag(args) as <synthetic>; @<synthetic>.out`. Preserved as a
-    /// distinct AST variant so source spans survive for diagnostics.
-    /// The DAG identifier must be a single in-scope name — qualified
-    /// `@module.dag(args).out` is rejected at parse time (bring the DAG into
-    /// scope first via `import <pkg>.{<dag>};`).
+    /// `include <path>(args) as <synthetic>; @<synthetic>.out`. Preserved as
+    /// a distinct AST variant so source spans survive for diagnostics.
+    ///
+    /// The post-`@` expression as a whole must denote a *node* — that is the
+    /// invariant `@` enforces. `@dag(args).out` is well-formed because
+    /// `dag(args).out` projects an output node from a fresh DAG instance, and
+    /// likewise `@module.dag(args).out` projects an output node from a DAG
+    /// brought into scope via `import module.{dag};` or `import path as
+    /// module;`. Bare `@dag(args)` (no projection) is rejected — a DAG
+    /// instance with no projection is not a node.
     InlineDagRef {
-        /// Name of the `dag` being invoked (single in-scope identifier).
-        dag: Spanned<DeclName>,
+        /// Path to the DAG being invoked. Single-segment for same-file calls
+        /// (`@dag(args).out`), multi-segment for cross-file qualified calls
+        /// (`@module.dag(args).out`). The leaf segment names the DAG; any
+        /// preceding segments resolve through module aliases brought into
+        /// scope by `import`.
+        path: ModulePath,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding<P>>,
         /// Projected output node name (after the closing paren `.`).

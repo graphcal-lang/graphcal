@@ -95,8 +95,9 @@ pub(super) struct EvaluatedFile {
     ///
     /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
     /// under `"alias::dag_name"` keys so qualified inline calls
-    /// (`@alias::dag(args)::out`) resolve through the same machinery as
-    /// same-file inline calls.
+    /// (`@alias.dag(args).out`) resolve through the same machinery as
+    /// same-file inline calls. The internal `::` separator avoids collisions
+    /// with user-visible `.`-separated names.
     pub(super) dag_tirs: HashMap<String, graphcal_compiler::tir::typed::TIR>,
 }
 

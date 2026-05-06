@@ -78,6 +78,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -175,6 +179,10 @@
         },
         {
           "type": "index_access",
+          "named": true
+        },
+        {
+          "type": "inline_dag_call",
           "named": true
         },
         {
@@ -385,6 +393,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -476,6 +488,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -581,6 +597,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -767,6 +787,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -1040,6 +1064,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -1162,6 +1190,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -1298,6 +1330,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -1464,6 +1500,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -1610,6 +1650,10 @@
           "named": true
         },
         {
+          "type": "inline_dag_call",
+          "named": true
+        },
+        {
           "type": "map_literal",
           "named": true
         },
@@ -1736,6 +1780,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -1885,29 +1933,9 @@
     "type": "graph_ref",
     "named": true,
     "fields": {
-      "args": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "include_param_bindings",
-            "named": true
-          }
-        ]
-      },
       "name": {
         "multiple": false,
         "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "output": {
-        "multiple": false,
-        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -1967,6 +1995,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -2234,6 +2266,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2349,6 +2385,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2456,6 +2496,10 @@
         },
         {
           "type": "index_access",
+          "named": true
+        },
+        {
+          "type": "inline_dag_call",
           "named": true
         },
         {
@@ -2568,6 +2612,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2672,6 +2720,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -2763,6 +2815,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -2890,6 +2946,52 @@
     }
   },
   {
+    "type": "inline_dag_call",
+    "named": true,
+    "fields": {
+      "args": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "include_param_bindings",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "output": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "path_segment": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "layer_declaration",
     "named": true,
     "fields": {
@@ -3002,6 +3104,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -3127,6 +3233,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -3280,6 +3390,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3402,6 +3516,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -3493,6 +3611,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -3668,6 +3790,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -4074,6 +4200,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -4208,6 +4338,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -4319,6 +4453,10 @@
         },
         {
           "type": "index_access",
+          "named": true
+        },
+        {
+          "type": "inline_dag_call",
           "named": true
         },
         {
@@ -4509,6 +4647,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -4669,6 +4811,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -4763,6 +4909,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -4854,6 +5004,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -5131,6 +5285,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -5334,6 +5492,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -5428,6 +5590,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -5519,6 +5685,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -5632,6 +5802,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -5729,6 +5903,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -5839,6 +6017,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -5975,6 +6157,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {
@@ -6184,6 +6370,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -6298,6 +6488,10 @@
             "named": true
           },
           {
+            "type": "inline_dag_call",
+            "named": true
+          },
+          {
             "type": "map_literal",
             "named": true
           },
@@ -6399,6 +6593,10 @@
           },
           {
             "type": "index_access",
+            "named": true
+          },
+          {
+            "type": "inline_dag_call",
             "named": true
           },
           {

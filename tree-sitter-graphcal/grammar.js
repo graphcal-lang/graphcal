@@ -41,6 +41,11 @@ module.exports = grammar({
     // `. { ... }` brace-list tail. The disambiguator (1-token lookahead
     // past the `.`) requires GLR — `IDENT` continues, `{` starts a tail.
     [$.module_path],
+    // `@<name>` could be the start of a bare `graph_ref` (with field
+    // projections handled by `field_access`) or an `inline_dag_call`
+    // (with multi-segment path before `(args)`). The disambiguator is
+    // whether `(args).<out>` eventually follows the path.
+    [$.graph_ref, $.inline_dag_call],
   ],
 
   rules: {
@@ -1194,6 +1199,7 @@ module.exports = grammar({
       $.boolean,
       $.unit_literal,
       $.graph_ref,
+      $.inline_dag_call,
       $.struct_construction,
       $.map_literal,
       $.parenthesized_expr,
@@ -1209,14 +1215,34 @@ module.exports = grammar({
       field("unit", $.unit_expr),
     )),
 
+    // Bare graph reference: `@<name>`. Field projections like
+    // `@orbit.altitude` are built atop this via the postfix `field_access`
+    // rule, the same way a non-`@` expression handles `.field`.
     graph_ref: $ => seq(
       "@",
       field("name", $.identifier),
-      optional(seq(
-        field("args", $.include_param_bindings),
-        ".",
-        field("output", $.identifier),
-      )),
+    ),
+
+    // Inline DAG invocation: `@<name>(args).<out>` for same-file calls,
+    // `@<name>(.<seg>)+ (args).<out>` for cross-file qualified calls.
+    //
+    // The shape is kept distinct from `graph_ref` so that `@a.b` (no
+    // parens) falls through to `field_access(graph_ref(@a), b)` — the
+    // GLR parser keeps both interpretations alive past `@a.b` and the
+    // presence of `(args).<out>` is what forces the inline-DAG reading.
+    //
+    // What `@` enforces is semantic: the post-`@` expression must denote
+    // a *node*, which is why the `.<output>` projection is mandatory.
+    // Bare `@dag(args)` (no projection) is rejected for the same reason
+    // a multi-segment `@module.dag(args)` is rejected — projection is
+    // what turns the DAG instance into a node.
+    inline_dag_call: $ => seq(
+      "@",
+      field("name", $.identifier),
+      repeat(seq(".", field("path_segment", $.identifier))),
+      field("args", $.include_param_bindings),
+      ".",
+      field("output", $.identifier),
     ),
 
     // TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }

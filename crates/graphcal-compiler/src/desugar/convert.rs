@@ -566,8 +566,8 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 scrutinees: scrutinees.into_iter().map(Into::into).collect(),
                 arms: arms.into_iter().map(Into::into).collect(),
             },
-            ExprKind::InlineDagRef { dag, args, output } => Self::InlineDagRef {
-                dag,
+            ExprKind::InlineDagRef { path, args, output } => Self::InlineDagRef {
+                path,
                 args: args.into_iter().map(Into::into).collect(),
                 output,
             },

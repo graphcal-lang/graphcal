@@ -560,8 +560,8 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
         expr: &crate::desugar::desugared_ast::Expr,
         args: &[crate::desugar::desugared_ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { dag, .. } = &expr.kind {
-            self.out.insert(dag.value.to_string());
+        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind {
+            self.out.insert(path.dag_lookup_key());
         }
         for b in args {
             self.visit_expr(&b.value)?;
@@ -573,9 +573,10 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
 /// Collect inline dag call targets from a compiled TIR's body expressions.
 ///
 /// Walks every const/param/node RHS expression and records the target key
-/// for each `@dag(args)::out` / `@mod::dag(args)::out` found. Keys match
-/// the format used by [`crate::tir::typed::TIR::dags`]: bare dag name for
-/// same-file calls, `"mod::dag"` for cross-file qualified calls.
+/// for each `@dag(args).out` / `@mod.dag(args).out` found. Keys match the
+/// format used by [`crate::tir::typed::TIR::dags`]: bare dag name for
+/// same-file calls, `"mod::dag"` for cross-file qualified calls (the key
+/// format is internal — the surface syntax uses `.` everywhere).
 fn collect_dag_call_targets_from_tir(
     dag_tir: &crate::tir::typed::TIR,
     out: &mut std::collections::BTreeSet<String>,

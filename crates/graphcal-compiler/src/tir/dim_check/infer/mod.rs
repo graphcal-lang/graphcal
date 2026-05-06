@@ -385,9 +385,9 @@ pub(super) fn infer_type_with_owner(
             unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
         }
 
-        ExprKind::InlineDagRef { dag, args, output } => infer_inline_dag_ref(
+        ExprKind::InlineDagRef { path, args, output } => infer_inline_dag_ref(
             expr,
-            dag,
+            path,
             args,
             output,
             declared_types,
@@ -407,20 +407,22 @@ pub(super) fn infer_type_with_owner(
     }
 }
 
-/// Infer the type of an inline DAG invocation `@dag(args)::out`.
+/// Infer the type of an inline DAG invocation `@<path>(args).<out>`.
 ///
-/// Looks up the called dag via `dag_tirs` using `"{module}::{dag}"` for
-/// qualified calls and the bare name for same-file calls. Both variants
-/// share the same compiled-TIR resolution path: param types come from
-/// `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates projection
-/// of non-`pub` outputs.
+/// Looks up the called dag via `dag_tirs` using `<path>.dag_lookup_key()` —
+/// which collapses single-segment paths to the bare name (same-file calls)
+/// and joins multi-segment paths with `::` (cross-file qualified calls,
+/// matching the key format installed by the cross-file dag-merge step).
+/// Both variants share the same compiled-TIR resolution path: param types
+/// come from `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates
+/// projection of non-`pub` outputs.
 #[expect(
     clippy::too_many_arguments,
     reason = "passes inference context through"
 )]
 fn infer_inline_dag_ref(
     expr: &Expr,
-    dag: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
+    path: &crate::syntax::ast::ModulePath,
     args: &[crate::desugar::desugared_ast::ParamBinding],
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<String, DeclaredType>,
@@ -430,14 +432,14 @@ fn infer_inline_dag_ref(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let key = dag.value.to_string();
+    let key = path.dag_lookup_key();
 
     let dag_tir = dag_tirs
         .get(&key)
         .ok_or_else(|| GraphcalError::UnknownDag {
             name: key.clone(),
             src: src.clone(),
-            span: dag.span.into(),
+            span: path.span.into(),
         })?;
 
     // Map param/node member names to their pre-resolved declared types.

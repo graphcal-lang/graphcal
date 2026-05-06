@@ -223,9 +223,9 @@ pub include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
 ### Inline-DAG call expression
 
 Inside an expression, `@dag(args).out` is sugar for an anonymous
-`include ... as <synthetic>; @<synthetic>.out`. The thing immediately
-after `@` must be a single in-scope identifier — bring the DAG into
-scope first:
+`include ... as <synthetic>; @<synthetic>.out`. What `@` enforces is
+that the post-`@` expression must denote a *node* — and `dag(args).out`
+does, because `out` is a node belonging to the DAG instance `dag(args)`.
 
 ```graphcal
 dag mission {
@@ -245,11 +245,30 @@ node distances: Length[Region] = for r: Region {
 };
 ```
 
-Qualified forms after `@` are rejected — `@module.dag(args).out` is a
-parse error because `module` is not a node, and `@` is reserved for
-node references. To call a DAG in another module, bring it into scope
-unqualified first via `import x.{dag};` (or `as` alias) and then call
-it as `@dag(...)`.
+#### Qualified form: `@module.dag(args).out`
+
+Inline calls also accept a module-qualified path, mirroring the way a
+DAG comes into scope via `import` without needing a `{dag}` brace list.
+After `import nasa.rocket as rocket;` (or unaliased `import nasa.rocket;`,
+which binds the leaf `rocket` as the module name) you can write:
+
+```graphcal
+import nasa.rocket as rocket;
+
+param o: Orbit;
+node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800 kg).thrust;
+```
+
+The semantics are identical to the bare form — `compute_thrust(args).thrust`
+is still a node, and prefixing the path with the in-scope module alias
+just adds a qualifier. The "post-`@` expression must denote a node"
+rule is unchanged; it has nothing to do with how many segments appear
+before the `(`.
+
+What *is* still rejected is dropping the projection: `@dag(args)` and
+`@module.dag(args)` (without the trailing `.<out>`) are both parse
+errors. A DAG instance with no projection is not a node, and that's
+the property `@` requires.
 
 ## Inline DAGs as Modules
 

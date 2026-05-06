@@ -1,6 +1,7 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, MapEntry, MatchArm,
-    MatchPattern, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
+    MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm,
+    TypeExpr, UnaryOp,
 };
 use pretty::RcDoc;
 
@@ -23,8 +24,8 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value.as_str())),
-        ExprKind::InlineDagRef { dag, args, output } => {
-            format_inline_dag_ref(fmt, dag.value.as_str(), args, output.value.as_str())
+        ExprKind::InlineDagRef { path, args, output } => {
+            format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
         ExprKind::ConstRef(name) => RcDoc::text(name.value.as_str().to_string()),
         ExprKind::QualifiedConstRef { module, name } => {
@@ -925,7 +926,7 @@ fn wrap_match_block(head: RcDoc<'static>, arm_docs: Vec<RcDoc<'static>>) -> RcDo
 
 fn format_inline_dag_ref(
     fmt: &mut Formatter<'_>,
-    dag: &str,
+    path: &ModulePath,
     args: &[ParamBinding],
     output: &str,
 ) -> RcDoc<'static> {
@@ -937,7 +938,8 @@ fn format_inline_dag_ref(
                 .append(format_expr(fmt, &b.value))
         })
         .collect();
-    RcDoc::text(format!("@{dag}"))
+    let path_text = path.display_path();
+    RcDoc::text(format!("@{path_text}"))
         .append(RcDoc::text("("))
         .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
         .append(RcDoc::text(")."))

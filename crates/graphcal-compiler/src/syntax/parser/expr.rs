@@ -1,4 +1,4 @@
-use crate::syntax::ast::{BinOp, Expr, ExprKind, IndexArg, UnaryOp};
+use crate::syntax::ast::{BinOp, Expr, ExprKind, Ident, IndexArg, ModulePath, UnaryOp};
 use crate::syntax::names::{
     DeclName, FieldName, FnName, IndexName, Spanned, StructTypeName, VariantName,
 };
@@ -327,35 +327,7 @@ impl Parser<'_> {
                 let text = raw[1..raw.len() - 1].to_string();
                 Ok(Expr::new(ExprKind::StringLiteral(text), span))
             }
-            Some(Token::At) => {
-                let (_, at_span) = self.advance()?;
-                // The thing immediately after `@` must be a single in-scope
-                // identifier (a node, or a DAG whose output projection yields
-                // a node). Qualified `@module.dag(...)` is rejected — bring
-                // the DAG into scope first via `import <pkg>.{<dag>};`.
-                let ident = self.parse_any_ident()?;
-                if self.lexer.peek() == Some(&Token::LParen) {
-                    // Inline DAG invocation: `@dag(args).out`
-                    let args = self.parse_import_param_bindings()?;
-                    self.expect(Token::Dot)?;
-                    let output = self.parse_any_ident()?;
-                    let span = at_span.merge(output.span);
-                    Ok(Expr::new(
-                        ExprKind::InlineDagRef {
-                            dag: ident.into_spanned::<DeclName>(),
-                            args,
-                            output: output.into_spanned::<DeclName>(),
-                        },
-                        span,
-                    ))
-                } else {
-                    let span = at_span.merge(ident.span);
-                    Ok(Expr::new(
-                        ExprKind::GraphRef(ident.into_spanned::<DeclName>()),
-                        span,
-                    ))
-                }
-            }
+            Some(Token::At) => self.parse_at_expr(),
             Some(Token::Scan) => {
                 let (_, span) = self.advance()?;
                 self.parse_scan(span)
@@ -384,6 +356,133 @@ impl Parser<'_> {
             }
             None => Err(self.unexpected_eof("expression")),
         }
+    }
+
+    /// Parse a `@`-prefixed expression: a graph reference or an inline-DAG
+    /// invocation, possibly with a module-qualified path.
+    ///
+    /// Forms accepted:
+    ///   `@<seg>`                                    — `GraphRef`
+    ///   `@<seg>(args).<out>`                        — same-file inline DAG
+    ///   `@<seg>.<seg>...<seg>(args).<out>`          — qualified inline DAG
+    ///                                                 (cross-file via `import`)
+    ///   `@<seg>.<seg>...<seg>` (no `(`)             — `FieldAccess` chain on
+    ///                                                 a `GraphRef` (e.g.
+    ///                                                 struct field projection)
+    ///
+    /// The grammar is unambiguous because the `(` after a path commits to the
+    /// inline-DAG reading; otherwise the path is a `GraphRef` followed by zero
+    /// or more `.<field>` projections — the same shape `apply_postfix` would
+    /// produce if we returned the bare `GraphRef` and let it consume the dotted
+    /// suffix. Synthesizing the `FieldAccess` chain inline avoids the lexer's
+    /// 2-slot put-back limit when the path turns out not to be an inline DAG.
+    ///
+    /// The semantic invariant `@` enforces — that the post-`@` expression must
+    /// denote a *node* — is checked downstream (parser rejects an inline-DAG
+    /// form without `.<out>` projection; resolver/dim-checker reject unknown
+    /// references). The parser itself only enforces the syntactic shape.
+    fn parse_at_expr(&mut self) -> Result<Expr, ParseError> {
+        let (_, at_span) = self.advance()?; // consume `@`
+        let first_seg = self.parse_any_ident()?;
+
+        // Bare same-file inline DAG: `@<seg>(args).<out>`.
+        if self.lexer.peek() == Some(&Token::LParen) {
+            return self.finish_inline_dag_call(at_span, vec![first_seg]);
+        }
+
+        // Bare `GraphRef`: nothing more to consume here. Let `apply_postfix`
+        // handle any `.<field>` continuation uniformly.
+        if self.lexer.peek() != Some(&Token::Dot) {
+            let span = at_span.merge(first_seg.span);
+            return Ok(Expr::new(
+                ExprKind::GraphRef(first_seg.into_spanned::<DeclName>()),
+                span,
+            ));
+        }
+
+        // We see `@<seg>.`. Greedily consume `.<seg>` segments. If we hit `(`
+        // afterward, commit to a qualified inline-DAG call. If we exhaust the
+        // path without finding `(`, rebuild a `GraphRef`-with-`FieldAccess`
+        // chain — the same shape `apply_postfix` would have produced.
+        let mut segments = vec![first_seg];
+        loop {
+            if self.lexer.peek() != Some(&Token::Dot) {
+                break;
+            }
+            let (_, dot_span) = self.advance()?; // consume `.`
+            if self.lexer.peek() != Some(&Token::Ident) {
+                // `.` not followed by an ident — not a path continuation. Put
+                // back the dot for whoever runs next (e.g. brace-list tail
+                // parser, or an error site higher up).
+                self.lexer.put_back(Token::Dot, dot_span);
+                break;
+            }
+            let seg = self.parse_any_ident()?;
+            segments.push(seg);
+
+            if self.lexer.peek() == Some(&Token::LParen) {
+                return self.finish_inline_dag_call(at_span, segments);
+            }
+        }
+
+        // No `(` — the path is a `GraphRef` followed by zero or more field
+        // projections. Synthesize the equivalent `FieldAccess` chain.
+        let mut iter = segments.into_iter();
+        #[expect(
+            clippy::expect_used,
+            reason = "loop seeded with first_seg, so segments is non-empty"
+        )]
+        let head = iter.next().expect("path always has at least one segment");
+        let head_span = head.span;
+        let mut expr = Expr::new(
+            ExprKind::GraphRef(head.into_spanned::<DeclName>()),
+            at_span.merge(head_span),
+        );
+        for seg in iter {
+            let seg_span = seg.span;
+            let span = expr.span.merge(seg_span);
+            expr = Expr::new(
+                ExprKind::FieldAccess {
+                    expr: Box::new(expr),
+                    field: seg.into_spanned::<FieldName>(),
+                },
+                span,
+            );
+        }
+        Ok(expr)
+    }
+
+    /// Finish parsing an inline DAG call after the `@<path>` prefix has been
+    /// consumed and the next token is a confirmed `(`. Reads the param
+    /// bindings, the mandatory `.<out>` projection, and assembles the
+    /// `InlineDagRef` AST node.
+    fn finish_inline_dag_call(
+        &mut self,
+        at_span: crate::syntax::span::Span,
+        segments: Vec<Ident>,
+    ) -> Result<Expr, ParseError> {
+        debug_assert!(
+            !segments.is_empty(),
+            "inline dag call must have at least one path segment"
+        );
+        let path_start = segments.first().map_or(at_span, |s| at_span.merge(s.span));
+        let path_end = segments.last().map_or(at_span, |s| s.span);
+        let path = ModulePath {
+            segments,
+            span: path_start.merge(path_end),
+        };
+        let args = self.parse_import_param_bindings()?;
+        self.expect(Token::Dot)?;
+        let output = self.parse_any_ident()?;
+        let span = at_span.merge(output.span);
+        Ok(Expr::new(
+            ExprKind::InlineDagRef {
+                path,
+                args,
+                output: output.into_spanned::<DeclName>(),
+            },
+            span,
+        ))
     }
 
     /// Parse a number literal: integer, float, or float with unit.
@@ -1306,8 +1405,9 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::InlineDagRef { dag, args, output } => {
-                assert_eq!(dag.value.as_str(), "clamp");
+            ExprKind::InlineDagRef { path, args, output } => {
+                assert_eq!(path.segments.len(), 1);
+                assert_eq!(path.segments[0].name, "clamp");
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name, "x");
                 assert!(
@@ -1329,8 +1429,9 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::InlineDagRef { dag, args, output } => {
-                assert_eq!(dag.value.as_str(), "scale");
+            ExprKind::InlineDagRef { path, args, output } => {
+                assert_eq!(path.segments.len(), 1);
+                assert_eq!(path.segments[0].name, "scale");
                 assert_eq!(args.len(), 2);
                 assert_eq!(args[0].name.name, "factor");
                 assert_eq!(args[1].name.name, "v");
@@ -1341,11 +1442,111 @@ mod tests {
     }
 
     #[test]
-    fn parse_inline_dag_ref_qualified_rejected() {
-        // Qualified `@module.dag(args).out` is rejected (Concept 6); the DAG
-        // must be brought into unqualified scope first.
-        let result = Parser::new("node y: Length = @geom.clamp(x: @p).result;").parse_file();
-        assert!(result.is_err());
+    fn parse_inline_dag_ref_qualified_accepted() {
+        // `@<module>.<dag>(args).<out>` projects a node from a DAG brought
+        // into scope via `import path as module` (or `import path;`). What
+        // `@` enforces is that the post-`@` expression denotes a node — and
+        // `module.dag(args).out` does, so the form is well-formed.
+        let file = Parser::new("node y: Length = @geom.clamp(x: @p).result;")
+            .parse_file()
+            .expect("qualified inline DAG call should parse");
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::InlineDagRef { path, args, output } => {
+                assert_eq!(path.segments.len(), 2);
+                assert_eq!(path.segments[0].name, "geom");
+                assert_eq!(path.segments[1].name, "clamp");
+                assert_eq!(path.dag_lookup_key(), "geom::clamp");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0].name.name, "x");
+                assert_eq!(output.value.as_str(), "result");
+            }
+            other => panic!("expected InlineDagRef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_at_field_access_still_works() {
+        // `@orbit.altitude` is a struct-field projection on a graph reference,
+        // not an inline DAG call (no `(...)` follows). It must still parse as
+        // `FieldAccess(GraphRef("orbit"), "altitude")` — the path-greedy
+        // `@`-parser falls back to this shape when no `(` is found.
+        let file = Parser::new("node y: Length = @orbit.altitude;")
+            .parse_file()
+            .expect("graph-ref field access should parse");
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        match &node.value.kind {
+            ExprKind::FieldAccess { expr, field } => {
+                assert_eq!(field.value.as_str(), "altitude");
+                match &expr.kind {
+                    ExprKind::GraphRef(name) => assert_eq!(name.value.as_str(), "orbit"),
+                    other => panic!("expected inner GraphRef, got {other:?}"),
+                }
+            }
+            other => panic!("expected FieldAccess, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_at_field_access_chain_still_works() {
+        // `@a.b.c` (no parens) → `FieldAccess(FieldAccess(GraphRef(a), b), c)`.
+        // The path-greedy parser must rebuild this chain when no `(` follows.
+        let file = Parser::new("node y: Length = @a.b.c;")
+            .parse_file()
+            .expect("graph-ref field access chain should parse");
+        let decl = &file.declarations[0].kind;
+        let DeclKind::Node(node) = decl else {
+            panic!("expected Node");
+        };
+        // Outer: FieldAccess(.., c)
+        let ExprKind::FieldAccess {
+            expr: outer_inner,
+            field: c,
+        } = &node.value.kind
+        else {
+            panic!("expected outer FieldAccess");
+        };
+        assert_eq!(c.value.as_str(), "c");
+        let ExprKind::FieldAccess {
+            expr: inner,
+            field: b,
+        } = &outer_inner.kind
+        else {
+            panic!("expected inner FieldAccess");
+        };
+        assert_eq!(b.value.as_str(), "b");
+        let ExprKind::GraphRef(a) = &inner.kind else {
+            panic!("expected innermost GraphRef");
+        };
+        assert_eq!(a.value.as_str(), "a");
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_no_projection_rejected() {
+        // `@dag(args)` (no `.<out>` projection) is rejected: a DAG instance
+        // without projection is not a node, and `@` requires a node.
+        let result = Parser::new("node y: Length = @dag(x: @p);").parse_file();
+        assert!(
+            result.is_err(),
+            "@dag(args) without .<out> projection must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_inline_dag_ref_qualified_no_projection_rejected() {
+        // `@module.dag(args)` (no `.<out>` projection) is rejected for the
+        // same reason — same rule, applied to a qualified path.
+        let result = Parser::new("node y: Length = @geom.clamp(x: @p);").parse_file();
+        assert!(
+            result.is_err(),
+            "@module.dag(args) without .<out> projection must be rejected"
+        );
     }
 
     #[test]

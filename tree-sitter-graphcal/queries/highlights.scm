@@ -180,16 +180,21 @@
 (fn_call module: (identifier) @module name: (identifier) @function.call)
 
 ; ---------------------------------------------------------------
-; Graph references: @name, @dag(args).out
+; Graph references: @name, @dag(args).out, @module.dag(args).out
 ; ---------------------------------------------------------------
 
 (graph_ref "@" @operator name: (identifier) @variable)
 
-; Inline DAG invocation: `@dag(args).out`.
-; The dag name in call position is highlighted as a function reference; the
-; projected output name after `.` is highlighted as a variable.
-(graph_ref name: (identifier) @function.call args: (include_param_bindings))
-(graph_ref output: (identifier) @variable)
+; Inline DAG invocation: `@<name>(args).<out>` or
+; `@<name>(.<seg>)+ (args).<out>`. The leaf segment of the path (the DAG
+; name in call position) is highlighted as a function reference; any
+; preceding segments are module aliases brought into scope by `import`;
+; the projected output name after the closing `).` is highlighted as a
+; variable.
+(inline_dag_call "@" @operator)
+(inline_dag_call name: (identifier) @function.call !path_segment)
+(inline_dag_call name: (identifier) @module path_segment: (identifier) @function.call)
+(inline_dag_call output: (identifier) @variable)
 
 ; ---------------------------------------------------------------
 ; Module imports
