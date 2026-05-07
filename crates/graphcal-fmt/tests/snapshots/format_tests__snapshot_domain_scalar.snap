@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // domain_scalar.gcl -- scalar params with domain constraints
-dim Velocity = Length / Time;
-dim Force = Mass * Length / Time^2;
+pub dim Velocity = Length / Time;
+pub dim Force = Mass * Length / Time^2;
 
 // Two-sided constraint
 param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
