@@ -1,9 +1,9 @@
 // comments_in_expressions.gcl -- Comments inside expressions should stay in place
-dim Velocity = Length / Time;
-dim Mass = Mass;
+pub dim Velocity = Length / Time;
+pub dim Mass = Mass;
 
-index Maneuver = { Departure, Correction, Insertion };
-index Phase = { Launch, Cruise, Arrival };
+pub index Maneuver = { Departure, Correction, Insertion };
+pub index Phase = { Launch, Cruise, Arrival };
 
 // 1D table with trailing comments on rows
 param delta_v: Velocity[Maneuver] = table[Maneuver] {

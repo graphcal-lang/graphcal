@@ -44,7 +44,7 @@ idempotency_test!(
     "valid/tagged_union_param.gcl"
 );
 idempotency_test!(idempotent_table_literal, "valid/table_literal.gcl");
-idempotency_test!(idempotent_time_scan, "invalid/time_scan.gcl");
+idempotency_test!(idempotent_time_scan, "valid/time_scan.gcl");
 idempotency_test!(idempotent_user_dimensions, "valid/user_dimensions.gcl");
 idempotency_test!(idempotent_assertions, "valid/assertions.gcl");
 idempotency_test!(
@@ -85,11 +85,11 @@ idempotency_test!(
 );
 idempotency_test!(
     idempotent_expected_fail_indexed,
-    "invalid/expected_fail_indexed.gcl"
+    "valid/expected_fail_indexed.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_multi_indexed,
-    "invalid/expected_fail_multi_indexed.gcl"
+    "valid/expected_fail_multi_indexed.gcl"
 );
 idempotency_test!(
     idempotent_expected_fail_indexed_partial,
@@ -104,8 +104,8 @@ idempotency_test!(
     "runtime_error/expected_fail_multi_indexed_partial.gcl"
 );
 idempotency_test!(idempotent_required_indexes, "invalid/required_indexes.gcl");
-idempotency_test!(idempotent_domain_scalar, "invalid/domain_scalar.gcl");
-idempotency_test!(idempotent_domain_indexed, "invalid/domain_indexed.gcl");
+idempotency_test!(idempotent_domain_scalar, "valid/domain_scalar.gcl");
+idempotency_test!(idempotent_domain_indexed, "valid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
@@ -141,7 +141,7 @@ roundtrip_test!(roundtrip_rocket, "valid/rocket.gcl");
 roundtrip_test!(roundtrip_tagged_union, "valid/tagged_union.gcl");
 roundtrip_test!(roundtrip_tagged_union_param, "valid/tagged_union_param.gcl");
 roundtrip_test!(roundtrip_table_literal, "valid/table_literal.gcl");
-roundtrip_test!(roundtrip_time_scan, "invalid/time_scan.gcl");
+roundtrip_test!(roundtrip_time_scan, "valid/time_scan.gcl");
 roundtrip_test!(roundtrip_user_dimensions, "valid/user_dimensions.gcl");
 roundtrip_test!(roundtrip_assertions, "valid/assertions.gcl");
 roundtrip_test!(
@@ -176,11 +176,11 @@ roundtrip_test!(
 );
 roundtrip_test!(
     roundtrip_expected_fail_indexed,
-    "invalid/expected_fail_indexed.gcl"
+    "valid/expected_fail_indexed.gcl"
 );
 roundtrip_test!(
     roundtrip_expected_fail_multi_indexed,
-    "invalid/expected_fail_multi_indexed.gcl"
+    "valid/expected_fail_multi_indexed.gcl"
 );
 roundtrip_test!(
     roundtrip_expected_fail_indexed_partial,
@@ -195,8 +195,8 @@ roundtrip_test!(
     "runtime_error/expected_fail_multi_indexed_partial.gcl"
 );
 roundtrip_test!(roundtrip_required_indexes, "invalid/required_indexes.gcl");
-roundtrip_test!(roundtrip_domain_scalar, "invalid/domain_scalar.gcl");
-roundtrip_test!(roundtrip_domain_indexed, "invalid/domain_indexed.gcl");
+roundtrip_test!(roundtrip_domain_scalar, "valid/domain_scalar.gcl");
+roundtrip_test!(roundtrip_domain_indexed, "valid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -509,7 +509,7 @@ snapshot_test!(snapshot_table_literal, "valid/table_literal.gcl");
 snapshot_test!(snapshot_multi_decl_1d, "valid/multi_decl_1d.gcl");
 snapshot_test!(snapshot_multi_decl_2d, "valid/multi_decl_2d.gcl");
 snapshot_test!(snapshot_multi_decl_sliced, "valid/multi_decl_sliced.gcl");
-snapshot_test!(snapshot_time_scan, "invalid/time_scan.gcl");
+snapshot_test!(snapshot_time_scan, "valid/time_scan.gcl");
 snapshot_test!(snapshot_user_dimensions, "valid/user_dimensions.gcl");
 snapshot_test!(snapshot_assertions, "valid/assertions.gcl");
 snapshot_test!(
@@ -544,11 +544,11 @@ snapshot_test!(
 );
 snapshot_test!(
     snapshot_expected_fail_indexed,
-    "invalid/expected_fail_indexed.gcl"
+    "valid/expected_fail_indexed.gcl"
 );
 snapshot_test!(
     snapshot_expected_fail_multi_indexed,
-    "invalid/expected_fail_multi_indexed.gcl"
+    "valid/expected_fail_multi_indexed.gcl"
 );
 snapshot_test!(
     snapshot_expected_fail_indexed_partial,
@@ -564,11 +564,11 @@ snapshot_test!(
 );
 snapshot_test!(
     snapshot_comments_in_expressions,
-    "invalid/comments_in_expressions.gcl"
+    "valid/comments_in_expressions.gcl"
 );
 snapshot_test!(snapshot_required_indexes, "invalid/required_indexes.gcl");
-snapshot_test!(snapshot_domain_scalar, "invalid/domain_scalar.gcl");
-snapshot_test!(snapshot_domain_indexed, "invalid/domain_indexed.gcl");
+snapshot_test!(snapshot_domain_scalar, "valid/domain_scalar.gcl");
+snapshot_test!(snapshot_domain_indexed, "valid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
 // Fixture: comments_in_expressions.gcl
@@ -576,11 +576,11 @@ snapshot_test!(snapshot_domain_indexed, "invalid/domain_indexed.gcl");
 
 idempotency_test!(
     idempotent_comments_in_expressions,
-    "invalid/comments_in_expressions.gcl"
+    "valid/comments_in_expressions.gcl"
 );
 roundtrip_test!(
     roundtrip_comments_in_expressions,
-    "invalid/comments_in_expressions.gcl"
+    "valid/comments_in_expressions.gcl"
 );
 
 // ---------------------------------------------------------------------------
