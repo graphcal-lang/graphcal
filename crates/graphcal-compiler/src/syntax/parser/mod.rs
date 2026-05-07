@@ -180,6 +180,32 @@ pub enum ParseError {
         #[label("here")]
         span: SourceSpan,
     },
+
+    #[error("index variant patterns cannot have field bindings")]
+    #[diagnostic(
+        code(graphcal::P013),
+        help("index variants are bare tags; remove the `{{ ... }}` block")
+    )]
+    IndexVariantPatternWithBindings {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("field-binding block here")]
+        span: SourceSpan,
+    },
+
+    #[error("inline DAG call requires `.<out>` projection")]
+    #[diagnostic(
+        code(graphcal::P014),
+        help(
+            "add `.<output_name>` after the call; an instantiated DAG without a projection is not a node"
+        )
+    )]
+    InlineDagCallMissingProjection {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected `.<out>` projection here")]
+        span: SourceSpan,
+    },
 }
 
 pub struct Parser<'src> {

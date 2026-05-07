@@ -382,7 +382,7 @@ snippets, labeled spans, and error codes.
 
 ```text
 CompileError
-  Parse(ParseError)         // P001-P005
+  Parse(ParseError)         // P001-P014
   Eval(GraphcalError)       // N001+, G001, D001+, S002+, E001, X001, V001+, M020
   Load(GraphcalError)
 

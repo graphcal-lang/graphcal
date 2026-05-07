@@ -472,7 +472,23 @@ impl Parser<'_> {
             span: path_start.merge(path_end),
         };
         let args = self.parse_import_param_bindings()?;
-        self.expect(Token::Dot)?;
+        // The `.<out>` projection is mandatory: an instantiated DAG without
+        // projection is not a node, and `@` requires a node. Surface a
+        // dedicated diagnostic instead of the generic "expected `.`".
+        match self.lexer.peek_with_span() {
+            Some((Token::Dot, _)) => {
+                self.lexer.next_token();
+            }
+            Some((_, span)) => {
+                return Err(ParseError::InlineDagCallMissingProjection {
+                    src: self.named_source(),
+                    span: span.into(),
+                });
+            }
+            None => {
+                return Err(self.unexpected_eof("`.<out>` projection"));
+            }
+        }
         let output = self.parse_any_ident()?;
         let span = at_span.merge(output.span);
         Ok(Expr::new(
