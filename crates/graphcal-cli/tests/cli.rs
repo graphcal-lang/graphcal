@@ -7,10 +7,20 @@
     reason = "test code"
 )]
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn graphcal_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_graphcal"))
+}
+
+fn fixtures_root() -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.pop();
+    p.pop();
+    p.push("tests");
+    p.push("fixtures");
+    p
 }
 
 fn fixture(name: &str) -> String {
@@ -2126,4 +2136,98 @@ fn eval_dynamic_units_with_override() {
 
     // total = 120 + 50 = 170 USD
     assert!(stdout.contains("170"), "expected 170 USD for total");
+}
+
+// ---------------------------------------------------------------------------
+// Invariant: any fixture that fails `check` must also fail `eval`.
+// `eval` runs the static check pipeline as its first stage, so this is
+// currently maintained only by call-order in the CLI. If a future refactor
+// lets `eval` skip part of the check pipeline, this test surfaces the
+// regression rather than letting check-level diagnostics be silently
+// bypassed.
+// ---------------------------------------------------------------------------
+
+fn collect_entry_points(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut local_gcls: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    let mut has_main = false;
+    for entry in std::fs::read_dir(dir).expect("read fixture dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            subdirs.push(path);
+        } else if path.is_file() && path.extension().is_some_and(|e| e == "gcl") {
+            if path.file_name().is_some_and(|n| n == "main.gcl") {
+                has_main = true;
+            }
+            local_gcls.push(path);
+        } else {
+            // skip non-gcl files (e.g. graphcal.toml, *.json fixtures)
+        }
+    }
+    if has_main {
+        out.extend(
+            local_gcls
+                .into_iter()
+                .filter(|p| p.file_name().is_some_and(|n| n == "main.gcl")),
+        );
+    } else {
+        out.extend(local_gcls);
+    }
+    subdirs.sort();
+    for d in subdirs {
+        collect_entry_points(&d, out);
+    }
+}
+
+fn fixture_entry_points() -> Vec<PathBuf> {
+    let root = fixtures_root();
+    let mut entries = Vec::new();
+    for cat in ["valid", "runtime_error", "invalid"] {
+        collect_entry_points(&root.join(cat), &mut entries);
+    }
+    entries.sort();
+    entries
+}
+
+#[test]
+fn check_failure_implies_eval_failure() {
+    let entries = fixture_entry_points();
+    assert!(
+        entries.len() >= 100,
+        "found only {} entry points",
+        entries.len()
+    );
+
+    let root = fixtures_root();
+    let mut violations: Vec<String> = Vec::new();
+    for path in &entries {
+        let check = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("graphcal check failed to spawn");
+        if check.status.success() {
+            continue;
+        }
+        let eval = graphcal_bin()
+            .args(["eval", path.to_str().unwrap()])
+            .output()
+            .expect("graphcal eval failed to spawn");
+        if eval.status.success() {
+            let rel = path.strip_prefix(&root).unwrap_or(path);
+            violations.push(format!(
+                "{}: check exit={:?}, eval exit={:?}",
+                rel.display(),
+                check.status.code(),
+                eval.status.code()
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "{} fixture(s) failed `check` but passed `eval` — invariant violated:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
 }
