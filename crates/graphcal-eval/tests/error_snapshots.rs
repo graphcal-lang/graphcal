@@ -357,6 +357,24 @@ fn error_index_match_with_bindings() {
 }
 
 #[test]
+fn error_inline_dag_call_missing_projection() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/inline_dag_call_errors/missing_projection.gcl"
+    );
+    let rendered = render_error(source, "missing_projection.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_inline_dag_call_qualified_missing_projection() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/inline_dag_call_errors/qualified_missing_projection.gcl"
+    );
+    let rendered = render_error(source, "qualified_missing_projection.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_nested_indexed_map() {
     let source = include_str!("../../../tests/fixtures/invalid/nested_indexed_map.gcl");
     let rendered = render_error(source, "nested_indexed_map.gcl");

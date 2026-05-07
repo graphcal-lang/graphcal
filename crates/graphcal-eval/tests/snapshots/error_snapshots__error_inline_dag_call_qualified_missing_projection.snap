@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+inline DAG call requires `.<out>` projection
+    Diagnostic severity: error
+Begin snippet for qualified_missing_projection.gcl starting at line 7, column 1
+
+snippet line 7: param src: Length = 1.0 m;
+snippet line 8: node bad: Length = @lib.scale(v: @src);
+    label at line 8, column 39: expected `.<out>` projection here
+diagnostic help: add `.<output_name>` after the call; an instantiated DAG without a projection is not a node
+diagnostic code: graphcal::P014

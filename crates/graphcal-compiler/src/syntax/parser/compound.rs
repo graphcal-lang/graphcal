@@ -160,6 +160,17 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '.'
             let variant_ident = self.parse_any_ident()?;
             let end_span = variant_ident.span;
+            // Index variants are bare tags — `Index.Variant { … }` is not a
+            // parse failure but a semantic constraint. Surface a dedicated
+            // diagnostic instead of the generic "expected `=>`".
+            if let Some((tok, lbrace_span)) = self.lexer.peek_with_span()
+                && *tok == Token::LBrace
+            {
+                return Err(ParseError::IndexVariantPatternWithBindings {
+                    src: self.named_source(),
+                    span: lbrace_span.into(),
+                });
+            }
             return Ok(MatchPattern {
                 qualified_index: Some(Spanned::new(
                     IndexName::new(&first_ident.name),
