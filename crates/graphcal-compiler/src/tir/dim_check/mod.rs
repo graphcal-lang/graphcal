@@ -242,6 +242,7 @@ pub fn check_dimensions_tir(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
+    detect_decl_cycles(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
     let declared_types = tir.build_declared_types(src)?;
@@ -306,6 +307,9 @@ pub fn check_dimensions_tir(
             src,
         )?;
     }
+
+    // Reject domain constraints on incompatible base types (e.g. Bool, Datetime).
+    check_domain_constraint_targets(tir, src)?;
 
     // Validate domain constraint bound expression dimensions
     check_domain_constraint_dimensions(
@@ -452,6 +456,54 @@ fn check_one_bound(
     }
 }
 
+/// Reject domain constraints on base types that don't accept them.
+///
+/// Bool, Datetime, Label, and struct/generic types cannot carry numeric
+/// `(min: …, max: …)` bounds. The check is a pure function of the resolved
+/// declaration type — independent of any bound expression's value — so it
+/// belongs in compile-time validation rather than runtime resolution.
+fn check_domain_constraint_targets(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let decl_iter = tir
+        .consts
+        .iter()
+        .map(|e| (&e.name, &e.type_ann, e.span))
+        .chain(tir.params.iter().map(|e| (&e.name, &e.type_ann, e.span)))
+        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
+
+    for (name, type_ann, decl_span) in decl_iter {
+        if extract_domain_bounds(type_ann).is_empty() {
+            continue;
+        }
+        let Some(resolved) = tir.resolved_decl_types.get(name) else {
+            continue;
+        };
+        let type_kind = match strip_indexed(resolved) {
+            crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
+            crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
+            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => format!("Label({idx})"),
+            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
+            | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
+                name: struct_name, ..
+            } => format!("struct `{struct_name}`"),
+            crate::tir::typed::ResolvedTypeExpr::Scalar(_)
+            | crate::tir::typed::ResolvedTypeExpr::Dimensionless
+            | crate::tir::typed::ResolvedTypeExpr::Int
+            | crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+            | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
+            | crate::tir::typed::ResolvedTypeExpr::Indexed { .. } => continue,
+        };
+        return Err(GraphcalError::InvalidDomainTarget {
+            type_kind,
+            src: src.clone(),
+            span: decl_span.into(),
+        });
+    }
+    Ok(())
+}
+
 /// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
 ///
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
@@ -596,6 +648,82 @@ fn collect_dag_call_targets_from_tir(
             let _ = collector.visit_expr(expr);
         }
     }
+}
+
+/// Detect cycles in same-file declaration dependencies.
+///
+/// A graph cycle is a topological property of source — knowable without
+/// evaluating any value. This check rejects cyclic params/nodes (`runtime_deps`)
+/// and cyclic consts (`const_deps`) at compile time so the diagnostic appears
+/// under `graphcal check`, not only at evaluation. Mirrors the toposort-based
+/// cycle detection in `graphcal-eval`'s `exec_plan::eval_consts_from_tir` and
+/// `build_runtime_dag`, which now act as defense-in-depth backstops.
+fn detect_decl_cycles(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    use std::collections::BTreeSet;
+
+    use petgraph::algo::toposort;
+    use petgraph::graph::DiGraph;
+
+    use crate::registry::resolve_types::ScopedName;
+
+    fn check<'a>(
+        names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
+        deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        let mut graph = DiGraph::<String, ()>::new();
+        let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
+        let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
+        for (name, span) in names_with_spans {
+            let key = name.to_string();
+            let idx = graph.add_node(key.clone());
+            index_map.insert(key.clone(), idx);
+            spans.insert(key, span);
+        }
+        if index_map.is_empty() {
+            return Ok(());
+        }
+        for (name, dep_set) in deps {
+            let Some(&to) = index_map.get(name.to_string().as_str()) else {
+                continue;
+            };
+            for dep in dep_set {
+                if let Some(&from) = index_map.get(dep.to_string().as_str()) {
+                    graph.add_edge(from, to, ());
+                }
+            }
+        }
+        toposort(&graph, None).map(|_| ()).map_err(|cycle| {
+            let cycle_node = &graph[cycle.node_id()];
+            let span = spans
+                .get(cycle_node)
+                .copied()
+                .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
+            GraphcalError::CyclicDependency {
+                name: crate::syntax::names::DeclName::new(cycle_node.clone()),
+                src: src.clone(),
+                span: span.into(),
+            }
+        })
+    }
+
+    check(
+        tir.consts.iter().map(|e| (&e.name, e.span)),
+        &tir.const_deps,
+        src,
+    )?;
+    check(
+        tir.params
+            .iter()
+            .map(|e| (&e.name, e.span))
+            .chain(tir.nodes.iter().map(|e| (&e.name, e.span))),
+        &tir.runtime_deps,
+        src,
+    )?;
+    Ok(())
 }
 
 fn detect_cross_dag_cycles(

@@ -101,6 +101,17 @@ pub(super) fn lower_and_finalize(
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
 
+    // Resolve domain constraints at compile time so malformed bounds (C003 min
+    // > max, C004 wrong target) surface under `graphcal check` instead of only
+    // at `eval`. C004 alone is a pure type check (handled in `dim_check`); C003
+    // additionally requires evaluating the bound expressions, which depends on
+    // const values, so we evaluate consts here too. The resulting plan is
+    // discarded — `exec_plan::compile` recomputes both as part of its run.
+    {
+        let const_values = crate::exec_plan::eval_consts_from_tir(&tir, file_src)?;
+        let _ = crate::exec_plan::resolve_domain_constraints(&tir, &const_values, file_src)?;
+    }
+
     let declared_types = tir.build_declared_types(file_src)?;
 
     for (override_name, override_expr) in &file_overrides {
