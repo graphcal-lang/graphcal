@@ -68,14 +68,14 @@ fn error_at_in_const() {
 
 #[test]
 fn error_runtime_cycle() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/cycle.gcl");
+    let source = include_str!("../../../tests/fixtures/invalid/cycle.gcl");
     let rendered = render_error(source, "cycle.gcl");
     insta::assert_snapshot!(rendered);
 }
 
 #[test]
 fn error_const_cycle() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/const_cycle.gcl");
+    let source = include_str!("../../../tests/fixtures/invalid/const_cycle.gcl");
     let rendered = render_error(source, "const_cycle.gcl");
     insta::assert_snapshot!(rendered);
 }
@@ -435,14 +435,14 @@ fn error_domain_violation() {
 
 #[test]
 fn error_domain_min_exceeds_max() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/domain_min_exceeds_max.gcl");
+    let source = include_str!("../../../tests/fixtures/invalid/domain_min_exceeds_max.gcl");
     let rendered = render_error(source, "domain_min_exceeds_max.gcl");
     insta::assert_snapshot!(rendered);
 }
 
 #[test]
 fn error_domain_on_bool() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/domain_on_bool.gcl");
+    let source = include_str!("../../../tests/fixtures/invalid/domain_on_bool.gcl");
     let rendered = render_error(source, "domain_on_bool.gcl");
     insta::assert_snapshot!(rendered);
 }

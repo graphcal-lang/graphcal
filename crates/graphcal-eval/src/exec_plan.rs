@@ -169,7 +169,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 }
 
 /// Topologically sort and evaluate const declarations from a TIR.
-fn eval_consts_from_tir(
+pub fn eval_consts_from_tir(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<DeclName, RuntimeValue>, GraphcalError> {
@@ -359,7 +359,7 @@ fn build_runtime_dag(
     clippy::too_many_lines,
     reason = "linear iteration over domain bounds with bound eval, range, and const-value checks"
 )]
-fn resolve_domain_constraints(
+pub fn resolve_domain_constraints(
     tir: &TIR,
     const_values: &HashMap<DeclName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
