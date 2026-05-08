@@ -308,7 +308,7 @@ fn eval_set_bad_value() {
 #[test]
 fn eval_missing_import_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("invalid/multi/missing_import.gcl")])
+        .args(["eval", &fixture("invalid/multi/missing_module/main.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -398,7 +398,7 @@ fn eval_tagged_union_json_output() {
 #[test]
 fn eval_import_name_not_found() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("invalid/multi/bad_name_import.gcl")])
+        .args(["eval", &fixture("invalid/multi/bad_name_import/main.gcl")])
         .output()
         .expect("failed to run graphcal");
 

@@ -2,5 +2,7 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-include circular_b().{ y };
+// Forward edge: `circ` depends on `circ.back`.
+import circ.back.{ y };
+
 param x: Dimensionless = 1.0;

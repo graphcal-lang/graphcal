@@ -1,2 +1,0 @@
-import helper.{ nonexistent };
-param y: Dimensionless = 1.0;
