@@ -18,7 +18,17 @@ fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
     let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
-    let tir = crate::tir::typed::type_resolve(ir, &src)?;
+    let parent_pub_names = ir.pub_names.clone();
+    let parent_dag_id =
+        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
+    let mut tir = crate::tir::typed::type_resolve(ir, &src)?;
+    crate::tir::typed::compile_inline_dag_bodies(
+        &mut tir,
+        &src,
+        &parent_dag_id,
+        &parent_pub_names,
+        &std::collections::HashSet::new(),
+    )?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
 }

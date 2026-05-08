@@ -99,11 +99,17 @@ pub(super) fn lower_and_finalize(
         apply_overrides(&mut ir, &file_overrides)?;
     }
 
-    // Type-resolve, merge dep dag TIRs from module imports, then check dimensions.
-    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_dag_id(
-        ir,
+    // Type-resolve top-level decls; then compile each inline dag body
+    // explicitly (loader supplies the per-file self-import set and the
+    // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
+    // afterward by `merge_dep_dag_tirs`.
+    let parent_pub_names = ir.pub_names.clone();
+    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_src)?;
+    graphcal_compiler::tir::typed::compile_inline_dag_bodies(
+        &mut tir,
         file_src,
         file_dag_id,
+        &parent_pub_names,
         &importer_loaded.dag_body_self_imports,
     )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);

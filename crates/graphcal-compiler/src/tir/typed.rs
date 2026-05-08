@@ -790,62 +790,65 @@ impl TIR {
 /// Resolve all type annotations in an `IR`, producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic
-/// params in scope. Additionally, compiles each `dag { ... }` declaration's
-/// body as its own inner TIR and stores the result on [`TIR::dags`] so that
-/// downstream stages (`dim_check`, `eval`) can resolve inline
-/// `@dag(args)::out` invocations against the compiled dag body.
+/// params in scope. Inline `dag { ... }` declarations are NOT compiled here;
+/// the project pipeline (or test helpers) compile them explicitly via
+/// [`compile_inline_dag_bodies`] after type-resolving the file-level
+/// declarations. This separation lets callers that have loader-level
+/// information (e.g. self-import path resolution, parent `DagId`) thread it
+/// in at the right point, without forcing every `type_resolve` caller to
+/// know about it.
+///
+/// The returned `TIR` always has an empty `dags` field. Use
+/// [`compile_inline_dag_bodies`] to populate it.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index, or if compiling a dag body fails.
+/// dimension, struct, or index.
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
-    let parent_dag_id =
-        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
-    type_resolve_with_dag_id(ir, src, &parent_dag_id, &HashSet::new())
+    type_resolve_single(ir, src)
 }
 
-/// Like [`type_resolve`] but with an explicit parent `DagId` and a loader-
-/// resolved set of dag-body self-import path strings that may differ from
-/// what would be derived from `src.name()` alone.
+/// Compile each inline `dag { ... }` body in a type-resolved [`TIR`] and
+/// insert the resulting per-dag `TIR`s into `tir.dags`, keyed by
+/// [`DagKey::local`].
 ///
-/// The project pipeline calls this with the loader's canonical `DagId`
-/// (the file's relative path within the package root) and the loader-
-/// computed `dag_body_self_imports` set so that `import <self>.{...}`
-/// declarations inside dag bodies are detected by exact path-membership
-/// rather than path-vs-DagId heuristics. Single-file invocations without
-/// a project manifest are happy to use [`type_resolve`], which derives
-/// `DagId` from `src.name()` and treats every dag body as having no
-/// loader-resolved self-imports.
+/// Separated from [`type_resolve`] so the project pipeline can supply the
+/// loader's canonical `DagId` (the file's relative path within the package
+/// root) and the loader-computed `dag_body_self_imports` set without
+/// leaking those concerns into every `type_resolve` caller.
 ///
-/// `dag_body_self_imports` is the flat set of import-path display strings
-/// that, when used inside any inline dag body of this file, resolve back
-/// to the file itself.
+/// Arguments:
+/// - `parent_dag_id`: Used as the prefix for child-dag `DagId`s and as the
+///   identity for dag-body self-import classification.
+/// - `parent_pub_names`: Names declared `pub` (or `pub(bind)`, plus
+///   implicit-pub params) in the file. Captured from the IR before
+///   [`type_resolve`] consumes it. Used to enforce visibility on
+///   `import <self>.{...}` items.
+/// - `dag_body_self_imports`: The loader-computed flat set of import-path
+///   display strings inside any inline-dag body that resolve back to the
+///   file itself. Pass `&HashSet::new()` when no loader-level resolution
+///   is available (single-file fixtures and test helpers).
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index, or if compiling a dag body fails.
+/// Returns a [`GraphcalError`] if compiling any dag body fails (typically
+/// a self-import naming an unknown name, runtime declaration, or private
+/// declaration in the parent file).
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn type_resolve_with_dag_id(
-    ir: IR,
+pub fn compile_inline_dag_bodies(
+    tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
+    parent_pub_names: &HashSet<String>,
     dag_body_self_imports: &HashSet<String>,
-) -> Result<TIR, GraphcalError> {
-    // Capture pub_names before `type_resolve_single` consumes the IR so the
-    // dag-body `import <self>.{...}` visibility check can mirror the
-    // cross-file `pub`-or-bust rule (Concept 9 — same import grammar, same
-    // visibility discipline).
-    let parent_pub_names = ir.pub_names.clone();
-    let mut tir = type_resolve_single(ir, src)?;
-
+) -> Result<(), GraphcalError> {
     // Build parent value-decl lookup table so dag-body `import <self>.{...}`
     // declarations can resolve const items against the parent file.
-    let parent_value_decls = build_parent_value_decls(&tir, src)?;
+    let parent_value_decls = build_parent_value_decls(tir, src)?;
 
     // Snapshot dag names before iterating so we can take immutable borrows of
     // `tir.registry` inside the loop while mutating `tir.dags`.
@@ -867,7 +870,7 @@ pub fn type_resolve_with_dag_id(
             &body,
             &tir.registry,
             &parent_value_decls,
-            &parent_pub_names,
+            parent_pub_names,
             dag_body_self_imports,
             src,
             parent_dag_id,
@@ -877,7 +880,7 @@ pub fn type_resolve_with_dag_id(
         tir.dags.insert(DagKey::local(name), compiled_dag);
     }
 
-    Ok(tir)
+    Ok(())
 }
 
 /// Build the `name → ParentValueKind` table consumed by
@@ -2331,7 +2334,18 @@ mod tests {
         let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
-        type_resolve(ir, &src)
+        let parent_pub_names = ir.pub_names.clone();
+        let parent_dag_id =
+            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
+        let mut tir = type_resolve(ir, &src)?;
+        compile_inline_dag_bodies(
+            &mut tir,
+            &src,
+            &parent_dag_id,
+            &parent_pub_names,
+            &HashSet::new(),
+        )?;
+        Ok(tir)
     }
 
     #[test]
