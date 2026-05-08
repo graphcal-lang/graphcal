@@ -78,6 +78,7 @@ pub(super) fn lower_and_finalize(
         &ctx.deferred_inline_dags,
         file_src,
         file_ast,
+        file_dag_id,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -97,7 +98,8 @@ pub(super) fn lower_and_finalize(
     }
 
     // Type-resolve, merge dep dag TIRs from module imports, then check dimensions.
-    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_src)?;
+    let mut tir =
+        graphcal_compiler::tir::typed::type_resolve_with_dag_id(ir, file_src, file_dag_id)?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
 
@@ -170,13 +172,17 @@ pub(super) fn merge_dep_dag_tirs(
             let mut cloned = dag_tir.clone();
             // Inject dep-file consts (and any other declared values) so a
             // dep dag body's `@r_earth` reference resolves even when the
-            // importer has no such name in scope.
+            // importer has no such name in scope. Always overwrite: dag
+            // bodies that use `import <self>.{...}` carry a placeholder
+            // `(value, type)` entry produced by
+            // `preprocess_dag_body_self_imports` at TIR-construction time;
+            // the dep file's freshly evaluated value is the authoritative
+            // one and must replace it.
             for (name, value) in &dep_eval.const_values {
                 if let Some(dt) = dep_eval.declared_types.get(name) {
                     cloned
                         .imported_values
-                        .entry(ScopedName::local(name.clone()))
-                        .or_insert_with(|| (value.clone(), dt.clone()));
+                        .insert(ScopedName::local(name.clone()), (value.clone(), dt.clone()));
                 }
             }
             tir.dags.insert(
@@ -319,25 +325,53 @@ pub(super) fn process_deferred_inline_dag_includes(
     deferred_dags: &[DeferredInlineDagInclude],
     file_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
     let importer_pub_names = super::extract_pub_names(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
+    let importer_type_system_names =
+        graphcal_compiler::ir::lower::collect_type_system_names(importer_ast);
+    let importer_value_decls = build_importer_value_decls(importer_ast);
     for deferred in deferred_dags {
+        // Pre-process `import <self>.{...}` declarations inside the dag body
+        // so they bring parent-file consts into the resolver's scope.
+        let self_imports = graphcal_compiler::ir::lower::preprocess_dag_body_self_imports(
+            &deferred.dag_body.declarations,
+            importer_dag_id,
+            &importer_type_system_names,
+            &importer_value_decls,
+            &importer_pub_names,
+            file_src,
+        )?;
+        let mut combined_names = deferred.dag_imported_names.clone();
+        combined_names
+            .const_names
+            .extend(self_imports.names.const_names);
+        combined_names
+            .param_names
+            .extend(self_imports.names.param_names);
+        combined_names
+            .node_names
+            .extend(self_imports.names.node_names);
+        combined_names
+            .assert_names
+            .extend(self_imports.names.assert_names);
+        let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
+            declarations: self_imports.stripped_body,
+        };
+
         // Compile the DAG body to IR.
         // The DAG body is lowered as if it were a standalone file, with only
         // prelude + explicitly imported items in scope.
-        let dag_dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
-            std::path::Path::new(file_src.name()),
-        )
-        .child(deferred.prefix.as_str());
+        let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
         let (dag_builder, dag_unfrozen) =
             graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
-                &deferred.dag_body,
+                &stripped_body,
                 file_src,
-                &deferred.dag_imported_names,
-                HashMap::new(), // No pre-evaluated values for inline DAGs
+                &combined_names,
+                self_imports.values,
                 &dag_dag_id,
             )?;
 
@@ -405,6 +439,49 @@ pub(super) fn process_deferred_inline_dag_includes(
         }
     }
     Ok(())
+}
+
+/// Build a `name → ParentValueKind` table from the importer's AST.
+///
+/// Used to seed [`graphcal_compiler::ir::lower::preprocess_dag_body_self_imports`]
+/// before compiling each inline-dag body. The `DeclaredType` carried on
+/// each entry is a placeholder — the importer's full type-system context
+/// is not available here as a frozen registry, but `merge_dependency`
+/// drops the dag body's `imported_values` during merging and the importer
+/// IR's own resolved declared types are used by downstream dim-checking,
+/// so the placeholder never surfaces.
+fn build_importer_value_decls(
+    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
+) -> HashMap<String, graphcal_compiler::ir::lower::ParentValueKind> {
+    use graphcal_compiler::ir::lower::ParentValueKind;
+    use graphcal_compiler::registry::declared_type::DeclaredType;
+    use graphcal_compiler::syntax::dimension::Dimension;
+    let placeholder = || DeclaredType::Scalar(Dimension::dimensionless());
+    let mut out = HashMap::new();
+    for decl in &importer_ast.declarations {
+        match &decl.kind {
+            DeclKind::ConstNode(c) => {
+                out.insert(
+                    c.name.value.to_string(),
+                    ParentValueKind::Const(placeholder()),
+                );
+            }
+            DeclKind::Param(p) => {
+                out.insert(
+                    p.name.value.to_string(),
+                    ParentValueKind::Param(placeholder()),
+                );
+            }
+            DeclKind::Node(n) => {
+                out.insert(
+                    n.name.value.to_string(),
+                    ParentValueKind::Node(placeholder()),
+                );
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Add alias declarations for selective inline DAG includes.

@@ -32,7 +32,7 @@ macro_rules! idempotency_test {
 idempotency_test!(idempotent_constants, "valid/constants.gcl");
 idempotency_test!(idempotent_functions, "invalid/functions.gcl");
 idempotency_test!(idempotent_generics, "valid/generics.gcl");
-idempotency_test!(idempotent_hohmann, "invalid/hohmann.gcl");
+idempotency_test!(idempotent_hohmann, "valid/hohmann.gcl");
 idempotency_test!(idempotent_indexed, "valid/indexed.gcl");
 idempotency_test!(idempotent_integers, "valid/integers.gcl");
 idempotency_test!(idempotent_orbital, "valid/orbital.gcl");
@@ -132,7 +132,7 @@ macro_rules! roundtrip_test {
 roundtrip_test!(roundtrip_constants, "valid/constants.gcl");
 roundtrip_test!(roundtrip_functions, "invalid/functions.gcl");
 roundtrip_test!(roundtrip_generics, "valid/generics.gcl");
-roundtrip_test!(roundtrip_hohmann, "invalid/hohmann.gcl");
+roundtrip_test!(roundtrip_hohmann, "valid/hohmann.gcl");
 roundtrip_test!(roundtrip_indexed, "valid/indexed.gcl");
 roundtrip_test!(roundtrip_integers, "valid/integers.gcl");
 roundtrip_test!(roundtrip_orbital, "valid/orbital.gcl");
@@ -497,7 +497,7 @@ macro_rules! snapshot_test {
 snapshot_test!(snapshot_constants, "valid/constants.gcl");
 snapshot_test!(snapshot_functions, "invalid/functions.gcl");
 snapshot_test!(snapshot_generics, "valid/generics.gcl");
-snapshot_test!(snapshot_hohmann, "invalid/hohmann.gcl");
+snapshot_test!(snapshot_hohmann, "valid/hohmann.gcl");
 snapshot_test!(snapshot_indexed, "valid/indexed.gcl");
 snapshot_test!(snapshot_integers, "valid/integers.gcl");
 snapshot_test!(snapshot_orbital, "valid/orbital.gcl");

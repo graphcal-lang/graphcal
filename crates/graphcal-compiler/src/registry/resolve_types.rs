@@ -373,7 +373,7 @@ impl From<DeclName> for ScopedName {
 /// Unlike `ImportedNames` which carries AST expressions, this carries
 /// evaluated values. Used in per-file evaluation where each file is
 /// compiled and evaluated independently.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ImportedValueNames {
     /// Imported const names (for scope checking only — actual values are in the exec plan).
     pub const_names: Vec<(ScopedName, Span)>,
