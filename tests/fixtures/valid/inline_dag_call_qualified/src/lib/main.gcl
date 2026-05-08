@@ -1,0 +1,8 @@
+// `@module.dag(args).out` — qualified inline DAG call. The `out` segment
+// references a node belonging to the instantiated DAG `lib.doubler(args)`,
+// which is exactly what the post-`@` expression is required to denote.
+import lib.lib;
+
+param src: Length = 3.0 m;
+
+node doubled: Length = @lib.doubler(v: @src).out;

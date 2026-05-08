@@ -1,0 +1,4 @@
+include lib.lib().{ value };
+import lib.lib.{ always_fails };
+
+node result: Dimensionless = @value + 1.0;

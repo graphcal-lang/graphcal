@@ -1,7 +1,0 @@
-// Module import: values from lib
-import lib;
-
-const node two: Dimensionless = 2.0;
-param x: Dimensionless = 21.0;
-
-node y: Dimensionless = @x * @two;

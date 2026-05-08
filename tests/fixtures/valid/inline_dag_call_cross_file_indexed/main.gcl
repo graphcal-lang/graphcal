@@ -1,4 +1,0 @@
-import lib as lib;
-
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
-node picked: Length = @lib.doubler(v: @dist).result[Region.A];

@@ -1,7 +1,0 @@
-// main.gcl -- two instantiations of the same file with different params
-dim Velocity = Length / Time;
-
-include rocket(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;
-include rocket(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
-
-node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;

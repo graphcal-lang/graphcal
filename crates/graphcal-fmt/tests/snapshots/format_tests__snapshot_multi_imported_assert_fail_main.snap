@@ -2,7 +2,7 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-include lib().{ value };
-import lib.{ always_fails };
+include lib.lib().{ value };
+import lib.lib.{ always_fails };
 
 node result: Dimensionless = @value + 1.0;

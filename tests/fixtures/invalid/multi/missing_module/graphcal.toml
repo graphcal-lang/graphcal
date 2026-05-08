@@ -1,3 +1,2 @@
 [package]
 name = "missing_module"
-source_dir = "."

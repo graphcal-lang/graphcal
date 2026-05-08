@@ -3,8 +3,8 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // main.gcl -- cross-file assumes test
-include checks().{ limit };
-import checks.{ limit_positive };
+include checks.lib().{ limit };
+import checks.lib.{ limit_positive };
 
 param value: Dimensionless = 42.0;
 

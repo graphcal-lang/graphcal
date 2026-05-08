@@ -1,0 +1,4 @@
+import lib.lib as lib;
+
+param speed: Velocity = 10.0 m/s;
+node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed).result;

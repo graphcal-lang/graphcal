@@ -2,6 +2,6 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-include helper().{ x as imported_x };
+include helper.lib().{ x as imported_x };
 
 node y: Dimensionless = @imported_x + 1.0;

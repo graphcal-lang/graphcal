@@ -1,4 +1,0 @@
-// Module include: qualified graph refs with @
-import params;
-
-node total_mass: Mass = @params.dry_mass + @params.fuel_mass;

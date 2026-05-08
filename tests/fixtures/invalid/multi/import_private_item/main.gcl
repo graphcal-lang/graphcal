@@ -1,2 +1,0 @@
-// Error: importing a private item from another file (V001).
-import lib.{ secret };

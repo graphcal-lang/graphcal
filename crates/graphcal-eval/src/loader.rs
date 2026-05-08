@@ -155,7 +155,15 @@ pub fn load_project<F: FileSystemReader>(
     let mut loading: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
-    let mut manifest: Option<graphcal_compiler::registry::manifest::Manifest> = None;
+    // Determine the package mode for the root file: real package iff a manifest
+    // exists at `project_root` AND the root file lives inside the package's
+    // namespace (`<source_dir>/<package_name>.gcl` or under
+    // `<source_dir>/<package_name>/`). A file sitting next to a manifest but
+    // outside the namespace is treated as a virtual package — cross-file
+    // imports from it will be rejected. This collapses the two modes into a
+    // single rule: to import across files, you must live in a real package.
+    let manifest: Option<graphcal_compiler::registry::manifest::Manifest> =
+        load_manifest_for_root(&project_root, &root_canonical, fs)?;
 
     load_file_dfs(
         &root_canonical,
@@ -165,7 +173,7 @@ pub fn load_project<F: FileSystemReader>(
         &mut load_order,
         &mut loading,
         &mut stack,
-        &mut manifest,
+        manifest.as_ref(),
         fs,
     )?;
 
@@ -193,7 +201,7 @@ fn load_file_dfs<F: FileSystemReader>(
     load_order: &mut Vec<DagId>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
-    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<(), CompileError> {
     // Already fully loaded — skip.
@@ -400,6 +408,76 @@ fn resolve_project_root<F: FileSystemReader>(
     )
 }
 
+/// Load the manifest at `project_root` and decide whether the root file is
+/// part of the real package.
+///
+/// Returns `Some(manifest)` only when a manifest is present AND the root file
+/// lives inside the package namespace (either `<source_dir>/<pkg>.gcl` or
+/// under `<source_dir>/<pkg>/`). Returns `None` for the virtual-package
+/// scenarios: no manifest, or the root file sits next to a manifest but
+/// outside the namespace (treated as a standalone script).
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if a manifest exists but cannot be read or
+/// parsed.
+fn load_manifest_for_root<F: FileSystemReader>(
+    project_root: &Path,
+    root_canonical: &Path,
+    fs: &F,
+) -> Result<Option<graphcal_compiler::registry::manifest::Manifest>, CompileError> {
+    let manifest_path = project_root.join("graphcal.toml");
+    if !fs.exists(&manifest_path) {
+        return Ok(None);
+    }
+    let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })?;
+    let parsed = graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
+        .map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: e.to_string(),
+            })
+        })?;
+
+    if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
+        Ok(Some(parsed))
+    } else {
+        Ok(None)
+    }
+}
+
+/// True iff `root_canonical` is the package's single-file module
+/// (`<source_dir>/<pkg>.gcl`) or lives under the package namespace directory
+/// (`<source_dir>/<pkg>/...`).
+fn root_in_package_namespace<F: FileSystemReader>(
+    project_root: &Path,
+    root_canonical: &Path,
+    manifest: &graphcal_compiler::registry::manifest::Manifest,
+    fs: &F,
+) -> bool {
+    let pkg_dir = project_root
+        .join(&manifest.source_dir)
+        .join(&manifest.package_name);
+    let pkg_file = project_root
+        .join(&manifest.source_dir)
+        .join(format!("{}.gcl", manifest.package_name));
+
+    if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
+        && root_canonical.starts_with(&canon_pkg_dir)
+    {
+        return true;
+    }
+    if let Ok(canon_pkg_file) = fs.canonicalize(&pkg_file)
+        && root_canonical == canon_pkg_file
+    {
+        return true;
+    }
+    false
+}
+
 /// Resolve a `ModulePath` to a canonical file path.
 ///
 /// All paths are absolute from a package root (real package via
@@ -412,7 +490,7 @@ fn resolve_import_path<F: FileSystemReader>(
     _parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     resolve_module_path(
@@ -433,7 +511,7 @@ fn resolve_module_path<F: FileSystemReader>(
     span: graphcal_compiler::syntax::span::Span,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: &mut Option<graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     let display_path = segments
@@ -452,27 +530,12 @@ fn resolve_module_path<F: FileSystemReader>(
         }));
     }
 
-    // Try to load a manifest if one is present (real package).
-    if manifest.is_none() {
-        let manifest_path = project_root.join("graphcal.toml");
-        if fs.exists(&manifest_path) {
-            let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: e.to_string(),
-                })
-            })?;
-            let parsed =
-                graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
-                    .map_err(|e| {
-                        CompileError::Eval(GraphcalError::ManifestError {
-                            message: e.to_string(),
-                        })
-                    })?;
-            *manifest = Some(parsed);
-        }
-    }
-
-    if let Some(m) = manifest.as_ref() {
+    // The manifest is determined eagerly by `load_manifest_for_root` based on
+    // whether the root file lives inside the package namespace. If it's
+    // `Some`, we're in a real package; if it's `None`, the root is a virtual
+    // package (either truly manifest-less, or a loose file sitting next to a
+    // manifest but outside `<source_dir>/<pkg>/`).
+    if let Some(m) = manifest {
         // Real package: first segment must match the package name.
         if !segments.is_empty() && segments[0].name != m.package_name {
             return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
@@ -580,23 +643,20 @@ mod tests {
     #[test]
     fn load_simple_import() {
         let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            ("src/helper/lib.gcl", "param y: Dimensionless = 2.0;"),
             (
-                "graphcal.toml",
-                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
-            ),
-            ("helper.gcl", "param y: Dimensionless = 2.0;"),
-            (
-                "main.gcl",
-                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
+                "src/helper/main.gcl",
+                "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("main.gcl"), None, &fs()).unwrap();
+        let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
-        // helper should be loaded before main (topological order)
-        let helper_dag_id = DagId::new(["helper"]);
-        let main_dag_id = DagId::new(["main"]);
-        assert_eq!(project.load_order[0], helper_dag_id);
+        // helper.lib should be loaded before main (topological order)
+        let lib_dag_id = DagId::new(["src", "helper", "lib"]);
+        let main_dag_id = DagId::new(["src", "helper", "main"]);
+        assert_eq!(project.load_order[0], lib_dag_id);
         assert_eq!(project.load_order[1], main_dag_id);
     }
 
@@ -688,19 +748,16 @@ mod tests {
     #[test]
     fn load_with_overlay_uses_disk_for_imports() {
         let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            ("src/helper/lib.gcl", "param y: Dimensionless = 2.0;"),
             (
-                "graphcal.toml",
-                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
-            ),
-            ("helper.gcl", "param y: Dimensionless = 2.0;"),
-            (
-                "main.gcl",
-                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
+                "src/helper/main.gcl",
+                "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
-        let root_path = dir.path().join("main.gcl");
+        let root_path = dir.path().join("src/helper/main.gcl");
 
-        let overlay_source = "import helper.{y};\nnode z: Dimensionless = @y + 99.0;";
+        let overlay_source = "import helper.lib.{y};\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
         let fs = graphcal_io::OverlayFileSystem::new(
             RealFileSystem::default(),
@@ -713,10 +770,10 @@ mod tests {
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), overlay_source);
 
-        // Helper file should use disk content
-        let helper_dag_id = DagId::new(["helper"]);
-        let helper_file = &project.files[&helper_dag_id];
-        assert_eq!(helper_file.source.as_str(), "param y: Dimensionless = 2.0;");
+        // Helper.lib file should use disk content
+        let lib_dag_id = DagId::new(["src", "helper", "lib"]);
+        let lib_file = &project.files[&lib_dag_id];
+        assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
 
     #[test]
@@ -837,11 +894,11 @@ mod tests {
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/nasa/rocket.gcl", "param x: Dimensionless = 1.0;"),
             (
-                "src/main.gcl",
+                "src/nasa/main.gcl",
                 "import nasa.rocket.{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
+        let project = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -854,11 +911,11 @@ mod tests {
                 "param dv: Dimensionless = 2460.0;",
             ),
             (
-                "src/main.gcl",
+                "src/nasa/main.gcl",
                 "import nasa.orbital.transfer.{dv};\nnode x: Dimensionless = @dv;",
             ),
         ]);
-        let project = load_project(&dir.path().join("src/main.gcl"), None, &fs()).unwrap();
+        let project = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
 
@@ -874,11 +931,12 @@ mod tests {
                 "param x: Dimensionless = 42.0;",
             ),
             (
-                "lib/main.gcl",
+                "lib/myproject/main.gcl",
                 "import myproject.helpers.{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
-        let project = load_project(&dir.path().join("lib/main.gcl"), None, &fs()).unwrap();
+        let project =
+            load_project(&dir.path().join("lib/myproject/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
     }
     #[test]
@@ -886,9 +944,9 @@ mod tests {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/other/rocket.gcl", "param x: Dimensionless = 1.0;"),
-            ("src/main.gcl", "import other.rocket.{x};"),
+            ("src/nasa/main.gcl", "import other.rocket.{x};"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
+        let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -901,9 +959,9 @@ mod tests {
     fn load_bare_import_stdlib_deferred_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/main.gcl", "import graphcal.math.{sin};"),
+            ("src/nasa/main.gcl", "import graphcal.math.{sin};"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
+        let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -916,9 +974,9 @@ mod tests {
     fn load_bare_import_file_not_found_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/main.gcl", "import nasa.nonexistent.{x};"),
+            ("src/nasa/main.gcl", "import nasa.nonexistent.{x};"),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
+        let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
     }
 
@@ -929,11 +987,33 @@ mod tests {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             (
-                "src/main.gcl",
+                "src/nasa/main.gcl",
                 "include nasa/rocket/nonexistent(x: 5.0) { result as y };",
             ),
         ]);
-        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
+        let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_root_outside_package_namespace_rejects_cross_file_import() {
+        // Manifest at the project root names a package `myproject`, whose
+        // namespace is `<source_dir>/myproject/`. A loose `main.gcl` sitting at
+        // the source-dir root is *not* in that namespace, so it's treated as a
+        // virtual package and any cross-file import is rejected.
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"myproject\"\n"),
+            ("src/myproject/helper.gcl", "param y: Dimensionless = 2.0;"),
+            (
+                "src/main.gcl",
+                "import myproject.helper.{y};\nnode z: Dimensionless = @y;",
+            ),
+        ]);
+        let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("CrossFileImportInVirtualPackage"),
+            "expected loose-entry rejection: {err}"
+        );
     }
 }

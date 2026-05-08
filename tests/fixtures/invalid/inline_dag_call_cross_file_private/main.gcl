@@ -1,4 +1,0 @@
-import lib as lib;
-
-param src: Length = 1.0 m;
-node oops: Length = @lib.scale(v: @src).hidden;

@@ -871,7 +871,7 @@ fn eval_int_with_unit_parse_error() {
 #[test]
 fn project_instantiated_import_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/instantiated_import/main.gcl");
+        .join("../../tests/fixtures/valid/multi/instantiated_import/src/rocket/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // dry_mass overridden to 800 kg, fuel_mass default 2800 kg, isp default 320 s
     // delta_v = 320 * 9.80665 * ln((800 + 2800) / 800) = 3138.128 * ln(4.5)
@@ -885,7 +885,7 @@ fn project_instantiated_import_selective() {
 #[test]
 fn project_instantiated_import_graph_ref() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/instantiated_import_graph_ref/main.gcl");
+        .join("../../tests/fixtures/valid/multi/instantiated_import_graph_ref/src/rocket/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // my_mass = 800 kg, passed as dry_mass binding via @my_mass
     // delta_v = 320 * 9.80665 * ln(3600/800)
@@ -973,7 +973,7 @@ fn cli_partial_override_uses_defaults() {
 fn import_partial_binding_uses_defaults() {
     // Parameterized import with partial binding falls back to defaults.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/instantiated_import/main.gcl");
+        .join("../../tests/fixtures/valid/multi/instantiated_import/src/rocket/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     assert!(
         result.is_ok(),
@@ -986,7 +986,7 @@ fn import_partial_binding_uses_defaults() {
 #[test]
 fn project_required_param_import() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/required_param_import/main.gcl");
+        .join("../../tests/fixtures/valid/multi/required_param_import/src/library/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // radius = 6371 km, circumference = 2 * PI * radius
     let expected = 2.0 * std::f64::consts::PI * 6_371_000.0; // in metres (SI)
@@ -1002,7 +1002,7 @@ fn project_required_param_import() {
 #[test]
 fn project_injectable_index_kind_mismatch() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/invalid/multi/injectable_index_kind_mismatch/main.gcl");
+        .join("../../tests/fixtures/invalid/multi/injectable_index_kind_mismatch/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
@@ -1020,7 +1020,7 @@ fn project_injectable_index_kind_mismatch() {
 #[test]
 fn project_injectable_index_basic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/injectable_index_basic/main.gcl");
+        .join("../../tests/fixtures/valid/multi/injectable_index_basic/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // total = sum(10.0 + 20.0) = 30.0
     let result_val = find_value(&result, "result");
@@ -1033,7 +1033,7 @@ fn project_injectable_index_basic() {
 #[test]
 fn project_instantiated_import_type_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/instantiated_import_type_binding/main.gcl");
+        .join("../../tests/fixtures/valid/multi/instantiated_import_type_binding/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // origin_size = 1.0 m (the lib's `Widget { size: 1.0 m }` rewritten to
     // `MyWidget { size: 1.0 m }` after type substitution)
@@ -1047,7 +1047,7 @@ fn project_instantiated_import_type_binding() {
 #[test]
 fn project_instantiated_import_dim_binding() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/instantiated_import_dim_binding/main.gcl");
+        .join("../../tests/fixtures/valid/multi/instantiated_import_dim_binding/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // result = 10.0 m/s; the lib's `v: Speed = 10.0 m/s` has its type_ann
     // rewritten Speed -> Velocity so main's Velocity dimension resolves.
@@ -1064,7 +1064,7 @@ fn project_pub_import_reexport_selective() {
     // item at the importer's visible surface, so a transitive importer
     // can reach it via the intermediate file.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/pub_import_reexport_selective/main.gcl");
+        .join("../../tests/fixtures/valid/multi/pub_import_reexport_selective/src/middle/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // result = 9.80665 m/s^2 (in the base unit, value 9.80665).
     let result_val = find_value(&result, "result");
@@ -1080,7 +1080,7 @@ fn project_include_overrides_index_no_param_binding_v005() {
     // `Phase.Design` / `Phase.Build`) because the importer forgot to
     // re-bind `cost` in the same include statement.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../tests/fixtures/invalid/multi/include_overrides_index_no_param_binding/main.gcl",
+        "../../tests/fixtures/invalid/multi/include_overrides_index_no_param_binding/src/lib/main.gcl",
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
@@ -1103,7 +1103,7 @@ fn project_include_overrides_index_with_param_binding_ok() {
     // Positive companion to project_include_overrides_index_no_param_binding_v005:
     // supplying a fresh `cost` binding satisfies A8.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../tests/fixtures/valid/multi/include_overrides_index_with_param_binding/main.gcl",
+        "../../tests/fixtures/valid/multi/include_overrides_index_with_param_binding/src/lib/main.gcl",
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let result_val = find_value(&result, "result");
@@ -1119,8 +1119,9 @@ fn project_pub_include_leaks_private_type_v006() {
     // V006: `pub include` re-exports container's `origin` decl whose
     // signature (post-substitution) names `PrivateInner`, which is a
     // private-local type at the importer.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/invalid/multi/pub_include_leaks_private_type/main.gcl");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/fixtures/invalid/multi/pub_include_leaks_private_type/src/container/main.gcl",
+    );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(GraphcalError::GenericsLeakage {
@@ -1142,7 +1143,7 @@ fn project_pub_include_with_public_type_binding_ok() {
     // Positive companion to project_pub_include_leaks_private_type_v006:
     // binding `Element` to a `pub` importer-local type satisfies A9.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/pub_include_with_public_type_binding/main.gcl");
+        .join("../../tests/fixtures/valid/multi/pub_include_with_public_type_binding/src/container/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     assert!(
         result.is_ok(),
@@ -1153,7 +1154,7 @@ fn project_pub_include_with_public_type_binding_ok() {
 #[test]
 fn project_injectable_index_expected_fail() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/valid/multi/injectable_index_expected_fail/main.gcl");
+        .join("../../tests/fixtures/valid/multi/injectable_index_expected_fail/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     // The within_limit assertion should pass overall because Overdrive is marked expected_fail.
     let assert_result = result

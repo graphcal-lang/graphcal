@@ -1,6 +1,0 @@
-// Module import: import entire file as a module namespace
-import constants;
-
-dim Acceleration = Length / Time^2;
-
-node g: Acceleration = @constants.g0;

@@ -588,122 +588,137 @@ roundtrip_test!(
 // ---------------------------------------------------------------------------
 
 // alias: selective import with renaming
-idempotency_test!(idempotent_multi_alias_main, "valid/multi/alias/main.gcl");
+idempotency_test!(
+    idempotent_multi_alias_main,
+    "valid/multi/alias/src/helper/main.gcl"
+);
 idempotency_test!(
     idempotent_multi_alias_helper,
-    "valid/multi/alias/helper.gcl"
+    "valid/multi/alias/src/helper/lib.gcl"
 );
-roundtrip_test!(roundtrip_multi_alias_main, "valid/multi/alias/main.gcl");
-roundtrip_test!(roundtrip_multi_alias_helper, "valid/multi/alias/helper.gcl");
-snapshot_test!(snapshot_multi_alias_main, "valid/multi/alias/main.gcl");
-snapshot_test!(snapshot_multi_alias_helper, "valid/multi/alias/helper.gcl");
+roundtrip_test!(
+    roundtrip_multi_alias_main,
+    "valid/multi/alias/src/helper/main.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_alias_helper,
+    "valid/multi/alias/src/helper/lib.gcl"
+);
+snapshot_test!(
+    snapshot_multi_alias_main,
+    "valid/multi/alias/src/helper/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_alias_helper,
+    "valid/multi/alias/src/helper/lib.gcl"
+);
 
 // alias_conflict: multiple imports with renaming
 idempotency_test!(
     idempotent_multi_alias_conflict_main,
-    "valid/multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_a,
-    "valid/multi/alias_conflict/lib/a.gcl"
+    "valid/multi/alias_conflict/src/lib/a.gcl"
 );
 idempotency_test!(
     idempotent_multi_alias_conflict_b,
-    "valid/multi/alias_conflict/lib/b.gcl"
+    "valid/multi/alias_conflict/src/lib/b.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_alias_conflict_main,
-    "valid/multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_alias_conflict_main,
-    "valid/multi/alias_conflict/main.gcl"
+    "valid/multi/alias_conflict/src/lib/main.gcl"
 );
 
 // module_import: whole-module import
 idempotency_test!(
     idempotent_multi_module_import_main,
-    "invalid/multi/module_import/main.gcl"
+    "invalid/multi/module_import/src/constants/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_constants,
-    "invalid/multi/module_import/constants.gcl"
+    "invalid/multi/module_import/src/constants/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_main,
-    "invalid/multi/module_import/main.gcl"
+    "invalid/multi/module_import/src/constants/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_main,
-    "invalid/multi/module_import/main.gcl"
+    "invalid/multi/module_import/src/constants/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_constants,
-    "invalid/multi/module_import/constants.gcl"
+    "invalid/multi/module_import/src/constants/lib.gcl"
 );
 
 // module_import_alias: import with alias
 idempotency_test!(
     idempotent_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/src/constants/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/src/constants/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/main.gcl"
+    "invalid/multi/module_import_alias/src/constants/main.gcl"
 );
 
 // module_import_fn: qualified function call
 idempotency_test!(
     idempotent_multi_module_import_fn_main,
-    "valid/multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_fn_lib,
-    "valid/multi/module_import_fn/lib.gcl"
+    "valid/multi/module_import_fn/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_fn_main,
-    "valid/multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_fn_main,
-    "valid/multi/module_import_fn/main.gcl"
+    "valid/multi/module_import_fn/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_fn_lib,
-    "valid/multi/module_import_fn/lib.gcl"
+    "valid/multi/module_import_fn/src/lib/lib.gcl"
 );
 
 // cross_file_dag: cross-file DAG paths
 idempotency_test!(
     idempotent_multi_cross_file_dag_main,
-    "invalid/multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_cross_file_dag_lib,
-    "invalid/multi/cross_file_dag/lib.gcl"
+    "invalid/multi/cross_file_dag/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_cross_file_dag_main,
-    "invalid/multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_cross_file_dag_main,
-    "invalid/multi/cross_file_dag/main.gcl"
+    "invalid/multi/cross_file_dag/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_cross_file_dag_lib,
-    "invalid/multi/cross_file_dag/lib.gcl"
+    "invalid/multi/cross_file_dag/src/lib/lib.gcl"
 );
 
 // bare_dag_ref: bare module path DAG references
 idempotency_test!(
     idempotent_multi_bare_dag_ref_main,
-    "valid/multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_bare_dag_ref_lib,
@@ -711,11 +726,11 @@ idempotency_test!(
 );
 roundtrip_test!(
     roundtrip_multi_bare_dag_ref_main,
-    "valid/multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_bare_dag_ref_main,
-    "valid/multi/bare_dag_ref/src/main.gcl"
+    "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_bare_dag_ref_lib,
@@ -725,279 +740,279 @@ snapshot_test!(
 // module_import_graph_ref: qualified @-references
 idempotency_test!(
     idempotent_multi_module_import_graph_ref_main,
-    "invalid/multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/src/params/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_module_import_graph_ref_params,
-    "invalid/multi/module_import_graph_ref/params.gcl"
+    "invalid/multi/module_import_graph_ref/src/params/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_graph_ref_main,
-    "invalid/multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/src/params/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_graph_ref_main,
-    "invalid/multi/module_import_graph_ref/main.gcl"
+    "invalid/multi/module_import_graph_ref/src/params/main.gcl"
 );
 
 // module_import_mixed: selective + module imports in same file
 idempotency_test!(
     idempotent_multi_module_import_mixed_main,
-    "invalid/multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/src/lib/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_mixed_main,
-    "invalid/multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_mixed_main,
-    "invalid/multi/module_import_mixed/main.gcl"
+    "invalid/multi/module_import_mixed/src/lib/main.gcl"
 );
 
 // rocket_split: selective import with many identifiers
 idempotency_test!(
     idempotent_multi_rocket_split_main,
-    "valid/multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_constants,
-    "valid/multi/rocket_split/lib/constants.gcl"
+    "valid/multi/rocket_split/src/lib/constants.gcl"
 );
 idempotency_test!(
     idempotent_multi_rocket_split_params,
-    "valid/multi/rocket_split/lib/params.gcl"
+    "valid/multi/rocket_split/src/lib/params.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_rocket_split_main,
-    "valid/multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_main,
-    "valid/multi/rocket_split/main.gcl"
+    "valid/multi/rocket_split/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_constants,
-    "valid/multi/rocket_split/lib/constants.gcl"
+    "valid/multi/rocket_split/src/lib/constants.gcl"
 );
 snapshot_test!(
     snapshot_multi_rocket_split_params,
-    "valid/multi/rocket_split/lib/params.gcl"
+    "valid/multi/rocket_split/src/lib/params.gcl"
 );
 
 // explicit_index: import of index types
 idempotency_test!(
     idempotent_multi_explicit_index_main,
-    "valid/multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_explicit_index_lib,
-    "valid/multi/explicit_index/lib.gcl"
+    "valid/multi/explicit_index/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_explicit_index_main,
-    "valid/multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_explicit_index_main,
-    "valid/multi/explicit_index/main.gcl"
+    "valid/multi/explicit_index/src/lib/main.gcl"
 );
 
 // diamond_assert: diamond-shaped import graph
 idempotency_test!(
     idempotent_multi_diamond_assert_main,
-    "valid/multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/src/graph/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_shared,
-    "valid/multi/diamond_assert/graph/shared.gcl"
+    "valid/multi/diamond_assert/src/graph/shared.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_left,
-    "valid/multi/diamond_assert/graph/left.gcl"
+    "valid/multi/diamond_assert/src/graph/left.gcl"
 );
 idempotency_test!(
     idempotent_multi_diamond_assert_right,
-    "valid/multi/diamond_assert/graph/right.gcl"
+    "valid/multi/diamond_assert/src/graph/right.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_diamond_assert_main,
-    "valid/multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/src/graph/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_diamond_assert_main,
-    "valid/multi/diamond_assert/main.gcl"
+    "valid/multi/diamond_assert/src/graph/main.gcl"
 );
 
 // assertions: cross-file assertions with #[assumes]
 idempotency_test!(
     idempotent_multi_assertions_main,
-    "valid/multi/assertions/main.gcl"
+    "valid/multi/assertions/src/checks/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_assertions_checks,
-    "valid/multi/assertions/checks.gcl"
+    "valid/multi/assertions/src/checks/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_assertions_main,
-    "valid/multi/assertions/main.gcl"
+    "valid/multi/assertions/src/checks/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_assertions_main,
-    "valid/multi/assertions/main.gcl"
+    "valid/multi/assertions/src/checks/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_assertions_checks,
-    "valid/multi/assertions/checks.gcl"
+    "valid/multi/assertions/src/checks/lib.gcl"
 );
 
 // auto_assert: auto-evaluated assertions from imports
 idempotency_test!(
     idempotent_multi_auto_assert_main,
-    "valid/multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_auto_assert_lib,
-    "valid/multi/auto_assert/lib.gcl"
+    "valid/multi/auto_assert/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_auto_assert_main,
-    "valid/multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_auto_assert_main,
-    "valid/multi/auto_assert/main.gcl"
+    "valid/multi/auto_assert/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_auto_assert_lib,
-    "valid/multi/auto_assert/lib.gcl"
+    "valid/multi/auto_assert/src/lib/lib.gcl"
 );
 
 // auto_assert_module: module import with auto assertions
 idempotency_test!(
     idempotent_multi_auto_assert_module_main,
-    "invalid/multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_auto_assert_module_lib,
-    "invalid/multi/auto_assert_module/lib.gcl"
+    "invalid/multi/auto_assert_module/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_auto_assert_module_main,
-    "invalid/multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_auto_assert_module_main,
-    "invalid/multi/auto_assert_module/main.gcl"
+    "invalid/multi/auto_assert_module/src/lib/main.gcl"
 );
 
 // imported_deps: import with internal graph dependencies
 idempotency_test!(
     idempotent_multi_imported_deps_main,
-    "valid/multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_imported_deps_lib,
-    "valid/multi/imported_deps/lib.gcl"
+    "valid/multi/imported_deps/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_imported_deps_main,
-    "valid/multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_imported_deps_main,
-    "valid/multi/imported_deps/main.gcl"
+    "valid/multi/imported_deps/src/lib/main.gcl"
 );
 
 // imported_assert_fail: import with failing assertion
 idempotency_test!(
     idempotent_multi_imported_assert_fail_main,
-    "runtime_error/multi/imported_assert_fail/main.gcl"
+    "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_imported_assert_fail_lib,
-    "runtime_error/multi/imported_assert_fail/lib.gcl"
+    "runtime_error/multi/imported_assert_fail/src/lib/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_imported_assert_fail_main,
-    "runtime_error/multi/imported_assert_fail/main.gcl"
+    "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_imported_assert_fail_main,
-    "runtime_error/multi/imported_assert_fail/main.gcl"
+    "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
 );
 
 // bad_name_import, missing_module, circular_imports: error-case import syntax (still parseable)
 idempotency_test!(
     idempotent_multi_bad_name_import_main,
-    "invalid/multi/bad_name_import/main.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_bad_name_import_helper,
-    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/helper.gcl"
 );
 idempotency_test!(
     idempotent_multi_missing_module_main,
-    "invalid/multi/missing_module/main.gcl"
+    "invalid/multi/missing_module/src/missing_module/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_circular_imports_main,
-    "invalid/multi/circular_imports/main.gcl"
+    "invalid/multi/circular_imports/src/circ/main.gcl"
 );
 idempotency_test!(
     idempotent_multi_circular_imports_circ,
-    "invalid/multi/circular_imports/circ.gcl"
+    "invalid/multi/circular_imports/src/circ/lib.gcl"
 );
 idempotency_test!(
     idempotent_multi_circular_imports_back,
-    "invalid/multi/circular_imports/circ/back.gcl"
+    "invalid/multi/circular_imports/src/circ/back.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_bad_name_import_main,
-    "invalid/multi/bad_name_import/main.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_bad_name_import_helper,
-    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/helper.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_missing_module_main,
-    "invalid/multi/missing_module/main.gcl"
+    "invalid/multi/missing_module/src/missing_module/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_circular_imports_main,
-    "invalid/multi/circular_imports/main.gcl"
+    "invalid/multi/circular_imports/src/circ/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_circular_imports_circ,
-    "invalid/multi/circular_imports/circ.gcl"
+    "invalid/multi/circular_imports/src/circ/lib.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_circular_imports_back,
-    "invalid/multi/circular_imports/circ/back.gcl"
+    "invalid/multi/circular_imports/src/circ/back.gcl"
 );
 snapshot_test!(
     snapshot_multi_bad_name_import_main,
-    "invalid/multi/bad_name_import/main.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_bad_name_import_helper,
-    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
+    "invalid/multi/bad_name_import/src/bad_name_import/helper.gcl"
 );
 snapshot_test!(
     snapshot_multi_missing_module_main,
-    "invalid/multi/missing_module/main.gcl"
+    "invalid/multi/missing_module/src/missing_module/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_circular_imports_main,
-    "invalid/multi/circular_imports/main.gcl"
+    "invalid/multi/circular_imports/src/circ/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_circular_imports_circ,
-    "invalid/multi/circular_imports/circ.gcl"
+    "invalid/multi/circular_imports/src/circ/lib.gcl"
 );
 snapshot_test!(
     snapshot_multi_circular_imports_back,
-    "invalid/multi/circular_imports/circ/back.gcl"
+    "invalid/multi/circular_imports/src/circ/back.gcl"
 );
 
 // ---------------------------------------------------------------------------
