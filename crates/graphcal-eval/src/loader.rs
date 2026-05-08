@@ -29,6 +29,21 @@ pub struct LoadedFile {
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
     pub resolved_imports: HashMap<String, DagId>,
+    /// Set of path display strings that, when used by an `import` declaration
+    /// inside an inline `dag X { ... }` body of this file, resolve back to
+    /// this file itself (i.e. the dag is `import`-ing from its own enclosing
+    /// file).
+    ///
+    /// Computed by the loader by attempting `resolve_module_path` on each
+    /// dag-body import path and comparing the result to this file's canonical
+    /// path. Lets downstream stages identify self-imports by exact set
+    /// membership rather than re-running a path-vs-DagId suffix-match heuristic.
+    ///
+    /// Whether the path resolves to this file is a property of the file and
+    /// the package layout, not of which specific dag uses it, so a single flat
+    /// set is sufficient (and matches what `preprocess_dag_body_self_imports`
+    /// consumes).
+    pub dag_body_self_imports: HashSet<String>,
 }
 
 impl LoadedFile {
@@ -109,6 +124,9 @@ impl LoadedProject {
         graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
         let path = PathBuf::from(name);
         let dag_id = DagId::from_relative_path(&path);
+        // No project root or manifest in single-file mode — only the
+        // file-stem self-reference (Concept 7) can be detected here.
+        let dag_body_self_imports = collect_dag_body_self_imports_by_stem(&ast, &path);
         let loaded_file = LoadedFile {
             path,
             dag_id: dag_id.clone(),
@@ -116,6 +134,7 @@ impl LoadedProject {
             ast,
             named_source,
             resolved_imports: HashMap::new(),
+            dag_body_self_imports,
         };
         let mut files = HashMap::new();
         files.insert(dag_id.clone(), loaded_file);
@@ -192,6 +211,10 @@ pub fn load_project<F: FileSystemReader>(
 #[expect(
     clippy::too_many_arguments,
     reason = "DFS state requires many parameters"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "DFS body inlines parsing, top-level import resolution, and inline-dag self-import scan"
 )]
 fn load_file_dfs<F: FileSystemReader>(
     canonical_path: &Path,
@@ -312,6 +335,22 @@ fn load_file_dfs<F: FileSystemReader>(
         })
         .collect();
 
+    // Pre-resolve `import` declarations inside inline `dag X { ... }` bodies:
+    // record which paths resolve to this file itself, so downstream stages can
+    // detect dag-body self-imports by set membership rather than path-vs-DagId
+    // heuristics. Resolution failures are silently skipped — the dag-body
+    // import resolver runs later and will surface a structured error if the
+    // path is genuinely invalid.
+    let dag_body_self_imports = collect_dag_body_self_imports(
+        &ast,
+        canonical_path,
+        parent_dir,
+        project_root,
+        &named_source,
+        manifest,
+        fs,
+    );
+
     // Post-order: add this file after its dependencies.
     load_order.push(dag_id.clone());
     loading.remove(canonical_path);
@@ -327,10 +366,78 @@ fn load_file_dfs<F: FileSystemReader>(
             ast,
             named_source,
             resolved_imports,
+            dag_body_self_imports,
         },
     );
 
     Ok(())
+}
+
+/// Walk inline `dag X { ... }` bodies and collect the set of import path
+/// display strings whose resolved canonical path equals `canonical_path`
+/// (i.e. they import from the dag's own enclosing file).
+///
+/// Resolution errors are treated as "not a self-import" and silently
+/// skipped: the dag-body import resolver runs later and will surface
+/// structured errors for paths that fail to resolve at all.
+fn collect_dag_body_self_imports<F: FileSystemReader>(
+    ast: &File,
+    canonical_path: &Path,
+    parent_dir: &Path,
+    project_root: &Path,
+    src: &NamedSource<Arc<String>>,
+    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    fs: &F,
+) -> HashSet<String> {
+    let file_stem = canonical_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    walk_dag_body_imports(ast, |path| {
+        // Single-segment file-stem reference (Concept 7 self-reference)
+        // bypasses path resolution: match by stem directly.
+        if path.segments.len() == 1 && path.segments[0].name == file_stem {
+            return true;
+        }
+        resolve_import_path(path, parent_dir, project_root, src, manifest, fs)
+            .is_ok_and(|resolved| resolved == canonical_path)
+    })
+}
+
+/// Stem-only variant of [`collect_dag_body_self_imports`] for the
+/// single-file [`LoadedProject::from_source`] path, where no project root
+/// or manifest is available to drive full path resolution.
+fn collect_dag_body_self_imports_by_stem(ast: &File, path: &Path) -> HashSet<String> {
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    walk_dag_body_imports(ast, |module_path| {
+        module_path.segments.len() == 1 && module_path.segments[0].name == file_stem
+    })
+}
+
+/// Helper: walk every `import` declaration inside every inline `dag` block
+/// at file top-level, applying `is_self` to each path and collecting the
+/// display strings of paths for which `is_self` returns true.
+fn walk_dag_body_imports<F>(ast: &File, mut is_self: F) -> HashSet<String>
+where
+    F: FnMut(&graphcal_compiler::syntax::ast::ModulePath) -> bool,
+{
+    let mut out: HashSet<String> = HashSet::new();
+    for decl in &ast.declarations {
+        let DeclKind::Dag(dag) = &decl.kind else {
+            continue;
+        };
+        for body_decl in &dag.body {
+            let DeclKind::Import(import_decl) = &body_decl.kind else {
+                continue;
+            };
+            if is_self(&import_decl.path) {
+                out.insert(import_decl.path.display_path());
+            }
+        }
+    }
+    out
 }
 
 /// Derive a module name from a file path string.

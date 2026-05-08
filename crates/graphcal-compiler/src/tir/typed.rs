@@ -708,6 +708,11 @@ pub struct TIR {
             crate::registry::declared_type::DeclaredType,
         ),
     >,
+    /// Declared types for imported names whose values are supplied by a caller
+    /// or dependency at evaluation time.
+    pub imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    /// Runtime source bindings for imported DAG-body values.
+    pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     /// Per-dag compiled TIRs, one per `dag { ... }` declaration in this file.
     ///
     /// Each entry is the TIR of the dag body, compiled as if it were a
@@ -775,6 +780,9 @@ impl TIR {
         for (name, (_rv, dt)) in &self.imported_values {
             declared_types.insert(name.to_string(), dt.clone());
         }
+        for (name, dt) in &self.imported_decl_types {
+            declared_types.insert(name.to_string(), dt.clone());
+        }
         Ok(declared_types)
     }
 }
@@ -782,126 +790,23 @@ impl TIR {
 /// Resolve all type annotations in an `IR`, producing a [`TIR`].
 ///
 /// For each const/param/node, resolves the type annotation with no generic
-/// params in scope. Additionally, compiles each `dag { ... }` declaration's
-/// body as its own inner TIR and stores the result on [`TIR::dags`] so that
-/// downstream stages (`dim_check`, `eval`) can resolve inline
-/// `@dag(args)::out` invocations against the compiled dag body.
+/// params in scope. Inline `dag { ... }` declarations are NOT compiled here;
+/// the project pipeline (or test helpers) compile them explicitly via
+/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` after type-resolving the file-level
+/// declarations. This separation lets callers that have loader-level
+/// information (e.g. self-import path resolution, parent `DagId`) thread it
+/// in at the right point, without forcing every `type_resolve` caller to
+/// know about it.
+///
+/// The returned `TIR` always has an empty `dags` field. Use
+/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` to populate it.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index, or if compiling a dag body fails.
+/// dimension, struct, or index.
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
-    let parent_dag_id =
-        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
-    type_resolve_with_dag_id(ir, src, &parent_dag_id)
-}
-
-/// Like [`type_resolve`] but with an explicit parent `DagId` that may
-/// differ from what would be derived from `src.name()`.
-///
-/// The project pipeline calls this with the loader's canonical `DagId`
-/// (the file's relative path within the package root) so that
-/// `import <self>.{...}` declarations inside dag bodies match against
-/// the same identity the loader uses for the file. Single-file
-/// invocations without a project manifest are happy to use [`type_resolve`],
-/// which derives `DagId` from `src.name()`.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index, or if compiling a dag body fails.
-pub fn type_resolve_with_dag_id(
-    ir: IR,
-    src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::syntax::dag_id::DagId,
-) -> Result<TIR, GraphcalError> {
-    // Capture pub_names before `type_resolve_single` consumes the IR so the
-    // dag-body `import <self>.{...}` visibility check can mirror the
-    // cross-file `pub`-or-bust rule (Concept 9 — same import grammar, same
-    // visibility discipline).
-    let parent_pub_names = ir.pub_names.clone();
-    let mut tir = type_resolve_single(ir, src)?;
-
-    // Build parent value-decl lookup table so dag-body `import <self>.{...}`
-    // declarations can resolve const items against the parent file.
-    let parent_value_decls = build_parent_value_decls(&tir, src)?;
-
-    // Snapshot dag names before iterating so we can take immutable borrows of
-    // `tir.registry` inside the loop while mutating `tir.dags`.
-    let dag_names: Vec<String> = tir
-        .registry
-        .dags
-        .all_dags()
-        .map(|(name, _)| name.clone())
-        .collect();
-    for name in dag_names {
-        let body = tir
-            .registry
-            .dags
-            .get(&name)
-            .map(|d| d.body.clone())
-            .unwrap_or_default();
-        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            &name,
-            &body,
-            &tir.registry,
-            &parent_value_decls,
-            &parent_pub_names,
-            src,
-            parent_dag_id,
-        )?;
-        let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
-        populate_pub_nodes(&mut compiled_dag, &body);
-        tir.dags.insert(DagKey::local(name), compiled_dag);
-    }
-
-    Ok(tir)
-}
-
-/// Build the `name → ParentValueKind` table consumed by
-/// [`crate::ir::lower::preprocess_dag_body_self_imports`].
-///
-/// Walks the parent file's TIR-level const/param/node entries and resolves
-/// each declared type to a concrete `DeclaredType`. Declarations that carry
-/// a generic dim/index/type parameter cannot appear at file scope (generics
-/// are dag-body-only), so the conversion is total in well-formed input.
-fn build_parent_value_decls(
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, crate::ir::lower::ParentValueKind>, GraphcalError> {
-    let mut out = HashMap::new();
-    for entry in &tir.consts {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(
-            entry.name.member().to_string(),
-            crate::ir::lower::ParentValueKind::Const(dt),
-        );
-    }
-    for entry in &tir.params {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(
-            entry.name.member().to_string(),
-            crate::ir::lower::ParentValueKind::Param(dt),
-        );
-    }
-    for entry in &tir.nodes {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(
-            entry.name.member().to_string(),
-            crate::ir::lower::ParentValueKind::Node(dt),
-        );
-    }
-    Ok(out)
+    type_resolve_single(ir, src)
 }
 
 /// Populate a dag TIR's `pub_nodes` set from the AST body declarations.
@@ -910,7 +815,10 @@ fn build_parent_value_decls(
 /// set to enforce projection of `pub` nodes only. Same-file calls still
 /// read visibility from the raw AST because the body is reachable through
 /// `registry.dags`; this set is the proxy that survives cross-file merges.
-fn populate_pub_nodes(dag_tir: &mut TIR, dag_body: &[crate::desugar::desugared_ast::Declaration]) {
+pub fn populate_pub_nodes(
+    dag_tir: &mut TIR,
+    dag_body: &[crate::desugar::desugared_ast::Declaration],
+) {
     use crate::desugar::desugared_ast::DeclKind;
 
     for decl in dag_body {
@@ -925,11 +833,16 @@ fn populate_pub_nodes(dag_tir: &mut TIR, dag_body: &[crate::desugar::desugared_a
 
 /// Resolve type annotations without recursively compiling nested dag bodies.
 ///
-/// Used both as the base case for the file-level [`type_resolve`] and to
-/// type-resolve each dag-body IR that it produces. The returned TIR has an
-/// empty `dags` map; cross-dag references are resolved against the enclosing
-/// file TIR's `dags` map.
-fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
+/// Used both as the base case for the file-level [`type_resolve`] and by
+/// the eval crate's per-dag-body compilation pipeline. The returned TIR
+/// has an empty `dags` map; cross-dag references are resolved against the
+/// enclosing file TIR's `dags` map.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if any type annotation references an unknown
+/// dimension, struct, or index.
+pub fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
 
     let no_generic_params: &[GenericParamName] = &[];
@@ -986,6 +899,8 @@ fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Gr
         resolved_decl_types,
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
+        imported_decl_types: ir.imported_decl_types,
+        imported_value_sources: ir.imported_value_sources,
         dags: DagRegistry::new(),
         pub_nodes: std::collections::HashSet::new(),
     })
@@ -2303,12 +2218,59 @@ mod tests {
 
     // --- type_resolve() integration tests ---
 
+    /// Single-file integration helper: lower + type-resolve + compile each
+    /// inline dag body using the dumb `lower_dag_body_to_ir` primitive
+    /// directly (no self-import preprocessing — fixtures exercised here
+    /// either don't use self-imports or are expected to surface errors that
+    /// fall out of the unprocessed body).
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
-        type_resolve(ir, &src)
+        let parent_dag_id =
+            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
+        let mut tir = type_resolve(ir, &src)?;
+        compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
+        Ok(tir)
+    }
+
+    /// Compile each inline dag body in `tir` with no self-import
+    /// preprocessing. Used by compiler-side integration tests that don't
+    /// have access to the eval crate's project pipeline.
+    fn compile_inline_dag_bodies_test(
+        tir: &mut TIR,
+        src: &NamedSource<Arc<String>>,
+        parent_dag_id: &crate::syntax::dag_id::DagId,
+    ) -> Result<(), GraphcalError> {
+        let dag_names: Vec<String> = tir
+            .registry
+            .dags
+            .all_dags()
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in dag_names {
+            let body = tir
+                .registry
+                .dags
+                .get(&name)
+                .map(|d| d.body.clone())
+                .unwrap_or_default();
+            let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
+                &name,
+                &body,
+                &tir.registry,
+                &crate::ir::resolve::ImportedValueNames::default(),
+                HashMap::new(),
+                HashMap::new(),
+                src,
+                parent_dag_id,
+            )?;
+            let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
+            populate_pub_nodes(&mut compiled_dag, &body);
+            tir.dags.insert(DagKey::local(name), compiled_dag);
+        }
+        Ok(())
     }
 
     #[test]

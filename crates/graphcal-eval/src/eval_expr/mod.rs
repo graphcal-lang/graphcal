@@ -332,13 +332,10 @@ fn eval_inline_dag_call(
         dag_values.insert(DeclName::new(&binding.name.name), value);
     }
 
-    // Resolve parent-scope `import .. { name }` references inside the dag
-    // body. The dag's own decls arrive via `args` or execute below; any
-    // other name visible to the dag (entries in `resolved_decl_types` for
-    // local decls plus entries in `imported_values` for `import`-bound
-    // outer-scope names) must come from an outer scope — either
-    // pre-injected onto the dag TIR's `imported_values` (cross-file
-    // merge) or present in the caller's values (same-file).
+    // Resolve explicit DAG-body imports. Cross-file qualified calls receive
+    // concrete imported values when the dependency dag TIR is cloned into the
+    // caller; same-file calls resolve through the source binding map against
+    // the caller's current values.
     let own_names: std::collections::HashSet<&str> = dag_tir
         .consts
         .iter()
@@ -349,25 +346,25 @@ fn eval_inline_dag_call(
     let outer_scope_keys: std::collections::HashSet<
         &graphcal_compiler::registry::resolve_types::ScopedName,
     > = dag_tir
-        .resolved_decl_types
+        .imported_values
         .keys()
-        .chain(dag_tir.imported_values.keys())
+        .chain(dag_tir.imported_value_sources.keys())
         .collect();
     for scoped in outer_scope_keys {
         let member = scoped.member();
         if own_names.contains(member) || dag_values.contains_key(member) {
             continue;
         }
-        // Name may not be available in any scope; the dim-check layer
-        // already verifies reachability, so body eval will surface a
-        // concrete error if it actually dereferences this name.
-        // Same-file inline calls take priority through `caller_values`
-        // because the dag body's `imported_values` carries placeholder
-        // entries for `import <self>.{...}` declarations whose true value
-        // lives in the caller's scope.
-        let value = caller_values
-            .get(member)
-            .or_else(|| dag_tir.imported_values.get(scoped).map(|(v, _)| v));
+        let value = dag_tir
+            .imported_values
+            .get(scoped)
+            .map(|(v, _)| v)
+            .or_else(|| {
+                dag_tir
+                    .imported_value_sources
+                    .get(scoped)
+                    .and_then(|source| caller_values.get(source.source_name.as_str()))
+            });
         if let Some(value) = value {
             dag_values.insert(DeclName::new(member), value.clone());
         }

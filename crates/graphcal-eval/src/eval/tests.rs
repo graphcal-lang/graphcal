@@ -1271,6 +1271,38 @@ node out: Length = @two_step(v: @src).result;
 }
 
 #[test]
+fn eval_inline_dag_call_imports_parent_const_with_alias() {
+    let source = "\
+pub const node seed_len: Length = 3.0 m;
+
+dag scaled {
+    import test.{seed_len as imported_seed};
+
+    param factor: Dimensionless;
+    pub node result: Length = @imported_seed * @factor;
+}
+
+node out: Length = @scaled(factor: 4.0).result;
+";
+    let result = compile_and_eval_named(source, "test.gcl").unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 12.0).abs() < 1e-10, "expected 12.0, got {out}");
+}
+
+#[test]
+fn eval_qualified_inline_dag_call_imports_parent_const_with_alias() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/fixtures/valid/inline_dag_call_cross_file_parent_const/src/lib/main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let earth_half = find_value(&result, "earth_half");
+    assert!(
+        (earth_half - 3_185_500.0).abs() < 1e-10,
+        "expected 3185500.0, got {earth_half}"
+    );
+}
+
+#[test]
 fn eval_inline_dag_call_in_for_comp_with_loop_var() {
     // Motivating shape: inline call inside a `for` whose arg references the
     // loop variable via an indexed graph ref.

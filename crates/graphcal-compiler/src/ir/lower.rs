@@ -142,6 +142,16 @@ pub struct IR {
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
     pub imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    /// Declared types for imported names that are not backed by a pre-evaluated
+    /// value at this compilation boundary.
+    ///
+    /// Inline DAG bodies use this for `import parent.{const}`: the body needs
+    /// the imported name's type during dim-checking, while the concrete value is
+    /// supplied later by the caller or by the dependency that owns the DAG.
+    pub imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    /// Source bindings for imported values whose runtime value is supplied
+    /// outside this IR.
+    pub imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     /// Names of declarations marked `pub` (or `pub(bind)`) in the file.
     ///
     /// Carried through from the resolver so downstream stages — most
@@ -151,6 +161,15 @@ pub struct IR {
     /// matching the rules for cross-file imports. Implicit visibility
     /// (params are visible by default) is already baked in.
     pub pub_names: HashSet<String>,
+}
+
+/// Runtime source of an imported value visible inside a DAG body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedValueSource {
+    /// DAG that owns the original declaration.
+    pub dag_id: crate::syntax::dag_id::DagId,
+    /// Original declaration name in the owning DAG.
+    pub source_name: String,
 }
 
 /// Convert a `DeclName`-keyed dep map from the resolver to a `ScopedName`-keyed map.
@@ -232,7 +251,17 @@ pub(crate) fn lower_to_builder(
     }
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, HashMap::new(), dag_id, None)
+    build_ir_from_resolved(
+        ast,
+        src,
+        resolved,
+        type_anns,
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        dag_id,
+        None,
+    )
 }
 
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
@@ -257,6 +286,44 @@ pub fn lower_to_builder_with_imported_values(
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    let imported_decl_types = imported_values
+        .iter()
+        .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
+        .collect();
+    lower_to_builder_with_imported_value_decls(
+        ast,
+        src,
+        imported_names,
+        imported_values,
+        imported_decl_types,
+        HashMap::new(),
+        dag_id,
+    )
+}
+
+/// Lower an AST with imported value names plus declared types for imports whose
+/// runtime values will be supplied later.
+///
+/// This is used for inline DAG bodies that import a parent const. The resolver
+/// needs the local imported name in scope, dim-checking needs its declared type,
+/// and evaluation gets the concrete value from `imported_value_sources`.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn lower_to_builder_with_imported_value_decls(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    dag_id: &crate::syntax::dag_id::DagId,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
@@ -264,7 +331,17 @@ pub fn lower_to_builder_with_imported_values(
     let type_anns = extract_type_annotations(ast);
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(ast, src, resolved, type_anns, imported_values, dag_id, None)
+    build_ir_from_resolved(
+        ast,
+        src,
+        resolved,
+        type_anns,
+        imported_values,
+        imported_decl_types,
+        imported_value_sources,
+        dag_id,
+        None,
+    )
 }
 
 /// Lower a `dag { ... }` body as if it were a standalone file.
@@ -277,18 +354,20 @@ pub fn lower_to_builder_with_imported_values(
 /// — cross-scope values must be either passed in via the dag's own params or
 /// brought into scope explicitly via `import <self>.{...}`.
 ///
-/// `import .. { ... }` declarations inside the dag body are pre-processed by
-/// [`preprocess_dag_body_self_imports`] before name resolution runs: const
-/// items from the parent file are brought into scope as locally-named imported
-/// values; type-system items (dimensions, units, types, indexes, sibling
-/// dags) are elided because they are already available through the
-/// parent-registry merge.
+/// The caller is responsible for pre-processing dag-body `import` declarations
+/// (resolving self-imports to local names, classifying items against the
+/// parent's value/type-system surface, recording source bindings) and passing
+/// in:
 ///
-/// `parent_value_decls` maps the parent file's const/param/node names to
-/// their kind and declared type. Pass an empty map when there is no parent
-/// (e.g., when invoked from tests for a synthetic standalone body). When the
-/// map is non-empty, dag-body `import <self>.{name}` items are matched
-/// against it to populate the resolver's imported-value scope.
+/// - `stripped_body`: the dag body with self-import declarations removed.
+///   Cross-file imports inside dag bodies (if any) are still left for the
+///   downstream resolver to handle through the regular import machinery.
+/// - `imported_names`: the resolver scope contribution from preprocessed
+///   self-imports.
+/// - `imported_decl_types`: per-name declared types for those self-imports.
+/// - `imported_value_sources`: per-name source bindings for those
+///   self-imports — recording that the value comes from the parent DAG at
+///   runtime.
 ///
 /// The returned `IR` has a `dag_id` formed by appending `dag_name` to
 /// `parent_dag_id`, so nested-scope diagnostics have a stable source location.
@@ -296,42 +375,31 @@ pub fn lower_to_builder_with_imported_values(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if name resolution or type-system construction
-/// fails for the dag body, or if a self-import names a parent declaration
-/// that does not exist or is a runtime declaration (param/node) — runtime
-/// values must be threaded through the dag's own params, not imported.
+/// fails for the dag body.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dag-body lowering threads pre-processed import metadata + parent registry"
+)]
 pub fn lower_dag_body_to_ir(
     dag_name: &str,
-    body: &[crate::desugar::desugared_ast::Declaration],
+    stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
-    parent_value_decls: &HashMap<String, ParentValueKind>,
-    parent_pub_names: &HashSet<String>,
+    imported_names: &ImportedValueNames,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
-    let parent_type_system_names = type_system_names_from_registry(parent_registry);
-    let DagBodySelfImports {
-        names: imported_names,
-        values: imported_values,
-        stripped_body,
-    } = preprocess_dag_body_self_imports(
-        body,
-        parent_dag_id,
-        &parent_type_system_names,
-        parent_value_decls,
-        parent_pub_names,
-        src,
-    )?;
-
     let virtual_file = File {
-        declarations: stripped_body,
+        declarations: stripped_body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
 
-    let resolved = resolve_with_imported_values(&virtual_file, src, &imported_names)?;
+    let resolved = resolve_with_imported_values(&virtual_file, src, imported_names)?;
     let type_anns = extract_type_annotations(&virtual_file);
 
     let (builder, unfrozen) = build_ir_from_resolved(
@@ -339,7 +407,9 @@ pub fn lower_dag_body_to_ir(
         src,
         resolved,
         type_anns,
-        imported_values,
+        HashMap::new(),
+        imported_decl_types,
+        imported_value_sources,
         &dag_dag_id,
         Some(parent_registry),
     )?;
@@ -348,7 +418,7 @@ pub fn lower_dag_body_to_ir(
 
 /// What kind of value declaration a name in the parent file refers to.
 ///
-/// Used by [`preprocess_dag_body_self_imports`] to classify each item in a
+/// Used by `preprocess_dag_body_self_imports` to classify each item in a
 /// dag-body `import <self>.{...}` brace list, choosing between the resolver's
 /// const-name vs. runtime-name slots and rejecting runtime imports per the
 /// `import` (compile-time only) discipline.
@@ -364,175 +434,23 @@ pub enum ParentValueKind {
     Node(DeclaredType),
 }
 
-/// Result of [`preprocess_dag_body_self_imports`]: imported names + values
-/// for the resolver, plus the body with self-import declarations stripped.
+/// Result of `preprocess_dag_body_self_imports`: imported names, declared
+/// types, source bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    pub decl_types: HashMap<ScopedName, DeclaredType>,
+    pub value_sources: HashMap<ScopedName, ImportedValueSource>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
-}
-
-/// Pre-process `import <self>.{...}` declarations inside a dag body.
-///
-/// A self-import is one whose `ModulePath` segments equal the parent file's
-/// `DagId` segments. For each self-import, every brace-list item is
-/// classified against `parent_type_system_names`, `parent_value_decls`, and
-/// `parent_pub_names`. The classification mirrors cross-file `import` rules
-/// so that the same `import` grammar carries the same visibility discipline
-/// regardless of whether the path names another file or the current one
-/// (Concept 9 — strong consistency invariant):
-///
-/// - Type-system items (dim/unit/type/union/index/dag): elided when
-///   `pub`-marked. They are already accessible through the parent-registry
-///   merge once visibility is satisfied.
-/// - `const` items: added to `ImportedValueNames::const_names` and to
-///   `imported_values` with a placeholder runtime value and the parent's
-///   declared type, but only when `pub`-marked. The placeholder is replaced
-///   by a real value either through cross-file merge (see
-///   `merge_dep_dag_tirs` in the eval project pipeline) or through
-///   caller-scope fallback at evaluation time.
-/// - `param` / `node` items: rejected with `ImportRuntimeItem` — runtime
-///   values must be passed via the dag's own params, regardless of pub.
-/// - Items that exist in the parent but are not `pub`: rejected with
-///   `ImportPrivateItem`, identical to the cross-file path.
-/// - Names not found in the parent at all: rejected with
-///   `ImportNameNotFound`.
-///
-/// Non-self imports (paths that do not match `parent_dag_id`) are left in
-/// the body untouched. They are handled by downstream project-pipeline
-/// stages — this helper only resolves the `<self>` case so that single-file
-/// fixtures and same-file dag-body imports compile.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if a self-import names a runtime declaration
-/// (param/node), a private declaration (no `pub`), or a name that does not
-/// exist in the parent.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn preprocess_dag_body_self_imports(
-    body: &[crate::desugar::desugared_ast::Declaration],
-    parent_dag_id: &crate::syntax::dag_id::DagId,
-    parent_type_system_names: &HashSet<String>,
-    parent_value_decls: &HashMap<String, ParentValueKind>,
-    parent_pub_names: &HashSet<String>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<DagBodySelfImports, GraphcalError> {
-    let mut names = ImportedValueNames::default();
-    let mut values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
-    let mut stripped_body: Vec<crate::desugar::desugared_ast::Declaration> =
-        Vec::with_capacity(body.len());
-
-    for decl in body {
-        let DeclKind::Import(import_decl) = &decl.kind else {
-            stripped_body.push(decl.clone());
-            continue;
-        };
-
-        if !is_self_import_path(&import_decl.path, parent_dag_id) {
-            stripped_body.push(decl.clone());
-            continue;
-        }
-
-        match &import_decl.kind {
-            crate::syntax::ast::ImportKind::Selective(items) => {
-                for item in items {
-                    let orig_name = &item.name.name;
-                    let local_name = item.local_name().to_string();
-                    let span = item.name.span;
-                    let exists_as_type_system =
-                        parent_type_system_names.contains(orig_name.as_str());
-                    let value_kind = parent_value_decls.get(orig_name.as_str());
-
-                    if !exists_as_type_system && value_kind.is_none() {
-                        return Err(GraphcalError::ImportNameNotFound {
-                            name: orig_name.clone(),
-                            file_path: import_decl.path.display_path(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
-                    }
-
-                    if !parent_pub_names.contains(orig_name.as_str()) {
-                        return Err(GraphcalError::ImportPrivateItem {
-                            name: orig_name.clone(),
-                            file_path: import_decl.path.display_path(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
-                    }
-
-                    match value_kind {
-                        Some(ParentValueKind::Const(dt)) => {
-                            let scoped = ScopedName::Local(local_name);
-                            names.const_names.push((scoped.clone(), span));
-                            values.insert(scoped, (placeholder_runtime_value_for(dt), dt.clone()));
-                        }
-                        Some(ParentValueKind::Param(_) | ParentValueKind::Node(_)) => {
-                            return Err(GraphcalError::ImportRuntimeItem {
-                                name: orig_name.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
-                        }
-                        // The name was a type-system item; the
-                        // parent-registry merge already exposes it, so
-                        // nothing more to bind for the resolver.
-                        None => {}
-                    }
-                }
-            }
-            crate::syntax::ast::ImportKind::Module { .. } => {
-                // Bare-module / aliased self-import (`import <self>;` or
-                // `import <self> as alias;`) is a no-op as a name source: the
-                // parent-registry merge already exposes type-system items,
-                // and bringing the parent file's value declarations under a
-                // module alias would shadow the dag body's own scope. Leave
-                // the declaration in place so downstream stages may
-                // diagnose it if needed.
-                stripped_body.push(decl.clone());
-            }
-        }
-    }
-
-    Ok(DagBodySelfImports {
-        names,
-        values,
-        stripped_body,
-    })
-}
-
-/// Returns true if `path` refers to the file identified by `parent_dag_id`.
-///
-/// The user-typed module path lives in package-namespace coordinates (e.g.
-/// `lib.lib`), while the parent file's `DagId` may carry an additional
-/// project-root-relative prefix (e.g. `src/lib/lib` when the manifest's
-/// `source_dir = "src"`). The match is therefore a suffix comparison: if
-/// `path.segments` equals the trailing segments of `parent_dag_id`, this is
-/// a self-import.
-fn is_self_import_path(
-    path: &crate::syntax::ast::ModulePath,
-    parent_dag_id: &crate::syntax::dag_id::DagId,
-) -> bool {
-    let segs = parent_dag_id.segments();
-    if path.segments.len() > segs.len() {
-        return false;
-    }
-    let offset = segs.len() - path.segments.len();
-    path.segments
-        .iter()
-        .zip(segs[offset..].iter())
-        .all(|(p, q)| p.name.as_str() == q.as_ref())
 }
 
 /// Collect every type-system declaration name from a frozen [`Registry`].
 ///
 /// Used to build the `parent_type_system_names` argument for
-/// [`preprocess_dag_body_self_imports`] when the caller has a frozen
-/// registry (e.g. inside `lower_dag_body_to_ir`).
-fn type_system_names_from_registry(registry: &Registry) -> HashSet<String> {
+/// `preprocess_dag_body_self_imports` when the caller has a frozen
+/// registry (e.g. inside `compile_inline_dag_bodies` orchestrating
+/// dag-body lowering for a file's own inline DAGs).
+#[must_use]
+pub fn type_system_names_from_registry(registry: &Registry) -> HashSet<String> {
     let mut out = HashSet::new();
     for (name, _) in registry.dimensions.all_dimensions() {
         out.insert(name.to_string());
@@ -556,7 +474,7 @@ fn type_system_names_from_registry(registry: &Registry) -> HashSet<String> {
 /// member/index/dag) declared in `file`.
 ///
 /// Used to build the `parent_type_system_names` argument for
-/// [`preprocess_dag_body_self_imports`] when the caller has the parent
+/// `preprocess_dag_body_self_imports` when the caller has the parent
 /// file's AST handy but no frozen [`Registry`].
 #[must_use]
 pub fn collect_type_system_names(file: &crate::desugar::desugared_ast::File) -> HashSet<String> {
@@ -593,37 +511,6 @@ pub fn collect_type_system_names(file: &crate::desugar::desugared_ast::File) -> 
     out
 }
 
-/// Placeholder runtime value for a self-imported declaration.
-///
-/// The dag body's `imported_values` map carries a `(RuntimeValue,
-/// DeclaredType)` pair for each imported name so that downstream stages can
-/// build a complete `declared_types` map for dim-checking. At
-/// TIR-construction time we do not yet have the parent file's evaluated
-/// const value — the parent file may not even have been evaluated when its
-/// dag body is compiled. The placeholder is replaced before evaluation in
-/// one of two ways:
-///
-/// - **Cross-file calls**: `merge_dep_dag_tirs` overwrites the placeholder
-///   with the dep file's real const value when cloning the dag TIR for a
-///   `@module.dag(args).out` site.
-/// - **Same-file calls / same-file `include`**: at evaluation time, the
-///   placeholder is shadowed by the caller's actual value via the
-///   caller-scope fallback in `eval_inline_dag_call`.
-///
-/// The concrete `DeclaredType` chooses the variant; the value itself is the
-/// type's "neutral" element. It is never observed in well-formed code.
-const fn placeholder_runtime_value_for(dt: &DeclaredType) -> RuntimeValue {
-    match dt {
-        DeclaredType::Bool => RuntimeValue::Bool(false),
-        DeclaredType::Int => RuntimeValue::Int(0),
-        DeclaredType::Datetime(_)
-        | DeclaredType::Label(_)
-        | DeclaredType::Struct(_, _)
-        | DeclaredType::Indexed { .. }
-        | DeclaredType::Scalar(_) => RuntimeValue::Scalar(0.0),
-    }
-}
-
 /// Remove and return the type annotation for `name`, or raise an internal error
 /// if it was dropped during resolution. The parser and resolver jointly
 /// guarantee that every top-level const/param/node ends up in `type_anns`;
@@ -651,12 +538,18 @@ fn take_type_ann(
     clippy::too_many_lines,
     reason = "single linear pipeline — splitting would obscure the flow"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "IR construction threads imported value type/source metadata"
+)]
 fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     mut resolved: ResolvedFile,
     mut type_anns: HashMap<String, TypeExpr>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::syntax::dag_id::DagId,
     parent_registry: Option<&Registry>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
@@ -794,6 +687,8 @@ fn build_ir_from_resolved(
             .map(|(k, v)| (ScopedName::local(k), v))
             .collect(),
         imported_values,
+        imported_decl_types,
+        imported_value_sources,
         pub_names: resolved.pub_names.iter().map(ToString::to_string).collect(),
     };
 
@@ -820,6 +715,10 @@ pub struct UnfrozenIR {
     expected_fail: HashMap<ScopedName, ExpectedFail>,
     // Key-lookup only, order irrelevant.
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    // Key-lookup only, order irrelevant.
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    // Key-lookup only, order irrelevant.
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     // Names of declarations marked `pub`/`pub(bind)` (plus implicit-pub
     // params). Used by `preprocess_dag_body_self_imports` to enforce
     // visibility on dag-body `import <self>.{...}` items.
@@ -846,6 +745,8 @@ impl UnfrozenIR {
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             imported_values: self.imported_values,
+            imported_decl_types: self.imported_decl_types,
+            imported_value_sources: self.imported_value_sources,
             pub_names: self.pub_names,
         }
     }
