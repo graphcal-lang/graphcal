@@ -74,11 +74,13 @@ pub(super) fn lower_and_finalize(
     )?;
 
     // Process deferred inline DAG includes: compile DAG body to IR and merge.
+    let importer_loaded = &project.files[file_dag_id];
     process_deferred_inline_dag_includes(
         &ctx.deferred_inline_dags,
         file_src,
         file_ast,
         file_dag_id,
+        &importer_loaded.dag_body_self_imports,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -98,8 +100,12 @@ pub(super) fn lower_and_finalize(
     }
 
     // Type-resolve, merge dep dag TIRs from module imports, then check dimensions.
-    let mut tir =
-        graphcal_compiler::tir::typed::type_resolve_with_dag_id(ir, file_src, file_dag_id)?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_dag_id(
+        ir,
+        file_src,
+        file_dag_id,
+        &importer_loaded.dag_body_self_imports,
+    )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
 
@@ -327,6 +333,7 @@ pub(super) fn process_deferred_inline_dag_includes(
     file_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    importer_self_import_paths: &HashSet<String>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
@@ -344,6 +351,7 @@ pub(super) fn process_deferred_inline_dag_includes(
             &importer_type_system_names,
             &importer_value_decls,
             &importer_pub_names,
+            importer_self_import_paths,
             file_src,
         )?;
         let mut combined_names = deferred.dag_imported_names.clone();

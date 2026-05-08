@@ -367,6 +367,11 @@ pub fn lower_to_builder_with_imported_value_decls(
 /// map is non-empty, dag-body `import <self>.{name}` items are matched
 /// against it to populate the resolver's imported-value scope.
 ///
+/// `self_import_paths` is the loader-computed set of import-path display
+/// strings (within this dag body) that resolve to the parent file itself.
+/// Pass an empty set when no loader-level resolution is available (e.g.
+/// in single-file fixture tests).
+///
 /// The returned `IR` has a `dag_id` formed by appending `dag_name` to
 /// `parent_dag_id`, so nested-scope diagnostics have a stable source location.
 ///
@@ -380,12 +385,17 @@ pub fn lower_to_builder_with_imported_value_decls(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dag-body lowering threads parent classification + loader-resolved self-import set"
+)]
 pub fn lower_dag_body_to_ir(
     dag_name: &str,
     body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
     parent_value_decls: &HashMap<String, ParentValueKind>,
     parent_pub_names: &HashSet<String>,
+    self_import_paths: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
@@ -401,6 +411,7 @@ pub fn lower_dag_body_to_ir(
         &parent_type_system_names,
         parent_value_decls,
         parent_pub_names,
+        self_import_paths,
         src,
     )?;
 
@@ -455,13 +466,15 @@ pub struct DagBodySelfImports {
 
 /// Pre-process `import <self>.{...}` declarations inside a dag body.
 ///
-/// A self-import is one whose `ModulePath` segments equal the parent file's
-/// `DagId` segments. For each self-import, every brace-list item is
-/// classified against `parent_type_system_names`, `parent_value_decls`, and
-/// `parent_pub_names`. The classification mirrors cross-file `import` rules
-/// so that the same `import` grammar carries the same visibility discipline
-/// regardless of whether the path names another file or the current one
-/// (Concept 9 — strong consistency invariant):
+/// A self-import is one whose `ModulePath` display string is in
+/// `self_import_paths` — pre-computed by the loader from a real path-to-
+/// canonical resolution against the file's own canonical path. For each
+/// self-import, every brace-list item is classified against
+/// `parent_type_system_names`, `parent_value_decls`, and `parent_pub_names`.
+/// The classification mirrors cross-file `import` rules so that the same
+/// `import` grammar carries the same visibility discipline regardless of
+/// whether the path names another file or the current one (Concept 9 —
+/// strong consistency invariant):
 ///
 /// - Type-system items (dim/unit/type/union/index/dag): elided when
 ///   `pub`-marked. They are already accessible through the parent-registry
@@ -477,10 +490,10 @@ pub struct DagBodySelfImports {
 /// - Names not found in the parent at all: rejected with
 ///   `ImportNameNotFound`.
 ///
-/// Non-self imports (paths that do not match `parent_dag_id`) are left in
-/// the body untouched. They are handled by downstream project-pipeline
-/// stages — this helper only resolves the `<self>` case so that single-file
-/// fixtures and same-file dag-body imports compile.
+/// Non-self imports (paths whose display is not in `self_import_paths`) are
+/// left in the body untouched. They are handled by downstream project-
+/// pipeline stages — this helper only resolves the `<self>` case so that
+/// same-file dag-body imports compile.
 ///
 /// # Errors
 ///
@@ -497,6 +510,7 @@ pub fn preprocess_dag_body_self_imports(
     parent_type_system_names: &HashSet<String>,
     parent_value_decls: &HashMap<String, ParentValueKind>,
     parent_pub_names: &HashSet<String>,
+    self_import_paths: &HashSet<String>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
@@ -511,7 +525,7 @@ pub fn preprocess_dag_body_self_imports(
             continue;
         };
 
-        if !is_self_import_path(&import_decl.path, parent_dag_id) {
+        if !self_import_paths.contains(&import_decl.path.display_path()) {
             stripped_body.push(decl.clone());
             continue;
         }
@@ -590,29 +604,6 @@ pub fn preprocess_dag_body_self_imports(
         value_sources,
         stripped_body,
     })
-}
-
-/// Returns true if `path` refers to the file identified by `parent_dag_id`.
-///
-/// The user-typed module path lives in package-namespace coordinates (e.g.
-/// `lib.lib`), while the parent file's `DagId` may carry an additional
-/// project-root-relative prefix (e.g. `src/lib/lib` when the manifest's
-/// `source_dir = "src"`). The match is therefore a suffix comparison: if
-/// `path.segments` equals the trailing segments of `parent_dag_id`, this is
-/// a self-import.
-fn is_self_import_path(
-    path: &crate::syntax::ast::ModulePath,
-    parent_dag_id: &crate::syntax::dag_id::DagId,
-) -> bool {
-    let segs = parent_dag_id.segments();
-    if path.segments.len() > segs.len() {
-        return false;
-    }
-    let offset = segs.len() - path.segments.len();
-    path.segments
-        .iter()
-        .zip(segs[offset..].iter())
-        .all(|(p, q)| p.name.as_str() == q.as_ref())
 }
 
 /// Collect every type-system declaration name from a frozen [`Registry`].

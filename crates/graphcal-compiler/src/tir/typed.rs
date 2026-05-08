@@ -4,7 +4,7 @@
 //! `TypeExprKind::Indexed::indexes`) into concrete dimensions, struct types,
 //! generic dimension parameters, or generic index parameters.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -802,27 +802,39 @@ impl TIR {
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let parent_dag_id =
         crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
-    type_resolve_with_dag_id(ir, src, &parent_dag_id)
+    type_resolve_with_dag_id(ir, src, &parent_dag_id, &HashSet::new())
 }
 
-/// Like [`type_resolve`] but with an explicit parent `DagId` that may
-/// differ from what would be derived from `src.name()`.
+/// Like [`type_resolve`] but with an explicit parent `DagId` and a loader-
+/// resolved set of dag-body self-import path strings that may differ from
+/// what would be derived from `src.name()` alone.
 ///
 /// The project pipeline calls this with the loader's canonical `DagId`
-/// (the file's relative path within the package root) so that
-/// `import <self>.{...}` declarations inside dag bodies match against
-/// the same identity the loader uses for the file. Single-file
-/// invocations without a project manifest are happy to use [`type_resolve`],
-/// which derives `DagId` from `src.name()`.
+/// (the file's relative path within the package root) and the loader-
+/// computed `dag_body_self_imports` set so that `import <self>.{...}`
+/// declarations inside dag bodies are detected by exact path-membership
+/// rather than path-vs-DagId heuristics. Single-file invocations without
+/// a project manifest are happy to use [`type_resolve`], which derives
+/// `DagId` from `src.name()` and treats every dag body as having no
+/// loader-resolved self-imports.
+///
+/// `dag_body_self_imports` is the flat set of import-path display strings
+/// that, when used inside any inline dag body of this file, resolve back
+/// to the file itself.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
 /// dimension, struct, or index, or if compiling a dag body fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
 pub fn type_resolve_with_dag_id(
     ir: IR,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::syntax::dag_id::DagId,
+    dag_body_self_imports: &HashSet<String>,
 ) -> Result<TIR, GraphcalError> {
     // Capture pub_names before `type_resolve_single` consumes the IR so the
     // dag-body `import <self>.{...}` visibility check can mirror the
@@ -856,6 +868,7 @@ pub fn type_resolve_with_dag_id(
             &tir.registry,
             &parent_value_decls,
             &parent_pub_names,
+            dag_body_self_imports,
             src,
             parent_dag_id,
         )?;
