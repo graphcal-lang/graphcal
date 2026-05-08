@@ -708,6 +708,11 @@ pub struct TIR {
             crate::registry::declared_type::DeclaredType,
         ),
     >,
+    /// Declared types for imported names whose values are supplied by a caller
+    /// or dependency at evaluation time.
+    pub imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    /// Runtime source bindings for imported DAG-body values.
+    pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     /// Per-dag compiled TIRs, one per `dag { ... }` declaration in this file.
     ///
     /// Each entry is the TIR of the dag body, compiled as if it were a
@@ -773,6 +778,9 @@ impl TIR {
         // Include imported values' declared types so dim_check can resolve references.
         // ScopedName → String: dim_check uses flat string keys.
         for (name, (_rv, dt)) in &self.imported_values {
+            declared_types.insert(name.to_string(), dt.clone());
+        }
+        for (name, dt) in &self.imported_decl_types {
             declared_types.insert(name.to_string(), dt.clone());
         }
         Ok(declared_types)
@@ -986,6 +994,8 @@ fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Gr
         resolved_decl_types,
         domain_constraints: HashMap::new(), // Resolved later in compile()
         imported_values: ir.imported_values,
+        imported_decl_types: ir.imported_decl_types,
+        imported_value_sources: ir.imported_value_sources,
         dags: DagRegistry::new(),
         pub_nodes: std::collections::HashSet::new(),
     })

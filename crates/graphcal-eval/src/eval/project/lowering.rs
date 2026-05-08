@@ -145,9 +145,9 @@ pub(super) fn lower_and_finalize(
 /// Only `pub` dags are exposed across the import boundary; private dags
 /// in the dep stay local (the dep's `pub_names` already filters them).
 ///
-/// Each cloned dag TIR also receives its dep file's `const_values` in
-/// `imported_values`, so dag bodies that reference dep-file consts via
-/// `import .. { name }` can resolve them at inline-call eval time.
+/// Each cloned dag TIR also receives the dep-file values named by the dag
+/// body's explicit imports, so `import dep.{const as local}` resolves under
+/// the local alias at inline-call eval time.
 pub(super) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
@@ -170,19 +170,20 @@ pub(super) fn merge_dep_dag_tirs(
                 continue;
             }
             let mut cloned = dag_tir.clone();
-            // Inject dep-file consts (and any other declared values) so a
-            // dep dag body's `@r_earth` reference resolves even when the
-            // importer has no such name in scope. Always overwrite: dag
-            // bodies that use `import <self>.{...}` carry a placeholder
-            // `(value, type)` entry produced by
-            // `preprocess_dag_body_self_imports` at TIR-construction time;
-            // the dep file's freshly evaluated value is the authoritative
-            // one and must replace it.
-            for (name, value) in &dep_eval.const_values {
-                if let Some(dt) = dep_eval.declared_types.get(name) {
+            // Inject only the values that the dag body imported from its
+            // owning dep DAG. There are no synthetic placeholder values to
+            // overwrite here; the source map carries the import alias.
+            for (local_name, source) in &cloned.imported_value_sources {
+                if &source.dag_id != dep_dag_id {
+                    continue;
+                }
+                if let Some(value) = dep_eval.const_values.get(&source.source_name)
+                    && let Some(dt) = dep_eval.declared_types.get(&source.source_name)
+                {
                     cloned
                         .imported_values
-                        .insert(ScopedName::local(name.clone()), (value.clone(), dt.clone()));
+                        .entry(local_name.clone())
+                        .or_insert_with(|| (value.clone(), dt.clone()));
                 }
             }
             tir.dags.insert(
@@ -367,11 +368,13 @@ pub(super) fn process_deferred_inline_dag_includes(
         // prelude + explicitly imported items in scope.
         let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
         let (dag_builder, dag_unfrozen) =
-            graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+            graphcal_compiler::ir::lower::lower_to_builder_with_imported_value_decls(
                 &stripped_body,
                 file_src,
                 &combined_names,
-                self_imports.values,
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
                 &dag_dag_id,
             )?;
 
@@ -443,39 +446,36 @@ pub(super) fn process_deferred_inline_dag_includes(
 
 /// Build a `name → ParentValueKind` table from the importer's AST.
 ///
-/// Used to seed [`graphcal_compiler::ir::lower::preprocess_dag_body_self_imports`]
-/// before compiling each inline-dag body. The `DeclaredType` carried on
-/// each entry is a placeholder — the importer's full type-system context
-/// is not available here as a frozen registry, but `merge_dependency`
-/// drops the dag body's `imported_values` during merging and the importer
-/// IR's own resolved declared types are used by downstream dim-checking,
-/// so the placeholder never surfaces.
+/// Used to classify dag-body self-imports before compiling an inline DAG
+/// include. The declared type payload is not consumed on this include path:
+/// the dag IR is merged into the importer before type resolution, so the
+/// importer's own resolved declared types drive downstream dim-checking.
 fn build_importer_value_decls(
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> HashMap<String, graphcal_compiler::ir::lower::ParentValueKind> {
     use graphcal_compiler::ir::lower::ParentValueKind;
     use graphcal_compiler::registry::declared_type::DeclaredType;
     use graphcal_compiler::syntax::dimension::Dimension;
-    let placeholder = || DeclaredType::Scalar(Dimension::dimensionless());
+    let unused_type = || DeclaredType::Scalar(Dimension::dimensionless());
     let mut out = HashMap::new();
     for decl in &importer_ast.declarations {
         match &decl.kind {
             DeclKind::ConstNode(c) => {
                 out.insert(
                     c.name.value.to_string(),
-                    ParentValueKind::Const(placeholder()),
+                    ParentValueKind::Const(unused_type()),
                 );
             }
             DeclKind::Param(p) => {
                 out.insert(
                     p.name.value.to_string(),
-                    ParentValueKind::Param(placeholder()),
+                    ParentValueKind::Param(unused_type()),
                 );
             }
             DeclKind::Node(n) => {
                 out.insert(
                     n.name.value.to_string(),
-                    ParentValueKind::Node(placeholder()),
+                    ParentValueKind::Node(unused_type()),
                 );
             }
             _ => {}
