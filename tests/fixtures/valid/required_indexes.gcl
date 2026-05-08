@@ -1,7 +1,3 @@
----
-source: crates/graphcal-fmt/tests/format_tests.rs
-expression: formatted
----
 // Required index declarations — bindable via parameterized import.
 dim Velocity = Length / Time;
 dim Acceleration = Length / Time^2;
