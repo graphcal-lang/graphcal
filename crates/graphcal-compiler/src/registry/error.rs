@@ -821,18 +821,18 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::M015))]
     ManifestError { message: String },
 
-    #[error("cross-file import `{path}` requires a `graphcal.toml` manifest")]
+    #[error("cross-file import `{path}` from a file outside any package")]
     #[diagnostic(
         code(graphcal::M017),
         help(
-            "a Graphcal file without a `graphcal.toml` manifest is a standalone script and may only reference its own top-level decls (via `import <file_stem>.{{...}};`) or its own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place the files under `source_dir`."
+            "a Graphcal file is either part of a real package (lives at `<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`) or a standalone virtual-package script. Standalone files may only reference their own top-level decls (via `import <file_stem>.{{...}};`) or their own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place this file inside the package's namespace directory."
         )
     )]
     CrossFileImportInVirtualPackage {
         path: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("not reachable in a manifest-less project")]
+        #[label("not reachable from a virtual-package file")]
         span: SourceSpan,
     },
 

@@ -1,0 +1,4 @@
+// Include both x and y. y's expression references @x internally.
+include lib.lib().{ x, y };
+
+node z: Dimensionless = @y + 1.0;

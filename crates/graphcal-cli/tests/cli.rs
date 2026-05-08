@@ -308,7 +308,10 @@ fn eval_set_bad_value() {
 #[test]
 fn eval_missing_import_error() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("invalid/multi/missing_module/main.gcl")])
+        .args([
+            "eval",
+            &fixture("invalid/multi/missing_module/src/missing_module/main.gcl"),
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -398,7 +401,10 @@ fn eval_tagged_union_json_output() {
 #[test]
 fn eval_import_name_not_found() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("invalid/multi/bad_name_import/main.gcl")])
+        .args([
+            "eval",
+            &fixture("invalid/multi/bad_name_import/src/bad_name_import/main.gcl"),
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -771,7 +777,10 @@ fn eval_assertions_compile_error_exit_code() {
 fn eval_explicit_index_import() {
     // Bug 3: `import "./lib.gcl" { Color }` should import the Color index explicitly.
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/multi/explicit_index/main.gcl")])
+        .args([
+            "eval",
+            &fixture("valid/multi/explicit_index/src/lib/main.gcl"),
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -1745,7 +1754,10 @@ fn eval_datetime_jd_unix() {
 #[test]
 fn eval_instantiated_import_selective() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/multi/instantiated_import/main.gcl")])
+        .args([
+            "eval",
+            &fixture("valid/multi/instantiated_import/src/rocket/main.gcl"),
+        ])
         .output()
         .expect("failed to run graphcal");
 

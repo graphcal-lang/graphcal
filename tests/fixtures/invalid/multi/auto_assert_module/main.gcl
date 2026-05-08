@@ -1,4 +1,0 @@
-// main.gcl -- module include; assertion in lib.gcl auto-evaluated
-import lib as lib;
-
-node result: Dimensionless = @lib.doubled + 1.0;

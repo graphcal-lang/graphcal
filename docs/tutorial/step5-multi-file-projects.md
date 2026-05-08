@@ -165,8 +165,10 @@ dag analyze {
 
 The moment you split into a second file, add a `graphcal.toml` at
 the project root and arrange the files under `<source_dir>/<pkg>/`
-as shown above. Sibling-file `import`s in a manifest-less project
-are rejected with a clear error.
+as shown above. Sibling-file `import`s are rejected with a clear
+error from any file that is not itself inside the package namespace —
+including a file sitting next to a `graphcal.toml` but outside its
+`<source_dir>/<pkg>/` directory.
 
 ## Circular Import Detection
 

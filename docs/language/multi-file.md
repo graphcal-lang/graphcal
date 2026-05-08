@@ -28,19 +28,26 @@ strings, and no `/` inside Graphcal source.
 A package has a name and a tree of modules. The name comes from one of
 two places:
 
-| Flavor       | Name source                          | When                                  |
-|--------------|--------------------------------------|---------------------------------------|
-| **Virtual**  | The file's stem (the `.gcl` filename without extension) | No `graphcal.toml` present          |
-| **Real**     | `package.name` in `graphcal.toml`    | A manifest sits in an ancestor dir    |
+| Flavor       | Name source                          | When                                                                  |
+|--------------|--------------------------------------|-----------------------------------------------------------------------|
+| **Virtual**  | The file's stem (the `.gcl` filename without extension) | No `graphcal.toml`, *or* the file lives outside the manifest's package namespace |
+| **Real**     | `package.name` in `graphcal.toml`    | The file lives at `<source_dir>/<package_name>.gcl` or under `<source_dir>/<package_name>/` |
 
 A **virtual package is a single file** — a standalone Graphcal script.
 The package consists of exactly one module: the file itself. The only
 import path that resolves in a virtual package is the file's own stem
 (see [Self-Reference](#self-reference-a-file-is-its-own-package)
-below). There are no sibling-file imports without a manifest; if a
-sibling file `helper.gcl` sits next to your script, the loader rejects
-`import helper.{X};` with a structured error pointing you at
-[Promoting to a Real Package](#promoting-to-a-real-package).
+below). There are no sibling-file imports from a virtual-package file;
+the loader rejects `import helper.{X};` with a structured error pointing
+you at [Promoting to a Real Package](#promoting-to-a-real-package).
+
+This applies even when a `graphcal.toml` sits next to the file. A
+manifest only "claims" files that live inside the package namespace
+(`<source_dir>/<package_name>.gcl` or under
+`<source_dir>/<package_name>/`); a loose `.gcl` sibling of the manifest
+is still a virtual-package script with no cross-file import privileges.
+There is exactly one rule: to import across files, the file must be in
+its package's namespace directory.
 
 A **real package** can span many files arranged in a directory tree
 under `source_dir`. Resolution walks `<source_dir>/<segments>.gcl`
@@ -767,9 +774,12 @@ package:
 
 ```text
 project/
-  constants.gcl   -- shared physical constants
-  params.gcl      -- tunable input parameters
-  main.gcl        -- computation graph, imports the others by their stems
+  graphcal.toml   -- [package] name = "project"
+  src/
+    project/
+      constants.gcl   -- shared physical constants
+      params.gcl      -- tunable input parameters
+      main.gcl        -- computation graph, imports the others
 ```
 
 ### Library / Application
@@ -854,9 +864,15 @@ command line. All `import` and `include` dependencies are resolved
 transitively from that file:
 
 ```bash
-graphcal eval project/main.gcl
+graphcal eval project/src/project/main.gcl
 ```
 
-If the entry file's directory or any ancestor contains a
-`graphcal.toml`, that manifest defines the package layout. Otherwise,
-the file is treated as a single-file virtual package.
+The entry file's package flavor is determined by where it lives. If a
+`graphcal.toml` sits in an ancestor directory **and** the entry file is
+inside that package's namespace
+(`<source_dir>/<package_name>.gcl` or under
+`<source_dir>/<package_name>/`), the manifest defines the package
+layout and the file can use cross-file imports. Otherwise — no manifest
+in any ancestor, or a manifest exists but the entry file lives outside
+its namespace — the file is treated as a single-file virtual package
+and may only self-reference.

@@ -3,6 +3,6 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // Module include: qualified graph refs with @
-import params;
+import params.lib;
 
 node total_mass: Mass = @params.dry_mass + @params.fuel_mass;

@@ -1427,20 +1427,17 @@ node bad: Mass = mass + length;
     #[test]
     fn imported_definitions_collected_for_selective_includes() {
         let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
             (
-                "graphcal.toml",
-                "[package]\nname = \"lib\"\nsource_dir = \".\"\n",
-            ),
-            (
-                "lib.gcl",
+                "src/lib/lib.gcl",
                 "param limit: Dimensionless = 100.0;\npub node doubled: Dimensionless = @limit * 2.0;\n",
             ),
             (
-                "main.gcl",
-                "include lib().{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
+                "src/lib/main.gcl",
+                "include lib.lib().{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
             ),
         ]);
-        let main_path = dir.path().join("main.gcl");
+        let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text);
@@ -1460,21 +1457,18 @@ node bad: Mass = mass + length;
 
     #[test]
     fn parse_error_in_imported_file_routes_to_imported_uri() {
-        // helper.gcl has a syntax error; main.gcl is fine. The diagnostic must
-        // surface on helper.gcl's URI, not main.gcl's URI.
+        // lib.gcl has a syntax error; main.gcl is fine. The diagnostic must
+        // surface on lib.gcl's URI, not main.gcl's URI.
         let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            ("src/helper/lib.gcl", "this is not valid graphcal"),
             (
-                "graphcal.toml",
-                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
-            ),
-            ("helper.gcl", "this is not valid graphcal"),
-            (
-                "main.gcl",
-                "import helper.{y};\nnode z: Dimensionless = 1.0;",
+                "src/helper/main.gcl",
+                "import helper.lib.{y};\nnode z: Dimensionless = 1.0;",
             ),
         ]);
-        let main_path = dir.path().join("main.gcl");
-        let helper_path = dir.path().join("helper.gcl");
+        let main_path = dir.path().join("src/helper/main.gcl");
+        let helper_path = dir.path().join("src/helper/lib.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let helper_uri = Url::from_file_path(&helper_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
@@ -1504,17 +1498,17 @@ node bad: Mass = mass + length;
     #[test]
     fn imported_definitions_keyed_by_local_alias_for_selective_imports() {
         let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
             (
-                "graphcal.toml",
-                "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+                "src/helper/lib.gcl",
+                "pub const node y: Dimensionless = 2.0;",
             ),
-            ("helper.gcl", "pub const node y: Dimensionless = 2.0;"),
             (
-                "main.gcl",
-                "import helper.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
+                "src/helper/main.gcl",
+                "import helper.lib.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
             ),
         ]);
-        let main_path = dir.path().join("main.gcl");
+        let main_path = dir.path().join("src/helper/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text);

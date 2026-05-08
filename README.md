@@ -55,7 +55,7 @@ graphcal eval path/to/file.gcl --set 'isp=450.0 s'
 graphcal eval path/to/file.gcl --input params.json
 
 # Multi-file project (import declarations resolved automatically)
-graphcal eval project/main.gcl
+graphcal eval project/src/project/main.gcl
 
 # Plot output (open interactive Vega-Lite chart in browser)
 graphcal eval path/to/file.gcl --plot browser
@@ -677,30 +677,31 @@ A multi-file project lives under a package manifest (`graphcal.toml`).
 `import` brings compile-time names (dimensions, units, types, indexes,
 const nodes, dags) into scope; `include` instantiates a DAG (or
 includes a sibling file's runtime params) and exposes its outputs.
-Paths are dot-separated and absolute from the package root.
+Paths are dot-separated and absolute from the package root, and every
+source file lives inside the package namespace
+`<source_dir>/<package_name>/` (default `<source_dir>` is `src`).
 
 ```toml
 # graphcal.toml
 [package]
 name = "rocket"
-source_dir = "."
 ```
 
 ```gcl
-// constants.gcl
+// src/rocket/constants.gcl
 pub dim Acceleration = Length / Time^2;
 pub const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 ```gcl
-// params.gcl
+// src/rocket/params.gcl
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
 param isp: Time = 320.0 s;
 ```
 
 ```gcl
-// main.gcl
+// src/rocket/main.gcl
 import rocket.constants.{ g0 };
 include rocket.params().{ dry_mass, fuel_mass, isp };
 
@@ -712,7 +713,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```sh
-$ graphcal eval main.gcl
+$ graphcal eval src/rocket/main.gcl
 g0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
@@ -726,7 +727,7 @@ Included params can be overridden at the command line (params not
 overridden keep their defaults), or rebound at the include site:
 
 ```sh
-$ graphcal eval main.gcl --set 'isp=450.0 s'
+$ graphcal eval src/rocket/main.gcl --set 'isp=450.0 s'
 g0         = 9.80665 m/s^2
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg

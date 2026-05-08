@@ -1,3 +1,0 @@
-include helper().{ x as imported_x };
-
-node y: Dimensionless = @imported_x + 1.0;

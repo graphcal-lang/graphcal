@@ -1,3 +1,2 @@
 [package]
 name = "bad_name_import"
-source_dir = "."

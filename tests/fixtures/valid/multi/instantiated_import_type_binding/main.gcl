@@ -1,6 +1,0 @@
-// main.gcl -- rebinds the lib's Widget type to MyWidget
-type MyWidget { size: Length }
-
-include lib(Widget: MyWidget).{ origin_size };
-
-node result: Length = @origin_size;

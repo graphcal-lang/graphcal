@@ -1,0 +1,2 @@
+// Import a library with a required param, providing the value.
+include library.lib(radius: 6371.0 km).{ circumference };

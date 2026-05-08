@@ -1,6 +1,0 @@
-// Entry point. Imports `circ`, which imports `circ.back`, which imports
-// `circ` again — closing the cycle. Expected diagnostic: M001 circular
-// import.
-import circ.{ x };
-
-node z: Dimensionless = @x + 0.0;
