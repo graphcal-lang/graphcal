@@ -18,19 +18,51 @@ fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
     let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
-    let parent_pub_names = ir.pub_names.clone();
     let parent_dag_id =
         crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
     let mut tir = crate::tir::typed::type_resolve(ir, &src)?;
-    crate::tir::typed::compile_inline_dag_bodies(
-        &mut tir,
-        &src,
-        &parent_dag_id,
-        &parent_pub_names,
-        &std::collections::HashSet::new(),
-    )?;
+    compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
+}
+
+/// Compile each inline dag body in `tir` with no self-import preprocessing.
+/// Used by compiler-side integration tests that don't have access to the
+/// eval crate's project pipeline.
+fn compile_inline_dag_bodies_test(
+    tir: &mut crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    parent_dag_id: &crate::syntax::dag_id::DagId,
+) -> Result<(), GraphcalError> {
+    let dag_names: Vec<String> = tir
+        .registry
+        .dags
+        .all_dags()
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in dag_names {
+        let body = tir
+            .registry
+            .dags
+            .get(&name)
+            .map(|d| d.body.clone())
+            .unwrap_or_default();
+        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
+            &name,
+            &body,
+            &tir.registry,
+            &crate::ir::resolve::ImportedValueNames::default(),
+            HashMap::new(),
+            HashMap::new(),
+            src,
+            parent_dag_id,
+        )?;
+        let mut compiled_dag = crate::tir::typed::type_resolve_single(dag_body_ir, src)?;
+        crate::tir::typed::populate_pub_nodes(&mut compiled_dag, &body);
+        tir.dags
+            .insert(crate::tir::typed::DagKey::local(name), compiled_dag);
+    }
+    Ok(())
 }
 
 #[test]

@@ -105,7 +105,7 @@ pub(super) fn lower_and_finalize(
     // afterward by `merge_dep_dag_tirs`.
     let parent_pub_names = ir.pub_names.clone();
     let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_src)?;
-    graphcal_compiler::tir::typed::compile_inline_dag_bodies(
+    crate::inline_dag::compile_inline_dag_bodies(
         &mut tir,
         file_src,
         file_dag_id,
@@ -347,11 +347,11 @@ pub(super) fn process_deferred_inline_dag_includes(
     let importer_local_type_names = collect_local_type_names(importer_ast);
     let importer_type_system_names =
         graphcal_compiler::ir::lower::collect_type_system_names(importer_ast);
-    let importer_value_decls = build_importer_value_decls(importer_ast);
+    let importer_value_decls = crate::inline_dag::build_importer_value_decls(importer_ast);
     for deferred in deferred_dags {
         // Pre-process `import <self>.{...}` declarations inside the dag body
         // so they bring parent-file consts into the resolver's scope.
-        let self_imports = graphcal_compiler::ir::lower::preprocess_dag_body_self_imports(
+        let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
             &deferred.dag_body.declarations,
             importer_dag_id,
             &importer_type_system_names,
@@ -456,46 +456,6 @@ pub(super) fn process_deferred_inline_dag_includes(
         }
     }
     Ok(())
-}
-
-/// Build a `name → ParentValueKind` table from the importer's AST.
-///
-/// Used to classify dag-body self-imports before compiling an inline DAG
-/// include. The declared type payload is not consumed on this include path:
-/// the dag IR is merged into the importer before type resolution, so the
-/// importer's own resolved declared types drive downstream dim-checking.
-fn build_importer_value_decls(
-    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
-) -> HashMap<String, graphcal_compiler::ir::lower::ParentValueKind> {
-    use graphcal_compiler::ir::lower::ParentValueKind;
-    use graphcal_compiler::registry::declared_type::DeclaredType;
-    use graphcal_compiler::syntax::dimension::Dimension;
-    let unused_type = || DeclaredType::Scalar(Dimension::dimensionless());
-    let mut out = HashMap::new();
-    for decl in &importer_ast.declarations {
-        match &decl.kind {
-            DeclKind::ConstNode(c) => {
-                out.insert(
-                    c.name.value.to_string(),
-                    ParentValueKind::Const(unused_type()),
-                );
-            }
-            DeclKind::Param(p) => {
-                out.insert(
-                    p.name.value.to_string(),
-                    ParentValueKind::Param(unused_type()),
-                );
-            }
-            DeclKind::Node(n) => {
-                out.insert(
-                    n.name.value.to_string(),
-                    ParentValueKind::Node(unused_type()),
-                );
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Add alias declarations for selective inline DAG includes.
