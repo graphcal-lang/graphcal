@@ -849,6 +849,7 @@ pub fn compile_inline_dag_bodies(
     // Build parent value-decl lookup table so dag-body `import <self>.{...}`
     // declarations can resolve const items against the parent file.
     let parent_value_decls = build_parent_value_decls(tir, src)?;
+    let parent_type_system_names = crate::ir::lower::type_system_names_from_registry(&tir.registry);
 
     // Snapshot dag names before iterating so we can take immutable borrows of
     // `tir.registry` inside the loop while mutating `tir.dags`.
@@ -865,13 +866,27 @@ pub fn compile_inline_dag_bodies(
             .get(&name)
             .map(|d| d.body.clone())
             .unwrap_or_default();
-        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            &name,
+        let crate::ir::lower::DagBodySelfImports {
+            names: imported_names,
+            decl_types: imported_decl_types,
+            value_sources: imported_value_sources,
+            stripped_body,
+        } = crate::ir::lower::preprocess_dag_body_self_imports(
             &body,
-            &tir.registry,
+            parent_dag_id,
+            &parent_type_system_names,
             &parent_value_decls,
             parent_pub_names,
             dag_body_self_imports,
+            src,
+        )?;
+        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
+            &name,
+            &stripped_body,
+            &tir.registry,
+            &imported_names,
+            imported_decl_types,
+            imported_value_sources,
             src,
             parent_dag_id,
         )?;
