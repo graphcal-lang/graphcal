@@ -794,7 +794,38 @@ impl TIR {
 pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
     let parent_dag_id =
         crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
+    type_resolve_with_dag_id(ir, src, &parent_dag_id)
+}
+
+/// Like [`type_resolve`] but with an explicit parent `DagId` that may
+/// differ from what would be derived from `src.name()`.
+///
+/// The project pipeline calls this with the loader's canonical `DagId`
+/// (the file's relative path within the package root) so that
+/// `import <self>.{...}` declarations inside dag bodies match against
+/// the same identity the loader uses for the file. Single-file
+/// invocations without a project manifest are happy to use [`type_resolve`],
+/// which derives `DagId` from `src.name()`.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if any type annotation references an unknown
+/// dimension, struct, or index, or if compiling a dag body fails.
+pub fn type_resolve_with_dag_id(
+    ir: IR,
+    src: &NamedSource<Arc<String>>,
+    parent_dag_id: &crate::syntax::dag_id::DagId,
+) -> Result<TIR, GraphcalError> {
+    // Capture pub_names before `type_resolve_single` consumes the IR so the
+    // dag-body `import <self>.{...}` visibility check can mirror the
+    // cross-file `pub`-or-bust rule (Concept 9 — same import grammar, same
+    // visibility discipline).
+    let parent_pub_names = ir.pub_names.clone();
     let mut tir = type_resolve_single(ir, src)?;
+
+    // Build parent value-decl lookup table so dag-body `import <self>.{...}`
+    // declarations can resolve const items against the parent file.
+    let parent_value_decls = build_parent_value_decls(&tir, src)?;
 
     // Snapshot dag names before iterating so we can take immutable borrows of
     // `tir.registry` inside the loop while mutating `tir.dags`.
@@ -815,8 +846,10 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
             &name,
             &body,
             &tir.registry,
+            &parent_value_decls,
+            &parent_pub_names,
             src,
-            &parent_dag_id,
+            parent_dag_id,
         )?;
         let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
         populate_pub_nodes(&mut compiled_dag, &body);
@@ -824,6 +857,51 @@ pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, Graph
     }
 
     Ok(tir)
+}
+
+/// Build the `name → ParentValueKind` table consumed by
+/// [`crate::ir::lower::preprocess_dag_body_self_imports`].
+///
+/// Walks the parent file's TIR-level const/param/node entries and resolves
+/// each declared type to a concrete `DeclaredType`. Declarations that carry
+/// a generic dim/index/type parameter cannot appear at file scope (generics
+/// are dag-body-only), so the conversion is total in well-formed input.
+fn build_parent_value_decls(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<String, crate::ir::lower::ParentValueKind>, GraphcalError> {
+    let mut out = HashMap::new();
+    for entry in &tir.consts {
+        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+            continue;
+        };
+        let dt = resolved_to_declared_type(resolved, src)?;
+        out.insert(
+            entry.name.member().to_string(),
+            crate::ir::lower::ParentValueKind::Const(dt),
+        );
+    }
+    for entry in &tir.params {
+        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+            continue;
+        };
+        let dt = resolved_to_declared_type(resolved, src)?;
+        out.insert(
+            entry.name.member().to_string(),
+            crate::ir::lower::ParentValueKind::Param(dt),
+        );
+    }
+    for entry in &tir.nodes {
+        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+            continue;
+        };
+        let dt = resolved_to_declared_type(resolved, src)?;
+        out.insert(
+            entry.name.member().to_string(),
+            crate::ir::lower::ParentValueKind::Node(dt),
+        );
+    }
+    Ok(out)
 }
 
 /// Populate a dag TIR's `pub_nodes` set from the AST body declarations.
@@ -2263,10 +2341,15 @@ mod tests {
 
     #[test]
     fn type_resolve_hohmann() {
-        // hohmann.gcl now uses DAG+include, which requires include expansion
-        // at a higher phase. Single-file TIR resolution correctly rejects the
-        // unknown graph ref `@transfer` that the include would create.
-        let source = include_str!("../../../../tests/fixtures/invalid/hohmann.gcl");
+        // hohmann.gcl uses DAG+include and `import <self>.{...}` for parent
+        // consts. Project-level `graphcal check` accepts it (see the CLI
+        // tests), but single-file TIR resolution rejects it: `parse_and_type_resolve`
+        // names the source `"test"`, so `import hohmann.{...}` does not match
+        // the parent file's identity and the dag-body resolver still sees
+        // `@r_earth` as an unknown graph reference (or `@transfer` from the
+        // unexpanded include — the resolver fails on the first unresolved
+        // name it encounters, which is enough to assert `UnknownGraphRef`).
+        let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_type_resolve(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }

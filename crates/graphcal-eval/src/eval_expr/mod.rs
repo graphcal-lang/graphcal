@@ -334,9 +334,11 @@ fn eval_inline_dag_call(
 
     // Resolve parent-scope `import .. { name }` references inside the dag
     // body. The dag's own decls arrive via `args` or execute below; any
-    // other name listed in `resolved_decl_types` must come from an outer
-    // scope — either pre-injected onto the dag TIR's `imported_values`
-    // (cross-file merge) or present in the caller's values (same-file).
+    // other name visible to the dag (entries in `resolved_decl_types` for
+    // local decls plus entries in `imported_values` for `import`-bound
+    // outer-scope names) must come from an outer scope — either
+    // pre-injected onto the dag TIR's `imported_values` (cross-file
+    // merge) or present in the caller's values (same-file).
     let own_names: std::collections::HashSet<&str> = dag_tir
         .consts
         .iter()
@@ -344,7 +346,14 @@ fn eval_inline_dag_call(
         .chain(dag_tir.params.iter().map(|e| e.name.member()))
         .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
         .collect();
-    for scoped in dag_tir.resolved_decl_types.keys() {
+    let outer_scope_keys: std::collections::HashSet<
+        &graphcal_compiler::registry::resolve_types::ScopedName,
+    > = dag_tir
+        .resolved_decl_types
+        .keys()
+        .chain(dag_tir.imported_values.keys())
+        .collect();
+    for scoped in outer_scope_keys {
         let member = scoped.member();
         if own_names.contains(member) || dag_values.contains_key(member) {
             continue;
@@ -352,11 +361,13 @@ fn eval_inline_dag_call(
         // Name may not be available in any scope; the dim-check layer
         // already verifies reachability, so body eval will surface a
         // concrete error if it actually dereferences this name.
-        let value = dag_tir
-            .imported_values
-            .get(scoped)
-            .map(|(v, _)| v)
-            .or_else(|| caller_values.get(member));
+        // Same-file inline calls take priority through `caller_values`
+        // because the dag body's `imported_values` carries placeholder
+        // entries for `import <self>.{...}` declarations whose true value
+        // lives in the caller's scope.
+        let value = caller_values
+            .get(member)
+            .or_else(|| dag_tir.imported_values.get(scoped).map(|(v, _)| v));
         if let Some(value) = value {
             dag_values.insert(DeclName::new(member), value.clone());
         }
