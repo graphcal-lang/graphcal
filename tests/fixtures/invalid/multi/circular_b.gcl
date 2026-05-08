@@ -1,2 +1,0 @@
-include circular_a().{ x };
-param y: Dimensionless = 2.0;

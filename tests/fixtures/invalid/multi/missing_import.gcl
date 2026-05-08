@@ -1,2 +1,0 @@
-import nonexistent.{ x };
-param y: Dimensionless = 1.0;

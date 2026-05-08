@@ -1,0 +1,5 @@
+// Imports a module that doesn't exist on disk.
+// Expected diagnostic: M002 imported file not found.
+import missing_module.absent.{ x };
+
+param y: Dimensionless = 1.0;

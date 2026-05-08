@@ -926,38 +926,79 @@ snapshot_test!(
     "runtime_error/multi/imported_assert_fail/main.gcl"
 );
 
-// bad_name_import, missing_import, circular: error-case import syntax (still parseable)
+// bad_name_import, missing_module, circular_imports: error-case import syntax (still parseable)
 idempotency_test!(
-    idempotent_multi_bad_name_import,
-    "invalid/multi/bad_name_import.gcl"
+    idempotent_multi_bad_name_import_main,
+    "invalid/multi/bad_name_import/main.gcl"
 );
 idempotency_test!(
-    idempotent_multi_missing_import,
-    "invalid/multi/missing_import.gcl"
+    idempotent_multi_bad_name_import_helper,
+    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
 );
-idempotency_test!(idempotent_multi_circular_a, "invalid/multi/circular_a.gcl");
-idempotency_test!(idempotent_multi_circular_b, "invalid/multi/circular_b.gcl");
-idempotency_test!(idempotent_multi_helper, "invalid/multi/helper.gcl");
+idempotency_test!(
+    idempotent_multi_missing_module_main,
+    "invalid/multi/missing_module/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_circular_imports_main,
+    "invalid/multi/circular_imports/main.gcl"
+);
+idempotency_test!(
+    idempotent_multi_circular_imports_circ,
+    "invalid/multi/circular_imports/circ.gcl"
+);
+idempotency_test!(
+    idempotent_multi_circular_imports_back,
+    "invalid/multi/circular_imports/circ/back.gcl"
+);
 roundtrip_test!(
-    roundtrip_multi_bad_name_import,
-    "invalid/multi/bad_name_import.gcl"
+    roundtrip_multi_bad_name_import_main,
+    "invalid/multi/bad_name_import/main.gcl"
 );
 roundtrip_test!(
-    roundtrip_multi_missing_import,
-    "invalid/multi/missing_import.gcl"
+    roundtrip_multi_bad_name_import_helper,
+    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
 );
-roundtrip_test!(roundtrip_multi_circular_a, "invalid/multi/circular_a.gcl");
-roundtrip_test!(roundtrip_multi_circular_b, "invalid/multi/circular_b.gcl");
+roundtrip_test!(
+    roundtrip_multi_missing_module_main,
+    "invalid/multi/missing_module/main.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_circular_imports_main,
+    "invalid/multi/circular_imports/main.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_circular_imports_circ,
+    "invalid/multi/circular_imports/circ.gcl"
+);
+roundtrip_test!(
+    roundtrip_multi_circular_imports_back,
+    "invalid/multi/circular_imports/circ/back.gcl"
+);
 snapshot_test!(
-    snapshot_multi_bad_name_import,
-    "invalid/multi/bad_name_import.gcl"
+    snapshot_multi_bad_name_import_main,
+    "invalid/multi/bad_name_import/main.gcl"
 );
 snapshot_test!(
-    snapshot_multi_missing_import,
-    "invalid/multi/missing_import.gcl"
+    snapshot_multi_bad_name_import_helper,
+    "invalid/multi/bad_name_import/bad_name_import/helper.gcl"
 );
-snapshot_test!(snapshot_multi_circular_a, "invalid/multi/circular_a.gcl");
-snapshot_test!(snapshot_multi_circular_b, "invalid/multi/circular_b.gcl");
+snapshot_test!(
+    snapshot_multi_missing_module_main,
+    "invalid/multi/missing_module/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_circular_imports_main,
+    "invalid/multi/circular_imports/main.gcl"
+);
+snapshot_test!(
+    snapshot_multi_circular_imports_circ,
+    "invalid/multi/circular_imports/circ.gcl"
+);
+snapshot_test!(
+    snapshot_multi_circular_imports_back,
+    "invalid/multi/circular_imports/circ/back.gcl"
+);
 
 // ---------------------------------------------------------------------------
 // Edge-case fixture: long lines, deep nesting, complex expressions
