@@ -103,7 +103,7 @@ idempotency_test!(
     idempotent_expected_fail_multi_indexed_partial,
     "runtime_error/expected_fail_multi_indexed_partial.gcl"
 );
-idempotency_test!(idempotent_required_indexes, "invalid/required_indexes.gcl");
+idempotency_test!(idempotent_required_indexes, "valid/required_indexes.gcl");
 idempotency_test!(idempotent_domain_scalar, "valid/domain_scalar.gcl");
 idempotency_test!(idempotent_domain_indexed, "valid/domain_indexed.gcl");
 
@@ -194,7 +194,7 @@ roundtrip_test!(
     roundtrip_expected_fail_multi_indexed_partial,
     "runtime_error/expected_fail_multi_indexed_partial.gcl"
 );
-roundtrip_test!(roundtrip_required_indexes, "invalid/required_indexes.gcl");
+roundtrip_test!(roundtrip_required_indexes, "valid/required_indexes.gcl");
 roundtrip_test!(roundtrip_domain_scalar, "valid/domain_scalar.gcl");
 roundtrip_test!(roundtrip_domain_indexed, "valid/domain_indexed.gcl");
 
@@ -566,7 +566,7 @@ snapshot_test!(
     snapshot_comments_in_expressions,
     "valid/comments_in_expressions.gcl"
 );
-snapshot_test!(snapshot_required_indexes, "invalid/required_indexes.gcl");
+snapshot_test!(snapshot_required_indexes, "valid/required_indexes.gcl");
 snapshot_test!(snapshot_domain_scalar, "valid/domain_scalar.gcl");
 snapshot_test!(snapshot_domain_indexed, "valid/domain_indexed.gcl");
 
