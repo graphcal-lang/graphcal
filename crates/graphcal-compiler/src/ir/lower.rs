@@ -418,7 +418,7 @@ pub fn lower_dag_body_to_ir(
 
 /// What kind of value declaration a name in the parent file refers to.
 ///
-/// Used by [`preprocess_dag_body_self_imports`] to classify each item in a
+/// Used by `preprocess_dag_body_self_imports` to classify each item in a
 /// dag-body `import <self>.{...}` brace list, choosing between the resolver's
 /// const-name vs. runtime-name slots and rejecting runtime imports per the
 /// `import` (compile-time only) discipline.
@@ -434,7 +434,7 @@ pub enum ParentValueKind {
     Node(DeclaredType),
 }
 
-/// Result of [`preprocess_dag_body_self_imports`]: imported names, declared
+/// Result of `preprocess_dag_body_self_imports`: imported names, declared
 /// types, source bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
@@ -446,7 +446,7 @@ pub struct DagBodySelfImports {
 /// Collect every type-system declaration name from a frozen [`Registry`].
 ///
 /// Used to build the `parent_type_system_names` argument for
-/// [`preprocess_dag_body_self_imports`] when the caller has a frozen
+/// `preprocess_dag_body_self_imports` when the caller has a frozen
 /// registry (e.g. inside `compile_inline_dag_bodies` orchestrating
 /// dag-body lowering for a file's own inline DAGs).
 #[must_use]
@@ -474,7 +474,7 @@ pub fn type_system_names_from_registry(registry: &Registry) -> HashSet<String> {
 /// member/index/dag) declared in `file`.
 ///
 /// Used to build the `parent_type_system_names` argument for
-/// [`preprocess_dag_body_self_imports`] when the caller has the parent
+/// `preprocess_dag_body_self_imports` when the caller has the parent
 /// file's AST handy but no frozen [`Registry`].
 #[must_use]
 pub fn collect_type_system_names(file: &crate::desugar::desugared_ast::File) -> HashSet<String> {

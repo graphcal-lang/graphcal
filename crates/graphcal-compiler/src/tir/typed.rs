@@ -792,14 +792,14 @@ impl TIR {
 /// For each const/param/node, resolves the type annotation with no generic
 /// params in scope. Inline `dag { ... }` declarations are NOT compiled here;
 /// the project pipeline (or test helpers) compile them explicitly via
-/// [`compile_inline_dag_bodies`] after type-resolving the file-level
+/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` after type-resolving the file-level
 /// declarations. This separation lets callers that have loader-level
 /// information (e.g. self-import path resolution, parent `DagId`) thread it
 /// in at the right point, without forcing every `type_resolve` caller to
 /// know about it.
 ///
 /// The returned `TIR` always has an empty `dags` field. Use
-/// [`compile_inline_dag_bodies`] to populate it.
+/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` to populate it.
 ///
 /// # Errors
 ///
