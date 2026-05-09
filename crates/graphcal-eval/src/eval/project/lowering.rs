@@ -75,12 +75,13 @@ pub(super) fn lower_and_finalize(
 
     // Process deferred inline DAG includes: compile DAG body to IR and merge.
     let importer_loaded = &project.files[file_dag_id];
+    let importer_self_imports = importer_loaded.dag_body_self_imports();
     process_deferred_inline_dag_includes(
         &ctx.deferred_inline_dags,
         file_src,
         file_ast,
         file_dag_id,
-        &importer_loaded.dag_body_self_imports,
+        &importer_self_imports,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -110,7 +111,7 @@ pub(super) fn lower_and_finalize(
         file_src,
         file_dag_id,
         &parent_pub_names,
-        &importer_loaded.dag_body_self_imports,
+        &importer_self_imports,
     )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
