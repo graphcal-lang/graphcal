@@ -26,6 +26,7 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::dag_id::DagId;
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
 
 use crate::loader::LoadedDag;
@@ -49,7 +50,7 @@ pub fn compile_inline_dag_bodies(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &DagId,
-    parent_pub_names: &HashSet<String>,
+    parent_pub_names: &HashSet<DeclName>,
     inline_dags: &[LoadedDag],
 ) -> Result<(), GraphcalError> {
     // Read parent's value decls directly from the (already type-resolved)
@@ -149,7 +150,7 @@ pub fn preprocess_dag_body_self_imports(
     parent_type_system_names: &HashSet<String>,
     parent_consts: &HashMap<String, DeclaredType>,
     parent_runtime_names: &HashSet<String>,
-    parent_pub_names: &HashSet<String>,
+    parent_pub_names: &HashSet<DeclName>,
     body_resolved_imports: &HashMap<String, DagId>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {

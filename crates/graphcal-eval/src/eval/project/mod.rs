@@ -121,7 +121,7 @@ pub(super) struct EvaluatedFile {
     pub(super) registry: Registry,
     /// Names of declarations marked `pub` in the source file.
     /// Used to enforce private-by-default visibility during imports.
-    pub(super) pub_names: HashSet<String>,
+    pub(super) pub_names: HashSet<DeclName>,
     /// Compiled dag TIRs for each `dag { ... }` declared in this file.
     ///
     /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
@@ -243,7 +243,7 @@ pub(super) struct ImportContext<'a> {
         HashMap<graphcal_compiler::syntax::dag_id::DagId, HashSet<String>>,
     pub(super) module_map: HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
-    pub(super) extra_registry_builders: Vec<(&'a Registry, &'a HashSet<String>)>,
+    pub(super) extra_registry_builders: Vec<(&'a Registry, &'a HashSet<DeclName>)>,
     pub(super) deferred_dag_includes: Vec<DeferredDagInclude>,
 }
 
@@ -359,7 +359,7 @@ fn rewrite_decl_exprs(
 /// walk does not have), so it is not expanded here.
 pub(super) fn extract_pub_names(
     file: &graphcal_compiler::desugar::desugared_ast::File,
-) -> HashSet<String> {
+) -> HashSet<DeclName> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
         let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
@@ -371,7 +371,7 @@ pub(super) fn extract_pub_names(
                     {
                         for item in items {
                             if item.is_pub {
-                                pub_names.insert(item.local_name().to_string());
+                                pub_names.insert(DeclName::new(item.local_name()));
                             }
                         }
                     }
@@ -382,7 +382,7 @@ pub(super) fn extract_pub_names(
                     {
                         for item in items {
                             if item.is_pub {
-                                pub_names.insert(item.local_name().to_string());
+                                pub_names.insert(DeclName::new(item.local_name()));
                             }
                         }
                     }
@@ -392,24 +392,24 @@ pub(super) fn extract_pub_names(
             continue;
         }
         let name = match &decl.kind {
-            DeclKind::Param(p) => p.name.value.to_string(),
-            DeclKind::Node(n) => n.name.value.to_string(),
-            DeclKind::ConstNode(c) => c.name.value.to_string(),
-            DeclKind::Assert(a) => a.name.value.to_string(),
-            DeclKind::BaseDimension(d) => d.name.value.to_string(),
-            DeclKind::Dimension(d) => d.name.value.to_string(),
-            DeclKind::Unit(u) => u.name.value.to_string(),
-            DeclKind::Index(idx) => idx.name.value.to_string(),
-            DeclKind::Type(t) => t.name.value.to_string(),
-            DeclKind::UnionType(u) => u.name.value.to_string(),
-            DeclKind::Plot(p) => p.name.value.to_string(),
-            DeclKind::Figure(f) => f.name.value.to_string(),
-            DeclKind::Layer(l) => l.name.value.to_string(),
-            DeclKind::Dag(d) => d.name.value.to_string(),
+            DeclKind::Param(p) => p.name.value.as_str(),
+            DeclKind::Node(n) => n.name.value.as_str(),
+            DeclKind::ConstNode(c) => c.name.value.as_str(),
+            DeclKind::Assert(a) => a.name.value.as_str(),
+            DeclKind::BaseDimension(d) => d.name.value.as_str(),
+            DeclKind::Dimension(d) => d.name.value.as_str(),
+            DeclKind::Unit(u) => u.name.value.as_str(),
+            DeclKind::Index(idx) => idx.name.value.as_str(),
+            DeclKind::Type(t) => t.name.value.as_str(),
+            DeclKind::UnionType(u) => u.name.value.as_str(),
+            DeclKind::Plot(p) => p.name.value.as_str(),
+            DeclKind::Figure(f) => f.name.value.as_str(),
+            DeclKind::Layer(l) => l.name.value.as_str(),
+            DeclKind::Dag(d) => d.name.value.as_str(),
             DeclKind::Import(_) | DeclKind::Include(_) => continue,
             DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
         };
-        pub_names.insert(name);
+        pub_names.insert(DeclName::new(name));
     }
     pub_names
 }
