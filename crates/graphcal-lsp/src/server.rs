@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
-use graphcal_compiler::syntax::names::VariantName;
+use graphcal_compiler::syntax::names::{DeclName, VariantName};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -77,7 +77,7 @@ pub(crate) struct AnalysisResult {
     pub(crate) diagnostics: HashMap<Url, Vec<Diagnostic>>,
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
-    pub(crate) eval_values: HashMap<String, String>,
+    pub(crate) eval_values: HashMap<DeclName, String>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
@@ -453,7 +453,7 @@ fn run_eval_from_project(
     uri: &Url,
     text: &str,
     symbol_table: &SymbolTable,
-) -> (HashMap<Url, Vec<Diagnostic>>, HashMap<String, String>) {
+) -> (HashMap<Url, Vec<Diagnostic>>, HashMap<DeclName, String>) {
     match compile_and_eval_from_project(project, &HashMap::new()) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
@@ -564,12 +564,12 @@ fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
 }
 
 /// Format all successfully evaluated values into display strings.
-fn format_eval_values(result: &EvalResult) -> HashMap<String, String> {
+fn format_eval_values(result: &EvalResult) -> HashMap<DeclName, String> {
     let mut map = HashMap::new();
     for (name, value_result, _decl_type) in &result.all {
         if let Ok(value) = value_result {
             map.insert(
-                name.as_str().to_string(),
+                name.clone(),
                 format_value_inline(value, &result.base_dim_symbols),
             );
         }
