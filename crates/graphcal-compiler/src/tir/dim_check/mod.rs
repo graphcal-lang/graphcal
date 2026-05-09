@@ -71,7 +71,7 @@ impl InferredType {
 #[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_decl_expr_type(
     expr: &Expr,
-    name: &crate::registry::resolve_types::ScopedName,
+    name: &crate::syntax::names::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
@@ -414,7 +414,7 @@ fn check_domain_constraint_dimensions_dag(
 }
 
 fn check_one_bound(
-    name: &crate::registry::resolve_types::ScopedName,
+    name: &crate::syntax::names::ScopedName,
     bound: &crate::desugar::desugared_ast::DomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
@@ -682,7 +682,7 @@ fn detect_decl_cycles(
     use petgraph::algo::toposort;
     use petgraph::graph::DiGraph;
 
-    use crate::registry::resolve_types::ScopedName;
+    use crate::syntax::names::ScopedName;
 
     fn check<'a>(
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,

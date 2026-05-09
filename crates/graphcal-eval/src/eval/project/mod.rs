@@ -8,7 +8,6 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
-use graphcal_compiler::syntax::ast::Ident;
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
@@ -41,76 +40,17 @@ pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> S
         .map_or_else(|| "module".to_string(), |seg| seg.name.clone())
 }
 
-/// Visitor that flattens `QualifiedConstRef` and `QualifiedGraphRef` into
-/// flat `ConstRef` / `GraphRef` whose `DeclName` carries the IR-internal
-/// `module::member` form.
+/// Visitor that recognizes `FieldAccess(GraphRef(Local(alias)), field)`
+/// and rewrites it to `GraphRef(ScopedName::Qualified { module: alias,
+/// member: field })` when `(alias, field)` matches an imported
+/// module-namespace member.
 ///
-/// This is the **only** place in the compiler that introduces the
-/// `module::member` flat-string convention; everywhere upstream (parser,
-/// alias rewriter, resolver-visible AST) the qualification is encoded
-/// type-safely in the `Qualified*Ref` variants. Downstream IR/eval
-/// consumes the flat form because the IR's existing data model uses
-/// `DeclName` as the lookup key.
-struct QualifiedRefRewriter;
-
-impl QualifiedRefRewriter {
-    fn flatten_qualified(module: &str, member: &str) -> DeclName {
-        DeclName::new(format!("{module}::{member}"))
-    }
-}
-
-impl ExprVisitorMut<Desugared> for QualifiedRefRewriter {
-    type Error = std::convert::Infallible;
-
-    fn visit_qualified_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
-        expr.kind = match old_kind {
-            ExprKind::QualifiedConstRef { module, name } => {
-                let flat = Self::flatten_qualified(&module.name, name.value.as_str());
-                ExprKind::ConstRef(Spanned {
-                    value: flat,
-                    span: name.span,
-                })
-            }
-            other => other,
-        };
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        let old_kind = std::mem::replace(&mut expr.kind, ExprKind::Number(0.0));
-        expr.kind = match old_kind {
-            ExprKind::QualifiedGraphRef { qualifier, member } => {
-                let flat = Self::flatten_qualified(&qualifier.name, member.value.as_str());
-                ExprKind::GraphRef(Spanned {
-                    value: flat,
-                    span: member.span,
-                })
-            }
-            other => other,
-        };
-        Ok(())
-    }
-}
-
-/// Flatten `QualifiedConstRef` / `QualifiedGraphRef` to their IR-flat form
-/// in-place. See [`QualifiedRefRewriter`] for the rationale.
-pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
-    let mut rewriter = QualifiedRefRewriter;
-    let _ = rewriter.visit_expr_mut(expr);
-}
-
-/// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and
-/// promotes it to the typed `QualifiedGraphRef { qualifier, member }`
-/// when `(alias, field)` matches an imported module-namespace member.
-///
-/// `@bar.field` parses as `FieldAccess(GraphRef(bar), field)`. For the
-/// `include foo() as bar;` and `import foo as bar;` namespace forms, the
-/// dependency's items are registered as
-/// `ScopedName::Qualified { module: "bar", member: "field" }`. Producing a
-/// typed `QualifiedGraphRef` keeps the qualification visible in the
-/// type system; the [`QualifiedRefRewriter`] then performs the single
-/// typed-to-flat conversion at the IR boundary.
+/// `@bar.field` parses as `FieldAccess(GraphRef(Local(bar)), field)`. For
+/// the `include foo() as bar;` and `import foo as bar;` namespace forms,
+/// the dependency's items are registered as
+/// `ScopedName::Qualified { module: "bar", member: "field" }`. The
+/// rewriter promotes the access to a typed qualified `GraphRef` directly
+/// — no `Qualified*Ref` variant or flat-string boundary involved.
 struct AliasFieldAccessRewriter<'a> {
     qualified_pairs: &'a HashSet<(String, String)>,
 }
@@ -121,27 +61,23 @@ impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         // Recurse first; chained `@bar.x.y` becomes
         // `FieldAccess(FieldAccess(GraphRef(bar), x), y)`. We promote the
-        // inner `FieldAccess(GraphRef(bar), x)` to `QualifiedGraphRef`,
+        // inner `FieldAccess(GraphRef(bar), x)` to a qualified `GraphRef`,
         // leaving the outer `.y` as a struct-field access on the
         // resulting qualified node value.
         self.dispatch_mut(expr)?;
 
         let promote = if let ExprKind::FieldAccess { expr: inner, field } = &expr.kind
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
-            && self.qualified_pairs.contains(&(
-                qualifier_name.value.as_str().to_string(),
-                field.value.as_str().to_string(),
-            )) {
-            Some(ExprKind::QualifiedGraphRef {
-                qualifier: Ident {
-                    name: qualifier_name.value.as_str().to_string(),
-                    span: qualifier_name.span,
-                },
-                member: Spanned {
-                    value: DeclName::new(field.value.as_str()),
-                    span: field.span,
-                },
-            })
+            && let ScopedName::Local(qualifier) = &qualifier_name.value
+            && self
+                .qualified_pairs
+                .contains(&(qualifier.clone(), field.value.as_str().to_string()))
+        {
+            let merged_span = qualifier_name.span.merge(field.span);
+            Some(ExprKind::GraphRef(Spanned {
+                value: ScopedName::qualified(qualifier.clone(), field.value.as_str()),
+                span: merged_span,
+            }))
         } else {
             None
         };
@@ -152,8 +88,10 @@ impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
     }
 }
 
-/// Promote `FieldAccess(GraphRef(alias), field)` to typed
-/// `QualifiedGraphRef` in-place.
+/// Promote `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
+/// `GraphRef` in-place. This is the only producer of qualified graph
+/// references in the project pipeline — qualified const references come
+/// out of name resolution directly.
 pub(super) fn rewrite_alias_field_access(
     expr: &mut Expr,
     qualified_pairs: &HashSet<(String, String)>,
@@ -321,18 +259,12 @@ pub(super) enum SelectiveImportResult {
     NotFound,
 }
 
-/// Resolve qualified references in the AST when module imports are present.
-///
-/// Two rewrites are folded into a single AST walk, in order:
-///   1. `FieldAccess(GraphRef(alias), field)` →
-///      `QualifiedGraphRef { qualifier, member }` (typed) when `(alias,
-///      field)` matches an imported namespace member.
-///   2. `Qualified{Const,Graph}Ref` → flat `{Const,Graph}Ref` whose
-///      `DeclName` carries the IR-internal `module::member` form.
-///
-/// Step 1 keeps the qualification visible in the type system; step 2 is
-/// the single explicit boundary where the typed variants are flattened
-/// for the IR / eval layer.
+/// Resolve namespace-alias graph references in the AST: rewrite
+/// `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
+/// `GraphRef(Qualified { module: alias, member: field })` when
+/// `(alias, field)` matches an imported namespace member. The
+/// qualification is preserved structurally throughout the IR / eval
+/// pipeline — there is no flat-string boundary.
 ///
 /// If there are no module imports and no qualified members, returns a
 /// borrowed reference to the original AST.
@@ -356,9 +288,9 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
 /// Collect `(module, member)` pairs from imported namespace registrations.
 ///
 /// Module-form `import`/`include` registers each dep declaration as
-/// `ScopedName::Qualified { module, member }`. `@module.member` should
-/// resolve to `module::member`; bare locals (selective items) do not
-/// participate.
+/// `ScopedName::Qualified { module, member }`; selective imports register
+/// `ScopedName::Local(...)`. The pairs returned here drive the
+/// `@alias.member` rewrite — bare locals do not participate.
 fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, String)> {
     let mut pairs = HashSet::new();
     let entries = imported
@@ -374,20 +306,13 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, St
     pairs
 }
 
-/// Apply both qualified-ref rewrites to a single declaration's expressions.
+/// Apply the alias-field-access rewrite to a single declaration's expressions.
 fn rewrite_decl_exprs(
     decl: &mut graphcal_compiler::desugar::desugared_ast::Declaration,
     alias_pairs: &HashSet<(String, String)>,
 ) {
-    // Order matters: the alias rewriter promotes `FieldAccess(GraphRef,
-    // field)` into a typed `QualifiedGraphRef`, then the flattener
-    // collapses both `Qualified*Ref` variants into the IR-flat
-    // `module::member` form. Running them in the opposite order would
-    // leave the typed `QualifiedGraphRef` in the AST and trip the
-    // unreachable arms in dim-check / eval.
     let rewrite = |e: &mut Expr| {
         rewrite_alias_field_access(e, alias_pairs);
-        rewrite_qualified_refs(e);
     };
     match &mut decl.kind {
         DeclKind::Param(p) => {

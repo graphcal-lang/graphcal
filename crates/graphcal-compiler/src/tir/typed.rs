@@ -17,9 +17,9 @@ use crate::syntax::span::Span;
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::ScopedName;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
+use crate::syntax::names::ScopedName;
 
 // ---------------------------------------------------------------------------
 // Resolved type types

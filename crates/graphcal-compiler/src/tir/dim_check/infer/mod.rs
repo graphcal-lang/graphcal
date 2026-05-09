@@ -18,7 +18,7 @@ use crate::desugar::desugared_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::UnitName;
+use crate::syntax::names::{DeclName, UnitName};
 
 use super::{DeclaredType, InferredType};
 
@@ -120,10 +120,13 @@ pub(super) fn infer_type_with_owner(
             Ok(InferredType::Scalar(dim))
         }
 
-        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => {
-            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
+        ExprKind::ConstRef(ident) => {
+            // Boundary: `declared_types` is still keyed by flat `String`s
+            // (`module::member` for qualified). Stringify once.
+            let flat = ident.value.to_string();
+            let dt = declared_types.get(flat.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownConstRef {
-                    name: ident.value.clone(),
+                    name: DeclName::new(&flat),
                     src: src.clone(),
                     span: ident.span.into(),
                 }
@@ -132,27 +135,15 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::GraphRef(ident) => {
-            let dt = declared_types.get(ident.value.as_str()).ok_or_else(|| {
+            let flat = ident.value.to_string();
+            let dt = declared_types.get(flat.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownGraphRef {
-                    name: ident.value.clone(),
+                    name: DeclName::new(&flat),
                     src: src.clone(),
                     span: ident.span.into(),
                 }
             })?;
             Ok(InferredType::from(dt))
-        }
-
-        // The project pipeline flattens `QualifiedGraphRef` to a flat
-        // `GraphRef` before lowering / dim-check. Any unflattened node
-        // here is a compiler bug.
-        #[expect(
-            clippy::unreachable,
-            reason = "QualifiedGraphRef must be flattened by the project pipeline before dim-check"
-        )]
-        ExprKind::QualifiedGraphRef { .. } => {
-            unreachable!(
-                "`QualifiedGraphRef` reached dim_check without being flattened by `rewrite_qualified_refs_in_ast`"
-            )
         }
 
         ExprKind::LocalRef(ident) => {

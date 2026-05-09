@@ -495,7 +495,10 @@ fn add_selective_aliases_inner(
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
     for (orig_name, local_name) in selective {
-        let prefixed_name = format!("{prefix}::{orig_name}");
+        // The alias points at the dep's prefixed declaration: a typed
+        // qualified `ScopedName`. No flat `prefix::orig_name` strings are
+        // built — the qualification stays structural through the IR.
+        let target = ScopedName::qualified(prefix, orig_name);
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {
             DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
@@ -521,9 +524,9 @@ fn add_selective_aliases_inner(
             |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
         );
         let alias_kind = if is_const {
-            ExprKind::ConstRef(Spanned::new(DeclName::new(&prefixed_name), import_span))
+            ExprKind::ConstRef(Spanned::new(target.clone(), import_span))
         } else {
-            ExprKind::GraphRef(Spanned::new(DeclName::new(&prefixed_name), import_span))
+            ExprKind::GraphRef(Spanned::new(target.clone(), import_span))
         };
         let alias_expr = Expr::new(alias_kind, import_span);
 
@@ -533,7 +536,7 @@ fn add_selective_aliases_inner(
                 type_ann,
                 alias_expr,
                 import_span,
-                ScopedName::local(prefixed_name),
+                target,
             );
         } else {
             unfrozen.add_node_alias(
@@ -541,7 +544,7 @@ fn add_selective_aliases_inner(
                 type_ann,
                 alias_expr,
                 import_span,
-                ScopedName::local(prefixed_name),
+                target,
             );
         }
     }
@@ -649,7 +652,9 @@ pub(super) fn extract_index_name_from_binding_expr(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<String, CompileError> {
     match &expr.kind {
-        ExprKind::ConstRef(name) => Ok(name.value.to_string()),
+        ExprKind::ConstRef(name) if !name.value.is_qualified() => {
+            Ok(name.value.member().to_string())
+        }
         ExprKind::StructConstruction {
             type_name,
             type_args,
@@ -674,7 +679,9 @@ pub(super) fn extract_type_name_from_binding_expr(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<String, CompileError> {
     match &expr.kind {
-        ExprKind::ConstRef(name) => Ok(name.value.to_string()),
+        ExprKind::ConstRef(name) if !name.value.is_qualified() => {
+            Ok(name.value.member().to_string())
+        }
         ExprKind::StructConstruction {
             type_name,
             type_args,

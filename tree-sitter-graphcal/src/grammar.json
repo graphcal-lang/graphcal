@@ -5630,31 +5630,6 @@
         "type": "SEQ",
         "members": [
           {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SEQ",
-                "members": [
-                  {
-                    "type": "FIELD",
-                    "name": "module",
-                    "content": {
-                      "type": "SYMBOL",
-                      "name": "identifier"
-                    }
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "."
-                  }
-                ]
-              },
-              {
-                "type": "BLANK"
-              }
-            ]
-          },
-          {
             "type": "FIELD",
             "name": "name",
             "content": {
@@ -6380,6 +6355,10 @@
     [
       "graph_ref",
       "inline_dag_call"
+    ],
+    [
+      "qualified_variant",
+      "_primary_expr"
     ]
   ],
   "precedences": [],

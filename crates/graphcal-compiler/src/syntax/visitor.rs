@@ -46,8 +46,6 @@ pub(crate) trait ExprVisitor<P: Phase> {
 
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref(expr),
-            ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref(expr),
-            ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref(expr),
             ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
             ExprKind::FnCall { args, .. } => self.visit_fn_call(expr, args),
@@ -124,14 +122,6 @@ pub(crate) trait ExprVisitor<P: Phase> {
     }
 
     fn visit_const_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_const_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -292,8 +282,6 @@ pub trait ExprVisitorMut<P: Phase> {
 
             ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
-            ExprKind::QualifiedConstRef { .. } => self.visit_qualified_const_ref_mut(expr),
-            ExprKind::QualifiedGraphRef { .. } => self.visit_qualified_graph_ref_mut(expr),
             ExprKind::InlineDagRef { .. } => self.visit_inline_dag_ref_mut(expr),
 
             ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
@@ -368,14 +356,6 @@ pub trait ExprVisitorMut<P: Phase> {
     }
 
     fn visit_const_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_const_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_qualified_graph_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 

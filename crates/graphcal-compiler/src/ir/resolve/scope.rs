@@ -31,10 +31,13 @@ where
     type Error = GraphcalError;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind
-            && self.forbidden.contains(ident.value.as_str())
-        {
-            return Err((self.make_error)(ident.value.as_str(), self.src, expr.span));
+        if let ExprKind::GraphRef(ident) = &expr.kind {
+            // Boundary: stringify the typed name to look it up in the
+            // (still flat-string) `forbidden` set.
+            let flat = ident.value.to_string();
+            if self.forbidden.contains(flat.as_str()) {
+                return Err((self.make_error)(flat.as_str(), self.src, expr.span));
+            }
         }
         Ok(())
     }

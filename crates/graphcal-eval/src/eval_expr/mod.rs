@@ -113,40 +113,33 @@ pub fn eval_expr(
             index_name: index.value.clone(),
             variant: variant.value.clone(),
         }),
-        ExprKind::GraphRef(ident) => values.get(ident.value.as_str()).cloned().ok_or_else(|| {
-            ctx.eval_error(
-                format!("undefined graph reference `@{}`", ident.value),
-                expr.span,
-            )
-        }),
-        // `QualifiedGraphRef` is flattened to `GraphRef` by
-        // `rewrite_qualified_refs_in_ast` before any IR/eval consumer
-        // sees it. Reaching this arm is a compiler bug.
-        #[expect(
-            clippy::unreachable,
-            reason = "QualifiedGraphRef must be flattened by the project pipeline before eval"
-        )]
-        ExprKind::QualifiedGraphRef { .. } => {
-            unreachable!(
-                "`QualifiedGraphRef` reached the evaluator without being flattened by `rewrite_qualified_refs_in_ast`"
-            )
+        ExprKind::GraphRef(ident) => {
+            // Boundary: the value map is still keyed by `DeclName` (flat
+            // string). Stringify the typed `ScopedName` here for the
+            // lookup; the qualified case yields `module::member`, locals
+            // the bare name. See follow-up issue for re-keying the maps.
+            let key = ident.value.to_string();
+            values.get(key.as_str()).cloned().ok_or_else(|| {
+                ctx.eval_error(format!("undefined graph reference `@{key}`"), expr.span)
+            })
         }
-        ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
-            .get(ident.value.as_str())
-            .cloned()
-            .or_else(|| {
-                ctx.builtin_consts
-                    .get(ident.value.as_str())
-                    .map(|v| RuntimeValue::Scalar(*v))
-            })
-            .or_else(|| {
-                // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                // and may be referenced in expression position as ConstRef (uppercase).
-                local_values.get(ident.value.as_str()).cloned()
-            })
-            .ok_or_else(|| {
-                ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
-            }),
+        ExprKind::ConstRef(ident) => {
+            let key = ident.value.to_string();
+            values
+                .get(key.as_str())
+                .cloned()
+                .or_else(|| {
+                    ctx.builtin_consts
+                        .get(key.as_str())
+                        .map(|v| RuntimeValue::Scalar(*v))
+                })
+                .or_else(|| {
+                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+                    // and may be referenced in expression position as ConstRef (uppercase).
+                    local_values.get(key.as_str()).cloned()
+                })
+                .ok_or_else(|| ctx.eval_error(format!("undefined constant `{key}`"), expr.span))
+        }
         ExprKind::LocalRef(ident) => {
             local_values
                 .get(ident.name.as_str())
@@ -358,13 +351,12 @@ fn eval_inline_dag_call(
         .chain(dag_tir.params.iter().map(|e| e.name.member()))
         .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
         .collect();
-    let outer_scope_keys: std::collections::HashSet<
-        &graphcal_compiler::registry::resolve_types::ScopedName,
-    > = dag_tir
-        .imported_values
-        .keys()
-        .chain(dag_tir.imported_value_sources.keys())
-        .collect();
+    let outer_scope_keys: std::collections::HashSet<&graphcal_compiler::syntax::names::ScopedName> =
+        dag_tir
+            .imported_values
+            .keys()
+            .chain(dag_tir.imported_value_sources.keys())
+            .collect();
     for scoped in outer_scope_keys {
         let member = scoped.member();
         if own_names.contains(member) || dag_values.contains_key(member) {
@@ -438,8 +430,8 @@ fn eval_inline_dag_call(
 /// well-typed dag body because compile-time dep collection rejects them.
 fn topo_order_for_dag_body(
     dag_tir: &graphcal_compiler::tir::typed::DagTIR,
-) -> Vec<graphcal_compiler::registry::resolve_types::ScopedName> {
-    use graphcal_compiler::registry::resolve_types::ScopedName;
+) -> Vec<graphcal_compiler::syntax::names::ScopedName> {
+    use graphcal_compiler::syntax::names::ScopedName;
     use std::collections::BTreeSet;
 
     // All declaration names in a stable order.
@@ -509,7 +501,7 @@ fn topo_order_for_dag_body(
 /// argument binding, not from a body-local expression).
 fn lookup_dag_body_expr<'a>(
     dag_tir: &'a graphcal_compiler::tir::typed::DagTIR,
-    name: &graphcal_compiler::registry::resolve_types::ScopedName,
+    name: &graphcal_compiler::syntax::names::ScopedName,
 ) -> Option<&'a Expr> {
     if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {
         return Some(&c.expr);

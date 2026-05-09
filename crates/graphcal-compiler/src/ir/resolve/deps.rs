@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::desugar::desugared_ast::{Expr, ExprKind, ParamBinding};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
-use crate::syntax::names::DeclName;
+use crate::syntax::names::{DeclName, ScopedName};
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
 
@@ -39,19 +39,25 @@ struct RefCollector<'a> {
 impl RefCollector<'_> {
     fn handle_graph_ref(
         &mut self,
-        ident: &crate::syntax::names::Spanned<DeclName>,
+        ident: &crate::syntax::names::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
+        // Boundary: the resolver's name sets are still keyed by flat strings;
+        // stringify the `ScopedName` once here to look it up. The functional
+        // core (`ScopedName` in the AST) carries the qualification typed.
+        let flat = ident.value.to_string();
+        let lookup = flat.as_str();
+        let display_name = || DeclName::new(lookup);
         match self.kind {
             RefKind::ConstOnly => {
                 // In const expressions, @name can reference other const nodes but not
                 // runtime names. Runtime refs are already rejected by
                 // check_no_runtime_graph_refs before we get here.
-                if self.all_const_names.contains(ident.value.as_str()) {
-                    self.const_refs.insert(DeclName::new(ident.value.as_str()));
+                if self.all_const_names.contains(lookup) {
+                    self.const_refs.insert(display_name());
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownConstRef {
-                        name: ident.value.clone(),
+                        name: display_name(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -62,16 +68,16 @@ impl RefCollector<'_> {
                 // `Some(all_runtime_names)` for `RefKind::All`, so this unwrap is
                 // an internal invariant.
                 let runtime = self.all_runtime_names.unwrap_or(self.all_const_names);
-                if runtime.contains(ident.value.as_str()) {
-                    self.graph_refs.insert(DeclName::new(ident.value.as_str()));
+                if runtime.contains(lookup) {
+                    self.graph_refs.insert(display_name());
                     Ok(())
-                } else if self.all_const_names.contains(ident.value.as_str()) {
+                } else if self.all_const_names.contains(lookup) {
                     // @const_node_name in a node expression — track as const dependency.
-                    self.const_refs.insert(DeclName::new(ident.value.as_str()));
+                    self.const_refs.insert(display_name());
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownGraphRef {
-                        name: ident.value.clone(),
+                        name: display_name(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -82,16 +88,18 @@ impl RefCollector<'_> {
 
     fn handle_const_ref(
         &self,
-        ident: &crate::syntax::names::Spanned<DeclName>,
+        ident: &crate::syntax::names::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
-        // Bare UPPER_SNAKE_CASE identifiers: built-in constants only.
-        if self.builtin_consts.contains_key(ident.value.as_str())
-            || is_time_scale_name(ident.value.as_str())
-        {
+        // Boundary: stringify for built-in lookup. Built-in constant names
+        // (`PI`, `E`, time scales) are bare; qualified `module.CONST` paths
+        // never resolve to a built-in.
+        let flat = ident.value.to_string();
+        let lookup = flat.as_str();
+        if self.builtin_consts.contains_key(lookup) || is_time_scale_name(lookup) {
             Ok(())
         } else {
             Err(GraphcalError::UnknownConstRef {
-                name: ident.value.clone(),
+                name: DeclName::new(lookup),
                 src: self.src.clone(),
                 span: ident.span.into(),
             })
@@ -145,18 +153,6 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for RefCollector<'_> {
         }
         Ok(())
     }
-
-    fn visit_qualified_const_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::QualifiedConstRef { name: ident, .. } = &expr.kind {
-            self.handle_const_ref(ident)?;
-        }
-        Ok(())
-    }
-
-    // `QualifiedGraphRef` is flattened to a flat `GraphRef` by the
-    // project-level rewriter before this resolver runs (see
-    // `rewrite_qualified_refs_in_ast` in graphcal-eval). The default
-    // no-op handler is therefore correct for the production pipeline.
 
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
         if let ExprKind::FnCall { name, .. } = &expr.kind {
@@ -264,9 +260,10 @@ pub(super) fn extract_all_refs(
 /// `GraphRefDetector`). Implementors record the observation however they
 /// like — as a typed `ScopedName`, a raw `String`, or a `bool` flag.
 trait GraphRefSink {
-    /// Called for each `@name` reference. `name` is the bare identifier.
-    /// (Qualified `@module.name` is no longer accepted by the parser.)
-    fn on_local(&mut self, name: &str);
+    /// Called for each `@`-reference. `scoped` is the typed name
+    /// (`Local` for bare `@name`, `Qualified` for `@alias.member` after
+    /// the namespace-alias rewrite).
+    fn on_ref(&mut self, scoped: &ScopedName);
 }
 
 /// Generic visitor that routes every observed graph reference through a
@@ -277,8 +274,11 @@ struct GraphRefVisitor<'a, S: GraphRefSink> {
 }
 
 impl<S: GraphRefSink> GraphRefVisitor<'_, S> {
-    fn should_record(&self, name: &str) -> bool {
-        self.known_names.is_none_or(|set| set.contains(name))
+    /// Filter against the (still flat-string) `known_names` set.
+    /// Boundary stringification — see module note.
+    fn should_record(&self, scoped: &ScopedName) -> bool {
+        self.known_names
+            .is_none_or(|set| set.contains(scoped.to_string().as_str()))
     }
 }
 
@@ -286,24 +286,26 @@ impl<S: GraphRefSink> ExprVisitor<crate::syntax::phase::Desugared> for GraphRefV
     type Error = std::convert::Infallible;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind {
-            let name = ident.value.as_str();
-            if self.should_record(name) {
-                self.sink.on_local(name);
-            }
+        if let ExprKind::GraphRef(ident) = &expr.kind
+            && self.should_record(&ident.value)
+        {
+            self.sink.on_ref(&ident.value);
         }
         Ok(())
     }
 }
 
-/// Sink that stores every observed ref name as a `String` (qualified refs drop the module).
+/// Sink that stores every observed ref name as a flat `String` (the
+/// qualified `module::member` form for qualified refs, bare for locals).
+/// Boundary stringification — callers that want the typed form should use
+/// `collect_scoped_graph_refs` instead.
 struct StringNameSink<'a> {
     refs: &'a mut HashSet<String>,
 }
 
 impl GraphRefSink for StringNameSink<'_> {
-    fn on_local(&mut self, name: &str) {
-        self.refs.insert(name.to_string());
+    fn on_ref(&mut self, scoped: &ScopedName) {
+        self.refs.insert(scoped.to_string());
     }
 }
 
@@ -350,7 +352,7 @@ pub fn collect_graph_ref_names(expr: &Expr, refs: &mut HashSet<String>) {
 pub fn contains_graph_ref(expr: &Expr) -> bool {
     struct DetectorSink(bool);
     impl GraphRefSink for DetectorSink {
-        fn on_local(&mut self, _name: &str) {
+        fn on_ref(&mut self, _scoped: &ScopedName) {
             self.0 = true;
         }
     }
@@ -364,17 +366,13 @@ pub fn contains_graph_ref(expr: &Expr) -> bool {
 }
 
 /// Collect `@`-references as typed [`ScopedName`]s, preserving module qualification.
-pub fn collect_scoped_graph_refs(
-    expr: &Expr,
-    refs: &mut std::collections::BTreeSet<crate::registry::resolve_types::ScopedName>,
-) {
-    use crate::registry::resolve_types::ScopedName;
+pub fn collect_scoped_graph_refs(expr: &Expr, refs: &mut std::collections::BTreeSet<ScopedName>) {
     struct ScopedSink<'a> {
         refs: &'a mut std::collections::BTreeSet<ScopedName>,
     }
     impl GraphRefSink for ScopedSink<'_> {
-        fn on_local(&mut self, name: &str) {
-            self.refs.insert(ScopedName::local(name));
+        fn on_ref(&mut self, scoped: &ScopedName) {
+            self.refs.insert(scoped.clone());
         }
     }
     let mut sink = ScopedSink { refs };

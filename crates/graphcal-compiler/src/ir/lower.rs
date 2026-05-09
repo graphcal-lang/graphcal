@@ -24,11 +24,11 @@ use crate::registry::declared_type::DeclaredType;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr;
 use crate::registry::prelude::load_prelude;
-use crate::registry::resolve_types::ScopedName;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{DeclName, DimName, FnName, IndexName, StructTypeName};
+use crate::syntax::names::ScopedName;
+use crate::syntax::names::{DeclName, DimName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
@@ -1355,9 +1355,31 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
 }
 
 /// Visitor that prefixes references to dependency declarations.
+///
+/// When a `@name` (or bare const `NAME`) refers to a name owned by the
+/// dependency being merged, rewrite the typed [`ScopedName`] payload via
+/// [`ScopedName::with_prefix`] so the merged-IR key matches the prefixed
+/// declaration name. No flat `::` strings are constructed here — the
+/// `Local`/`Qualified` distinction lives in the variant.
 struct RefPrefixer<'a> {
     prefix: &'a str,
     dep_names: &'a HashSet<String>,
+}
+
+impl RefPrefixer<'_> {
+    fn rewrite(&self, scoped: &ScopedName) -> Option<ScopedName> {
+        // Only rewrite refs that are local to the dep (i.e. unqualified
+        // members owned by the dependency). Already-qualified refs (e.g.
+        // a transitively-imported `@module.x` inside the dep) belong to
+        // some other namespace and are left untouched.
+        if let ScopedName::Local(name) = scoped
+            && self.dep_names.contains(name.as_str())
+        {
+            Some(scoped.with_prefix(self.prefix))
+        } else {
+            None
+        }
+    }
 }
 
 impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
@@ -1365,35 +1387,26 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
 
     fn visit_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::GraphRef(ident) = &mut expr.kind
-            && self.dep_names.contains(ident.value.as_str())
+            && let Some(prefixed) = self.rewrite(&ident.value)
         {
-            ident.value = DeclName::new(format!("{}::{}", self.prefix, ident.value));
+            ident.value = prefixed;
         }
         Ok(())
     }
 
     fn visit_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::ConstRef(ident) = &mut expr.kind
-            && self.dep_names.contains(ident.value.as_str())
+            && let Some(prefixed) = self.rewrite(&ident.value)
         {
-            ident.value = DeclName::new(format!("{}::{}", self.prefix, ident.value));
+            ident.value = prefixed;
         }
         Ok(())
     }
 
-    fn visit_fn_call_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { name, args, .. } = &mut expr.kind {
-            if self.dep_names.contains(name.value.as_str()) {
-                name.value = FnName::new(format!("{}::{}", self.prefix, name.value));
-            }
-            for arg in args {
-                self.visit_expr_mut(arg)?;
-            }
-        }
-        Ok(())
-    }
-
-    // Qualified refs and leaf nodes don't need rewriting (handled by default no-ops)
+    // Function calls don't need rewriting: built-ins (`sqrt`, `sum`, …)
+    // are unqualified and never appear in `dep_names`, and there are no
+    // user-defined functions in graphcal. The default `visit_fn_call_mut`
+    // (which recurses into args) is correct.
 }
 
 /// Rewrite `@`-references and const/fn references within an expression to use
@@ -1631,8 +1644,6 @@ pub(crate) fn substitute_type_names_in_expr(
         | ExprKind::QualifiedNameRef { .. }
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::VariantLiteral { .. } => {}
 
         ExprKind::InlineDagRef { args, .. } => {
@@ -2510,9 +2521,9 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
         ExprKind::Number(n) => Ok(*n),
         #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
         ExprKind::Integer(n) => Ok(*n as f64),
-        ExprKind::ConstRef(ident) => match ident.value.as_str() {
-            "PI" => Ok(std::f64::consts::PI),
-            "E" => Ok(std::f64::consts::E),
+        ExprKind::ConstRef(ident) => match ident.value.member() {
+            "PI" if !ident.value.is_qualified() => Ok(std::f64::consts::PI),
+            "E" if !ident.value.is_qualified() => Ok(std::f64::consts::E),
             _ => Err(GraphcalError::EvalError {
                 message: format!(
                     "unknown constant `{}` in scale expression; only `PI` and `E` are supported",

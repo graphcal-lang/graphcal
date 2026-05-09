@@ -3,6 +3,7 @@ use graphcal_compiler::syntax::ast::{
     MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm,
     TypeExpr, UnaryOp,
 };
+use graphcal_compiler::syntax::names::ScopedName;
 use pretty::RcDoc;
 
 use super::{
@@ -23,19 +24,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
-        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value.as_str())),
+        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", format_scoped_surface(&name.value))),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
-        ExprKind::ConstRef(name) => RcDoc::text(name.value.as_str().to_string()),
-        ExprKind::QualifiedConstRef { module, name } => {
-            RcDoc::text(format!("{}.{}", module.name.as_str(), name.value.as_str()))
-        }
-        ExprKind::QualifiedGraphRef { qualifier, member } => RcDoc::text(format!(
-            "@{}.{}",
-            qualifier.name.as_str(),
-            member.value.as_str()
-        )),
+        ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
         ExprKind::LocalRef(ident) | ExprKind::NameRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -135,6 +128,18 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::QualifiedNameRef { qualifier, member } => {
             RcDoc::text(format!("{}.{}", qualifier.name, member.name))
         }
+    }
+}
+
+/// Render a [`ScopedName`] in surface syntax (qualified separator is `.`).
+///
+/// The `Display` impl for `ScopedName` uses `::` because that is the
+/// internal/boundary form (`HashMap` keys, debug output). Surface graphcal
+/// has used `.` since alpha-4, so the formatter has its own rendering.
+fn format_scoped_surface(scoped: &ScopedName) -> String {
+    match scoped {
+        ScopedName::Local(name) => name.clone(),
+        ScopedName::Qualified { module, member } => format!("{module}.{member}"),
     }
 }
 

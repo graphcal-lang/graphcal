@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, Spanned, StructTypeName,
-    UnitName, VariantName,
+    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, ScopedName, Spanned,
+    StructTypeName, UnitName, VariantName,
 };
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::Span;
@@ -1018,10 +1018,17 @@ pub enum ExprKind<P: Phase = Raw> {
     Bool(bool),
     /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
     StringLiteral(String),
-    /// Graph reference: `@name` (param, node, or const node)
-    GraphRef(Spanned<DeclName>),
-    /// Built-in constant reference: `PI`, `E`, `TAU`
-    ConstRef(Spanned<DeclName>),
+    /// Graph reference: `@name` or `@alias.member`. The payload encodes
+    /// qualification structurally — `Local` for bare `@name`, `Qualified`
+    /// for `@alias.member` (after the namespace-alias rewrite). Producers
+    /// never invent or interpret a `::` separator.
+    GraphRef(Spanned<ScopedName>),
+    /// Built-in constant reference (`PI`, `E`, `TAU`) or module-qualified
+    /// constant (`module.CONST`). The payload encodes qualification
+    /// structurally — see [`GraphRef`].
+    ///
+    /// [`GraphRef`]: ExprKind::GraphRef
+    ConstRef(Spanned<ScopedName>),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
         op: BinOp,
@@ -1148,21 +1155,6 @@ pub enum ExprKind<P: Phase = Raw> {
         args: Vec<ParamBinding<P>>,
         /// Projected output node name (after the closing paren `.`).
         output: Spanned<DeclName>,
-    },
-    /// Module-qualified built-in constant reference: `module.CONST_NAME`.
-    QualifiedConstRef {
-        module: Ident,
-        name: Spanned<DeclName>,
-    },
-    /// Module-qualified runtime graph reference: `@alias.member`, where
-    /// `alias` is a namespace introduced by `include path(...) as alias;`
-    /// or `import path as alias;`. Produced by the namespace-alias rewrite
-    /// pass; never emitted directly by the parser. The IR-layer flattener
-    /// turns this into a flat `GraphRef` whose `DeclName` carries the
-    /// internal `alias::member` form expected by downstream consumers.
-    QualifiedGraphRef {
-        qualifier: Ident,
-        member: Spanned<DeclName>,
     },
     /// Unresolved bare identifier reference.
     ///
@@ -1495,8 +1487,6 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::VariantLiteral { .. }
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::NameRef(_)
         | ExprKind::QualifiedNameRef { .. }
         // TupleMatch is handled below after recursing into children.
