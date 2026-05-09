@@ -190,7 +190,9 @@ pub(super) fn merge_dep_dag_tirs(
                     continue;
                 }
                 if let Some(value) = dep_eval.const_values.get(&source.source_name)
-                    && let Some(dt) = dep_eval.declared_types.get(&source.source_name)
+                    && let Some(dt) = dep_eval
+                        .declared_types
+                        .get(&ScopedName::local(source.source_name.clone()))
                 {
                     cloned
                         .imported_values
@@ -333,8 +335,8 @@ pub(super) fn process_deferred_dag_includes(
                             else {
                                 continue;
                             };
-                            let Some(dt) = parent_eval.declared_types.get(&source.source_name)
-                            else {
+                            let parent_key = ScopedName::local(source.source_name.clone());
+                            let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
                                 continue;
                             };
                             imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));

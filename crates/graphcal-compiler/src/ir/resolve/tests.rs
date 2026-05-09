@@ -121,8 +121,8 @@ fn resolve_const_deps_extracted() {
         "const node a: Dimensionless = 1.0;\nconst node b: Dimensionless = @a + 2.0;",
     )
     .unwrap();
-    let b_deps = &resolved.const_deps["b"];
-    assert!(b_deps.contains("a"));
+    let b_deps = &resolved.const_deps[&ScopedName::local("b")];
+    assert!(b_deps.contains(&ScopedName::local("a")));
     assert_eq!(b_deps.len(), 1);
 }
 
@@ -130,9 +130,9 @@ fn resolve_const_deps_extracted() {
 fn resolve_runtime_deps_extracted() {
     let resolved =
         parse_and_resolve("param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;").unwrap();
-    let c_deps = &resolved.runtime_deps["c"];
-    assert!(c_deps.contains("a"));
-    assert!(c_deps.contains("b"));
+    let c_deps = &resolved.runtime_deps[&ScopedName::local("c")];
+    assert!(c_deps.contains(&ScopedName::local("a")));
+    assert!(c_deps.contains(&ScopedName::local("b")));
     assert_eq!(c_deps.len(), 2);
 }
 
@@ -241,8 +241,8 @@ fn resolve_node_with_struct() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let p_deps = &resolved.runtime_deps["p"];
-    assert!(p_deps.contains("x"));
+    let p_deps = &resolved.runtime_deps[&ScopedName::local("p")];
+    assert!(p_deps.contains(&ScopedName::local("x")));
 }
 
 #[test]
@@ -308,8 +308,8 @@ fn resolve_for_comprehension() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let deps = &resolved.runtime_deps["doubled"];
-    assert!(deps.contains("values"));
+    let deps = &resolved.runtime_deps[&ScopedName::local("doubled")];
+    assert!(deps.contains(&ScopedName::local("values")));
 }
 
 #[test]
@@ -327,8 +327,8 @@ fn resolve_scan_expression() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let deps = &resolved.runtime_deps["cumul"];
-    assert!(deps.contains("vals"));
+    let deps = &resolved.runtime_deps[&ScopedName::local("cumul")];
+    assert!(deps.contains(&ScopedName::local("vals")));
 }
 
 #[test]
@@ -340,9 +340,9 @@ fn resolve_unfold_self_edge_excluded() {
         node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);
     ";
     let resolved = parse_and_resolve(source).unwrap();
-    let x_deps = &resolved.runtime_deps["x"];
+    let x_deps = &resolved.runtime_deps[&ScopedName::local("x")];
     assert!(
-        !x_deps.contains("x"),
+        !x_deps.contains(&ScopedName::local("x")),
         "unfold self-reference should be excluded from runtime_deps"
     );
 }

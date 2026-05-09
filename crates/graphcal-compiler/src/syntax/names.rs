@@ -226,18 +226,6 @@ impl From<String> for ScopedName {
     }
 }
 
-impl From<&ScopedName> for DeclName {
-    /// Flatten a scoped name into a single `DeclName` using the `module::member`
-    /// display form for qualified names and the bare member for locals.
-    ///
-    /// **Boundary-only.** This conversion exists for legacy `HashMap` keys
-    /// that still use `DeclName`. Inside the functional core, pattern-match
-    /// on `ScopedName` directly.
-    fn from(s: &ScopedName) -> Self {
-        Self::new(s.to_string())
-    }
-}
-
 impl From<DeclName> for ScopedName {
     /// Wrap a `DeclName` as a `ScopedName::Local`. Use this at the resolver →
     /// IR boundary where resolver keys (local `DeclName`s) become IR keys

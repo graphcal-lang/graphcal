@@ -5,7 +5,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::Expr;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{IndexName, StructTypeName};
+use crate::syntax::names::{IndexName, ScopedName, StructTypeName};
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -73,25 +73,23 @@ fn check_decl_expr_type(
     expr: &Expr,
     name: &crate::syntax::names::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let name_str = name.to_string();
-    let declared =
-        declared_types
-            .get(name_str.as_str())
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("no declared type recorded for `{name_str}`"),
-                src: src.clone(),
-                span: (*type_ann_span).into(),
-            })?;
+    let declared = declared_types
+        .get(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("no declared type recorded for `{name}`"),
+            src: src.clone(),
+            span: (*type_ann_span).into(),
+        })?;
     let inferred = infer_type_with_owner(
         expr,
-        Some(name_str.as_str()),
+        Some(name.member()),
         declared_types,
         empty_locals,
         tir,
@@ -118,7 +116,7 @@ fn check_decl_expr_type(
 fn check_assert_body(
     body: &crate::desugar::desugared_ast::AssertBody,
     span: crate::syntax::span::Span,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -363,7 +361,7 @@ enum ExpectedBound {
 /// `validate_constraint_target` in `exec_plan` (which raises `InvalidDomainTarget`).
 fn check_domain_constraint_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -551,7 +549,7 @@ fn strip_indexed(
 pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -559,9 +557,12 @@ pub fn check_override_dimension(
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
+    // Override targets are addressed by their bare param name, which is always
+    // a top-level local in the file being overridden.
+    let param_key = ScopedName::local(param_name);
     let declared =
         declared_types
-            .get(param_name)
+            .get(&param_key)
             .ok_or_else(|| GraphcalError::OverrideUnknownParam {
                 name: crate::syntax::names::DeclName::new(param_name.to_string()),
             })?;

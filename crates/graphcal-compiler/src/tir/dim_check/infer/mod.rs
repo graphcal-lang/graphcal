@@ -18,7 +18,7 @@ use crate::desugar::desugared_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{DeclName, UnitName};
+use crate::syntax::names::{DeclName, ScopedName, UnitName};
 
 use super::{DeclaredType, InferredType};
 
@@ -30,7 +30,7 @@ use super::{DeclaredType, InferredType};
 /// Pass `None` when the owner is not known (e.g., in override dimension checks).
 pub(super) fn infer_type(
     expr: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -54,7 +54,7 @@ pub(super) fn infer_type(
 pub(super) fn infer_type_with_owner(
     expr: &Expr,
     owner_decl_name: Option<&str>,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -121,28 +121,26 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::ConstRef(ident) => {
-            // Boundary: `declared_types` is still keyed by flat `String`s
-            // (`module::member` for qualified). Stringify once.
-            let flat = ident.value.to_string();
-            let dt = declared_types.get(flat.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownConstRef {
-                    name: DeclName::new(&flat),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                }
-            })?;
+            let dt =
+                declared_types
+                    .get(&ident.value)
+                    .ok_or_else(|| GraphcalError::UnknownConstRef {
+                        name: DeclName::new(ident.value.to_string()),
+                        src: src.clone(),
+                        span: ident.span.into(),
+                    })?;
             Ok(InferredType::from(dt))
         }
 
         ExprKind::GraphRef(ident) => {
-            let flat = ident.value.to_string();
-            let dt = declared_types.get(flat.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownGraphRef {
-                    name: DeclName::new(&flat),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                }
-            })?;
+            let dt =
+                declared_types
+                    .get(&ident.value)
+                    .ok_or_else(|| GraphcalError::UnknownGraphRef {
+                        name: DeclName::new(ident.value.to_string()),
+                        src: src.clone(),
+                        span: ident.span.into(),
+                    })?;
             Ok(InferredType::from(dt))
         }
 
@@ -429,7 +427,7 @@ fn infer_inline_dag_ref(
     path: &crate::syntax::ast::ModulePath,
     args: &[crate::desugar::desugared_ast::ParamBinding],
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -449,6 +447,9 @@ fn infer_inline_dag_ref(
     // Using the compiled TIR (not the raw AST) means the same code path
     // serves same-file and cross-file calls — the dep's TIR has already
     // resolved its type annotations in its own registry's scope.
+    //
+    // Locals only here: param/node binding names at a call site are bare
+    // identifiers, so a `String`-keyed table is the right shape.
     let mut param_decl_types: HashMap<String, DeclaredType> = HashMap::new();
     for p in &dag_tir.params {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&p.name) {

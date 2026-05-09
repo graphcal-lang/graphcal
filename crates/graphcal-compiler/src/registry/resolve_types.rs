@@ -410,9 +410,15 @@ pub struct ResolvedFile {
     /// Layer declarations in source order.
     pub layers: Vec<ResolvedLayerEntry>,
     /// For each node/param, the set of `@`-references (graph deps).
-    pub runtime_deps: HashMap<DeclName, HashSet<DeclName>>,
+    /// Keys are bare locals (the file's own decls); values may be qualified
+    /// when the ref targets an imported module member.
+    pub runtime_deps:
+        HashMap<crate::syntax::names::ScopedName, HashSet<crate::syntax::names::ScopedName>>,
     /// For each const, the set of `CONST_REF` references (const deps).
-    pub const_deps: HashMap<DeclName, HashSet<DeclName>>,
+    /// Keys are bare locals (the file's own decls); values may be qualified
+    /// when the ref targets an imported module member.
+    pub const_deps:
+        HashMap<crate::syntax::names::ScopedName, HashSet<crate::syntax::names::ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(DeclName, DeclCategory)>,
     /// Set of all assert names (for checking `@assert_name` errors).

@@ -114,7 +114,7 @@ pub(super) struct EvaluatedFile {
     /// Evaluated const values: name → `RuntimeValue`.
     pub(super) const_values: HashMap<String, RuntimeValue>,
     /// Declared types for all consts/params/nodes in this file.
-    pub(super) declared_types: HashMap<String, DeclaredType>,
+    pub(super) declared_types: HashMap<ScopedName, DeclaredType>,
     /// Assertion results from this file: name → (result, span).
     pub(super) assertions: HashMap<DeclName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
@@ -145,7 +145,7 @@ impl EvaluatedFile {
 /// per-file evaluation and TIR compilation pipelines.
 pub(super) struct CompiledFile {
     pub(super) tir: graphcal_compiler::tir::typed::TIR,
-    pub(super) declared_types: HashMap<String, DeclaredType>,
+    pub(super) declared_types: HashMap<ScopedName, DeclaredType>,
     /// Imported values for this file (cloned before being consumed by IR).
     /// Used by the root file to enrich output with imported value names.
     pub(super) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,

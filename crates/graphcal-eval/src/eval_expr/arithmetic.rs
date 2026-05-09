@@ -1,5 +1,5 @@
 use graphcal_compiler::desugar::desugared_ast::{BinOp, Expr, UnaryOp};
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::names::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -20,7 +20,7 @@ pub(super) fn eval_binop_expr(
     op: &BinOp,
     lhs: &Expr,
     rhs: &Expr,
-    values: &std::collections::HashMap<DeclName, RuntimeValue>,
+    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -171,7 +171,7 @@ pub(super) fn eval_unaryop_expr(
     expr: &Expr,
     op: &UnaryOp,
     operand: &Expr,
-    values: &std::collections::HashMap<DeclName, RuntimeValue>,
+    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

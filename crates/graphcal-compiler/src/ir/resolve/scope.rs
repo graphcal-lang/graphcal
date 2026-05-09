@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::desugar::desugared_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::registry::error::GraphcalError;
-use crate::syntax::names::DeclName;
+use crate::syntax::names::{DeclName, ScopedName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
@@ -25,19 +25,16 @@ struct ForbiddenGraphRefChecker<'a, S, F> {
 
 impl<S, F> ExprVisitor<crate::syntax::phase::Desugared> for ForbiddenGraphRefChecker<'_, S, F>
 where
-    S: Eq + Hash + Borrow<str>,
-    F: Fn(&str, &NamedSource<Arc<String>>, Span) -> GraphcalError,
+    S: Eq + Hash + Borrow<ScopedName>,
+    F: Fn(&ScopedName, &NamedSource<Arc<String>>, Span) -> GraphcalError,
 {
     type Error = GraphcalError;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::GraphRef(ident) = &expr.kind {
-            // Boundary: stringify the typed name to look it up in the
-            // (still flat-string) `forbidden` set.
-            let flat = ident.value.to_string();
-            if self.forbidden.contains(flat.as_str()) {
-                return Err((self.make_error)(flat.as_str(), self.src, expr.span));
-            }
+        if let ExprKind::GraphRef(ident) = &expr.kind
+            && self.forbidden.contains(&ident.value)
+        {
+            return Err((self.make_error)(&ident.value, self.src, expr.span));
         }
         Ok(())
     }
@@ -49,15 +46,15 @@ where
 /// runtime params or nodes.
 pub(super) fn check_no_runtime_graph_refs(
     expr: &Expr,
-    runtime_names: &HashSet<&str>,
+    runtime_names: &HashSet<&ScopedName>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut checker = ForbiddenGraphRefChecker {
         forbidden: runtime_names,
         src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
+        make_error: |name: &ScopedName, src: &NamedSource<Arc<String>>, span: Span| {
             GraphcalError::GraphRefInConst {
-                name: name.into(),
+                name: name.to_string().into(),
                 src: src.clone(),
                 span: span.into(),
             }
@@ -74,17 +71,34 @@ pub(super) fn check_no_assert_graph_refs(
     assert_names: &HashSet<DeclName>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let mut checker = ForbiddenGraphRefChecker {
-        forbidden: assert_names,
-        src,
-        make_error: |name: &str, src: &NamedSource<Arc<String>>, span: Span| {
-            GraphcalError::GraphRefToAssert {
-                name: name.into(),
-                src: src.clone(),
-                span: span.into(),
+    // Asserts are top-level declarations and therefore always bare-local
+    // refs in the AST. A qualified `@module.member` never names an assert,
+    // so the check skips qualified refs and matches the bare member name
+    // against the local assert set.
+    struct AssertChecker<'a> {
+        assert_names: &'a HashSet<DeclName>,
+        src: &'a NamedSource<Arc<String>>,
+    }
+
+    impl ExprVisitor<crate::syntax::phase::Desugared> for AssertChecker<'_> {
+        type Error = GraphcalError;
+
+        fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+            if let ExprKind::GraphRef(ident) = &expr.kind
+                && !ident.value.is_qualified()
+                && self.assert_names.contains(ident.value.member())
+            {
+                return Err(GraphcalError::GraphRefToAssert {
+                    name: ident.value.member().into(),
+                    src: self.src.clone(),
+                    span: expr.span.into(),
+                });
             }
-        },
-    };
+            Ok(())
+        }
+    }
+
+    let mut checker = AssertChecker { assert_names, src };
     checker.visit_expr(expr)
 }
 

@@ -670,7 +670,8 @@ impl TIR {
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<HashMap<String, crate::registry::declared_type::DeclaredType>, GraphcalError> {
+    ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
+    {
         self.root().build_declared_types(src)
     }
 
@@ -841,23 +842,24 @@ impl DagTIR {
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<HashMap<String, crate::registry::declared_type::DeclaredType>, GraphcalError> {
+    ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
+    {
         let mut declared_types = HashMap::new();
         for name in crate::registry::builtins::builtin_constants().keys() {
             declared_types.insert(
-                (*name).to_string(),
+                ScopedName::local(*name),
                 crate::registry::declared_type::DeclaredType::Scalar(Dimension::dimensionless()),
             );
         }
         for (name, resolved) in &self.resolved_decl_types {
             let dt = resolved_to_declared_type(resolved, src)?;
-            declared_types.insert(name.to_string(), dt);
+            declared_types.insert(name.clone(), dt);
         }
         for (name, (_rv, dt)) in &self.imported_values {
-            declared_types.insert(name.to_string(), dt.clone());
+            declared_types.insert(name.clone(), dt.clone());
         }
         for (name, dt) in &self.imported_decl_types {
-            declared_types.insert(name.to_string(), dt.clone());
+            declared_types.insert(name.clone(), dt.clone());
         }
         Ok(declared_types)
     }

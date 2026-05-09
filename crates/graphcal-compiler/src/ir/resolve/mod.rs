@@ -76,8 +76,8 @@ struct CollectedDeclarations {
     plots: Vec<ResolvedPlotEntry>,
     figures: Vec<ResolvedFigureEntry>,
     layers: Vec<ResolvedLayerEntry>,
-    runtime_deps: HashMap<DeclName, HashSet<DeclName>>,
-    const_deps: HashMap<DeclName, HashSet<DeclName>>,
+    runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
+    const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
     pub_names: HashSet<DeclName>,
@@ -93,7 +93,7 @@ struct CollectedDeclarations {
 fn collect_local_declarations(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    names: &mut HashMap<String, (Span, NameCategory)>,
+    names: &mut HashMap<ScopedName, (Span, NameCategory)>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
@@ -104,8 +104,8 @@ fn collect_local_declarations(
     let mut plots = Vec::new();
     let mut figures = Vec::new();
     let mut layers = Vec::new();
-    let mut runtime_deps: HashMap<DeclName, HashSet<DeclName>> = HashMap::new();
-    let mut const_deps: HashMap<DeclName, HashSet<DeclName>> = HashMap::new();
+    let mut runtime_deps: HashMap<ScopedName, HashSet<ScopedName>> = HashMap::new();
+    let mut const_deps: HashMap<ScopedName, HashSet<ScopedName>> = HashMap::new();
     let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
@@ -206,8 +206,9 @@ fn collect_local_declarations(
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
 
-        // Check for duplicates
-        if let Some((first_span, _)) = names.get(&name) {
+        // Check for duplicates. Names from local declarations are bare locals.
+        let scoped_name = ScopedName::local(name.clone());
+        if let Some((first_span, _)) = names.get(&scoped_name) {
             return Err(GraphcalError::DuplicateName {
                 name,
                 src: src.clone(),
@@ -220,7 +221,7 @@ fn collect_local_declarations(
         } else {
             NameCategory::Runtime
         };
-        names.insert(name.clone(), (name_span, name_cat));
+        names.insert(scoped_name, (name_span, name_cat));
 
         // Track source order and assert names
         let category = match &decl.kind {
@@ -450,9 +451,9 @@ fn collect_local_declarations(
                         src,
                         None,
                     )?;
-                    runtime_deps.insert(DeclName::new(pname.as_str()), graph_refs);
+                    runtime_deps.insert(ScopedName::local(pname.as_str()), graph_refs);
                 } else {
-                    runtime_deps.insert(DeclName::new(pname.as_str()), HashSet::new());
+                    runtime_deps.insert(ScopedName::local(pname.as_str()), HashSet::new());
                 }
                 params.push(ResolvedParamEntry {
                     name: pname,
@@ -471,7 +472,7 @@ fn collect_local_declarations(
                     src,
                 )?;
                 let cname = c.name.value.to_string();
-                const_deps.insert(DeclName::new(cname.as_str()), deps);
+                const_deps.insert(ScopedName::local(cname.as_str()), deps);
                 consts.push(ResolvedConstEntry {
                     name: cname,
                     expr: c.value.clone(),
@@ -491,7 +492,7 @@ fn collect_local_declarations(
                     src,
                     Some(&nname),
                 )?;
-                runtime_deps.insert(DeclName::new(nname.as_str()), graph_refs);
+                runtime_deps.insert(ScopedName::local(nname.as_str()), graph_refs);
                 nodes.push(ResolvedNodeEntry {
                     name: nname,
                     expr: n.value.clone(),
@@ -518,18 +519,22 @@ fn collect_local_declarations(
 }
 
 /// Build const and runtime name sets from the names map using stored categories.
+///
+/// The returned sets borrow keys from `names`; downstream resolver code uses
+/// them for typed `ScopedName` membership checks against AST `GraphRef` /
+/// `ConstRef` values directly.
 fn build_name_sets(
-    names: &HashMap<String, (Span, NameCategory)>,
-) -> (HashSet<&str>, HashSet<&str>) {
-    let all_const_names: HashSet<&str> = names
+    names: &HashMap<ScopedName, (Span, NameCategory)>,
+) -> (HashSet<&ScopedName>, HashSet<&ScopedName>) {
+    let all_const_names: HashSet<&ScopedName> = names
         .iter()
         .filter(|(_, (_, cat))| *cat == NameCategory::Const)
-        .map(|(name, _)| name.as_str())
+        .map(|(name, _)| name)
         .collect();
-    let all_runtime_names: HashSet<&str> = names
+    let all_runtime_names: HashSet<&ScopedName> = names
         .iter()
         .filter(|(_, (_, cat))| *cat == NameCategory::Runtime)
-        .map(|(name, _)| name.as_str())
+        .map(|(name, _)| name)
         .collect();
     (all_const_names, all_runtime_names)
 }
@@ -926,21 +931,23 @@ pub(crate) fn resolve_with_imports(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
+    let mut names: HashMap<ScopedName, (Span, NameCategory)> = HashMap::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
+    // The `imported.*` legacy entries pass bare names; the at-rest dep map
+    // produced upstream already classifies them as locals.
     for (name, _, _, span) in &imported.consts {
-        names.insert(name.clone(), (*span, NameCategory::Const));
+        names.insert(ScopedName::local(name), (*span, NameCategory::Const));
     }
     for (name, _, _, span) in &imported.params {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
     }
     for (name, _, _, span) in &imported.nodes {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
     }
     for (name, _, span) in &imported.asserts {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
     }
 
     // Collect local declarations
@@ -964,7 +971,7 @@ pub(crate) fn resolve_with_imports(
 
     for (name, _, expr, _) in &imported.consts {
         let deps = extract_const_refs(expr, &all_const_names, builtin_consts, builtin_fns, src)?;
-        const_deps.insert(DeclName::new(name.as_str()), deps);
+        const_deps.insert(ScopedName::local(name.as_str()), deps);
     }
     for (name, _, expr, _) in &imported.params {
         let (graph_refs, _const_refs) = extract_all_refs(
@@ -976,7 +983,7 @@ pub(crate) fn resolve_with_imports(
             src,
             None,
         )?;
-        runtime_deps.insert(DeclName::new(name.as_str()), graph_refs);
+        runtime_deps.insert(ScopedName::local(name.as_str()), graph_refs);
     }
     for (name, _, expr, _) in &imported.nodes {
         let (graph_refs, _const_refs) = extract_all_refs(
@@ -988,7 +995,7 @@ pub(crate) fn resolve_with_imports(
             src,
             Some(name.as_str()),
         )?;
-        runtime_deps.insert(DeclName::new(name.as_str()), graph_refs);
+        runtime_deps.insert(ScopedName::local(name.as_str()), graph_refs);
     }
 
     // Prepend imported declarations so they appear before local ones in eval order.
@@ -1099,22 +1106,23 @@ pub(crate) fn resolve_with_imported_values(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    let mut names: HashMap<String, (Span, NameCategory)> = HashMap::new();
+    let mut names: HashMap<ScopedName, (Span, NameCategory)> = HashMap::new();
 
-    // Pre-populate with imported names (for scope checking only).
-    // ScopedName -> String conversion: the resolver's internal scope uses flat strings
-    // because it mixes imported names with local declarations.
+    // Pre-populate with imported names. The scope here mixes typed imported
+    // `ScopedName`s (which may be `Qualified` for module aliases) with
+    // local declarations; both share the same key type so subsequent lookups
+    // pattern-match against AST `GraphRef`/`ConstRef` values directly.
     for (name, span) in &imported.const_names {
-        names.insert(name.to_string(), (*span, NameCategory::Const));
+        names.insert(name.clone(), (*span, NameCategory::Const));
     }
     for (name, span) in &imported.param_names {
-        names.insert(name.to_string(), (*span, NameCategory::Runtime));
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
     for (name, span) in &imported.node_names {
-        names.insert(name.to_string(), (*span, NameCategory::Runtime));
+        names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
     for (name, span) in &imported.assert_names {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
     }
 
     // Collect local declarations
