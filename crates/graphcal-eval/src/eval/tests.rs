@@ -1303,6 +1303,39 @@ fn eval_qualified_inline_dag_call_imports_parent_const_with_alias() {
 }
 
 #[test]
+fn eval_inline_dag_namespace_alias_at_field() {
+    // Issue #518: `include foo() as bar; @bar.member` was N002.
+    // Two instances confirm distinct namespaces.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/valid/inline_dag_namespace/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let doubled = find_value(&result, "doubled_result");
+    let tripled = find_value(&result, "tripled_result");
+    assert!((doubled - 20.0).abs() < 1e-10, "doubled = {doubled}");
+    assert!((tripled - 30.0).abs() < 1e-10, "tripled = {tripled}");
+}
+
+#[test]
+fn eval_cross_file_include_namespace_alias_at_field() {
+    // Issue #518: `include path(...) as alias; @alias.member` across files.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/valid/multi/instantiated_import_module/src/rocket/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let dv = find_value(&result, "dv");
+    assert!(dv > 0.0, "dv should be positive, got {dv}");
+}
+
+#[test]
+fn eval_import_namespace_alias_at_field() {
+    // Issue #518: `import path as alias; @alias.const_member` across files.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/valid/multi/module_import_alias/src/constants/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let g = find_value(&result, "g");
+    assert!((g - 9.806_65).abs() < 1e-10, "g = {g}");
+}
+
+#[test]
 fn eval_inline_dag_include_cross_file_self_import() {
     // Cross-file `include` of a DAG whose body has `import <self>.{...}`
     // (resolved against the dag's parent file). The parent's value must
