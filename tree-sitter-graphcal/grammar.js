@@ -148,9 +148,10 @@ module.exports = grammar({
 
     // Multi-declaration (issue #481): introduce N parallel
     // param/node/const-node declarations from a single table literal.
-    // Attributes and visibility annotations are forbidden on multi-decls.
+    // Attributes are forbidden; visibility (`pub` / `pub(bind)`) attaches
+    // per slot, with the leading prefix applying to the first slot.
     //
-    //     param a: T[I], const node b: U[I]
+    //     pub node a: T[I], const node b: U[I]
     //       = table[I, (_, _)] {
     //           : _, _;
     //           A: 1, 2;
@@ -166,6 +167,7 @@ module.exports = grammar({
     ),
 
     multi_decl_slot: $ => seq(
+      optional(field("visibility", $.visibility)),
       field("kind", $.multi_decl_kind),
       field("name", $.identifier),
       ":",

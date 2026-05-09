@@ -41,9 +41,10 @@ pub(super) enum SlotKind {
     ConstNode,
 }
 
-/// A parsed slot header: `[const] (param|node) IDENT: TypeExpr`.
+/// A parsed slot header: `[pub|pub(bind)] [const] (param|node) IDENT: TypeExpr`.
 #[derive(Debug, Clone)]
 pub(super) struct SlotHeader {
+    pub visibility: Visibility,
     pub kind: SlotKind,
     /// Span covering the kind keyword(s).
     pub kind_span: Span,
@@ -54,10 +55,48 @@ pub(super) struct SlotHeader {
 }
 
 impl Parser<'_> {
+    /// Validate that `visibility` is legal on a value-decl slot of `kind`.
+    /// Mirrors the per-decl checks at the top of `parse_declaration`:
+    /// `param` rejects any visibility annotation; `node` / `const node`
+    /// reject `pub(bind)`. Called once per multi-decl slot.
+    pub(super) fn check_value_decl_visibility(
+        &self,
+        visibility: Visibility,
+        visibility_span: Option<Span>,
+        kind: SlotKind,
+    ) -> Result<(), ParseError> {
+        let Some(vis_span) = visibility_span else {
+            return Ok(());
+        };
+        match (kind, visibility) {
+            (SlotKind::Param, Visibility::Public) => Err(self.unexpected_token(
+                "no visibility annotation (params are always visible and bindable)",
+                "`pub`",
+                vis_span,
+            )),
+            (SlotKind::Param, Visibility::PublicBind) => Err(self.unexpected_token(
+                "no visibility annotation (params are always visible and bindable)",
+                "`pub(bind)`",
+                vis_span,
+            )),
+            (SlotKind::Node | SlotKind::ConstNode, Visibility::PublicBind) => {
+                Err(self.unexpected_token(
+                    "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
+                    "`pub(bind)`",
+                    vis_span,
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Parse the tail of a slot header: `IDENT : TypeExpr` given that the
     /// kind keyword(s) have already been consumed and their span captured.
+    /// Visibility is supplied by the caller (the leading `pub`/`pub(bind)`
+    /// prefix is parsed before the kind keyword).
     pub(super) fn parse_slot_header_tail(
         &mut self,
+        visibility: Visibility,
         kind: SlotKind,
         kind_span: Span,
     ) -> Result<SlotHeader, ParseError> {
@@ -66,6 +105,7 @@ impl Parser<'_> {
         let type_ann = self.parse_type_expr()?;
         let header_span = kind_span.merge(type_ann.span);
         Ok(SlotHeader {
+            visibility,
             kind,
             kind_span,
             name,
@@ -75,9 +115,12 @@ impl Parser<'_> {
     }
 
     /// Parse the remainder of a multi-decl given the first slot header,
-    /// the leading `,` already peeked but not consumed. Returns a single
-    /// `Declaration` wrapping a [`ast::MultiDecl`]. Expansion to N flat
-    /// declarations happens later, in
+    /// the leading `,` already peeked but not consumed. The first slot's
+    /// visibility was consumed by `parse_declaration` before the multi-decl
+    /// was recognized, and is supplied via `first_visibility`/
+    /// `first_visibility_span` so per-slot validation runs once for every
+    /// slot. Returns a single `Declaration` wrapping a [`ast::MultiDecl`].
+    /// Expansion to N flat declarations happens later in
     /// [`crate::syntax::desugar::desugar_multi_decls_in_file`].
     #[expect(
         clippy::too_many_lines,
@@ -86,14 +129,23 @@ impl Parser<'_> {
     pub(super) fn parse_multi_decl_rest(
         &mut self,
         first_slot: SlotHeader,
+        first_visibility: Visibility,
+        first_visibility_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
+        // Validate the first slot's visibility against its kind. The
+        // single-decl path applies the same rules inline before reaching
+        // here; for multi-decl we run them per-slot so a leading `pub`
+        // followed by a comma still gets validated against slot 0's kind.
+        self.check_value_decl_visibility(first_visibility, first_visibility_span, first_slot.kind)?;
         let mut slots: Vec<SlotHeader> = vec![first_slot];
 
-        // Parse remaining slots: `, (param|node|const node) IDENT : TypeExpr`.
+        // Parse remaining slots: `, [pub|pub(bind)] (param|node|const node) IDENT : TypeExpr`.
         while self.lexer.peek() == Some(&Token::Comma) {
             self.lexer.next_token(); // consume ','
+            let (visibility, visibility_span) = self.parse_visibility_prefix()?;
             let (kind, kind_span) = self.parse_slot_kind()?;
-            let header = self.parse_slot_header_tail(kind, kind_span)?;
+            self.check_value_decl_visibility(visibility, visibility_span, kind)?;
+            let header = self.parse_slot_header_tail(visibility, kind, kind_span)?;
             slots.push(header);
         }
 
@@ -226,6 +278,7 @@ impl Parser<'_> {
         let ast_slots: Vec<ast::MultiDeclSlot> = slots
             .iter()
             .map(|s| ast::MultiDeclSlot {
+                visibility: s.visibility,
                 kind: match s.kind {
                     SlotKind::Param => ast::MultiSlotKind::Param,
                     SlotKind::Node => ast::MultiSlotKind::Node,
@@ -602,7 +655,7 @@ mod tests {
     )]
 
     use super::*;
-    use crate::syntax::ast::{ExprKind, MultiSlotKind};
+    use crate::syntax::ast::{ExprKind, MultiSlotKind, Visibility};
     use crate::syntax::desugar::expand_multi_decl;
     use crate::syntax::parser::Parser;
 
@@ -752,7 +805,12 @@ param a: Int[Component], param b: Int[Component]
     }
 
     #[test]
-    fn multi_decl_rejects_visibility_on_whole() {
+    fn multi_decl_first_slot_pub_param_still_rejected() {
+        // `pub` on `param` is invalid per-slot — params are implicitly
+        // visible+bindable and never carry an annotation. The leading `pub`
+        // here applies to the first slot, so the error fires with that slot's
+        // kind even though the multi-decl shape isn't recognized until the
+        // first comma.
         let source = r"
 pub param a: Int[Component], param b: Int[Component]
   = table[Component, (_, _)] {
@@ -761,7 +819,87 @@ pub param a: Int[Component], param b: Int[Component]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        // `pub param` is already rejected earlier (params never pub).
+        assert!(matches!(err, ParseError::UnexpectedToken { .. }));
+    }
+
+    #[test]
+    fn multi_decl_first_slot_pub_node_accepted() {
+        // The leading `pub` becomes the first slot's visibility; the second
+        // slot stays private.
+        let source = r"
+index Component = { ComponentA, ComponentB };
+
+pub node a: Int[Component], node b: Int[Component]
+  = table[Component, (_, _)] {
+      :           _, _;
+      ComponentA: 1, 2;
+      ComponentB: 3, 4;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots[0].visibility, Visibility::Public);
+        assert_eq!(multi.slots[1].visibility, Visibility::Private);
+
+        let desugared = expand_multi_decl(multi);
+        assert_eq!(desugared[0].visibility, Visibility::Public);
+        assert_eq!(desugared[1].visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn multi_decl_per_slot_visibility_mixed() {
+        // First private, second pub via per-slot prefix after the comma.
+        let source = r"
+index Component = { ComponentA, ComponentB };
+
+node a: Int[Component], pub node b: Int[Component]
+  = table[Component, (_, _)] {
+      :           _, _;
+      ComponentA: 1, 2;
+      ComponentB: 3, 4;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        let multi = sole_multi_decl(&file);
+        assert_eq!(multi.slots[0].visibility, Visibility::Private);
+        assert_eq!(multi.slots[1].visibility, Visibility::Public);
+
+        let desugared = expand_multi_decl(multi);
+        assert_eq!(desugared[0].visibility, Visibility::Private);
+        assert_eq!(desugared[1].visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn multi_decl_per_slot_pub_param_still_rejected() {
+        // The per-slot rule fires for non-first slots too.
+        let source = r"
+index Component = { ComponentA, ComponentB };
+
+node a: Int[Component], pub param b: Int[Component]
+  = table[Component, (_, _)] {
+      :           _, _;
+      ComponentA: 1, 2;
+      ComponentB: 3, 4;
+  };
+";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(err, ParseError::UnexpectedToken { .. }));
+    }
+
+    #[test]
+    fn multi_decl_per_slot_pub_bind_node_rejected() {
+        // pub(bind) is meaningless on node / const node — same per-slot.
+        let source = r"
+index Component = { ComponentA, ComponentB };
+
+node a: Int[Component], pub(bind) node b: Int[Component]
+  = table[Component, (_, _)] {
+      :           _, _;
+      ComponentA: 1, 2;
+      ComponentB: 3, 4;
+  };
+";
+        let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(err, ParseError::UnexpectedToken { .. }));
     }
 

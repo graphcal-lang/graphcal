@@ -34,26 +34,7 @@ impl Parser<'_> {
         }
 
         // Optional `pub` or `pub(bind)` visibility modifier.
-        //
-        // `bind` is a contextual keyword parsed as a literal identifier
-        // inside the parens; it is not a reserved token so it remains a
-        // valid identifier elsewhere.
-        let (visibility, visibility_span) = if self.lexer.peek() == Some(&Token::Pub) {
-            let (_, pub_span) = self.advance()?;
-            if self.lexer.peek() == Some(&Token::LParen) {
-                self.expect(Token::LParen)?;
-                let (bind_tok, bind_span) = self.advance()?;
-                if bind_tok != Token::Ident || self.lexer.slice_at(bind_span) != "bind" {
-                    return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
-                }
-                let (_, rparen_span) = self.expect(Token::RParen)?;
-                (Visibility::PublicBind, Some(pub_span.merge(rparen_span)))
-            } else {
-                (Visibility::Public, Some(pub_span))
-            }
-        } else {
-            (Visibility::Private, None)
-        };
+        let (visibility, visibility_span) = self.parse_visibility_prefix()?;
 
         // Reject `pub` / `pub(bind)` on `param` at parse time. The spec
         // (visibility-bindability axioms §4.0) says `param` is
@@ -269,10 +250,12 @@ impl Parser<'_> {
         visibility: Visibility,
         visibility_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
-        let header = self.parse_slot_header_tail(kind, kind_span)?;
+        let header = self.parse_slot_header_tail(visibility, kind, kind_span)?;
 
         if self.lexer.peek() == Some(&Token::Comma) {
-            // Multi-decl. Attributes and visibility are not allowed.
+            // Multi-decl. Attributes are still forbidden; visibility now
+            // attaches to each slot, with the leading prefix consumed by
+            // `parse_declaration` becoming the first slot's visibility.
             if let Some(first_attr) = attributes.first() {
                 return Err(self.unexpected_token(
                     "no attributes on multi-decl (attributes are forbidden on multi-decl surface forms in v1)",
@@ -280,19 +263,7 @@ impl Parser<'_> {
                     first_attr.span,
                 ));
             }
-            if let Some(vis_span) = visibility_span {
-                let found = match visibility {
-                    Visibility::Public => "`pub`",
-                    Visibility::PublicBind => "`pub(bind)`",
-                    Visibility::Private => "visibility annotation",
-                };
-                return Err(self.unexpected_token(
-                    "no visibility annotation on multi-decl (apply visibility to each slot in a future extension)",
-                    found,
-                    vis_span,
-                ));
-            }
-            return self.parse_multi_decl_rest(header);
+            return self.parse_multi_decl_rest(header, visibility, visibility_span);
         }
 
         // Single decl. Continue with the existing param/node/const-node path.
@@ -306,6 +277,30 @@ impl Parser<'_> {
         }
         decl.attributes = attributes;
         Ok(decl)
+    }
+
+    /// Parse an optional `pub` / `pub(bind)` visibility prefix.
+    ///
+    /// Returns `(Visibility::Private, None)` when the next token is not
+    /// `pub`. `bind` is a contextual keyword: parsed as a literal identifier
+    /// inside the parens, not reserved as a token elsewhere.
+    pub(super) fn parse_visibility_prefix(
+        &mut self,
+    ) -> Result<(Visibility, Option<Span>), ParseError> {
+        if self.lexer.peek() != Some(&Token::Pub) {
+            return Ok((Visibility::Private, None));
+        }
+        let (_, pub_span) = self.advance()?;
+        if self.lexer.peek() != Some(&Token::LParen) {
+            return Ok((Visibility::Public, Some(pub_span)));
+        }
+        self.expect(Token::LParen)?;
+        let (bind_tok, bind_span) = self.advance()?;
+        if bind_tok != Token::Ident || self.lexer.slice_at(bind_span) != "bind" {
+            return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
+        }
+        let (_, rparen_span) = self.expect(Token::RParen)?;
+        Ok((Visibility::PublicBind, Some(pub_span.merge(rparen_span))))
     }
 
     /// Parse a single attribute: `#[name]` or `#[name(arg1, arg2)]`

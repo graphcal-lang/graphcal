@@ -50,7 +50,6 @@ use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
     ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryKey, MultiDecl,
     MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,
-    Visibility,
 };
 use crate::syntax::names::{IndexName, Spanned, VariantName};
 use crate::syntax::phase::{Desugared, Raw};
@@ -185,14 +184,9 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
         // whole multi-decl so diagnostics land on the source surface.
         let decl_span = slot.header_span.merge(multi.span);
 
-        // TODO(#481): plumb slot visibility once the parser accepts per-slot
-        // `pub`/`pub(bind)` markers on multi-decls. Today the parser rejects
-        // any visibility on the whole block (see
-        // `multi_decl_rejects_visibility_on_whole`), so every desugared slot
-        // is unconditionally Private.
         out.push(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
+            visibility: slot.visibility,
             kind,
             span: decl_span,
         });

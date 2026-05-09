@@ -510,9 +510,14 @@ pub struct MultiDecl<P: Phase = Raw> {
     pub table_expr_span: Span,
 }
 
-/// One slot in a multi-decl: kind keyword, name, type annotation.
+/// One slot in a multi-decl: kind keyword, name, type annotation, visibility.
 #[derive(Debug, Clone)]
 pub struct MultiDeclSlot<P: Phase = Raw> {
+    /// Visibility for this slot. The first slot inherits the leading
+    /// `pub`/`pub(bind)` prefix consumed before the multi-decl was
+    /// recognized; subsequent slots accept their own optional prefix
+    /// before the kind keyword.
+    pub visibility: Visibility,
     pub kind: MultiSlotKind,
     /// Span covering the kind keyword(s) (`param`, `node`, or `const node`).
     pub kind_span: Span,
