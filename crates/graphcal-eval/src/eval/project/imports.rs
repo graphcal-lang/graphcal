@@ -976,12 +976,15 @@ pub(super) fn import_selective_item(
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> SelectiveImportResult {
+    // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
+    // declarations are always bare locals, so wrap the bare member name.
+    let dep_key = ScopedName::local(orig_name);
     if let Some(rv) = dep.const_values.get(orig_name) {
         let scoped = ScopedName::Local(local_name.to_string());
         imported_names.const_names.push((scoped.clone(), span));
         let dt = dep
             .declared_types
-            .get(orig_name)
+            .get(&dep_key)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
                 graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
@@ -996,7 +999,7 @@ pub(super) fn import_selective_item(
         imported_names.param_names.push((scoped.clone(), span));
         let dt = dep
             .declared_types
-            .get(orig_name)
+            .get(&dep_key)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
                 graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
@@ -1046,9 +1049,10 @@ pub(super) fn import_module_values(
         imported_names
             .const_names
             .push((scoped.clone(), import_span));
+        let dep_key = ScopedName::local(name);
         let dt = dep
             .declared_types
-            .get(name)
+            .get(&dep_key)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
                 graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
@@ -1079,9 +1083,10 @@ pub(super) fn import_module_values(
         imported_names
             .param_names
             .push((scoped.clone(), import_span));
+        let dep_key = ScopedName::local(name);
         let dt = dep
             .declared_types
-            .get(name)
+            .get(&dep_key)
             .cloned()
             .unwrap_or(DeclaredType::Scalar(
                 graphcal_compiler::syntax::dimension::Dimension::dimensionless(),

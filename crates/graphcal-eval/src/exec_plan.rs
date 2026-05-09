@@ -11,7 +11,7 @@ use miette::NamedSource;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl,
 };
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::names::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -24,7 +24,7 @@ use graphcal_compiler::tir::typed::{ResolvedDomainConstraint, TIR};
 /// An assert body entry for execution.
 #[derive(Debug, Clone)]
 pub struct AssertBodyEntry {
-    pub(crate) name: DeclName,
+    pub(crate) name: ScopedName,
     pub(crate) body: AssertBody,
     pub(crate) span: Span,
 }
@@ -32,7 +32,7 @@ pub struct AssertBodyEntry {
 /// A plot body entry for execution.
 #[derive(Debug, Clone)]
 pub struct PlotBodyEntry {
-    pub(crate) name: DeclName,
+    pub(crate) name: ScopedName,
     pub(crate) decl: PlotDecl,
     /// Whether this plot is `pub` (visible in standalone output).
     pub(crate) is_pub: bool,
@@ -41,14 +41,14 @@ pub struct PlotBodyEntry {
 /// A figure body entry for execution.
 #[derive(Debug, Clone)]
 pub struct FigureBodyEntry {
-    pub(crate) name: DeclName,
+    pub(crate) name: ScopedName,
     pub(crate) decl: FigureDecl,
 }
 
 /// A layer body entry for execution.
 #[derive(Debug, Clone)]
 pub struct LayerBodyEntry {
-    pub(crate) name: DeclName,
+    pub(crate) name: ScopedName,
     pub(crate) decl: LayerDecl,
 }
 
@@ -57,16 +57,16 @@ pub struct LayerBodyEntry {
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: HashMap<DeclName, RuntimeValue>,
+    pub(crate) const_values: HashMap<ScopedName, RuntimeValue>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
     /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
-    pub(crate) imported_values: HashMap<graphcal_compiler::ir::resolve::ScopedName, RuntimeValue>,
+    pub(crate) imported_values: HashMap<ScopedName, RuntimeValue>,
     /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub(crate) topo_order: Vec<DeclName>,
+    pub(crate) topo_order: Vec<ScopedName>,
     /// Runtime expressions keyed by declaration name (params + nodes).
     /// Key-lookup only, order irrelevant.
-    pub(crate) expressions: HashMap<DeclName, Expr>,
+    pub(crate) expressions: HashMap<ScopedName, Expr>,
     /// Assert bodies in source order.
     pub(crate) assert_bodies: Vec<AssertBodyEntry>,
     /// Plot declarations in source order.
@@ -77,13 +77,13 @@ pub struct ExecPlan {
     pub(crate) layer_bodies: Vec<LayerBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
-    pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
+    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<DeclName, graphcal_compiler::ir::resolve::ExpectedFail>,
+    pub(crate) expected_fail: HashMap<ScopedName, graphcal_compiler::ir::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>,
+    pub(crate) domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -105,7 +105,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .asserts
         .iter()
         .map(|entry| AssertBodyEntry {
-            name: DeclName::from(&entry.name),
+            name: entry.name.clone(),
             body: entry.body.clone(),
             span: entry.span,
         })
@@ -116,7 +116,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .plots
         .iter()
         .map(|entry| PlotBodyEntry {
-            name: DeclName::from(&entry.name),
+            name: entry.name.clone(),
             decl: entry.decl.clone(),
             is_pub: entry.is_pub,
         })
@@ -127,7 +127,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .figures
         .iter()
         .map(|entry| FigureBodyEntry {
-            name: DeclName::from(&entry.name),
+            name: entry.name.clone(),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -137,7 +137,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .layers
         .iter()
         .map(|entry| LayerBodyEntry {
-            name: DeclName::from(&entry.name),
+            name: entry.name.clone(),
             decl: entry.decl.clone(),
         })
         .collect();
@@ -159,18 +159,8 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         plot_bodies,
         figure_bodies,
         layer_bodies,
-        assumes_map: tir
-            .root()
-            .assumes_map
-            .iter()
-            .map(|(k, v)| (DeclName::from(k), v.iter().map(DeclName::from).collect()))
-            .collect(),
-        expected_fail: tir
-            .root()
-            .expected_fail
-            .iter()
-            .map(|(k, v)| (DeclName::from(k), v.clone()))
-            .collect(),
+        assumes_map: tir.root().assumes_map.clone(),
+        expected_fail: tir.root().expected_fail.clone(),
         domain_constraints,
     })
 }
@@ -179,7 +169,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 pub fn eval_consts_from_tir(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<DeclName, RuntimeValue>, GraphcalError> {
+) -> Result<HashMap<ScopedName, RuntimeValue>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -187,24 +177,22 @@ pub fn eval_consts_from_tir(
         return Ok(HashMap::new());
     }
 
-    let mut graph = DiGraph::<String, ()>::new();
-    let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut graph = DiGraph::<ScopedName, ()>::new();
+    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
 
     // Sort consts by name for canonical tie-breaking among incomparable nodes.
     let mut sorted_consts: Vec<&_> = tir.root().consts.iter().collect();
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
-        let name_str = entry.name.to_string();
-        let idx = graph.add_node(name_str.clone());
-        index_map.insert(name_str, idx);
+        let idx = graph.add_node(entry.name.clone());
+        index_map.insert(entry.name.clone(), idx);
     }
 
     for entry in &tir.root().consts {
         if let Some(deps) = tir.root().const_deps.get(&entry.name) {
-            let from = index_map[&entry.name.to_string()];
+            let from = index_map[&entry.name];
             for dep in deps {
-                let dep_str = dep.to_string();
-                let to = index_map[&dep_str];
+                let to = index_map[dep];
                 graph.add_edge(to, from, ());
             }
         }
@@ -216,24 +204,24 @@ pub fn eval_consts_from_tir(
             .root()
             .consts
             .iter()
-            .find(|e| e.name.to_string() == *cycle_node)
+            .find(|e| &e.name == cycle_node)
             .map_or_else(|| Span::new(0, 0), |e| e.span);
         GraphcalError::CyclicDependency {
-            name: cycle_node.clone().into(),
+            name: cycle_node.to_string().into(),
             src: src.clone(),
             span: span.into(),
         }
     })?;
 
-    let const_exprs: HashMap<String, &Expr> = tir
+    let const_exprs: HashMap<ScopedName, &Expr> = tir
         .root()
         .consts
         .iter()
-        .map(|entry| (entry.name.to_string(), &entry.expr))
+        .map(|entry| (entry.name.clone(), &entry.expr))
         .collect();
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    let mut const_values: HashMap<DeclName, RuntimeValue> = HashMap::new();
+    let mut const_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -248,7 +236,7 @@ pub fn eval_consts_from_tir(
         let name = &graph[idx];
         let expr = const_exprs[name];
         let val = eval_expr(expr, &const_values, &empty_locals, &ctx)?;
-        const_values.insert(DeclName::new(name), val);
+        const_values.insert(name.clone(), val);
     }
 
     Ok(const_values)
@@ -258,7 +246,7 @@ pub fn eval_consts_from_tir(
 fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Vec<DeclName>, HashMap<DeclName, Expr>), GraphcalError> {
+) -> Result<(Vec<ScopedName>, HashMap<ScopedName, Expr>), GraphcalError> {
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
     enum DeclRef<'a> {
@@ -267,7 +255,7 @@ fn build_runtime_dag(
     }
 
     impl DeclRef<'_> {
-        const fn name(&self) -> &graphcal_compiler::ir::resolve::ScopedName {
+        const fn name(&self) -> &ScopedName {
             match self {
                 Self::Param(e) => &e.name,
                 Self::Node(e) => &e.name,
@@ -282,12 +270,12 @@ fn build_runtime_dag(
         }
     }
 
-    let mut graph = DiGraph::<String, ()>::new();
-    let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
-    let mut expressions: HashMap<DeclName, Expr> = HashMap::new();
+    let mut graph = DiGraph::<ScopedName, ()>::new();
+    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut expressions: HashMap<ScopedName, Expr> = HashMap::new();
     // Lookup used to recover source spans for cycle-error reporting without
     // re-iterating params/nodes on the error path.
-    let mut span_by_name: HashMap<String, Span> = HashMap::new();
+    let mut span_by_name: HashMap<ScopedName, Span> = HashMap::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = tir
         .root()
@@ -299,35 +287,33 @@ fn build_runtime_dag(
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
     for decl in &all_decls {
-        let name_str = decl.name().to_string();
-        let idx = graph.add_node(name_str.clone());
-        index_map.insert(name_str.clone(), idx);
-        span_by_name.insert(name_str.clone(), decl.span());
+        let name = decl.name().clone();
+        let idx = graph.add_node(name.clone());
+        index_map.insert(name.clone(), idx);
+        span_by_name.insert(name.clone(), decl.span());
         match decl {
             DeclRef::Param(entry) => match &entry.default_expr {
                 Some(expr) => {
-                    expressions.insert(DeclName::new(name_str), expr.clone());
+                    expressions.insert(name, expr.clone());
                 }
                 None => {
                     return Err(GraphcalError::RequiredParamNotProvided {
-                        name: name_str,
+                        name: name.to_string(),
                         src: src.clone(),
                         span: entry.span.into(),
                     });
                 }
             },
             DeclRef::Node(entry) => {
-                expressions.insert(DeclName::new(name_str), entry.expr.clone());
+                expressions.insert(name, entry.expr.clone());
             }
         }
     }
 
     for (name, deps) in &tir.root().runtime_deps {
-        let name_str = name.to_string();
-        if let Some(&to_idx) = index_map.get(&name_str) {
+        if let Some(&to_idx) = index_map.get(name) {
             for dep in deps {
-                let dep_str = dep.to_string();
-                if let Some(&from_idx) = index_map.get(&dep_str) {
+                if let Some(&from_idx) = index_map.get(dep) {
                     graph.add_edge(from_idx, to_idx, ());
                 }
             }
@@ -341,15 +327,15 @@ fn build_runtime_dag(
             .copied()
             .unwrap_or_else(|| Span::new(0, 0));
         GraphcalError::CyclicDependency {
-            name: cycle_node.clone().into(),
+            name: cycle_node.to_string().into(),
             src: src.clone(),
             span: span.into(),
         }
     })?;
 
-    let topo_order: Vec<DeclName> = topo_indices
+    let topo_order: Vec<ScopedName> = topo_indices
         .into_iter()
-        .map(|idx| DeclName::new(graph[idx].clone()))
+        .map(|idx| graph[idx].clone())
         .collect();
 
     Ok((topo_order, expressions))
@@ -371,9 +357,9 @@ fn build_runtime_dag(
 )]
 pub fn resolve_domain_constraints(
     tir: &TIR,
-    const_values: &HashMap<DeclName, RuntimeValue>,
+    const_values: &HashMap<ScopedName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<DeclName, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<ScopedName, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -493,7 +479,7 @@ pub fn resolve_domain_constraints(
 
         // For const declarations, validate the (already-known) value at compile time.
         if is_const
-            && let Some(value) = const_values.get(&DeclName::from(name))
+            && let Some(value) = const_values.get(name)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
@@ -506,7 +492,7 @@ pub fn resolve_domain_constraints(
             });
         }
 
-        constraints.insert(DeclName::from(name), resolved_constraint);
+        constraints.insert(name.clone(), resolved_constraint);
     }
 
     Ok(constraints)
@@ -684,7 +670,9 @@ mod tests {
     #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!((scalar(&plan.const_values["g0"]) - 9.80665).abs() < f64::EPSILON);
+        assert!(
+            (scalar(&plan.const_values[&ScopedName::local("g0")]) - 9.80665).abs() < f64::EPSILON
+        );
         assert!(plan.topo_order.is_empty());
     }
 
@@ -694,7 +682,7 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((scalar(&plan.const_values["two_g0"]) - 19.6133).abs() < 1e-10);
+        assert!((scalar(&plan.const_values[&ScopedName::local("two_g0")]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
@@ -703,9 +691,21 @@ mod tests {
             "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;\nnode z: Dimensionless = @y * 2.0;",
         )
         .unwrap();
-        let x_pos = plan.topo_order.iter().position(|n| n == "x").unwrap();
-        let y_pos = plan.topo_order.iter().position(|n| n == "y").unwrap();
-        let z_pos = plan.topo_order.iter().position(|n| n == "z").unwrap();
+        let x_pos = plan
+            .topo_order
+            .iter()
+            .position(|n| n.member() == "x")
+            .unwrap();
+        let y_pos = plan
+            .topo_order
+            .iter()
+            .position(|n| n.member() == "y")
+            .unwrap();
+        let z_pos = plan
+            .topo_order
+            .iter()
+            .position(|n| n.member() == "z")
+            .unwrap();
         assert!(x_pos < y_pos);
         assert!(y_pos < z_pos);
     }

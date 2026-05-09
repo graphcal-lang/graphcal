@@ -27,8 +27,7 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::ScopedName;
-use crate::syntax::names::{DeclName, DimName, IndexName, StructTypeName};
+use crate::syntax::names::{DimName, IndexName, ScopedName, StructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
@@ -172,17 +171,14 @@ pub struct ImportedValueSource {
     pub source_name: String,
 }
 
-/// Convert a `DeclName`-keyed dep map from the resolver to a `ScopedName`-keyed map.
+/// Convert a resolver dep map (whose value sets are `HashSet`) into the
+/// IR shape that uses `BTreeSet` for deterministic iteration order. Keys
+/// and dep entries are already typed [`ScopedName`]s end-to-end.
 fn wrap_dep_map(
-    map: HashMap<DeclName, HashSet<DeclName>>,
+    map: HashMap<ScopedName, HashSet<ScopedName>>,
 ) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
     map.into_iter()
-        .map(|(k, v)| {
-            (
-                ScopedName::from(k),
-                v.into_iter().map(ScopedName::from).collect(),
-            )
-        })
+        .map(|(k, v)| (k, v.into_iter().collect()))
         .collect()
 }
 
@@ -2241,7 +2237,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for UnitNameCollector {
 /// the params referenced by dynamic unit scales are evaluated before any
 /// node/param that uses the dynamic unit.
 fn augment_runtime_deps_for_dynamic_units(
-    runtime_deps: &mut HashMap<DeclName, HashSet<DeclName>>,
+    runtime_deps: &mut HashMap<ScopedName, HashSet<ScopedName>>,
     dynamic_unit_deps: &HashMap<String, HashSet<String>>,
     params: &[crate::registry::resolve_types::ResolvedParamEntry],
     nodes: &[crate::registry::resolve_types::ResolvedNodeEntry],
@@ -2250,15 +2246,16 @@ fn augment_runtime_deps_for_dynamic_units(
         return;
     }
 
-    // For each param with a default expression, check for dynamic unit references
+    // For each param with a default expression, check for dynamic unit references.
+    // Resolved param/node names are bare locals at this stage of the resolver.
     for param in params {
         if let Some(expr) = &param.default_expr {
             let extra_deps = collect_dynamic_unit_deps_from_expr(expr, dynamic_unit_deps);
             if !extra_deps.is_empty() {
                 runtime_deps
-                    .entry(DeclName::new(param.name.as_str()))
+                    .entry(ScopedName::local(param.name.as_str()))
                     .or_default()
-                    .extend(extra_deps.into_iter().map(DeclName::new));
+                    .extend(extra_deps.into_iter().map(ScopedName::local));
             }
         }
     }
@@ -2268,9 +2265,9 @@ fn augment_runtime_deps_for_dynamic_units(
         let extra_deps = collect_dynamic_unit_deps_from_expr(&node.expr, dynamic_unit_deps);
         if !extra_deps.is_empty() {
             runtime_deps
-                .entry(DeclName::new(node.name.as_str()))
+                .entry(ScopedName::local(node.name.as_str()))
                 .or_default()
-                .extend(extra_deps.into_iter().map(DeclName::new));
+                .extend(extra_deps.into_iter().map(ScopedName::local));
         }
     }
 }

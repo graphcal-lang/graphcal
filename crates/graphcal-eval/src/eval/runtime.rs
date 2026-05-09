@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexName, VariantName};
+use graphcal_compiler::syntax::names::{DeclName, IndexName, ScopedName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
@@ -140,7 +140,7 @@ pub(super) fn runtime_to_value(
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
-    pub values: HashMap<DeclName, RuntimeValue>,
+    pub values: HashMap<ScopedName, RuntimeValue>,
     pub errors: HashMap<String, NodeError>,
 }
 
@@ -154,29 +154,20 @@ pub(super) struct EvalLoopResult {
 pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
     tir: &graphcal_compiler::tir::typed::TIR,
-    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
-    let mut values: HashMap<DeclName, RuntimeValue> = HashMap::new();
+    let mut values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
     let mut errors: HashMap<String, NodeError> = HashMap::new();
 
-    // Build string-keyed runtime_deps for lookups (TIR uses ScopedName keys).
-    let runtime_deps: HashMap<String, Vec<String>> = tir
-        .root()
-        .runtime_deps
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.iter().map(ToString::to_string).collect()))
-        .collect();
-
     // Insert imported values into the lookup table (pre-evaluated by dependency files).
-    // ScopedName → DeclName: the runtime values map uses flat decl names because it
-    // merges imported, const, and locally computed values into a single namespace.
+    // Imported values keep their original `ScopedName` qualification.
     for (name, val) in &plan.imported_values {
-        values.insert(DeclName::new(name.to_string()), val.clone());
+        values.insert(name.clone(), val.clone());
     }
 
     // Insert const values into the lookup table
@@ -184,20 +175,23 @@ pub(super) fn run_eval_loop(
         values.insert(name.clone(), val.clone());
     }
 
-    // Evaluate in topological order (params first, then nodes that depend on them)
+    // Evaluate in topological order (params first, then nodes that depend on them).
+    // Top-level declarations in a single file are always `Local`-form names.
     for name in &plan.topo_order {
-        let name_str = name.to_string();
-        if values.contains_key(name.as_str()) {
+        let name_str = name.member().to_string();
+        if values.contains_key(name) {
             continue;
         }
 
         // Check if any dependency has failed
-        let failed_deps: Vec<DeclName> = runtime_deps
-            .get(&name_str)
+        let failed_deps: Vec<DeclName> = tir
+            .root()
+            .runtime_deps
+            .get(name)
             .map(|deps| {
                 deps.iter()
-                    .filter(|dep| errors.contains_key(dep.as_str()))
-                    .map(DeclName::new)
+                    .filter(|dep| errors.contains_key(dep.member()))
+                    .map(|dep| DeclName::new(dep.member()))
                     .collect()
             })
             .unwrap_or_default();
@@ -207,7 +201,7 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
-        let expr = &plan.expressions[name.as_str()];
+        let expr = &plan.expressions[name];
 
         // Build eval context with unfold support for this node.
         let unfold_ctx = UnfoldContext {
@@ -228,7 +222,7 @@ pub(super) fn run_eval_loop(
         match result {
             Ok(val) => {
                 // Check domain constraints after successful evaluation.
-                if let Some(constraint) = plan.domain_constraints.get(name.as_str())
+                if let Some(constraint) = plan.domain_constraints.get(name)
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
@@ -266,7 +260,7 @@ pub(super) fn run_eval_loop(
 pub(super) fn evaluate_plan(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> EvalResult {
     let builtin_consts = builtin_constants();
@@ -285,27 +279,23 @@ pub(super) fn evaluate_plan(
     let EvalLoopResult { values, errors } =
         run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
-    // Build a map from name -> expression for display unit extraction
-    let expr_map: HashMap<String, &graphcal_compiler::desugar::desugared_ast::Expr> = tir
+    // Build a map from name -> expression for display unit extraction.
+    // Top-level decls are always `Local`-form names.
+    let expr_map: HashMap<ScopedName, &graphcal_compiler::desugar::desugared_ast::Expr> = tir
         .root()
         .consts
         .iter()
-        .map(|e| (e.name.to_string(), &e.expr))
+        .map(|e| (e.name.clone(), &e.expr))
         .chain(
             tir.root()
                 .params
                 .iter()
-                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.to_string(), ex))),
+                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.clone(), ex))),
         )
-        .chain(
-            tir.root()
-                .nodes
-                .iter()
-                .map(|e| (e.name.to_string(), &e.expr)),
-        )
+        .chain(tir.root().nodes.iter().map(|e| (e.name.clone(), &e.expr)))
         .collect();
 
-    let make_value = |name: &str, rv: &RuntimeValue| -> Value {
+    let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Value {
         let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
         if let Some(expr) = expr_map.get(name) {
             attach_display_units(&mut value, expr, &tir.registry, &values);
@@ -313,8 +303,9 @@ pub(super) fn evaluate_plan(
         value
     };
 
-    let make_result = |name: &str| -> Result<Value, NodeError> {
-        errors.get(name).map_or_else(
+    let make_result = |name: &ScopedName| -> Result<Value, NodeError> {
+        let leaf = name.member();
+        errors.get(leaf).map_or_else(
             || Ok(make_value(name, &values[name])),
             |err| Err(err.clone()),
         )
@@ -325,28 +316,21 @@ pub(super) fn evaluate_plan(
         .consts
         .iter()
         .map(|e| {
-            let name_str = e.name.to_string();
-            let val = make_value(&name_str, &plan.const_values[name_str.as_str()]);
-            (DeclName::new(&name_str), val)
+            let val = make_value(&e.name, &plan.const_values[&e.name]);
+            (DeclName::new(e.name.member()), val)
         })
         .collect();
     let params = tir
         .root()
         .params
         .iter()
-        .map(|e| {
-            let name_str = e.name.to_string();
-            (DeclName::new(&name_str), make_result(&name_str))
-        })
+        .map(|e| (DeclName::new(e.name.member()), make_result(&e.name)))
         .collect();
     let nodes = tir
         .root()
         .nodes
         .iter()
-        .map(|e| {
-            let name_str = e.name.to_string();
-            (DeclName::new(&name_str), make_result(&name_str))
-        })
+        .map(|e| (DeclName::new(e.name.member()), make_result(&e.name)))
         .collect();
 
     let all = tir
@@ -354,7 +338,6 @@ pub(super) fn evaluate_plan(
         .source_order
         .iter()
         .filter_map(|(name, cat)| {
-            let name_str = name.to_string();
             let decl_type = match cat {
                 DeclCategory::Const => DeclType::Const,
                 DeclCategory::Param => DeclType::Param,
@@ -365,16 +348,14 @@ pub(super) fn evaluate_plan(
                 | DeclCategory::Layer => return None,
             };
             let result = match cat {
-                DeclCategory::Const => {
-                    Ok(make_value(&name_str, &plan.const_values[name_str.as_str()]))
-                }
-                DeclCategory::Param | DeclCategory::Node => make_result(&name_str),
+                DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
+                DeclCategory::Param | DeclCategory::Node => make_result(name),
                 DeclCategory::Assert
                 | DeclCategory::Plot
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            Some((DeclName::new(&name_str), result, decl_type))
+            Some((DeclName::new(name.member()), result, decl_type))
         })
         .collect();
 
@@ -383,10 +364,14 @@ pub(super) fn evaluate_plan(
         .assert_bodies
         .iter()
         .map(|entry| {
-            let ef = plan.expected_fail.get(entry.name.as_str());
+            let ef = plan.expected_fail.get(&entry.name);
             let assert_result =
                 evaluate_assert_with_expected_fail(&entry.body, ef, &values, &empty_locals, &ctx);
-            (entry.name.clone(), assert_result, entry.span)
+            (
+                DeclName::new(entry.name.member()),
+                assert_result,
+                entry.span,
+            )
         })
         .collect();
 
@@ -397,7 +382,7 @@ pub(super) fn evaluate_plan(
         .filter_map(|entry| {
             evaluate_plot(
                 &entry.decl,
-                entry.name.as_str(),
+                entry.name.member(),
                 entry.is_pub,
                 &values,
                 &empty_locals,
@@ -420,7 +405,7 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::FigureSpec {
-                name: entry.name.clone(),
+                name: DeclName::new(entry.name.member()),
                 plot_names,
                 properties,
             }
@@ -440,14 +425,28 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::LayerSpec {
-                name: entry.name.clone(),
+                name: DeclName::new(entry.name.member()),
                 plot_names,
                 properties,
             }
         })
         .collect();
 
-    let domain_constraints = plan.domain_constraints.clone();
+    let domain_constraints: HashMap<DeclName, _> = plan
+        .domain_constraints
+        .iter()
+        .map(|(k, v)| (DeclName::new(k.member()), v.clone()))
+        .collect();
+    let assumes_map: HashMap<DeclName, Vec<DeclName>> = plan
+        .assumes_map
+        .iter()
+        .map(|(k, v)| {
+            (
+                DeclName::new(k.member()),
+                v.iter().map(|n| DeclName::new(n.member())).collect(),
+            )
+        })
+        .collect();
 
     EvalResult {
         consts,
@@ -458,7 +457,7 @@ pub(super) fn evaluate_plan(
         plots,
         figures,
         layers,
-        assumes_map: plan.assumes_map.clone(),
+        assumes_map,
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
     }
@@ -474,7 +473,7 @@ pub(super) fn evaluate_plan(
 fn evaluate_assert_with_expected_fail(
     body: &graphcal_compiler::desugar::desugared_ast::AssertBody,
     ef: Option<&ExpectedFail>,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -750,7 +749,7 @@ fn collect_failing_paths(
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
     body: &graphcal_compiler::desugar::desugared_ast::AssertBody,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -856,7 +855,7 @@ pub(super) fn evaluate_assert_body(
 /// best-effort, so a single bad encoding/property aborts the plot.
 fn eval_plot_property(
     expr: &graphcal_compiler::desugar::desugared_ast::Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Option<PlotFieldValue> {
@@ -877,10 +876,10 @@ fn evaluate_plot(
     decl: &graphcal_compiler::desugar::desugared_ast::PlotDecl,
     name: &str,
     is_pub: bool,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
-    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
 ) -> Option<PlotSpec> {
     let mut encodings = Vec::new();
     let mut encoding_meta = Vec::new();
@@ -937,9 +936,9 @@ fn evaluate_plot(
 /// unit literals and conversion targets.
 fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::desugar::desugared_ast::Expr,
-    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
 ) -> AxisMeta {
     let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
     let unit_label = extract_flat_display_unit(expr, registry, values).map(|du| du.label);
@@ -952,16 +951,13 @@ fn extract_encoding_axis_meta(
 /// Walk an expression tree to find the first `@`-reference and extract its dimension name.
 fn extract_dimension_from_expr(
     expr: &graphcal_compiler::desugar::desugared_ast::Expr,
-    declared_types: &HashMap<String, graphcal_compiler::registry::declared_type::DeclaredType>,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
 ) -> Option<String> {
     use graphcal_compiler::desugar::desugared_ast::ExprKind;
     match &expr.kind {
         ExprKind::GraphRef(name) => {
-            // Boundary: `declared_types` is keyed by the flat string form
-            // of the scoped name (`module::member` for qualified, bare for
-            // local). Stringify here for the lookup.
-            let dt = declared_types.get(name.value.to_string().as_str())?;
+            let dt = declared_types.get(&name.value)?;
             dimension_label_from_declared_type(dt, registry)
         }
         ExprKind::ForComp { body, .. } => {
@@ -1004,7 +1000,7 @@ fn dimension_label_from_declared_type(
 fn eval_composition_fields(
     fields: &[graphcal_compiler::desugar::desugared_ast::PlotField],
     plot_name_spans: &[graphcal_compiler::syntax::names::Spanned<DeclName>],
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> (

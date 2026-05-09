@@ -10,7 +10,7 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr,
 };
-use crate::syntax::names::{FieldName, GenericParamName, IndexName, StructTypeName};
+use crate::syntax::names::{FieldName, GenericParamName, IndexName, ScopedName, StructTypeName};
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
@@ -66,7 +66,7 @@ fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
 pub(super) fn infer_for_comp(
     bindings: &[ForBinding],
     body: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -138,7 +138,7 @@ pub(super) fn infer_for_comp(
 pub(super) fn infer_map_or_table_literal(
     expr: &Expr,
     entries: &[crate::desugar::desugared_ast::MapEntry],
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -395,7 +395,7 @@ pub(super) fn infer_index_access(
     expr: &Expr,
     inner: &Expr,
     args: &[IndexArg],
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -700,7 +700,7 @@ pub(super) fn infer_scan(
     acc_name: &crate::desugar::desugared_ast::Ident,
     val_name: &crate::desugar::desugared_ast::Ident,
     body: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -780,7 +780,7 @@ pub(super) fn infer_unfold(
     curr_name: &crate::desugar::desugared_ast::Ident,
     body: &Expr,
     owner_decl_name: Option<&str>,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -800,10 +800,10 @@ pub(super) fn infer_unfold(
     // Look up the owning declaration's type to find the range index and its
     // dimension. This is precise — it uses the specific node's declared type
     // rather than scanning all declared types (which would pick an arbitrary
-    // range index if multiple exist).
+    // range index if multiple exist). The owner is a top-level decl: bare local.
     let mut scan_locals = local_types.clone();
     let owner_range_index = owner_decl_name.and_then(|name| {
-        let dt = declared_types.get(name)?;
+        let dt = declared_types.get(&ScopedName::local(name))?;
         if let DeclaredType::Indexed { index, .. } = dt {
             let idx_def = registry.indexes.get_index(index.as_str())?;
             if idx_def.is_range() {
@@ -879,7 +879,7 @@ pub(super) fn infer_unfold(
 pub(super) fn infer_field_access(
     inner: &Expr,
     field: &crate::syntax::names::Spanned<FieldName>,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -949,7 +949,7 @@ pub(super) fn infer_struct_construction(
     type_name: &crate::syntax::names::Spanned<StructTypeName>,
     constructor_type_args: &[crate::desugar::desugared_ast::TypeExpr],
     fields: &[crate::desugar::desugared_ast::FieldInit],
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,

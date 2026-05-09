@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::FnName;
+use crate::syntax::names::{FnName, ScopedName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -26,7 +26,7 @@ use super::infer_type;
 struct InferCtx<'a> {
     name: &'a crate::syntax::names::Spanned<FnName>,
     args: &'a [Expr],
-    declared_types: &'a HashMap<String, DeclaredType>,
+    declared_types: &'a HashMap<ScopedName, DeclaredType>,
     local_types: &'a HashMap<String, InferredType>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
@@ -378,7 +378,7 @@ impl InferCtx<'_> {
 pub(super) fn infer_fn_call(
     name: &crate::syntax::names::Spanned<FnName>,
     args: &[Expr],
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,

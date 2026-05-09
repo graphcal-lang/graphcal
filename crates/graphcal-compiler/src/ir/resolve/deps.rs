@@ -27,13 +27,13 @@ enum RefKind {
 ///   `const_refs` respectively.
 struct RefCollector<'a> {
     kind: RefKind,
-    all_runtime_names: Option<&'a HashSet<&'a str>>,
-    all_const_names: &'a HashSet<&'a str>,
+    all_runtime_names: Option<&'a HashSet<&'a ScopedName>>,
+    all_const_names: &'a HashSet<&'a ScopedName>,
     builtin_consts: &'a HashMap<&'a str, f64>,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
     src: &'a NamedSource<Arc<String>>,
-    graph_refs: &'a mut HashSet<DeclName>,
-    const_refs: &'a mut HashSet<DeclName>,
+    graph_refs: &'a mut HashSet<ScopedName>,
+    const_refs: &'a mut HashSet<ScopedName>,
 }
 
 impl RefCollector<'_> {
@@ -41,23 +41,18 @@ impl RefCollector<'_> {
         &mut self,
         ident: &crate::syntax::names::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
-        // Boundary: the resolver's name sets are still keyed by flat strings;
-        // stringify the `ScopedName` once here to look it up. The functional
-        // core (`ScopedName` in the AST) carries the qualification typed.
-        let flat = ident.value.to_string();
-        let lookup = flat.as_str();
-        let display_name = || DeclName::new(lookup);
+        let scoped = &ident.value;
         match self.kind {
             RefKind::ConstOnly => {
                 // In const expressions, @name can reference other const nodes but not
                 // runtime names. Runtime refs are already rejected by
                 // check_no_runtime_graph_refs before we get here.
-                if self.all_const_names.contains(lookup) {
-                    self.const_refs.insert(display_name());
+                if self.all_const_names.contains(scoped) {
+                    self.const_refs.insert(scoped.clone());
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownConstRef {
-                        name: display_name(),
+                        name: DeclName::new(scoped.to_string()),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -68,16 +63,16 @@ impl RefCollector<'_> {
                 // `Some(all_runtime_names)` for `RefKind::All`, so this unwrap is
                 // an internal invariant.
                 let runtime = self.all_runtime_names.unwrap_or(self.all_const_names);
-                if runtime.contains(lookup) {
-                    self.graph_refs.insert(display_name());
+                if runtime.contains(scoped) {
+                    self.graph_refs.insert(scoped.clone());
                     Ok(())
-                } else if self.all_const_names.contains(lookup) {
+                } else if self.all_const_names.contains(scoped) {
                     // @const_node_name in a node expression — track as const dependency.
-                    self.const_refs.insert(display_name());
+                    self.const_refs.insert(scoped.clone());
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownGraphRef {
-                        name: display_name(),
+                        name: DeclName::new(scoped.to_string()),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -90,16 +85,17 @@ impl RefCollector<'_> {
         &self,
         ident: &crate::syntax::names::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
-        // Boundary: stringify for built-in lookup. Built-in constant names
-        // (`PI`, `E`, time scales) are bare; qualified `module.CONST` paths
-        // never resolve to a built-in.
-        let flat = ident.value.to_string();
-        let lookup = flat.as_str();
-        if self.builtin_consts.contains_key(lookup) || is_time_scale_name(lookup) {
+        // Built-in constant names (`PI`, `E`, time scales) are bare; a
+        // qualified `module.CONST` path never resolves to a built-in. The
+        // bare-name check is the only string-level use of the AST identifier
+        // here — the rest of the resolver carries the typed value.
+        let lookup = ident.value.member();
+        let is_bare = !ident.value.is_qualified();
+        if is_bare && (self.builtin_consts.contains_key(lookup) || is_time_scale_name(lookup)) {
             Ok(())
         } else {
             Err(GraphcalError::UnknownConstRef {
-                name: DeclName::new(lookup),
+                name: DeclName::new(ident.value.to_string()),
                 src: self.src.clone(),
                 span: ident.span.into(),
             })
@@ -192,11 +188,11 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for RefCollector<'_> {
 /// Extract const references from a const expression.
 pub(super) fn extract_const_refs(
     expr: &Expr,
-    all_const_names: &HashSet<&str>,
+    all_const_names: &HashSet<&ScopedName>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashSet<DeclName>, GraphcalError> {
+) -> Result<HashSet<ScopedName>, GraphcalError> {
     let mut deps = HashSet::new();
     let mut unused = HashSet::new();
     let mut collector = RefCollector {
@@ -221,13 +217,13 @@ pub(super) fn extract_const_refs(
 /// true cyclic dependency.
 pub(super) fn extract_all_refs(
     expr: &Expr,
-    all_runtime_names: &HashSet<&str>,
-    all_const_names: &HashSet<&str>,
+    all_runtime_names: &HashSet<&ScopedName>,
+    all_const_names: &HashSet<&ScopedName>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
     self_name: Option<&str>,
-) -> Result<(HashSet<DeclName>, HashSet<DeclName>), GraphcalError> {
+) -> Result<(HashSet<ScopedName>, HashSet<ScopedName>), GraphcalError> {
     let mut graph_refs = HashSet::new();
     let mut const_refs = HashSet::new();
     {
@@ -245,10 +241,11 @@ pub(super) fn extract_all_refs(
     }
     // Unfold self-references (@self[prev_i]) are not true cyclic dependencies —
     // they access the previous step. Remove the self-edge so the DAG stays acyclic.
+    // Self-name is the bare local name of the owning declaration.
     if let Some(name) = self_name
         && matches!(expr.kind, ExprKind::Unfold { .. })
     {
-        graph_refs.remove(name);
+        graph_refs.remove(&ScopedName::local(name));
     }
     Ok((graph_refs, const_refs))
 }

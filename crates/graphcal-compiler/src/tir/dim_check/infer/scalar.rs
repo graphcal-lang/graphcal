@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{BinOp, Expr, ExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{GenericParamName, UnitName};
+use crate::syntax::names::{GenericParamName, ScopedName, UnitName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -26,7 +26,7 @@ pub(super) fn infer_binop(
     op: &BinOp,
     lhs: &Expr,
     rhs: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -328,7 +328,7 @@ pub(super) fn infer_binop(
 pub(super) fn infer_unary(
     op: &crate::desugar::desugared_ast::UnaryOp,
     operand: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -379,7 +379,7 @@ pub(super) fn infer_unary(
 pub(super) fn infer_convert(
     inner: &Expr,
     target: &crate::desugar::desugared_ast::UnitExpr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -433,7 +433,7 @@ pub(super) fn infer_display_timezone(
     expr: &Expr,
     inner: &Expr,
     timezone: &str,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -474,7 +474,7 @@ pub(super) fn infer_as_cast(
     expr: &Expr,
     inner: &Expr,
     target_type: &crate::desugar::desugared_ast::TypeExpr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,

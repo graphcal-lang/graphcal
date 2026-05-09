@@ -7,13 +7,14 @@
 )]
 use super::*;
 use crate::syntax::dimension::BaseDimId;
+use crate::syntax::names::ScopedName;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
     NamedSource::new("test", Arc::new(source.to_string()))
 }
 
-fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
+fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let src = make_src(source);
@@ -69,7 +70,7 @@ fn compile_inline_dag_bodies_test(
 fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
-        types["g0"],
+        types[&ScopedName::local("g0")],
         DeclaredType::Scalar(Dimension::dimensionless())
     );
 }
@@ -77,14 +78,20 @@ fn check_dimensionless_const() {
 #[test]
 fn check_dimensionless_arithmetic() {
     let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
-    assert_eq!(types["y"], DeclaredType::Scalar(Dimension::dimensionless()));
+    assert_eq!(
+        types[&ScopedName::local("y")],
+        DeclaredType::Scalar(Dimension::dimensionless())
+    );
 }
 
 #[test]
 fn check_length_unit_literal() {
     let types = check("param alt: Length = 400.0 km;").unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
-    assert_eq!(types["alt"], DeclaredType::Scalar(length));
+    assert_eq!(
+        types[&ScopedName::local("alt")],
+        DeclaredType::Scalar(length)
+    );
 }
 
 #[test]
@@ -93,7 +100,10 @@ fn check_velocity_from_division() {
     let types = check(source).unwrap();
     let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string()));
-    assert_eq!(types["speed"], DeclaredType::Scalar(velocity));
+    assert_eq!(
+        types[&ScopedName::local("speed")],
+        DeclaredType::Scalar(velocity)
+    );
 }
 
 #[test]
@@ -120,7 +130,10 @@ fn check_conversion_same_dimension() {
     let types = check(source).unwrap();
     let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string()));
-    assert_eq!(types["speed_kmh"], DeclaredType::Scalar(velocity));
+    assert_eq!(
+        types[&ScopedName::local("speed_kmh")],
+        DeclaredType::Scalar(velocity)
+    );
 }
 
 #[test]
@@ -202,7 +215,7 @@ Maneuver.Insertion: 1.8 km / s,
     let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string()));
     assert_eq!(
-        types["dv"],
+        types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(velocity)),
             index: IndexName::new("Maneuver"),
@@ -1111,7 +1124,10 @@ node doubled: Length = @scale(factor: 2.0, v: @src).result;
 fn inline_dag_call_basic_returns_output_type() {
     let types = check(INLINE_DAG_CALL_SCALE).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
-    assert_eq!(types["doubled"], DeclaredType::Scalar(length));
+    assert_eq!(
+        types[&ScopedName::local("doubled")],
+        DeclaredType::Scalar(length)
+    );
 }
 
 #[test]
@@ -1218,7 +1234,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
-        types["distances"],
+        types[&ScopedName::local("distances")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(length)),
             index: crate::syntax::names::IndexName::new("Region".to_string()),
@@ -1262,7 +1278,10 @@ node out: Length = @doubler(v: @dist).result[Region.A];
 ";
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
-    assert_eq!(types["out"], DeclaredType::Scalar(length));
+    assert_eq!(
+        types[&ScopedName::local("out")],
+        DeclaredType::Scalar(length)
+    );
 }
 
 #[test]

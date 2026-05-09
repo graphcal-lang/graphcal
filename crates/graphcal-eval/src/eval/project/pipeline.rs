@@ -225,10 +225,13 @@ pub(super) fn evaluate_and_store_file(
         file_dag_id.clone(),
         EvaluatedFile {
             values: file_runtime_values,
+            // Top-level consts are bare locals; collapse the ScopedName
+            // back to a `String` for the per-file lookup map that import
+            // logic indexes by member name.
             const_values: plan
                 .const_values
                 .into_iter()
-                .map(|(k, v)| (k.into_inner(), v))
+                .map(|(k, v)| (k.member().to_string(), v))
                 .collect(),
             declared_types: compiled.declared_types,
             assertions: eval_result
@@ -658,7 +661,7 @@ pub(super) fn route_overrides_to_files(
 pub(super) fn extract_runtime_values(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> HashMap<String, RuntimeValue> {
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
@@ -673,18 +676,19 @@ pub(super) fn extract_runtime_values(
     );
 
     // Return only locally-defined param/node values (not imported, not consts).
-    let local_runtime_names: HashSet<String> = tir
+    // Param/node names are always `Local`-form at the file's top level.
+    let local_runtime_names: HashSet<&ScopedName> = tir
         .root()
         .params
         .iter()
-        .map(|e| e.name.to_string())
-        .chain(tir.root().nodes.iter().map(|e| e.name.to_string()))
+        .map(|e| &e.name)
+        .chain(tir.root().nodes.iter().map(|e| &e.name))
         .collect();
 
     result
         .values
         .into_iter()
-        .filter(|(name, _)| local_runtime_names.contains(name.as_str()))
-        .map(|(k, v)| (k.into_inner(), v))
+        .filter(|(name, _)| local_runtime_names.contains(name))
+        .map(|(k, v)| (k.member().to_string(), v))
         .collect()
 }

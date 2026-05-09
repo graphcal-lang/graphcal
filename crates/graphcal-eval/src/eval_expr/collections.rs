@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, MapEntry};
-use graphcal_compiler::syntax::names::{DeclName, VariantName};
+use graphcal_compiler::syntax::names::{ScopedName, VariantName};
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -67,7 +67,7 @@ pub(super) fn eval_index_access(
     expr: &Expr,
     inner: &Expr,
     args: &[graphcal_compiler::desugar::desugared_ast::IndexArg],
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -144,7 +144,7 @@ pub(super) fn eval_scan(
     acc_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     val_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     body: &Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -194,7 +194,7 @@ pub(super) fn eval_unfold(
     prev_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     curr_name: &graphcal_compiler::desugar::desugared_ast::Ident,
     body: &Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
@@ -206,13 +206,15 @@ pub(super) fn eval_unfold(
     let self_name = unfold_ctx.self_name;
     let declared_types = unfold_ctx.declared_types;
 
-    // Find the range index from the node's declared type
-    let declared = declared_types.get(self_name).ok_or_else(|| {
-        ctx.eval_error(
-            format!("no declared type for node `{self_name}`"),
-            Span::new(0, 0),
-        )
-    })?;
+    // Find the range index from the node's declared type. Top-level decls are bare locals.
+    let declared = declared_types
+        .get(&ScopedName::local(self_name))
+        .ok_or_else(|| {
+            ctx.eval_error(
+                format!("no declared type for node `{self_name}`"),
+                Span::new(0, 0),
+            )
+        })?;
     let index_name = match declared {
         graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
             index.clone()
@@ -257,8 +259,9 @@ pub(super) fn eval_unfold(
     // Seed the self-reference slot once. Per iteration we swap the accumulating
     // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
     // O(N) clone of the map every iteration (which would make the loop O(N²)).
+    let self_key = ScopedName::local(self_name);
     overlay_values.insert(
-        DeclName::new(self_name),
+        self_key.clone(),
         RuntimeValue::Indexed {
             index_name: index_name.clone(),
             entries: IndexMap::new(),
@@ -267,7 +270,7 @@ pub(super) fn eval_unfold(
     for i in 1..step_count {
         // Move the accumulated entries into the overlay (O(1)). `result_entries`
         // is left as an empty IndexMap — it will be restored after body eval.
-        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(self_name) {
+        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             *entries = std::mem::take(&mut result_entries);
         }
 
@@ -294,7 +297,7 @@ pub(super) fn eval_unfold(
         // Take the entries back out of the overlay (O(1)) so we can append the
         // new result without cloning. The overlay's slot is left with an empty
         // IndexMap until the next iteration repopulates it.
-        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(self_name) {
+        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             result_entries = std::mem::take(entries);
         }
         result_entries.insert(variants[i].clone(), body_val);
@@ -317,7 +320,7 @@ pub(super) fn eval_unfold(
 /// builds nested `Indexed` values from the remaining keys.
 pub(super) fn eval_map_literal(
     entries: &[MapEntry],
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -404,7 +407,7 @@ pub(super) fn eval_map_literal(
 pub(super) fn eval_for_comp(
     bindings: &[graphcal_compiler::desugar::desugared_ast::ForBinding],
     body: &Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

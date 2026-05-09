@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, MatchArm};
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::names::ScopedName;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -15,7 +15,7 @@ pub(super) fn eval_if(
     condition: &Expr,
     then_branch: &Expr,
     else_branch: &Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -34,7 +34,7 @@ pub(super) fn eval_match(
     expr: &Expr,
     scrutinee: &Expr,
     arms: &[MatchArm],
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{Expr, MatchArm};
-use crate::syntax::names::{FieldName, IndexName, StructTypeName};
+use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -20,7 +20,7 @@ pub(super) fn infer_if(
     condition: &Expr,
     then_branch: &Expr,
     else_branch: &Expr,
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -87,7 +87,7 @@ pub(super) fn infer_match(
     expr: &Expr,
     scrutinee: &Expr,
     arms: &[MatchArm],
-    declared_types: &HashMap<String, DeclaredType>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,

@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::names::ScopedName;
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
@@ -53,7 +53,7 @@ pub struct EvalContext<'a> {
 /// to look up the range index for iterative evaluation.
 pub struct UnfoldContext<'a> {
     pub self_name: &'a str,
-    pub declared_types: &'a HashMap<String, DeclaredType>,
+    pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
 }
 
 impl EvalContext<'_> {
@@ -94,7 +94,7 @@ impl EvalContext<'_> {
 #[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
 pub fn eval_expr(
     expr: &Expr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -113,33 +113,33 @@ pub fn eval_expr(
             index_name: index.value.clone(),
             variant: variant.value.clone(),
         }),
-        ExprKind::GraphRef(ident) => {
-            // Boundary: the value map is still keyed by `DeclName` (flat
-            // string). Stringify the typed `ScopedName` here for the
-            // lookup; the qualified case yields `module::member`, locals
-            // the bare name. See follow-up issue for re-keying the maps.
-            let key = ident.value.to_string();
-            values.get(key.as_str()).cloned().ok_or_else(|| {
-                ctx.eval_error(format!("undefined graph reference `@{key}`"), expr.span)
+        ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {
+            ctx.eval_error(
+                format!("undefined graph reference `@{}`", ident.value),
+                expr.span,
+            )
+        }),
+        ExprKind::ConstRef(ident) => values
+            .get(&ident.value)
+            .cloned()
+            .or_else(|| {
+                ctx.builtin_consts
+                    .get(ident.value.member())
+                    .map(|v| RuntimeValue::Scalar(*v))
             })
-        }
-        ExprKind::ConstRef(ident) => {
-            let key = ident.value.to_string();
-            values
-                .get(key.as_str())
-                .cloned()
-                .or_else(|| {
-                    ctx.builtin_consts
-                        .get(key.as_str())
-                        .map(|v| RuntimeValue::Scalar(*v))
-                })
-                .or_else(|| {
-                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                    // and may be referenced in expression position as ConstRef (uppercase).
-                    local_values.get(key.as_str()).cloned()
-                })
-                .ok_or_else(|| ctx.eval_error(format!("undefined constant `{key}`"), expr.span))
-        }
+            .or_else(|| {
+                // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+                // and may be referenced in expression position as ConstRef (uppercase).
+                // Locals are always bare names (no module qualification).
+                if ident.value.is_qualified() {
+                    None
+                } else {
+                    local_values.get(ident.value.member()).cloned()
+                }
+            })
+            .ok_or_else(|| {
+                ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
+            }),
         ExprKind::LocalRef(ident) => {
             local_values
                 .get(ident.name.as_str())
@@ -237,10 +237,12 @@ pub fn eval_expr(
                 let val = if let Some(value_expr) = &field_init.value {
                     eval_expr(value_expr, values, local_values, ctx)?
                 } else {
-                    // Shorthand: look up name in local scope, then graph scope
+                    // Shorthand: look up name in local scope, then graph scope.
+                    // Shorthand field names are always bare locals.
+                    let bare = field_init.name.value.as_str();
                     local_values
-                        .get(field_init.name.value.as_str())
-                        .or_else(|| values.get(field_init.name.value.as_str()))
+                        .get(bare)
+                        .or_else(|| values.get(&ScopedName::local(bare)))
                         .cloned()
                         .ok_or_else(|| {
                             ctx.eval_error(
@@ -318,7 +320,7 @@ fn eval_inline_dag_call(
     path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
-    caller_values: &HashMap<DeclName, RuntimeValue>,
+    caller_values: &HashMap<ScopedName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -333,11 +335,12 @@ fn eval_inline_dag_call(
     })?;
 
     // Evaluate argument expressions in the caller's scope so loop variables
-    // and other enclosing bindings resolve correctly.
-    let mut dag_values: HashMap<DeclName, RuntimeValue> = HashMap::new();
+    // and other enclosing bindings resolve correctly. Param-binding names are
+    // always bare locals.
+    let mut dag_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(DeclName::new(&binding.name.name), value);
+        dag_values.insert(ScopedName::local(binding.name.name.clone()), value);
     }
 
     // Resolve explicit DAG-body imports. Cross-file qualified calls receive
@@ -351,15 +354,15 @@ fn eval_inline_dag_call(
         .chain(dag_tir.params.iter().map(|e| e.name.member()))
         .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
         .collect();
-    let outer_scope_keys: std::collections::HashSet<&graphcal_compiler::syntax::names::ScopedName> =
-        dag_tir
-            .imported_values
-            .keys()
-            .chain(dag_tir.imported_value_sources.keys())
-            .collect();
+    let outer_scope_keys: std::collections::HashSet<&ScopedName> = dag_tir
+        .imported_values
+        .keys()
+        .chain(dag_tir.imported_value_sources.keys())
+        .collect();
     for scoped in outer_scope_keys {
         let member = scoped.member();
-        if own_names.contains(member) || dag_values.contains_key(member) {
+        let local_key = ScopedName::local(member);
+        if own_names.contains(member) || dag_values.contains_key(&local_key) {
             continue;
         }
         let value = dag_tir
@@ -370,10 +373,12 @@ fn eval_inline_dag_call(
                 dag_tir
                     .imported_value_sources
                     .get(scoped)
-                    .and_then(|source| caller_values.get(source.source_name.as_str()))
+                    .and_then(|source| {
+                        caller_values.get(&ScopedName::local(source.source_name.clone()))
+                    })
             });
         if let Some(value) = value {
-            dag_values.insert(DeclName::new(member), value.clone());
+            dag_values.insert(local_key, value.clone());
         }
     }
 
@@ -397,8 +402,8 @@ fn eval_inline_dag_call(
     // `args` and never execute body code.
     let topo = topo_order_for_dag_body(dag_tir);
     for name in topo {
-        let key = name.member();
-        if dag_values.contains_key(key) {
+        let local_key = ScopedName::local(name.member());
+        if dag_values.contains_key(&local_key) {
             continue;
         }
         let expr = lookup_dag_body_expr(dag_tir, &name);
@@ -406,11 +411,11 @@ fn eval_inline_dag_call(
             continue;
         };
         let value = eval_expr(expr, &dag_values, &empty_locals, &dag_ctx)?;
-        dag_values.insert(DeclName::new(key), value);
+        dag_values.insert(local_key, value);
     }
 
     dag_values
-        .get(output.value.as_str())
+        .get(&ScopedName::local(output.value.as_str()))
         .cloned()
         .ok_or_else(|| {
             ctx.internal_error(
@@ -428,10 +433,7 @@ fn eval_inline_dag_call(
 /// Produces an order in which each const/param/node appears after every one
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
-fn topo_order_for_dag_body(
-    dag_tir: &graphcal_compiler::tir::typed::DagTIR,
-) -> Vec<graphcal_compiler::syntax::names::ScopedName> {
-    use graphcal_compiler::syntax::names::ScopedName;
+fn topo_order_for_dag_body(dag_tir: &graphcal_compiler::tir::typed::DagTIR) -> Vec<ScopedName> {
     use std::collections::BTreeSet;
 
     // All declaration names in a stable order.
@@ -501,7 +503,7 @@ fn topo_order_for_dag_body(
 /// argument binding, not from a body-local expression).
 fn lookup_dag_body_expr<'a>(
     dag_tir: &'a graphcal_compiler::tir::typed::DagTIR,
-    name: &graphcal_compiler::syntax::names::ScopedName,
+    name: &ScopedName,
 ) -> Option<&'a Expr> {
     if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {
         return Some(&c.expr);
@@ -524,7 +526,7 @@ fn lookup_dag_body_expr<'a>(
 /// fails to evaluate to a scalar.
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
-    values: &HashMap<DeclName, RuntimeValue>,
+    values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
